@@ -5,13 +5,12 @@ by frontmatter tag / folder / inline hashtag, serves a dashboard.
 
 ## Install
 
-Requires Python 3.11+.
+Requires [uv](https://docs.astral.sh/uv/) (manages the Python 3.14 install and venv for you).
 
 ```
 git clone https://github.com/Qyrhal/Eunomia.git
 cd Eunomia
-python3 -m venv .venv
-.venv/bin/pip install -e ".[dev]"
+uv sync --extra dev
 ```
 
 ## Configure
@@ -30,7 +29,7 @@ doesn't talk to Obsidian directly.
 ## Run locally
 
 ```
-EUNOMIA_VAULT_PATH=/path/to/vault .venv/bin/uvicorn eunomia.api:app --reload
+EUNOMIA_VAULT_PATH=/path/to/vault uv run uvicorn eunomia.api:app --reload
 ```
 
 - `GET /` — dashboard
@@ -43,7 +42,9 @@ EUNOMIA_VAULT_PATH=/path/to/vault .venv/bin/uvicorn eunomia.api:app --reload
 Runs as a single process — no containers or reverse proxy required, though you can
 put one in front for TLS if you expose it beyond localhost.
 
-1. On the server: clone the repo and install as above into `/opt/eunomia` (or wherever).
+1. On the server: install [uv](https://docs.astral.sh/uv/getting-started/installation/),
+   clone the repo into `/opt/eunomia` (or wherever), then `cd /opt/eunomia && uv sync --extra dev`.
+   uv downloads and pins Python 3.14 itself — no system Python version to manage.
 2. Create a systemd unit at `/etc/systemd/system/eunomia.service`:
 
    ```ini
@@ -56,12 +57,14 @@ put one in front for TLS if you expose it beyond localhost.
    WorkingDirectory=/opt/eunomia
    Environment=EUNOMIA_VAULT_PATH=/path/to/vault
    Environment=EUNOMIA_DB_PATH=/opt/eunomia/eunomia.db
-   ExecStart=/opt/eunomia/.venv/bin/uvicorn eunomia.api:app --host 0.0.0.0 --port 8000
+   ExecStart=/usr/local/bin/uv run uvicorn eunomia.api:app --host 0.0.0.0 --port 8000
    Restart=on-failure
 
    [Install]
    WantedBy=multi-user.target
    ```
+
+   Adjust the `uv` path to wherever it installed (`which uv` on the server).
 
 3. Enable and start it:
 
@@ -74,12 +77,12 @@ put one in front for TLS if you expose it beyond localhost.
    or the vault sync tool's hook at `POST /sync` to keep the dashboard current, since
    nothing polls the filesystem automatically yet.
 
-To update: `git pull`, `.venv/bin/pip install -e ".[dev]"`, `sudo systemctl restart eunomia`.
+To update: `git pull`, `uv sync --extra dev`, `sudo systemctl restart eunomia`.
 
 ## Test
 
 ```
-.venv/bin/pytest
+uv run pytest
 ```
 
 ## Status
