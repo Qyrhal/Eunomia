@@ -1,0 +1,25 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Eunomia</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 2rem; }
+    h2 { text-transform: capitalize; border-bottom: 1px solid #ccc; }
+    ul { list-style: none; padding-left: 0; }
+    li { padding: 0.25rem 0; }
+    .tags { color: #888; font-size: 0.85em; }
+  </style>
+</head>
+<body>
+  <h1>Eunomia</h1>
+  {% for bucket, notes in grouped.items() %}
+    <h2>{{ bucket }} ({{ notes|length }})</h2>
+    <ul>
+      {% for note in notes %}
+        <li>{{ note.title }} <span class="tags">{{ note.tags|join(", ") }}</span></li>
+      {% endfor %}
+    </ul>
+  {% endfor %}
+</body>
+</html>
