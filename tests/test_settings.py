@@ -10,6 +10,72 @@ def test_settings_page_loads(client):
     assert "GitHub" in resp.text
     assert "Sign in" in resp.text
     assert "or add an API key instead" in resp.text
+    assert "Buckets" in resp.text
+    assert "Vault" in resp.text
+
+
+def test_settings_shows_default_buckets(client):
+    resp = client.get("/settings")
+    for label in ["Uni", "Work", "Business", "Other"]:
+        assert label in resp.text
+
+
+def test_set_vault_path(client, tmp_path):
+    new_vault = tmp_path / "my-vault"
+    resp = client.post("/settings/vault", data={"path": str(new_vault)})
+    assert resp.status_code == 200
+    assert new_vault.exists()
+    assert str(new_vault) in resp.text
+
+
+def test_set_vault_path_requires_value(client):
+    resp = client.post("/settings/vault", data={"path": "  "})
+    assert "required" in resp.text
+
+
+def test_add_bucket_shows_up_in_settings(client):
+    resp = client.post(
+        "/settings/buckets",
+        data={"key": "side-project", "label": "Side Project", "keywords": "startup-x, sx"},
+    )
+    assert resp.status_code == 200
+    assert "Side Project" in resp.text
+    assert "startup-x" in resp.text
+
+
+def test_add_bucket_requires_key_and_label(client):
+    resp = client.post("/settings/buckets", data={"key": "", "label": "", "keywords": ""})
+    assert "required" in resp.text
+
+
+def test_add_duplicate_bucket_key_shows_error(client):
+    resp = client.post("/settings/buckets", data={"key": "work", "label": "Work Again", "keywords": ""})
+    assert "already exists" in resp.text
+
+
+def test_delete_bucket(client):
+    from eunomia import config, db
+
+    client.post("/settings/buckets", data={"key": "side-project", "label": "Side Project", "keywords": ""})
+    conn = db.connect(config.DB_PATH)
+    bucket_id = next(b.id for b in db.get_buckets(conn) if b.key == "side-project")
+    conn.close()
+
+    resp = client.post(f"/settings/buckets/{bucket_id}/delete")
+    assert resp.status_code == 200
+    assert f"/settings/buckets/{bucket_id}/delete" not in resp.text
+
+
+def test_cannot_delete_other_bucket(client):
+    from eunomia import config, db
+
+    conn = db.connect(config.DB_PATH)
+    other_id = next(b.id for b in db.get_buckets(conn) if b.key == "other")
+    conn.close()
+
+    resp = client.post(f"/settings/buckets/{other_id}/delete")
+    assert resp.status_code == 200
+    assert "Other" in resp.text
 
 
 def test_add_api_key_shows_as_connected(client):

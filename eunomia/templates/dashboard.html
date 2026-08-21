@@ -11,7 +11,14 @@
   <nav class="sidebar">
     <div class="brand">Eunomia</div>
     <ul class="nav-list" id="nav-list"></ul>
+
+    {% if vault_configured %}
+      <button class="btn btn-primary new-note-btn" id="new-note-btn">+ New note</button>
+    {% else %}
+      <a class="btn btn-primary new-note-btn" href="/settings">Set up vault to add notes</a>
+    {% endif %}
     <button class="sync-btn" id="sync-btn">Sync vault</button>
+
     <div class="nav-footer">
       <a class="nav-item" href="/settings">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>
@@ -29,6 +36,23 @@
     <div class="note-group" id="note-group"></div>
   </main>
 
+  {% if vault_configured %}
+  <div class="modal-backdrop" id="new-note-backdrop">
+    <div class="modal">
+      <h2>New note</h2>
+      <form id="new-note-form">
+        <input type="text" name="title" placeholder="Title" required autofocus>
+        <select name="bucket" id="new-note-bucket"></select>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" id="new-note-cancel">Cancel</button>
+          <button type="submit" class="btn btn-primary">Create</button>
+        </div>
+        <p class="hint" id="new-note-error"></p>
+      </form>
+    </div>
+  </div>
+  {% endif %}
+
 <script>
 const BUCKETS = {{ buckets_json | safe }};
 const ICONS = {
@@ -38,6 +62,7 @@ const ICONS = {
   other: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg>',
   all: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>',
 };
+const DEFAULT_ICON = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v16H4z"/><path d="M4 9h16"/></svg>';
 
 let notes = {{ notes_json | safe }};
 let activeBucket = "all";
@@ -51,19 +76,19 @@ const syncBtn = document.getElementById("sync-btn");
 
 function counts() {
   const c = { all: notes.length };
-  for (const b of BUCKETS) c[b] = notes.filter(n => n.bucket === b).length;
+  for (const b of BUCKETS) c[b.key] = notes.filter(n => n.bucket === b.key).length;
   return c;
 }
 
 function renderNav() {
   const c = counts();
-  const items = ["all", ...BUCKETS];
+  const items = [{ key: "all", label: "All" }, ...BUCKETS];
   navList.innerHTML = items.map(b => `
     <li>
-      <button class="nav-item ${b === activeBucket ? "active" : ""}" data-bucket="${b}">
-        ${ICONS[b] || ""}
-        <span class="label">${b}</span>
-        <span class="count">${c[b]}</span>
+      <button class="nav-item ${b.key === activeBucket ? "active" : ""}" data-bucket="${b.key}">
+        ${ICONS[b.key] || DEFAULT_ICON}
+        <span class="label">${escapeHtml(b.label)}</span>
+        <span class="count">${c[b.key] || 0}</span>
       </button>
     </li>
   `).join("");
@@ -76,7 +101,8 @@ function renderNav() {
 }
 
 function renderNotes() {
-  pageTitle.textContent = activeBucket;
+  const activeMeta = BUCKETS.find(b => b.key === activeBucket);
+  pageTitle.textContent = activeBucket === "all" ? "All" : (activeMeta ? activeMeta.label : activeBucket);
   let visible = activeBucket === "all" ? notes : notes.filter(n => n.bucket === activeBucket);
   if (query) {
     const q = query.toLowerCase();
@@ -107,6 +133,12 @@ function render() {
   renderNotes();
 }
 
+async function refreshNotes() {
+  const resp = await fetch("/api/notes");
+  notes = await resp.json();
+  render();
+}
+
 searchInput.addEventListener("input", (e) => {
   query = e.target.value;
   renderNotes();
@@ -117,14 +149,47 @@ syncBtn.addEventListener("click", async () => {
   syncBtn.textContent = "Syncing…";
   try {
     await fetch("/sync", { method: "POST" });
-    const resp = await fetch("/api/notes");
-    notes = await resp.json();
-    render();
+    await refreshNotes();
   } finally {
     syncBtn.disabled = false;
     syncBtn.textContent = "Sync vault";
   }
 });
+
+const newNoteBtn = document.getElementById("new-note-btn");
+const newNoteBackdrop = document.getElementById("new-note-backdrop");
+if (newNoteBtn) {
+  const form = document.getElementById("new-note-form");
+  const bucketSelect = document.getElementById("new-note-bucket");
+  const errorEl = document.getElementById("new-note-error");
+  const cancelBtn = document.getElementById("new-note-cancel");
+
+  const openModal = () => {
+    bucketSelect.innerHTML = BUCKETS.map(b => `<option value="${b.key}">${escapeHtml(b.label)}</option>`).join("");
+    errorEl.textContent = "";
+    form.reset();
+    newNoteBackdrop.classList.add("open");
+    form.title.focus();
+  };
+  const closeModal = () => newNoteBackdrop.classList.remove("open");
+
+  newNoteBtn.addEventListener("click", openModal);
+  cancelBtn.addEventListener("click", closeModal);
+  newNoteBackdrop.addEventListener("click", (e) => { if (e.target === newNoteBackdrop) closeModal(); });
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const body = new URLSearchParams(new FormData(form));
+    const resp = await fetch("/notes", { method: "POST", body });
+    if (!resp.ok) {
+      const detail = await resp.json().catch(() => ({}));
+      errorEl.textContent = detail.detail || "Couldn't create the note.";
+      return;
+    }
+    closeModal();
+    await refreshNotes();
+  });
+}
 
 render();
 </script>

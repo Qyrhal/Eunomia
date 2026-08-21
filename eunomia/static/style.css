@@ -96,7 +96,7 @@ body {
 .nav-footer { margin-top: auto; display: flex; flex-direction: column; gap: 4px; }
 
 .sync-btn {
-  margin: 20px 12px 0;
+  margin: 8px 12px 0;
   width: calc(100% - 24px);
   padding: 8px 12px;
   border: none;
@@ -111,12 +111,19 @@ body {
 .sync-btn:hover { background: var(--border); }
 .sync-btn:disabled { opacity: 0.5; cursor: default; }
 
+.new-note-btn {
+  margin: 20px 12px 0;
+  width: calc(100% - 24px);
+  text-align: center;
+}
+
 /* Main */
 main {
   flex: 1;
   padding: 32px 40px;
   max-width: 760px;
 }
+main.wide { max-width: 980px; }
 .page-title {
   font-size: 28px;
   font-weight: 700;
@@ -309,3 +316,86 @@ main {
   font-size: 13px;
   margin-bottom: 20px;
 }
+
+/* Settings: block grid — each section is a self-contained block so new integration
+   types (voice, reminders, etc.) can be added as another block without restructuring. */
+.blocks-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  gap: 20px;
+  align-items: start;
+}
+.blocks-grid .settings-section { margin-bottom: 0; }
+.block-card {
+  background: var(--surface);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  padding: 16px;
+}
+
+.field-form { display: flex; flex-direction: column; gap: 8px; }
+.field-form input, .field-form select {
+  border: 1px solid var(--border);
+  background: var(--bg);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 13px;
+  color: var(--text);
+  font-family: inherit;
+  width: 100%;
+}
+.field-form input:focus, .field-form select:focus {
+  outline: 2px solid var(--accent-soft);
+  border-color: var(--accent);
+}
+.field-form-row { display: flex; gap: 8px; }
+.field-form-row > * { flex: 1; }
+
+.bucket-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+.bucket-row:last-of-type { border-bottom: none; }
+.bucket-meta { flex: 1; min-width: 0; }
+.bucket-label { font-size: 14px; font-weight: 500; }
+.bucket-keywords { font-size: 12px; color: var(--text-secondary); }
+
+/* Modal (new note) */
+.modal-backdrop {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+}
+.modal-backdrop.open { display: flex; }
+.modal {
+  background: var(--surface);
+  border-radius: 14px;
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.3);
+  padding: 20px;
+  width: 360px;
+}
+.modal h2 { font-size: 16px; margin: 0 0 14px; }
+.modal form { display: flex; flex-direction: column; gap: 10px; }
+.modal input, .modal select {
+  border: 1px solid var(--border);
+  background: var(--bg);
+  border-radius: 8px;
+  padding: 9px 10px;
+  font-size: 14px;
+  color: var(--text);
+  font-family: inherit;
+  width: 100%;
+}
+.modal input:focus, .modal select:focus {
+  outline: 2px solid var(--accent-soft);
+  border-color: var(--accent);
+}
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+.modal .hint { color: var(--danger); min-height: 14px; }

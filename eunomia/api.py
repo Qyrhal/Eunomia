@@ -2,6 +2,7 @@
 
 import json
 import secrets
+import sqlite3
 import time
 from pathlib import Path
 from urllib.parse import quote
@@ -13,7 +14,7 @@ from fastapi.templating import Jinja2Templates
 from starlette.requests import Request
 
 from . import config, crypto, db, oauth, vault
-from .models import BUCKETS
+from .classifier import rules_from_buckets
 
 app = FastAPI(title="Eunomia")
 app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "static")), name="static")
@@ -46,8 +47,13 @@ def health():
 
 @app.post("/sync")
 def sync():
-    notes = vault.scan_vault(config.VAULT_PATH)
     conn = get_db()
+    vault_path = config.resolve_vault_path(conn)
+    if not vault_path.exists():
+        conn.close()
+        raise HTTPException(400, f"Vault not found at {vault_path}. Set it in Settings first.")
+    rules = rules_from_buckets(db.get_buckets(conn))
+    notes = vault.scan_vault(vault_path, rules)
     db.sync_notes(conn, notes)
     conn.close()
     return {"synced": len(notes)}
@@ -65,12 +71,46 @@ def api_notes(bucket: str | None = None):
 def dashboard(request: Request):
     conn = get_db()
     notes = db.get_notes(conn)
+    buckets = db.get_buckets(conn)
+    vault_path = config.resolve_vault_path(conn)
+    vault_configured = vault_path.exists()
     conn.close()
     notes_json = json.dumps([n.__dict__ for n in notes])
-    buckets_json = json.dumps(list(BUCKETS))
+    buckets_json = json.dumps([{"key": b.key, "label": b.label} for b in buckets])
     return templates.TemplateResponse(
-        request, "dashboard.html", {"buckets_json": buckets_json, "notes_json": notes_json}
+        request,
+        "dashboard.html",
+        {
+            "buckets_json": buckets_json,
+            "notes_json": notes_json,
+            "vault_configured": vault_configured,
+        },
     )
+
+
+@app.post("/notes")
+def create_note(title: str = Form(...), bucket: str = Form(...)):
+    title = title.strip()
+    conn = get_db()
+    vault_path = config.resolve_vault_path(conn)
+    if not vault_path.exists():
+        conn.close()
+        raise HTTPException(400, f"Vault not found at {vault_path}. Set it in Settings first.")
+    if not title:
+        conn.close()
+        raise HTTPException(400, "Title is required")
+
+    try:
+        vault.create_note(vault_path, title, bucket)
+    except FileExistsError as e:
+        conn.close()
+        raise HTTPException(409, str(e))
+
+    rules = rules_from_buckets(db.get_buckets(conn))
+    notes = vault.scan_vault(vault_path, rules)
+    db.sync_notes(conn, notes)
+    conn.close()
+    return {"created": True}
 
 
 def _redirect_uri(request: Request, service: str) -> str:
@@ -111,15 +151,64 @@ def settings_page(request: Request):
     known_services = {c["service"] for c in CONNECTIONS}
     other_credentials = [c for c in creds if c.service not in known_services]
 
+    conn = get_db()
+    buckets = db.get_buckets(conn)
+    vault_path = config.resolve_vault_path(conn)
+    conn.close()
+
     return templates.TemplateResponse(
         request,
         "settings.html",
         {
             "connections": connections,
             "other_credentials": other_credentials,
+            "buckets": buckets,
+            "vault_path": str(vault_path),
+            "vault_configured": vault_path.exists(),
             "error": request.query_params.get("error"),
         },
     )
+
+
+@app.post("/settings/vault")
+def set_vault_path(path: str = Form(...)):
+    path = path.strip()
+    if not path:
+        return RedirectResponse(f"/settings?error={quote('Vault path is required')}", status_code=303)
+    resolved = Path(path).expanduser()
+    try:
+        resolved.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        return RedirectResponse(f"/settings?error={quote(f'Could not use that path: {e}')}", status_code=303)
+    conn = get_db()
+    db.set_setting(conn, "vault_path", str(resolved))
+    conn.close()
+    return RedirectResponse("/settings", status_code=303)
+
+
+@app.post("/settings/buckets")
+def add_bucket(key: str = Form(...), label: str = Form(...), keywords: str = Form("")):
+    key = key.strip().lower().replace(" ", "-")
+    label = label.strip()
+    keyword_list = [k.strip() for k in keywords.split(",") if k.strip()]
+    if not key or not label:
+        return RedirectResponse(f"/settings?error={quote('Key and label are required')}", status_code=303)
+    conn = get_db()
+    try:
+        db.add_bucket(conn, key, label, keyword_list)
+    except sqlite3.IntegrityError:
+        conn.close()
+        return RedirectResponse(f"/settings?error={quote(f'A bucket with key \"{key}\" already exists')}", status_code=303)
+    conn.close()
+    return RedirectResponse("/settings", status_code=303)
+
+
+@app.post("/settings/buckets/{bucket_id}/delete")
+def delete_bucket(bucket_id: int):
+    conn = get_db()
+    db.delete_bucket(conn, bucket_id)
+    conn.close()
+    return RedirectResponse("/settings", status_code=303)
 
 
 @app.post("/settings/api-key")

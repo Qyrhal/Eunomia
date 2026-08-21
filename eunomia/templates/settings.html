@@ -24,91 +24,141 @@
     </div>
   </nav>
 
-  <main>
+  <main class="wide">
     <h1 class="page-title">Settings</h1>
-    <p class="page-subtitle">Connect the accounts and API keys Eunomia pulls from. Signing in is preferred where it's available — an API key is the fallback.</p>
+    <p class="page-subtitle">Everything Eunomia reads from, arranged as blocks — add more of any kind as the app grows.</p>
 
     {% if error %}
       <div class="error-banner">{{ error }}</div>
     {% endif %}
 
-    <div class="settings-section">
-      <h2>Connections</h2>
-      <div class="conn-card">
-        {% for c in connections %}
-          {% for row in c.rows %}
-            <div class="conn-row">
-              <div class="conn-icon">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9 12h6M12 9v6"/></svg>
-              </div>
-              <div class="conn-meta">
-                <div class="conn-name">{{ c.name }}</div>
-                <div class="conn-label">{{ row.label }}</div>
-              </div>
+    <div class="blocks-grid">
 
-              {% if row.connected %}
-                <span class="badge badge-connected">{{ "Signed in" if row.kind == "oauth" else "API key set" }}</span>
-                <div class="conn-actions">
-                  <form method="post" action="/settings/credentials/{{ row.credential_id }}/delete">
+      <div class="settings-section">
+        <h2>Vault</h2>
+        <div class="block-card">
+          {% if vault_configured %}
+            <p class="hint" style="color: var(--success); margin-bottom: 10px;">Connected: {{ vault_path }}</p>
+          {% else %}
+            <p class="hint" style="color: var(--danger); margin-bottom: 10px;">Not set — notes can't be read or created until a vault folder is chosen.</p>
+          {% endif %}
+          <form class="field-form" method="post" action="/settings/vault">
+            <input type="text" name="path" placeholder="/path/to/your/obsidian/vault" value="{{ vault_path }}" required>
+            <button class="btn btn-primary" type="submit">{{ "Update vault" if vault_configured else "Set vault" }}</button>
+          </form>
+          <p class="hint">Points at a folder of .md files kept in sync by Obsidian Sync, Syncthing, or iCloud. Created automatically if it doesn't exist yet.</p>
+        </div>
+      </div>
+
+      <div class="settings-section">
+        <h2>Buckets</h2>
+        <div class="block-card">
+          {% for b in buckets %}
+            <div class="bucket-row">
+              <div class="bucket-meta">
+                <div class="bucket-label">{{ b.label }}</div>
+                <div class="bucket-keywords">{{ b.key }}{% if b.keywords %} · {{ b.keywords | join(", ") }}{% endif %}</div>
+              </div>
+              {% if b.key != "other" %}
+                <form method="post" action="/settings/buckets/{{ b.id }}/delete">
+                  <button class="btn btn-danger" type="submit" title="Remove">✕</button>
+                </form>
+              {% endif %}
+            </div>
+          {% endfor %}
+          <form class="field-form" method="post" action="/settings/buckets" style="margin-top: 12px;">
+            <div class="field-form-row">
+              <input type="text" name="label" placeholder="Name (e.g. Side Project)" required>
+              <input type="text" name="key" placeholder="key (e.g. side-project)" required>
+            </div>
+            <input type="text" name="keywords" placeholder="Extra keywords, comma separated (optional)">
+            <button class="btn btn-secondary" type="submit">Add bucket</button>
+          </form>
+          <p class="hint">A note lands in a bucket if it's tagged with the bucket's key, is in a matching folder, or uses a matching #hashtag.</p>
+        </div>
+      </div>
+
+      <div class="settings-section">
+        <h2>Connections</h2>
+        <div class="conn-card">
+          {% for c in connections %}
+            {% for row in c.rows %}
+              <div class="conn-row">
+                <div class="conn-icon">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9 12h6M12 9v6"/></svg>
+                </div>
+                <div class="conn-meta">
+                  <div class="conn-name">{{ c.name }}</div>
+                  <div class="conn-label">{{ row.label }}</div>
+                </div>
+
+                {% if row.connected %}
+                  <span class="badge badge-connected">{{ "Signed in" if row.kind == "oauth" else "API key set" }}</span>
+                  <div class="conn-actions">
+                    <form method="post" action="/settings/credentials/{{ row.credential_id }}/delete">
+                      <button class="btn btn-danger" type="submit" title="Remove">✕</button>
+                    </form>
+                  </div>
+                {% else %}
+                  <span class="badge badge-idle">Not connected</span>
+                  <div class="conn-actions">
+                    {% if c.oauth_supported %}
+                      {% if c.oauth_configured %}
+                        <a class="btn btn-primary" href="/oauth/{{ c.service }}/start?label={{ row.label }}">Sign in</a>
+                      {% else %}
+                        <a class="btn btn-primary disabled" title="Set EUNOMIA_{{ c.service.upper() }}_CLIENT_ID / _SECRET to enable">Sign in</a>
+                      {% endif %}
+                    {% endif %}
+                  </div>
+                {% endif %}
+              </div>
+              {% if not row.connected %}
+                <details class="disclosure">
+                  <summary>or add an API key instead</summary>
+                  <form class="form-inline" method="post" action="/settings/api-key">
+                    <input type="hidden" name="service" value="{{ c.service }}">
+                    <input type="hidden" name="label" value="{{ row.label }}">
+                    <input type="password" name="key" placeholder="API key" required>
+                    <button class="btn btn-secondary" type="submit">Save</button>
+                  </form>
+                </details>
+              {% endif %}
+            {% endfor %}
+          {% endfor %}
+        </div>
+      </div>
+
+      <div class="settings-section">
+        <h2>LLM provider keys</h2>
+        <div class="block-card">
+          <p class="hint" style="margin-bottom: 12px;">Any provider — OpenAI, Anthropic, or otherwise. Eunomia tries them in the order added and falls back to the next on failure.</p>
+
+          {% if other_credentials %}
+            <div class="conn-card" style="margin-bottom: 12px;">
+              {% for cred in other_credentials %}
+                <div class="conn-row">
+                  <div class="conn-meta">
+                    <div class="conn-name">{{ cred.service }}</div>
+                    <div class="conn-label">{{ cred.label }}</div>
+                  </div>
+                  <span class="badge badge-connected">API key set</span>
+                  <form method="post" action="/settings/credentials/{{ cred.id }}/delete">
                     <button class="btn btn-danger" type="submit" title="Remove">✕</button>
                   </form>
                 </div>
-              {% else %}
-                <span class="badge badge-idle">Not connected</span>
-                <div class="conn-actions">
-                  {% if c.oauth_supported %}
-                    {% if c.oauth_configured %}
-                      <a class="btn btn-primary" href="/oauth/{{ c.service }}/start?label={{ row.label }}">Sign in</a>
-                    {% else %}
-                      <a class="btn btn-primary disabled" title="Set EUNOMIA_{{ c.service.upper() }}_CLIENT_ID / _SECRET to enable">Sign in</a>
-                    {% endif %}
-                  {% endif %}
-                </div>
-              {% endif %}
+              {% endfor %}
             </div>
-            {% if not row.connected %}
-              <details class="disclosure">
-                <summary>or add an API key instead</summary>
-                <form class="form-inline" method="post" action="/settings/api-key">
-                  <input type="hidden" name="service" value="{{ c.service }}">
-                  <input type="hidden" name="label" value="{{ row.label }}">
-                  <input type="password" name="key" placeholder="API key" required>
-                  <button class="btn btn-secondary" type="submit">Save</button>
-                </form>
-              </details>
-            {% endif %}
-          {% endfor %}
-        {% endfor %}
-      </div>
-    </div>
+          {% endif %}
 
-    <div class="settings-section">
-      <h2>LLM provider keys</h2>
-      <p class="hint" style="margin-bottom: 12px;">Any provider — OpenAI, Anthropic, or otherwise. Eunomia tries them in the order added and falls back to the next on failure.</p>
-
-      {% if other_credentials %}
-        <div class="conn-card" style="margin-bottom: 12px;">
-          {% for cred in other_credentials %}
-            <div class="conn-row">
-              <div class="conn-meta">
-                <div class="conn-name">{{ cred.service }}</div>
-                <div class="conn-label">{{ cred.label }}</div>
-              </div>
-              <span class="badge badge-connected">API key set</span>
-              <form method="post" action="/settings/credentials/{{ cred.id }}/delete">
-                <button class="btn btn-danger" type="submit" title="Remove">✕</button>
-              </form>
-            </div>
-          {% endfor %}
+          <form class="field-form-row" method="post" action="/settings/api-key" style="display: flex;">
+            <input type="text" name="service" placeholder="Provider (e.g. openai)" required>
+            <input type="hidden" name="label" value="default">
+            <input type="password" name="key" placeholder="API key" required>
+            <button class="btn btn-primary" type="submit">Add</button>
+          </form>
         </div>
-      {% endif %}
+      </div>
 
-      <form class="new-key-form" method="post" action="/settings/api-key">
-        <input type="text" name="service" placeholder="Provider (e.g. openai)" required>
-        <input type="hidden" name="label" value="default">
-        <input type="password" name="key" placeholder="API key" required>
-        <button class="btn btn-primary" type="submit">Add</button>
-      </form>
     </div>
   </main>
 </body>

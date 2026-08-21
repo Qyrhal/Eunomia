@@ -20,7 +20,7 @@ Environment variables:
 
 | Variable                        | Required for                | Meaning                                                    |
 |----------------------------------|------------------------------|--------------------------------------------------------------|
-| `EUNOMIA_VAULT_PATH`             | dashboard (default `./vault`) | Path to your Obsidian vault folder                          |
+| `EUNOMIA_VAULT_PATH`             | dashboard (default `./vault`) | Fallback vault path — the Settings page's "Vault" block overrides this once set |
 | `EUNOMIA_DB_PATH`                | dashboard (default `eunomia.db`) | Path to the SQLite file Eunomia writes to                |
 | `EUNOMIA_MASTER_KEY`             | Settings page                | Encrypts stored credentials at rest. Generate one:<br>`uv run python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` |
 | `EUNOMIA_GITHUB_CLIENT_ID` / `_SECRET` | GitHub sign-in         | From a GitHub OAuth App: https://github.com/settings/developers |
@@ -42,10 +42,11 @@ them, that connection's Settings row still works via a pasted API key instead.
 EUNOMIA_VAULT_PATH=/path/to/vault EUNOMIA_MASTER_KEY=<generated key> uv run uvicorn eunomia.api:app --reload
 ```
 
-- `GET /` — dashboard
+- `GET /` — dashboard; "+ New note" is disabled until a vault is set in Settings
+- `POST /notes` — create a note (`title`, `bucket`) directly in the vault; 400s if no vault is configured yet
 - `POST /sync` — rescan the vault and refresh the DB
 - `GET /api/notes?bucket=work` — JSON, `bucket` optional
-- `GET /settings` — connect accounts (sign-in or API key) and manage LLM provider keys
+- `GET /settings` — set the vault path, manage buckets (add your own beyond Uni/Work/Business/Other), connect accounts (sign-in or API key), and manage LLM provider keys
 - `GET /health` — liveness check
 
 ## Deploy (self-hosted, always-on)
@@ -102,8 +103,10 @@ uv run pytest
 
 ## Status
 
-Vault reader + rule classifier + SQLite + dashboard, plus the Settings page for
-connecting accounts (OAuth sign-in where configured, API key as fallback) and
-storing LLM provider keys. No LLM fallback wired into classification yet, and
+Vault reader + rule classifier + SQLite + dashboard, note creation gated on a
+configured vault, user-defined buckets beyond the built-in four, and a Settings
+page (laid out as independent blocks so new sections drop in cleanly) for the
+vault path, buckets, connected accounts (OAuth sign-in where configured, API key
+as fallback), and LLM provider keys. No LLM classification fallback yet, and
 Slack/Linear/GitHub/HeyPocket/Reminders don't pull data yet — the credentials
 just sit ready for when those integrations land.

@@ -1,3 +1,7 @@
+import sqlite3
+
+import pytest
+
 from eunomia import db
 from eunomia.models import Note
 
@@ -101,3 +105,71 @@ def test_delete_credential():
     db.delete_credential(conn, cred_id)
 
     assert db.get_credentials(conn) == []
+
+
+def test_connect_seeds_default_buckets():
+    conn = db.connect(":memory:")
+    keys = [b.key for b in db.get_buckets(conn)]
+    assert keys == ["uni", "work", "business", "other"]
+
+
+def test_connect_does_not_reseed_on_second_call_with_same_db():
+    conn = sqlite3.connect(":memory:")
+    conn.executescript(db.SCHEMA)
+    db._seed_default_buckets(conn)
+    db._seed_default_buckets(conn)
+    assert len(db.get_buckets(conn)) == 4
+
+
+def test_add_bucket():
+    conn = db.connect(":memory:")
+    db.add_bucket(conn, "side-project", "Side Project", ["startup-x"])
+
+    keys = [b.key for b in db.get_buckets(conn)]
+    assert "side-project" in keys
+
+    added = next(b for b in db.get_buckets(conn) if b.key == "side-project")
+    assert added.label == "Side Project"
+    assert added.keywords == ["startup-x"]
+
+
+def test_add_bucket_duplicate_key_raises():
+    conn = db.connect(":memory:")
+    with pytest.raises(sqlite3.IntegrityError):
+        db.add_bucket(conn, "work", "Work Again", [])
+
+
+def test_delete_bucket():
+    conn = db.connect(":memory:")
+    db.add_bucket(conn, "side-project", "Side Project", [])
+    bucket_id = next(b.id for b in db.get_buckets(conn) if b.key == "side-project")
+
+    db.delete_bucket(conn, bucket_id)
+
+    keys = [b.key for b in db.get_buckets(conn)]
+    assert "side-project" not in keys
+
+
+def test_delete_bucket_cannot_remove_other():
+    conn = db.connect(":memory:")
+    other_id = next(b.id for b in db.get_buckets(conn) if b.key == "other")
+
+    db.delete_bucket(conn, other_id)
+
+    keys = [b.key for b in db.get_buckets(conn)]
+    assert "other" in keys
+
+
+def test_app_settings_get_set():
+    conn = db.connect(":memory:")
+    assert db.get_setting(conn, "vault_path") is None
+
+    db.set_setting(conn, "vault_path", "/home/me/vault")
+    assert db.get_setting(conn, "vault_path") == "/home/me/vault"
+
+
+def test_app_settings_set_overwrites():
+    conn = db.connect(":memory:")
+    db.set_setting(conn, "vault_path", "/first")
+    db.set_setting(conn, "vault_path", "/second")
+    assert db.get_setting(conn, "vault_path") == "/second"
