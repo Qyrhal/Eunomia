@@ -1,5 +1,6 @@
 # FastAPI app: dashboard + JSON API + manual vault sync.
 
+import json
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -45,5 +46,8 @@ def dashboard(request: Request):
     conn = get_db()
     notes = db.get_notes(conn)
     conn.close()
-    grouped = {b: [n for n in notes if n.bucket == b] for b in BUCKETS}
-    return templates.TemplateResponse(request, "dashboard.html", {"grouped": grouped})
+    notes_json = json.dumps([n.__dict__ for n in notes])
+    buckets_json = json.dumps(list(BUCKETS))
+    return templates.TemplateResponse(
+        request, "dashboard.html", {"buckets_json": buckets_json, "notes_json": notes_json}
+    )

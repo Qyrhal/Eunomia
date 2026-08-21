@@ -1,25 +1,312 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
-  <meta charset="utf-8">
-  <title>Eunomia</title>
-  <style>
-    body { font-family: system-ui, sans-serif; margin: 2rem; }
-    h2 { text-transform: capitalize; border-bottom: 1px solid #ccc; }
-    ul { list-style: none; padding-left: 0; }
-    li { padding: 0.25rem 0; }
-    .tags { color: #888; font-size: 0.85em; }
-  </style>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Eunomia</title>
+<style>
+  :root {
+    --bg: #f5f5f7;
+    --sidebar-bg: rgba(255, 255, 255, 0.72);
+    --surface: #ffffff;
+    --border: rgba(60, 60, 67, 0.12);
+    --text: #1d1d1f;
+    --text-secondary: #6e6e73;
+    --accent: #007aff;
+    --accent-soft: rgba(0, 122, 255, 0.12);
+    --tag-bg: rgba(60, 60, 67, 0.07);
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 1px 8px rgba(0, 0, 0, 0.03);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #000000;
+      --sidebar-bg: rgba(28, 28, 30, 0.72);
+      --surface: #1c1c1e;
+      --border: rgba(255, 255, 255, 0.1);
+      --text: #f5f5f7;
+      --text-secondary: #98989d;
+      --accent: #0a84ff;
+      --accent-soft: rgba(10, 132, 255, 0.18);
+      --tag-bg: rgba(255, 255, 255, 0.08);
+      --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 1px 8px rgba(0, 0, 0, 0.2);
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    height: 100%;
+    margin: 0;
+  }
+  body {
+    display: flex;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Sidebar */
+  .sidebar {
+    width: 240px;
+    flex-shrink: 0;
+    padding: 24px 12px;
+    background: var(--sidebar-bg);
+    backdrop-filter: blur(20px);
+    border-right: 1px solid var(--border);
+    height: 100vh;
+    position: sticky;
+    top: 0;
+  }
+  .brand {
+    font-size: 20px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    padding: 0 12px 20px;
+  }
+  .nav-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .nav-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    padding: 8px 12px;
+    border: none;
+    background: transparent;
+    border-radius: 8px;
+    color: var(--text);
+    font-size: 14px;
+    font-weight: 500;
+    text-align: left;
+    cursor: pointer;
+    transition: background 0.12s ease;
+  }
+  .nav-item:hover { background: var(--tag-bg); }
+  .nav-item.active { background: var(--accent); color: #fff; }
+  .nav-item.active .count { color: rgba(255, 255, 255, 0.8); }
+  .nav-item svg { flex-shrink: 0; opacity: 0.85; }
+  .nav-item .label { flex: 1; text-transform: capitalize; }
+  .nav-item .count {
+    font-size: 12px;
+    color: var(--text-secondary);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .sync-btn {
+    margin: 20px 12px 0;
+    width: calc(100% - 24px);
+    padding: 8px 12px;
+    border: none;
+    border-radius: 8px;
+    background: var(--tag-bg);
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.12s ease, opacity 0.12s ease;
+  }
+  .sync-btn:hover { background: var(--border); }
+  .sync-btn:disabled { opacity: 0.5; cursor: default; }
+
+  /* Main */
+  main {
+    flex: 1;
+    padding: 32px 40px;
+    max-width: 760px;
+  }
+  .page-title {
+    font-size: 28px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    margin: 0 0 20px;
+    text-transform: capitalize;
+  }
+
+  .search {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--tag-bg);
+    border-radius: 10px;
+    padding: 8px 12px;
+    margin-bottom: 24px;
+  }
+  .search svg { flex-shrink: 0; color: var(--text-secondary); }
+  .search input {
+    border: none;
+    background: transparent;
+    outline: none;
+    font-size: 14px;
+    color: var(--text);
+    width: 100%;
+    font-family: inherit;
+  }
+  .search input::placeholder { color: var(--text-secondary); }
+
+  .note-group {
+    background: var(--surface);
+    border-radius: 12px;
+    box-shadow: var(--shadow);
+    overflow: hidden;
+  }
+  .note-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  .note-row:last-child { border-bottom: none; }
+  .note-title {
+    font-size: 14px;
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .note-tags {
+    display: flex;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+  .tag-pill {
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    background: var(--tag-bg);
+    border-radius: 999px;
+    padding: 3px 9px;
+  }
+
+  .empty-state {
+    text-align: center;
+    padding: 64px 24px;
+    color: var(--text-secondary);
+    font-size: 14px;
+  }
+</style>
 </head>
 <body>
-  <h1>Eunomia</h1>
-  {% for bucket, notes in grouped.items() %}
-    <h2>{{ bucket }} ({{ notes|length }})</h2>
-    <ul>
-      {% for note in notes %}
-        <li>{{ note.title }} <span class="tags">{{ note.tags|join(", ") }}</span></li>
-      {% endfor %}
-    </ul>
-  {% endfor %}
+
+  <nav class="sidebar">
+    <div class="brand">Eunomia</div>
+    <ul class="nav-list" id="nav-list"></ul>
+    <button class="sync-btn" id="sync-btn">Sync vault</button>
+  </nav>
+
+  <main>
+    <h1 class="page-title" id="page-title">All</h1>
+    <div class="search">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <input type="text" id="search-input" placeholder="Search notes">
+    </div>
+    <div class="note-group" id="note-group"></div>
+  </main>
+
+<script>
+const BUCKETS = {{ buckets_json | safe }};
+const ICONS = {
+  uni: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 10 12 5 2 10l10 5 10-5Z"/><path d="M6 12v5c0 1.5 2.5 3 6 3s6-1.5 6-3v-5"/></svg>',
+  work: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>',
+  business: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3" width="16" height="18" rx="1"/><line x1="9" y1="8" x2="9" y2="8"/><line x1="15" y1="8" x2="15" y2="8"/><line x1="9" y1="12" x2="9" y2="12"/><line x1="15" y1="12" x2="15" y2="12"/><line x1="9" y1="16" x2="15" y2="16"/></svg>',
+  other: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg>',
+  all: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>',
+};
+
+let notes = {{ notes_json | safe }};
+let activeBucket = "all";
+let query = "";
+
+const navList = document.getElementById("nav-list");
+const noteGroup = document.getElementById("note-group");
+const pageTitle = document.getElementById("page-title");
+const searchInput = document.getElementById("search-input");
+const syncBtn = document.getElementById("sync-btn");
+
+function counts() {
+  const c = { all: notes.length };
+  for (const b of BUCKETS) c[b] = notes.filter(n => n.bucket === b).length;
+  return c;
+}
+
+function renderNav() {
+  const c = counts();
+  const items = ["all", ...BUCKETS];
+  navList.innerHTML = items.map(b => `
+    <li>
+      <button class="nav-item ${b === activeBucket ? "active" : ""}" data-bucket="${b}">
+        ${ICONS[b] || ""}
+        <span class="label">${b}</span>
+        <span class="count">${c[b]}</span>
+      </button>
+    </li>
+  `).join("");
+  navList.querySelectorAll(".nav-item").forEach(btn => {
+    btn.addEventListener("click", () => {
+      activeBucket = btn.dataset.bucket;
+      render();
+    });
+  });
+}
+
+function renderNotes() {
+  pageTitle.textContent = activeBucket;
+  let visible = activeBucket === "all" ? notes : notes.filter(n => n.bucket === activeBucket);
+  if (query) {
+    const q = query.toLowerCase();
+    visible = visible.filter(n =>
+      n.title.toLowerCase().includes(q) || n.tags.some(t => t.toLowerCase().includes(q))
+    );
+  }
+  if (visible.length === 0) {
+    noteGroup.innerHTML = `<div class="empty-state">No notes here yet.</div>`;
+    return;
+  }
+  noteGroup.innerHTML = visible.map(n => `
+    <div class="note-row">
+      <span class="note-title">${escapeHtml(n.title)}</span>
+      <span class="note-tags">${n.tags.map(t => `<span class="tag-pill">${escapeHtml(t)}</span>`).join("")}</span>
+    </div>
+  `).join("");
+}
+
+function escapeHtml(s) {
+  const div = document.createElement("div");
+  div.textContent = s;
+  return div.innerHTML;
+}
+
+function render() {
+  renderNav();
+  renderNotes();
+}
+
+searchInput.addEventListener("input", (e) => {
+  query = e.target.value;
+  renderNotes();
+});
+
+syncBtn.addEventListener("click", async () => {
+  syncBtn.disabled = true;
+  syncBtn.textContent = "Syncing…";
+  try {
+    await fetch("/sync", { method: "POST" });
+    const resp = await fetch("/api/notes");
+    notes = await resp.json();
+    render();
+  } finally {
+    syncBtn.disabled = false;
+    syncBtn.textContent = "Sync vault";
+  }
+});
+
+render();
+</script>
 </body>
 </html>
