@@ -10,3 +10,14 @@ class Note:
     bucket: str
     tags: list[str] = field(default_factory=list)
     mtime: float = 0.0
+
+
+@dataclass
+class Credential:
+    id: int
+    service: str
+    label: str
+    kind: str  # "oauth" | "api_key"
+    secret_encrypted: str
+    account: str | None = None
+    created_at: float = 0.0

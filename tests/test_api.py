@@ -1,18 +1,6 @@
 """Smoke tests: real HTTP requests against the FastAPI app, backed by a temp vault + temp DB."""
 
-import pytest
-from fastapi.testclient import TestClient
-
 from eunomia import config
-
-
-@pytest.fixture
-def client(vault, tmp_path, monkeypatch):
-    monkeypatch.setattr(config, "VAULT_PATH", vault)
-    monkeypatch.setattr(config, "DB_PATH", str(tmp_path / "test.db"))
-    from eunomia.api import app
-
-    return TestClient(app)
 
 
 def test_health(client):

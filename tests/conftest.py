@@ -1,6 +1,10 @@
 from pathlib import Path
 
 import pytest
+from cryptography.fernet import Fernet
+from fastapi.testclient import TestClient
+
+from eunomia import config
 
 
 @pytest.fixture
@@ -18,3 +22,13 @@ def vault(tmp_path: Path) -> Path:
     (tmp_path / "bad_frontmatter.md").write_text("---\n: not valid yaml : [\n---\n# Broken\nBody text.\n")
 
     return tmp_path
+
+
+@pytest.fixture
+def client(vault, tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "VAULT_PATH", vault)
+    monkeypatch.setattr(config, "DB_PATH", str(tmp_path / "test.db"))
+    monkeypatch.setenv("EUNOMIA_MASTER_KEY", Fernet.generate_key().decode())
+    from eunomia.api import app
+
+    return TestClient(app)

@@ -48,3 +48,56 @@ def test_sync_notes_with_empty_list_clears_table():
     db.sync_notes(conn, [])
 
     assert db.get_notes(conn) == []
+
+
+def test_upsert_and_get_credentials():
+    conn = db.connect(":memory:")
+    db.upsert_credential(conn, "github", "Work", "oauth", "enc-token")
+
+    creds = db.get_credentials(conn)
+    assert len(creds) == 1
+    assert creds[0].service == "github"
+    assert creds[0].label == "Work"
+    assert creds[0].kind == "oauth"
+    assert creds[0].secret_encrypted == "enc-token"
+
+
+def test_upsert_credential_idempotent_on_service_and_label():
+    conn = db.connect(":memory:")
+    db.upsert_credential(conn, "github", "Work", "oauth", "token-1")
+    db.upsert_credential(conn, "github", "Work", "oauth", "token-2")
+
+    creds = db.get_credentials(conn)
+    assert len(creds) == 1
+    assert creds[0].secret_encrypted == "token-2"
+
+
+def test_credentials_for_different_labels_coexist():
+    conn = db.connect(":memory:")
+    db.upsert_credential(conn, "github", "Work", "oauth", "token-work")
+    db.upsert_credential(conn, "github", "Business", "oauth", "token-biz")
+
+    creds = db.get_credentials(conn)
+    assert {(c.label, c.secret_encrypted) for c in creds} == {
+        ("Work", "token-work"),
+        ("Business", "token-biz"),
+    }
+
+
+def test_get_credential_secret_by_id():
+    conn = db.connect(":memory:")
+    db.upsert_credential(conn, "openai", "default", "api_key", "enc-key")
+    cred_id = db.get_credentials(conn)[0].id
+
+    assert db.get_credential_secret(conn, cred_id) == "enc-key"
+    assert db.get_credential_secret(conn, 9999) is None
+
+
+def test_delete_credential():
+    conn = db.connect(":memory:")
+    db.upsert_credential(conn, "openai", "default", "api_key", "enc-key")
+    cred_id = db.get_credentials(conn)[0].id
+
+    db.delete_credential(conn, cred_id)
+
+    assert db.get_credentials(conn) == []

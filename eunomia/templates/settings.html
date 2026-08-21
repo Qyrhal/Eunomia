@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Settings · Eunomia</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+  <nav class="sidebar">
+    <div class="brand">Eunomia</div>
+    <ul class="nav-list">
+      <li><a class="nav-item" href="/">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
+        <span class="label">Dashboard</span>
+      </a></li>
+    </ul>
+    <div class="nav-footer">
+      <a class="nav-item active" href="/settings">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>
+        <span class="label">Settings</span>
+      </a>
+    </div>
+  </nav>
+
+  <main>
+    <h1 class="page-title">Settings</h1>
+    <p class="page-subtitle">Connect the accounts and API keys Eunomia pulls from. Signing in is preferred where it's available — an API key is the fallback.</p>
+
+    {% if error %}
+      <div class="error-banner">{{ error }}</div>
+    {% endif %}
+
+    <div class="settings-section">
+      <h2>Connections</h2>
+      <div class="conn-card">
+        {% for c in connections %}
+          {% for row in c.rows %}
+            <div class="conn-row">
+              <div class="conn-icon">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9 12h6M12 9v6"/></svg>
+              </div>
+              <div class="conn-meta">
+                <div class="conn-name">{{ c.name }}</div>
+                <div class="conn-label">{{ row.label }}</div>
+              </div>
+
+              {% if row.connected %}
+                <span class="badge badge-connected">{{ "Signed in" if row.kind == "oauth" else "API key set" }}</span>
+                <div class="conn-actions">
+                  <form method="post" action="/settings/credentials/{{ row.credential_id }}/delete">
+                    <button class="btn btn-danger" type="submit" title="Remove">✕</button>
+                  </form>
+                </div>
+              {% else %}
+                <span class="badge badge-idle">Not connected</span>
+                <div class="conn-actions">
+                  {% if c.oauth_supported %}
+                    {% if c.oauth_configured %}
+                      <a class="btn btn-primary" href="/oauth/{{ c.service }}/start?label={{ row.label }}">Sign in</a>
+                    {% else %}
+                      <a class="btn btn-primary disabled" title="Set EUNOMIA_{{ c.service.upper() }}_CLIENT_ID / _SECRET to enable">Sign in</a>
+                    {% endif %}
+                  {% endif %}
+                </div>
+              {% endif %}
+            </div>
+            {% if not row.connected %}
+              <details class="disclosure">
+                <summary>or add an API key instead</summary>
+                <form class="form-inline" method="post" action="/settings/api-key">
+                  <input type="hidden" name="service" value="{{ c.service }}">
+                  <input type="hidden" name="label" value="{{ row.label }}">
+                  <input type="password" name="key" placeholder="API key" required>
+                  <button class="btn btn-secondary" type="submit">Save</button>
+                </form>
+              </details>
+            {% endif %}
+          {% endfor %}
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="settings-section">
+      <h2>LLM provider keys</h2>
+      <p class="hint" style="margin-bottom: 12px;">Any provider — OpenAI, Anthropic, or otherwise. Eunomia tries them in the order added and falls back to the next on failure.</p>
+
+      {% if other_credentials %}
+        <div class="conn-card" style="margin-bottom: 12px;">
+          {% for cred in other_credentials %}
+            <div class="conn-row">
+              <div class="conn-meta">
+                <div class="conn-name">{{ cred.service }}</div>
+                <div class="conn-label">{{ cred.label }}</div>
+              </div>
+              <span class="badge badge-connected">API key set</span>
+              <form method="post" action="/settings/credentials/{{ cred.id }}/delete">
+                <button class="btn btn-danger" type="submit" title="Remove">✕</button>
+              </form>
+            </div>
+          {% endfor %}
+        </div>
+      {% endif %}
+
+      <form class="new-key-form" method="post" action="/settings/api-key">
+        <input type="text" name="service" placeholder="Provider (e.g. openai)" required>
+        <input type="hidden" name="label" value="default">
+        <input type="password" name="key" placeholder="API key" required>
+        <button class="btn btn-primary" type="submit">Add</button>
+      </form>
+    </div>
+  </main>
+</body>
+</html>
