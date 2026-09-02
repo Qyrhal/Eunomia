@@ -101,9 +101,14 @@ def embed(texts: list[str]) -> list[list[float]]:
     missing_idx = [i for i, k in enumerate(keys) if k not in cached]
     if missing_idx:
         fresh_texts = [texts[i] for i in missing_idx]
-        if cfg["backend"] == "local":
+        backend = cfg["backend"]
+        if backend == "api" and not (cfg["base_url"] and cfg["model"]):
+            # unconfigured API backend: degrade to stub so search still works
+            # out of the box. Configuring llm_base_url + embedding_model upgrades it.
+            backend = "stub"
+        if backend == "local":
             vecs = _embed_local(fresh_texts)
-        elif cfg["backend"] == "api":
+        elif backend == "api":
             vecs = _embed_api(fresh_texts, cfg)
         else:
             vecs = _embed_stub(fresh_texts)
