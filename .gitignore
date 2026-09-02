@@ -2,6 +2,12 @@ __pycache__/
 *.pyc
 .venv/
 *.db
+*.sqlite3
 .pytest_cache/
 .env
 vault/
+
+node_modules/
+.next/
+test-results/
+playwright-report/

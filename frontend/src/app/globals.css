@@ -1,0 +1,146 @@
+@import "tailwindcss";
+
+/* ---- Eunomia: "civic ledger" ----
+   Ink = deep verdigris (oxidised bronze), the metal of Greek instruments.
+   Accent = brass, the metal of a seal. A hairline register, not a bubble UI. */
+
+:root {
+  color-scheme: light;
+  --plane: #ececE4;
+  --surface: #fbfbf8;
+  --surface-2: #f2f1e8;
+  --text-primary: #182524;
+  --text-secondary: #48605a;
+  --text-muted: #82938c;
+  --gridline: #d9d9cd;
+  --border: rgba(24, 37, 36, 0.14);
+  --border-strong: rgba(24, 37, 36, 0.28);
+  --accent: #a8752f;
+  --accent-ink: #6e4f1e;
+  --verdigris: #1f8a75;
+  --series-1: #a8752f;
+  --series-2: #1f8a75;
+  --series-3: #b03f28;
+  --series-4: #235c99;
+  --good: #2f8f4e;
+  --warning: #a8752f;
+  --critical: #b03f28;
+
+  --font-display: var(--font-fraunces);
+  --font-sans: var(--font-plex-sans);
+  --font-mono: var(--font-plex-mono);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --plane: #0e1512;
+    --surface: #141e1a;
+    --surface-2: #1a2622;
+    --text-primary: #eceee6;
+    --text-secondary: #adbab3;
+    --text-muted: #728279;
+    --gridline: #26332d;
+    --border: rgba(236, 238, 230, 0.12);
+    --border-strong: rgba(236, 238, 230, 0.22);
+    --accent: #bb8640;
+    --accent-ink: #f3dfb8;
+    --verdigris: #2e9a82;
+    --series-1: #bb8640;
+    --series-2: #2e9a82;
+    --series-3: #db7052;
+    --series-4: #5488c7;
+    --good: #49b56a;
+    --warning: #bb8640;
+    --critical: #db7052;
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --plane: #0e1512;
+  --surface: #141e1a;
+  --surface-2: #1a2622;
+  --text-primary: #eceee6;
+  --text-secondary: #adbab3;
+  --text-muted: #728279;
+  --gridline: #26332d;
+  --border: rgba(236, 238, 230, 0.12);
+  --border-strong: rgba(236, 238, 230, 0.22);
+  --accent: #bb8640;
+  --accent-ink: #f3dfb8;
+  --verdigris: #2e9a82;
+  --series-1: #bb8640;
+  --series-2: #2e9a82;
+  --series-3: #db7052;
+  --series-4: #5488c7;
+  --good: #49b56a;
+  --warning: #bb8640;
+  --critical: #db7052;
+}
+
+* {
+  border-color: var(--border);
+}
+
+body {
+  background: var(--plane);
+  color: var(--text-primary);
+  font-family: var(--font-sans), system-ui, sans-serif;
+}
+
+.font-display {
+  font-family: var(--font-display), Georgia, serif;
+  font-feature-settings: "ss01" 1;
+  letter-spacing: -0.01em;
+}
+
+.font-mono {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.surface {
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+
+.ledger {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.eyebrow {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 10.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.hairline-rows > * + * {
+  border-top: 1px solid var(--border);
+}
+
+.field {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-family: var(--font-sans), system-ui, sans-serif;
+}
+
+.field::placeholder {
+  color: var(--text-muted);
+}
+
+::selection {
+  background: var(--accent);
+  color: var(--surface);
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}

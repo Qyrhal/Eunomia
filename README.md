@@ -1,112 +1,100 @@
 # Eunomia
 
-Personal work/uni/business dashboard. Reads an Obsidian vault off disk, buckets notes
-by frontmatter tag / folder / inline hashtag, serves a dashboard. See [ABOUT.md](ABOUT.md)
-for what it's for and why.
+Personal AI dashboard: tasks/reminders, an AI assistant (bring your own OpenAI-compatible
+endpoint) with tool-calling over your tasks/calendar/bank data, and connectors for Google
+(Calendar + Gmail), [Up Bank](https://developer.up.com.au), and
+[PocketAI](https://docs.heypocketai.com/docs/api).
 
-## Install
+On the Tasks page, hitting "Generate" next to a task title asks the model to draft notes —
+it can call read-only tools (calendar, email search, recent transactions) to pull in real,
+specific context (e.g. a "Picnic with Sam" task can end up referencing the actual email
+thread or the venue booking transaction) rather than inventing detail. That generation path
+never touches your data — it can look things up but can't create or edit tasks itself.
 
-Requires [uv](https://docs.astral.sh/uv/) (manages the Python 3.14 install and venv for you).
+No auth — this is meant to run on your own machine/network, not be exposed publicly.
 
-```
-git clone https://github.com/Qyrhal/Eunomia.git
-cd Eunomia
-uv sync --extra dev
-```
+## Structure
 
-## Configure
+- `backend/` — Django + DRF API, uv-managed. Also ships `mcp_server.py`, a standalone
+  MCP server (stdio) exposing the same task/calendar tools to Claude or other MCP clients.
+- `frontend/` — Next.js (App Router) + Tailwind, bun-managed.
 
-Environment variables:
+## Quick start
 
-| Variable                        | Required for                | Meaning                                                    |
-|----------------------------------|------------------------------|--------------------------------------------------------------|
-| `EUNOMIA_VAULT_PATH`             | dashboard (default `./vault`) | Fallback vault path — the Settings page's "Vault" block overrides this once set |
-| `EUNOMIA_DB_PATH`                | dashboard (default `eunomia.db`) | Path to the SQLite file Eunomia writes to                |
-| `EUNOMIA_MASTER_KEY`             | Settings page                | Encrypts stored credentials at rest. Generate one:<br>`uv run python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` |
-| `EUNOMIA_GITHUB_CLIENT_ID` / `_SECRET` | GitHub sign-in         | From a GitHub OAuth App: https://github.com/settings/developers |
-| `EUNOMIA_LINEAR_CLIENT_ID` / `_SECRET` | Linear sign-in         | From a Linear OAuth application: https://linear.app/settings/api/applications |
-| `EUNOMIA_SLACK_CLIENT_ID` / `_SECRET`  | Slack sign-in          | From a Slack app: https://api.slack.com/apps               |
-
-The vault path just needs to be a folder of `.md` files kept in sync by whatever you
-already use (Obsidian Sync, Syncthing, iCloud) — Eunomia only reads from disk, it
-doesn't talk to Obsidian directly.
-
-The OAuth client id/secret pairs are only needed if you want the "Sign in" buttons
-on the Settings page to work for that service — set the redirect/callback URL on
-each platform's app to `http(s)://<your-host>/oauth/<service>/callback`. Without
-them, that connection's Settings row still works via a pasted API key instead.
-
-## Run locally
-
-```
-EUNOMIA_VAULT_PATH=/path/to/vault EUNOMIA_MASTER_KEY=<generated key> uv run uvicorn eunomia.api:app --reload
+```bash
+./run.sh
 ```
 
-- `GET /` — dashboard; "+ New note" is disabled until a vault is set in Settings
-- `POST /notes` — create a note (`title`, `bucket`) directly in the vault; 400s if no vault is configured yet
-- `POST /sync` — rescan the vault and refresh the DB
-- `GET /api/notes?bucket=work` — JSON, `bucket` optional
-- `GET /settings` — set the vault path, manage buckets (add your own beyond Uni/Work/Business/Other), connect accounts (sign-in or API key), and manage LLM provider keys
-- `GET /health` — liveness check
+Migrates the backend and runs both servers together. See "Local dev" below to do it by hand.
 
-## Deploy (self-hosted, always-on)
+## Local dev
 
-Runs as a single process — no containers or reverse proxy required, though you can
-put one in front for TLS if you expose it beyond localhost.
+```bash
+# backend
+cd backend
+uv sync
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"  # -> ENCRYPTION_KEY
+cat > .env <<EOF
+SECRET_KEY=dev-secret
+ENCRYPTION_KEY=<paste generated key>
+EOF
+uv run manage.py migrate
+uv run manage.py runserver 8000
 
-1. On the server: install [uv](https://docs.astral.sh/uv/getting-started/installation/),
-   clone the repo into `/opt/eunomia` (or wherever), then `cd /opt/eunomia && uv sync --extra dev`.
-   uv downloads and pins Python 3.14 itself — no system Python version to manage.
-2. Create a systemd unit at `/etc/systemd/system/eunomia.service`:
-
-   ```ini
-   [Unit]
-   Description=Eunomia dashboard
-   After=network.target
-
-   [Service]
-   User=YOUR_USER
-   WorkingDirectory=/opt/eunomia
-   Environment=EUNOMIA_VAULT_PATH=/path/to/vault
-   Environment=EUNOMIA_DB_PATH=/opt/eunomia/eunomia.db
-   Environment=EUNOMIA_MASTER_KEY=<generated key, keep it secret>
-   # Optional, only needed for the Settings page's "Sign in" buttons:
-   # Environment=EUNOMIA_GITHUB_CLIENT_ID=...
-   # Environment=EUNOMIA_GITHUB_CLIENT_SECRET=...
-   ExecStart=/usr/local/bin/uv run uvicorn eunomia.api:app --host 0.0.0.0 --port 8000
-   Restart=on-failure
-
-   [Install]
-   WantedBy=multi-user.target
-   ```
-
-   Adjust the `uv` path to wherever it installed (`which uv` on the server).
-
-3. Enable and start it:
-
-   ```
-   sudo systemctl daemon-reload
-   sudo systemctl enable --now eunomia
-   ```
-
-4. `curl http://localhost:8000/health` to confirm it's up. Point a cron/systemd timer
-   or the vault sync tool's hook at `POST /sync` to keep the dashboard current, since
-   nothing polls the filesystem automatically yet.
-
-To update: `git pull`, `uv sync --extra dev`, `sudo systemctl restart eunomia`.
-
-## Test
-
-```
-uv run pytest
+# frontend, in another shell
+cd frontend
+bun install
+echo "NEXT_PUBLIC_API_URL=http://localhost:8000" > .env.local
+bun run dev
 ```
 
-## Status
+Open http://localhost:3000, go to Settings for the AI endpoint/theme, and Connectors for
+Google/Up Bank/PocketAI.
 
-Vault reader + rule classifier + SQLite + dashboard, note creation gated on a
-configured vault, user-defined buckets beyond the built-in four, and a Settings
-page (laid out as independent blocks so new sections drop in cleanly) for the
-vault path, buckets, connected accounts (OAuth sign-in where configured, API key
-as fallback), and LLM provider keys. No LLM classification fallback yet, and
-Slack/Linear/GitHub/HeyPocket/Reminders don't pull data yet — the credentials
-just sit ready for when those integrations land.
+Google OAuth needs a Google Cloud OAuth client (Calendar + Gmail APIs enabled, redirect URI
+`http://localhost:8000/api/connectors/google/callback`) — paste its client ID/secret into
+the Google card on the Connectors page, no `.env` editing needed. (They can also be set via
+`GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` in `backend/.env` as a deployment-wide
+fallback if you'd rather not store them per-instance.)
+
+## Demo data
+
+Nothing to look at yet? Seed ~50 realistic fake tasks across 4 demo projects (all prefixed
+"Demo — ", so they're easy to tell apart and clear):
+
+```bash
+cd backend
+uv run manage.py seed_demo_data          # add --seed N for reproducible data
+uv run manage.py seed_demo_data --clear  # remove it again
+```
+
+Or from the app: Settings → Demo data → Seed/Clear. Re-seeding replaces the previous batch;
+clearing only ever touches those prefixed projects, never real data.
+
+## MCP server
+
+```bash
+cd backend
+uv run mcp_server.py
+```
+
+Point Claude Desktop (or another MCP client) at that command — it reads/writes the same
+sqlite database as the Django app.
+
+## Tests
+
+```bash
+cd backend
+uv run manage.py test
+
+# frontend UI tests (needs the backend running on :8000 — real API, no mocks)
+cd frontend
+bun run test
+```
+
+## Docker
+
+```bash
+cp .env.example .env   # fill in SECRET_KEY, ENCRYPTION_KEY, Google OAuth creds
+docker compose up --build
+```
