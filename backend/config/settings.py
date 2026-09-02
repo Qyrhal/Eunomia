@@ -35,6 +35,7 @@ INSTALLED_APPS = [
     "masking",
     "embeddings",
     "cache",
+    "sources",
 ]
 
 MIDDLEWARE = [

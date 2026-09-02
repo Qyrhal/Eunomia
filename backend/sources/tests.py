@@ -1,0 +1,78 @@
+from django.test import TestCase
+
+from cache.models import CacheRecord
+from connectors.models import AppSettings, Connector
+
+from . import registry
+from .base import Source, SyncResult, ToolSpec
+
+
+class FakeSource(Source):
+    key = "fake"
+    label = "Fake"
+    record_types = ["fake.thing"]
+    secret_fields = ["nested.token"]
+
+    def __init__(self, records=None):
+        self._records = records or []
+
+    def sync(self, mode, cursor=None):
+        return SyncResult(records=self._records, cursor="c2")
+
+    def map(self, raw):
+        return {
+            "id": f"fake:fake.thing:{raw['id']}",
+            "source": "fake",
+            "type": "fake.thing",
+            "external_id": str(raw["id"]),
+            "title": raw.get("title", ""),
+            "body_text": raw.get("body", ""),
+            "occurred_at": None,
+            "url": "",
+            "payload": {},
+            "links": [],
+            "deleted": False,
+        }
+
+    def tools(self):
+        return [ToolSpec(name="hi", schema={"type": "object"}, impl=lambda: "hi")]
+
+
+class DiscoveryTests(TestCase):
+    def test_example_source_is_discovered(self):
+        registry.discover()
+        self.assertIsNotNone(registry.get("example"))
+        self.assertIn("example", [s.key for s in registry.all()])
+
+    def test_tool_registry_namespaces_by_source_key(self):
+        registry.discover()
+        self.assertIn("example.ping", registry.tool_registry())
+
+
+class RunSyncTests(TestCase):
+    def setUp(self):
+        s = AppSettings.load()
+        s.embedding_backend = AppSettings.EMBED_STUB
+        s.save()
+        registry.register(FakeSource(records=[{"id": 1, "title": "One", "body": "hello world"}]))
+
+    def test_run_sync_pipes_records_into_the_cache(self):
+        report, cursor = registry.run_sync("fake")
+        self.assertEqual(report.written, 1)
+        self.assertEqual(cursor, "c2")
+        self.assertTrue(CacheRecord.objects.filter(pk="fake:fake.thing:1").exists())
+
+    def test_run_sync_unknown_source_raises(self):
+        with self.assertRaises(KeyError):
+            registry.run_sync("nope")
+
+    def test_secret_values_resolved_from_connector_credentials(self):
+        c = Connector.objects.create(kind="fake", enabled=True)
+        c.credentials = {"nested": {"token": "SECRET123"}}
+        c.save()
+        self.assertEqual(registry._secret_values(registry.get("fake")), ["SECRET123"])
+
+    def test_enabled_reflects_connector_rows(self):
+        self.assertNotIn("fake", [s.key for s in registry.enabled()])
+        Connector.objects.create(kind="fake", enabled=True)
+        self.assertIn("fake", [s.key for s in registry.enabled()])
