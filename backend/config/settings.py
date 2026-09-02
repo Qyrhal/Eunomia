@@ -14,6 +14,10 @@ ALLOWED_HOSTS = os.environ.get("ALLOWED_HOSTS", "*").split(",")
 # Generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 ENCRYPTION_KEY = os.environ.get("ENCRYPTION_KEY", "")
 
+# Static bearer token guarding the API + MCP surface. Unset = open (trusted LAN /
+# tailscale only). See config/auth.py.
+EUNOMIA_API_TOKEN = os.environ.get("EUNOMIA_API_TOKEN", "")
+
 INSTALLED_APPS = [
     "django.contrib.admin",
     "django.contrib.auth",
@@ -76,10 +80,10 @@ USE_TZ = True
 STATIC_URL = "static/"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
-# Personal single-user app: no auth wall on the API.
-# ponytail: AllowAny everywhere, add real auth if this ever leaves localhost.
+# Single-user app on a trusted network. One static bearer token (EUNOMIA_API_TOKEN);
+# open when it's unset. ponytail: per-user tokens/scopes are fog (see map #1).
 REST_FRAMEWORK = {
-    "DEFAULT_PERMISSION_CLASSES": ["rest_framework.permissions.AllowAny"],
+    "DEFAULT_PERMISSION_CLASSES": ["config.auth.HasApiToken"],
     "DEFAULT_FILTER_BACKENDS": ["django_filters.rest_framework.DjangoFilterBackend"],
 }
 
