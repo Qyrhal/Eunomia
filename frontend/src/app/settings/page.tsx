@@ -65,9 +65,10 @@ export default function SettingsPage() {
   async function saveSettings() {
     if (!settings) return;
     const payload: Record<string, unknown> = {
-      system_prompt: settings.system_prompt,
+      embedding_backend: settings.embedding_backend,
+      embedding_model: settings.embedding_model,
       llm_base_url: settings.llm_base_url,
-      llm_model: settings.llm_model,
+      hermes_webhook_url: settings.hermes_webhook_url,
       theme: settings.theme,
     };
     if (apiKeyInput) payload.llm_api_key = apiKeyInput;
@@ -103,31 +104,35 @@ export default function SettingsPage() {
       </Link>
 
       <section className="ledger p-6 flex flex-col gap-4">
-        <div className="eyebrow">AI assistant</div>
+        <div className="eyebrow">Embeddings</div>
         <label className="text-[13px] flex flex-col gap-1.5" style={{ color: "var(--text-secondary)" }}>
-          System prompt
-          <textarea
+          Backend
+          <select
             className="field px-3 py-2.5 text-[13.5px]"
-            rows={4}
-            value={settings.system_prompt}
-            onChange={(e) => setSettings({ ...settings, system_prompt: e.target.value })}
-          />
+            value={settings.embedding_backend}
+            onChange={(e) => setSettings({ ...settings, embedding_backend: e.target.value as AppSettings["embedding_backend"] })}
+          >
+            <option value="api">OpenAI-compatible API</option>
+            <option value="local">Local (sentence-transformers)</option>
+            <option value="stub">Stub (offline)</option>
+          </select>
         </label>
         <label className="text-[13px] flex flex-col gap-1.5" style={{ color: "var(--text-secondary)" }}>
-          OpenAI-compatible base URL
+          API base URL
           <input
             className="field px-3 py-2.5 text-[13.5px] font-mono"
             value={settings.llm_base_url}
             onChange={(e) => setSettings({ ...settings, llm_base_url: e.target.value })}
-            placeholder="https://api.openai.com/v1"
+            placeholder="http://127.0.0.1:11434/v1"
           />
         </label>
         <label className="text-[13px] flex flex-col gap-1.5" style={{ color: "var(--text-secondary)" }}>
           Model
           <input
             className="field px-3 py-2.5 text-[13.5px] font-mono"
-            value={settings.llm_model}
-            onChange={(e) => setSettings({ ...settings, llm_model: e.target.value })}
+            value={settings.embedding_model}
+            onChange={(e) => setSettings({ ...settings, embedding_model: e.target.value })}
+            placeholder="nomic-embed-text"
           />
         </label>
         <label className="text-[13px] flex flex-col gap-1.5" style={{ color: "var(--text-secondary)" }}>
@@ -138,6 +143,19 @@ export default function SettingsPage() {
             value={apiKeyInput}
             onChange={(e) => setApiKeyInput(e.target.value)}
             placeholder={settings.llm_api_key_set ? "leave blank to keep" : "sk-…"}
+          />
+        </label>
+      </section>
+
+      <section className="ledger p-6 flex flex-col gap-4">
+        <div className="eyebrow">Hermes</div>
+        <label className="text-[13px] flex flex-col gap-1.5" style={{ color: "var(--text-secondary)" }}>
+          Gateway webhook base URL
+          <input
+            className="field px-3 py-2.5 text-[13.5px] font-mono"
+            value={settings.hermes_webhook_url}
+            onChange={(e) => setSettings({ ...settings, hermes_webhook_url: e.target.value })}
+            placeholder="http://127.0.0.1:8644/webhooks"
           />
         </label>
       </section>

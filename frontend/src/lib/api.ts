@@ -1,9 +1,15 @@
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+// Matches backend EUNOMIA_API_TOKEN. Only needed when the backend sets it.
+const API_TOKEN = process.env.NEXT_PUBLIC_API_TOKEN || "";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API_URL}${path}`, {
     ...init,
-    headers: { "Content-Type": "application/json", ...init?.headers },
+    headers: {
+      "Content-Type": "application/json",
+      ...(API_TOKEN ? { Authorization: `Bearer ${API_TOKEN}` } : {}),
+      ...init?.headers,
+    },
   });
   if (!res.ok) {
     const body = await res.text();
@@ -55,10 +61,17 @@ export type Task = {
 };
 
 export type AppSettings = {
-  system_prompt: string;
+  embedding_backend: "api" | "local" | "stub";
+  embedding_model: string;
   llm_base_url: string;
-  llm_model: string;
   llm_api_key_set: boolean;
+  hermes_webhook_url: string;
+  hermes_webhook_secret_set: boolean;
+  pii_allowlist: string[];
+  pii_disabled_sources: string[];
+  pii_min_confidence: number;
+  vip_senders: string[];
+  sync_intervals: Record<string, number>;
   theme: { mode?: "light" | "dark" | "system"; accent?: string };
 };
 
@@ -101,22 +114,11 @@ export type FinanceSummary = {
   recent_transactions: { description: string; amount: string; created_at: string }[];
 };
 
-export type GeneratedTaskDetails = {
-  description: string;
-  tool_trace: { tool: string; args: Record<string, unknown>; result: unknown }[];
-};
-
 export type PocketSummary = {
   recordings_count: number;
   total_duration_minutes: number;
   tag_breakdown: { tag: string; count: number }[];
   recent_recordings: { title: string; duration_minutes: number; recorded_at: string; tags: string[] }[];
-};
-
-export type TaskSuggestion = { title: string; notes?: string; due_at?: string | null };
-export type SuggestTasksResponse = {
-  suggestions: TaskSuggestion[];
-  tool_trace: { tool: string; args: Record<string, unknown>; result: unknown }[];
 };
 
 export type TaskContext = {

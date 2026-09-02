@@ -20,7 +20,15 @@ dependencies = [
     "httpx>=0.28.1",
     "mcp>=2.1.1",
     "python-dotenv>=1.2.3",
+    "apscheduler>=3.10",
+    "sqlite-vec>=0.1.9",
+    "uvicorn>=0.52.4",
 ]
+
+[project.optional-dependencies]
+# `embedding_backend = "local"` — pulls torch, ~1GB. The default "api" backend
+# (OpenAI-compatible / Ollama) needs none of this.
+local-embeddings = ["sentence-transformers>=3.0"]
 
 [tool.uv]
 package = false
