@@ -37,9 +37,11 @@ class ToolRestTests(TestCase):
     def test_unknown_tool_404(self):
         self.assertEqual(self.client.post("/api/tools/nope", {}, content_type="application/json").status_code, 404)
 
-    def test_bad_args_400(self):
+    def test_bad_args_returns_clean_error_not_a_crash(self):
+        # generic tools are @safe: unexpected kwargs come back as {"error": ...}, HTTP 200
         r = self.client.post("/api/tools/get", {"wrong": 1}, content_type="application/json")
-        self.assertEqual(r.status_code, 400)
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("error", r.json())
 
     def test_create_task_via_rest(self):
         r = self.client.post("/api/tools/create_task", {"title": "from rest"}, content_type="application/json")

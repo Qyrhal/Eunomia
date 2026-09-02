@@ -59,3 +59,22 @@ class RegistryTests(TestCase):
 
     def test_unknown_tool(self):
         self.assertEqual(registry.call("nope", {}), {"error": "unknown tool nope"})
+
+
+class BadAgentInputTests(TestCase):
+    def test_list_bad_sort_field_is_a_clean_error_not_a_500(self):
+        out = registry.call("list", {"type": "gcal.event", "sort": "start_at"})
+        self.assertIn("error", out)
+        self.assertIn("start_at", out["error"])
+
+    def test_list_bad_filter_field_is_a_clean_error(self):
+        out = registry.call("list", {"filters": {"nope": 1}})
+        self.assertIn("error", out)
+
+    def test_list_payload_filter_is_allowed(self):
+        out = registry.call("list", {"filters": {"payload__x": 1}})
+        self.assertNotIn("error", out)
+
+    def test_search_bad_type_int_limit_does_not_raise(self):
+        out = registry.call("search", {"query": "x", "limit": "not-a-number"})
+        self.assertIn("error", out)
