@@ -12,6 +12,7 @@ from googleapiclient.discovery import build
 GOOGLE_SCOPES = [
     "https://www.googleapis.com/auth/calendar",
     "https://www.googleapis.com/auth/gmail.modify",
+    "https://www.googleapis.com/auth/drive.readonly",
 ]
 
 
@@ -271,6 +272,44 @@ class GoogleClient:
                 }
             )
         return results
+
+    def gmail_list_detailed(self, query: str, max_results: int = 100) -> list[dict]:
+        """id + Subject/From/Date + snippet per message — envelope-shaped, no body (#21)."""
+        service = build("gmail", "v1", credentials=self._creds)
+        listing = service.users().messages().list(userId="me", q=query, maxResults=max_results).execute()
+        out = []
+        for item in listing.get("messages", []):
+            msg = service.users().messages().get(
+                userId="me", id=item["id"], format="metadata",
+                metadataHeaders=["Subject", "From", "To", "Date"],
+            ).execute()
+            headers = {h["name"]: h["value"] for h in msg.get("payload", {}).get("headers", [])}
+            out.append({
+                "id": item["id"], "threadId": msg.get("threadId"),
+                "subject": headers.get("Subject", ""), "from": headers.get("From", ""),
+                "to": headers.get("To", ""), "date": headers.get("Date", ""),
+                "snippet": msg.get("snippet", ""),
+                "labelIds": msg.get("labelIds", []),
+                "internalDate": msg.get("internalDate"),
+            })
+        return out
+
+    def drive_files(self, query: str = "trashed = false", page_size: int = 100) -> list[dict]:
+        """File metadata only — body is fetched on demand (#41)."""
+        service = build("drive", "v3", credentials=self._creds)
+        result = service.files().list(
+            q=query, pageSize=page_size, orderBy="modifiedTime desc",
+            fields="files(id,name,mimeType,modifiedTime,createdTime,webViewLink,owners(emailAddress),size)",
+        ).execute()
+        return result.get("files", [])
+
+    def drive_file_text(self, file_id: str, mime_type: str = "") -> str:
+        """On-demand plain-text body for a Drive file (#41)."""
+        service = build("drive", "v3", credentials=self._creds)
+        if mime_type == "application/vnd.google-apps.document":
+            return service.files().export(fileId=file_id, mimeType="text/plain").execute().decode("utf-8", "replace")
+        data = service.files().get_media(fileId=file_id).execute()
+        return data.decode("utf-8", "replace") if isinstance(data, bytes) else str(data)
 
     def gmail_unread_count(self) -> int:
         """Uses the list response's resultSizeEstimate rather than paginating everything."""
