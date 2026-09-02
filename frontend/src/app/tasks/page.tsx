@@ -1,11 +1,11 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Check, ChevronDown, ChevronRight, Flag, GripVertical, Link2, Pencil, Plus, Radar, Sparkles, Trash2, X } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, Flag, GripVertical, Link2, Pencil, Plus, Trash2, X } from "lucide-react";
 import DueDatePicker from "@/components/DueDatePicker";
 import TagInput from "@/components/TagInput";
 import Toast, { ToastState } from "@/components/Toast";
-import { api, GeneratedTaskDetails, Project, SuggestTasksResponse, Task, TaskContext, TaskSuggestion } from "@/lib/api";
+import { api, Project, Task, TaskContext } from "@/lib/api";
 import { parseQuickAdd } from "@/lib/quickAdd";
 
 const RECURRENCES: { value: Task["recurrence"]; label: string }[] = [
@@ -89,13 +89,7 @@ export default function TasksPage() {
   const [newDueAt, setNewDueAt] = useState("");
   const [newPriority, setNewPriority] = useState<0 | 1 | 2 | 3>(0);
   const [newRecurrence, setNewRecurrence] = useState<Task["recurrence"]>("none");
-  const [generating, setGenerating] = useState(false);
-  const [generateError, setGenerateError] = useState<string | null>(null);
   const [showCompleted, setShowCompleted] = useState(false);
-  const [suggestions, setSuggestions] = useState<TaskSuggestion[]>([]);
-  const [scanning, setScanning] = useState(false);
-  const [scanError, setScanError] = useState<string | null>(null);
-  const [scanned, setScanned] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState<Draft | null>(null);
   const [saving, setSaving] = useState(false);
@@ -216,57 +210,6 @@ export default function TasksPage() {
     setNewRecurrence("none");
     loadTasks();
     loadAllTags();
-  }
-
-  async function generateDescription() {
-    if (!newTitle.trim() || generating) return;
-    setGenerating(true);
-    setGenerateError(null);
-    try {
-      const activeProjectName = projects.find((p) => p.id === activeProject)?.name;
-      const res = await api.post<GeneratedTaskDetails>("/api/ai/generate-task-details", {
-        title: newTitle,
-        notes: newNotes,
-        project_name: activeProjectName,
-      });
-      setNewNotes(res.description);
-    } catch (e) {
-      setGenerateError(e instanceof Error ? e.message : "Could not generate notes.");
-    } finally {
-      setGenerating(false);
-    }
-  }
-
-  async function scanForSuggestions() {
-    if (scanning) return;
-    setScanning(true);
-    setScanError(null);
-    try {
-      const res = await api.post<SuggestTasksResponse>("/api/ai/suggest-tasks");
-      setSuggestions(res.suggestions);
-      setScanned(true);
-    } catch (e) {
-      setScanError(e instanceof Error ? e.message : "Could not scan for suggestions.");
-    } finally {
-      setScanning(false);
-    }
-  }
-
-  async function approveSuggestion(index: number) {
-    const s = suggestions[index];
-    let projectId = activeProject !== "all" ? activeProject : projects[0]?.id;
-    if (!projectId) {
-      const created = await api.post<Project>("/api/projects/", { name: "Inbox" });
-      projectId = created.id;
-      loadProjects();
-    }
-    await api.post("/api/tasks/", { title: s.title, notes: s.notes || "", due_at: s.due_at || null, project: projectId });
-    setSuggestions((cur) => cur.filter((_, i) => i !== index));
-    loadTasks();
-  }
-
-  function dismissSuggestion(index: number) {
-    setSuggestions((cur) => cur.filter((_, i) => i !== index));
   }
 
   async function toggleComplete(task: Task) {
@@ -539,71 +482,6 @@ export default function TasksPage() {
         <div className="eyebrow mb-2">Tasks</div>
         <h1 className="font-display text-3xl mb-6">Open items</h1>
 
-        <div className="ledger p-5 mb-6 flex flex-col gap-3">
-          <div className="flex items-center justify-between">
-            <div>
-              <div className="eyebrow mb-1">Suggestions</div>
-              <p className="text-[12.5px]" style={{ color: "var(--text-secondary)" }}>
-                Scans your calendar, email, and recent transactions for things that should
-                probably be a task. Nothing is added until you approve it.
-              </p>
-            </div>
-            <button
-              onClick={scanForSuggestions}
-              disabled={scanning}
-              className="field px-4 py-2 text-[13px] flex items-center gap-1.5 shrink-0 disabled:opacity-40"
-              style={{ color: "var(--accent)" }}
-            >
-              <Radar size={14} className={scanning ? "animate-pulse" : ""} />
-              {scanning ? "Scanning…" : "Scan"}
-            </button>
-          </div>
-
-          {scanError && (
-            <div className="text-[12px]" style={{ color: "var(--critical)" }}>
-              {scanError}
-            </div>
-          )}
-
-          {scanned && !scanError && suggestions.length === 0 && (
-            <div className="text-[12.5px]" style={{ color: "var(--text-muted)" }}>
-              Nothing found that needs a task right now.
-            </div>
-          )}
-
-          {suggestions.length > 0 && (
-            <ul className="hairline-rows -mx-5 px-5">
-              {suggestions.map((s, i) => (
-                <li key={i} className="flex items-start gap-3 py-3">
-                  <div className="flex-1 min-w-0">
-                    <div className="text-[13.5px]">{s.title}</div>
-                    {s.notes && (
-                      <div className="text-[12px] mt-0.5" style={{ color: "var(--text-secondary)" }}>
-                        {s.notes}
-                      </div>
-                    )}
-                    {s.due_at && (
-                      <div className="text-[11.5px] font-mono mt-0.5" style={{ color: "var(--text-muted)" }}>
-                        {new Date(s.due_at).toLocaleString()}
-                      </div>
-                    )}
-                  </div>
-                  <button
-                    onClick={() => approveSuggestion(i)}
-                    className="px-3 py-1.5 text-[12px] font-medium text-white shrink-0 flex items-center gap-1"
-                    style={{ background: "var(--accent)" }}
-                  >
-                    <Check size={12} /> Approve
-                  </button>
-                  <button onClick={() => dismissSuggestion(i)} className="shrink-0" aria-label="Dismiss">
-                    <X size={14} color="var(--text-muted)" />
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-
         <div className="ledger p-3.5 mb-6 flex flex-col gap-2.5">
           <div className="flex gap-2">
             <input
@@ -613,16 +491,6 @@ export default function TasksPage() {
               placeholder="New reminder… try “call mom tomorrow 3pm #family”"
               className="flex-1 field px-3 py-2 text-[13.5px]"
             />
-            <button
-              onClick={generateDescription}
-              disabled={!newTitle.trim() || generating}
-              title="Draft notes with AI — it can pull context from your calendar, email, and bank transactions"
-              className="field px-3 text-[13px] flex items-center gap-1.5 disabled:opacity-40"
-              style={{ color: "var(--accent)" }}
-            >
-              <Sparkles size={14} className={generating ? "animate-pulse" : ""} />
-              {generating ? "Thinking…" : "Generate"}
-            </button>
             <button onClick={addTask} className="px-4 text-[13px] font-medium field flex items-center gap-1.5" style={{ color: "var(--accent)" }}>
               <Plus size={14} /> Add
             </button>
@@ -630,7 +498,7 @@ export default function TasksPage() {
           <textarea
             value={newNotes}
             onChange={(e) => setNewNotes(e.target.value)}
-            placeholder="Notes (optional) — write your own, or generate with AI"
+            placeholder="Notes (optional)"
             rows={2}
             className="field px-3 py-2 text-[12.5px]"
           />
@@ -645,11 +513,6 @@ export default function TasksPage() {
             </div>
           </div>
           <TagInput value={newTags} onChange={setNewTags} suggestions={allTags} />
-          {generateError && (
-            <div className="text-[12px]" style={{ color: "var(--critical)" }}>
-              {generateError}
-            </div>
-          )}
         </div>
 
         <ul className="ledger overflow-hidden hairline-rows">

@@ -2,14 +2,14 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { BarChart3, CheckSquare, MessageCircle, Plug, Settings, Wallet } from "lucide-react";
+import { BarChart3, CheckSquare, Plug, Settings, Wallet } from "lucide-react";
 import { api, Project } from "@/lib/api";
 
 type Item = { label: string; hint?: string; go: () => void };
 
-const PAGE_LABELS = ["Dashboard", "Tasks", "Finance", "Connectors", "Assistant", "Settings"];
-const PAGE_ICONS = [BarChart3, CheckSquare, Wallet, Plug, MessageCircle, Settings];
-const PAGE_HREFS = ["/", "/tasks", "/finance", "/connectors", "/chat", "/settings"];
+const PAGE_LABELS = ["Dashboard", "Tasks", "Finance", "Connectors", "Settings"];
+const PAGE_ICONS = [BarChart3, CheckSquare, Wallet, Plug, Settings];
+const PAGE_HREFS = ["/", "/tasks", "/finance", "/connectors", "/settings"];
 
 export default function CommandPalette() {
   const [open, setOpen] = useState(false);

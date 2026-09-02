@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { BarChart3, CheckSquare, MessageCircle, Plug, Settings, Wallet } from "lucide-react";
+import { BarChart3, CheckSquare, Plug, Settings, Wallet } from "lucide-react";
 import HourRing from "./HourRing";
 
 const NAV = [
@@ -10,7 +10,6 @@ const NAV = [
   { href: "/tasks", label: "Tasks", icon: CheckSquare },
   { href: "/finance", label: "Finance", icon: Wallet },
   { href: "/connectors", label: "Connectors", icon: Plug },
-  { href: "/chat", label: "Assistant", icon: MessageCircle },
   { href: "/settings", label: "Settings", icon: Settings },
 ];
 

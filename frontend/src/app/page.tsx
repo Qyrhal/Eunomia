@@ -489,9 +489,6 @@ export default function Dashboard() {
           Your assistant has entered <b style={{ color: "var(--text-primary)" }}>{ai?.ai_created ?? 0}</b> of your{" "}
           <b style={{ color: "var(--text-primary)" }}>{aiTotal}</b> open tasks into the register.
         </div>
-        <Link href="/chat" className="px-4 py-2 text-[13px] font-medium shrink-0 text-white" style={{ background: "var(--accent)" }}>
-          Open assistant
-        </Link>
       </div>
     </div>
   );

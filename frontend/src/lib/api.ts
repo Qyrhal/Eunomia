@@ -101,22 +101,11 @@ export type FinanceSummary = {
   recent_transactions: { description: string; amount: string; created_at: string }[];
 };
 
-export type GeneratedTaskDetails = {
-  description: string;
-  tool_trace: { tool: string; args: Record<string, unknown>; result: unknown }[];
-};
-
 export type PocketSummary = {
   recordings_count: number;
   total_duration_minutes: number;
   tag_breakdown: { tag: string; count: number }[];
   recent_recordings: { title: string; duration_minutes: number; recorded_at: string; tags: string[] }[];
-};
-
-export type TaskSuggestion = { title: string; notes?: string; due_at?: string | null };
-export type SuggestTasksResponse = {
-  suggestions: TaskSuggestion[];
-  tool_trace: { tool: string; args: Record<string, unknown>; result: unknown }[];
 };
 
 export type TaskContext = {

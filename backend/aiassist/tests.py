@@ -1,11 +1,9 @@
-from unittest.mock import patch
-
 from connectors.demo_seed import seed_demo_bank_data, seed_demo_google_data
 from django.test import TestCase
 
 from tasks.models import Project, Task
 
-from . import tools, views
+from . import tools
 
 
 class ToolsTests(TestCase):
@@ -78,121 +76,3 @@ class ToolsTests(TestCase):
         self.assertIsInstance(results, list)
         self.assertGreater(len(results), 0)
         self.assertIn("amount", results[0])
-
-
-class GenerateTaskDetailsViewTests(TestCase):
-    def test_requires_a_title(self):
-        response = self.client.post("/api/ai/generate-task-details", {}, content_type="application/json")
-        self.assertEqual(response.status_code, 400)
-
-    def test_without_llm_configured_returns_400(self):
-        response = self.client.post(
-            "/api/ai/generate-task-details", {"title": "Picnic with Sam"}, content_type="application/json"
-        )
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("Settings", response.json()["detail"])
-
-    def test_success_shape_and_only_uses_read_only_tools(self):
-        with patch("aiassist.views.run_tool_loop") as mock_loop:
-            mock_loop.return_value = (
-                {"role": "assistant", "content": "Bring the blanket you bought at the shop from that receipt."},
-                [{"tool": "list_recent_transactions", "args": {}, "result": []}],
-            )
-            response = self.client.post(
-                "/api/ai/generate-task-details",
-                {"title": "Picnic with Sam", "project_name": "Weekend"},
-                content_type="application/json",
-            )
-
-        self.assertEqual(response.status_code, 200)
-        data = response.json()
-        self.assertIn("blanket", data["description"])
-        self.assertEqual(len(data["tool_trace"]), 1)
-
-        # the tool set handed to the model must not include anything that mutates data
-        _, kwargs = mock_loop.call_args
-        tool_names = {s["function"]["name"] for s in kwargs["tool_schemas"]}
-        self.assertNotIn("create_task", tool_names)
-        self.assertNotIn("update_task", tool_names)
-        self.assertNotIn("list_tasks", tool_names)
-
-    def test_passes_both_title_and_existing_notes_as_context(self):
-        with patch("aiassist.views.run_tool_loop") as mock_loop:
-            mock_loop.return_value = ({"role": "assistant", "content": "..."}, [])
-            self.client.post(
-                "/api/ai/generate-task-details",
-                {"title": "Picnic with Sam", "notes": "already booked the park"},
-                content_type="application/json",
-            )
-
-        args, _ = mock_loop.call_args
-        user_message = args[1][0]["content"]
-        self.assertIn("Picnic with Sam", user_message)
-        self.assertIn("already booked the park", user_message)
-
-
-class SuggestTasksViewTests(TestCase):
-    def test_without_llm_configured_returns_400(self):
-        response = self.client.post("/api/ai/suggest-tasks")
-        self.assertEqual(response.status_code, 400)
-
-    def test_parses_a_json_array_response_into_suggestions(self):
-        with patch("aiassist.views.run_tool_loop") as mock_loop:
-            mock_loop.return_value = (
-                {
-                    "role": "assistant",
-                    "content": '[{"title": "Prep for standup", "notes": "review yesterday\'s PRs", "due_at": null}]',
-                },
-                [{"tool": "list_calendar_events", "args": {}, "result": []}],
-            )
-            response = self.client.post("/api/ai/suggest-tasks")
-
-        self.assertEqual(response.status_code, 200)
-        data = response.json()
-        self.assertEqual(len(data["suggestions"]), 1)
-        self.assertEqual(data["suggestions"][0]["title"], "Prep for standup")
-        self.assertEqual(len(data["tool_trace"]), 1)
-
-    def test_tolerates_a_model_that_wraps_the_array_in_prose_or_fences(self):
-        with patch("aiassist.views.run_tool_loop") as mock_loop:
-            mock_loop.return_value = (
-                {"role": "assistant", "content": 'Sure, here you go:\n```json\n[{"title": "Pay Netflix"}]\n```'},
-                [],
-            )
-            response = self.client.post("/api/ai/suggest-tasks")
-
-        self.assertEqual(response.json()["suggestions"], [{"title": "Pay Netflix"}])
-
-    def test_empty_array_response_means_no_suggestions(self):
-        with patch("aiassist.views.run_tool_loop") as mock_loop:
-            mock_loop.return_value = ({"role": "assistant", "content": "[]"}, [])
-            response = self.client.post("/api/ai/suggest-tasks")
-
-        self.assertEqual(response.json()["suggestions"], [])
-
-    def test_unparseable_response_degrades_to_no_suggestions_not_an_error(self):
-        with patch("aiassist.views.run_tool_loop") as mock_loop:
-            mock_loop.return_value = ({"role": "assistant", "content": "not json at all"}, [])
-            response = self.client.post("/api/ai/suggest-tasks")
-
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["suggestions"], [])
-
-    def test_only_uses_read_only_tools(self):
-        with patch("aiassist.views.run_tool_loop") as mock_loop:
-            mock_loop.return_value = ({"role": "assistant", "content": "[]"}, [])
-            self.client.post("/api/ai/suggest-tasks")
-
-        _, kwargs = mock_loop.call_args
-        tool_names = {s["function"]["name"] for s in kwargs["tool_schemas"]}
-        self.assertNotIn("create_task", tool_names)
-        self.assertNotIn("update_task", tool_names)
-
-
-class ResearchToolRestrictionTests(TestCase):
-    def test_research_tools_are_read_only(self):
-        self.assertNotIn("create_task", views.RESEARCH_TOOL_IMPLS)
-        self.assertNotIn("update_task", views.RESEARCH_TOOL_IMPLS)
-        self.assertIn("search_emails", views.RESEARCH_TOOL_IMPLS)
-        self.assertIn("list_calendar_events", views.RESEARCH_TOOL_IMPLS)
-        self.assertIn("list_recent_transactions", views.RESEARCH_TOOL_IMPLS)
