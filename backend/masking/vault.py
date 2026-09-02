@@ -88,21 +88,40 @@ def rotate(token: str, new_value: str) -> None:
     row.save(update_fields=["value_encrypted", "value_hmac", "last_used"])
 
 
-def tokenize_text(text: str, source: str = "") -> str:
-    """Replace every detected PII span in ``text`` with its token.
+def _pii_config():
+    """PII knobs from AppSettings, with defaults for before #26 adds the fields."""
+    try:
+        from connectors.models import AppSettings
 
-    The detector registry lives in :mod:`masking.pii` (#28); until it ships this
-    is a no-op passthrough, so callers can wire it in now.
-    """
+        row = AppSettings.load()
+    except Exception:
+        row = None
+    return (
+        set(getattr(row, "pii_allowlist", None) or []),
+        set(getattr(row, "pii_disabled_sources", None) or []),
+        float(getattr(row, "pii_min_confidence", None) or 0.5),
+    )
+
+
+def tokenize_text(text: str, source: str = "") -> str:
+    """Replace every detected PII span in ``text`` with its vault token."""
     if not text:
         return text
     try:
         from .pii import scan
     except ImportError:
         return text
+
+    allowlist, disabled_sources, min_conf = _pii_config()
+    if source and source in disabled_sources:
+        return text
+
     spans = sorted(scan(text), key=lambda s: s[0], reverse=True)
     out = text
-    for start, end, type_, _conf in spans:
-        tok = tokenize(out[start:end], type_, kind=VaultSecret.KIND_PII, source=source)
+    for start, end, type_, conf in spans:
+        value = out[start:end]
+        if conf < min_conf or value in allowlist:
+            continue
+        tok = tokenize(value, type_, kind=VaultSecret.KIND_PII, source=source)
         out = out[:start] + tok + out[end:]
     return out

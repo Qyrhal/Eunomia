@@ -51,9 +51,57 @@ class VaultTests(TestCase):
 
         self.assertNotEqual(row.value_hmac, hashlib.sha256(b"email:a@x.com").hexdigest())
 
-    def test_tokenize_text_noop_without_detector(self):
-        # pii.py (#28) not shipped yet -> passthrough
-        self.assertEqual(tokenize_text("email me at a@x.com"), "email me at a@x.com")
+    def test_tokenize_text_masks_email_and_is_reversible(self):
+        out = tokenize_text("ping me at Sam@Example.com about it", source="gmail")
+        self.assertNotIn("Sam@Example.com", out)
+        self.assertRegex(out, r"\[eunomia:email:\d+\]")
+        tok = out.split("ping me at ")[1].split(" about")[0]
+        self.assertEqual(detokenize(tok), "Sam@Example.com")
+
+    def test_tokenize_text_masks_multiple_spans(self):
+        out = tokenize_text("card 4242 4242 4242 4242 email a@b.com", source="x")
+        self.assertNotIn("4242 4242", out)
+        self.assertNotIn("a@b.com", out)
+        self.assertIn("[eunomia:card:", out)
+        self.assertIn("[eunomia:email:", out)
+
+
+class PIIScanTests(TestCase):
+    def test_email(self):
+        from .pii import scan
+
+        spans = scan("reach a.b+c@x.co.uk now")
+        self.assertEqual([(s[2]) for s in spans], ["email"])
+
+    def test_luhn_card_only(self):
+        from .pii import scan
+
+        self.assertTrue(any(s[2] == "card" for s in scan("pay 4242424242424242")))
+        self.assertFalse(any(s[2] == "card" for s in scan("ref 1234567812345678")))  # fails Luhn
+
+    def test_au_phone(self):
+        from .pii import scan
+
+        self.assertTrue(any(s[2] == "phone" for s in scan("call 0412 345 678 today")))
+
+    def test_bank_bsb_account(self):
+        from .pii import scan
+
+        self.assertTrue(any(s[2] == "bank_acct" for s in scan("acct 123-456 12345678")))
+
+    def test_key_shaped_needs_entropy_and_mixed_classes(self):
+        from .pii import scan
+
+        self.assertTrue(any(s[2] == "key_shaped" for s in scan("token sk_live_9f8Q2xKp1mZ7Rw3aB6cD0eF")))
+        self.assertFalse(any(s[2] == "key_shaped" for s in scan("aaaaaaaaaaaaaaaaaaaaaaaaaaaa")))
+        self.assertFalse(any(s[2] == "key_shaped" for s in scan("thisisjustaverylongplainenglishword")))
+
+    def test_overlaps_resolved_by_confidence(self):
+        from .pii import scan
+
+        # a Luhn card is also 16 digits; card (0.95) must beat any tokenish match
+        spans = scan("4242424242424242")
+        self.assertEqual([s[2] for s in spans], ["card"])
 
 
 class BoundaryTests(TestCase):
