@@ -15,7 +15,10 @@ from django.utils import timezone
 
 from .models import DeliveryLog, Trigger
 
-_RETRY_BACKOFF = [0, 5, 30, 120]  # attempt 1 immediate, then 5s/30s/120s
+# attempt 1 immediate, then short retries. Kept tight because rule-triggered
+# deliveries run inline in the ingest path (#31 stage 7) — a bulk sync that
+# matches many records must not stall for minutes when Hermes is briefly down.
+_RETRY_BACKOFF = [0, 3, 10]
 
 
 def _sign(secret: str, ts: str, body: str) -> str:
@@ -71,6 +74,11 @@ def fire(trigger: Trigger, entity: dict, payload: dict | None = None, *, sleep=t
                 Trigger.objects.filter(pk=trigger.pk).update(
                     last_fired_at=timezone.now(), fire_count=trigger.fire_count + 1)
                 return True
+        except (httpx.ConnectError, httpx.ConnectTimeout) as e:
+            # host isn't answering — retrying inline is pointless, dead-letter now
+            DeliveryLog.objects.create(trigger_key=trigger.key, entity_id=entity_id,
+                                       attempt=attempt, ok=False, detail=str(e)[:300])
+            break
         except httpx.HTTPError as e:
             DeliveryLog.objects.create(trigger_key=trigger.key, entity_id=entity_id,
                                        attempt=attempt, ok=False, detail=str(e)[:300])

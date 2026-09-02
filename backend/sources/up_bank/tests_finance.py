@@ -54,4 +54,4 @@ class FinanceSummaryTests(TestCase):
         self.assertEqual({c["category"] for c in out["spend_by_category"]}, {"transport"})
 
     def test_registered_as_up_bank_tool(self):
-        self.assertIn("up_bank.finance_summary", all_tools())
+        self.assertIn("up_bank__finance_summary", all_tools())

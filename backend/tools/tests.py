@@ -46,7 +46,7 @@ class RegistryTests(TestCase):
         reg = registry.all_tools()
         self.assertIn("search", reg)
         self.assertIn("get", reg)
-        self.assertIn("example.ping", reg)
+        self.assertIn("example__ping", reg)
 
     def test_register_tool_and_call(self):
         registry.register_tool("echo", {"type": "object"}, lambda **kw: kw)

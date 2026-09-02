@@ -93,5 +93,5 @@ def tool_registry() -> dict:
     reg: dict[str, object] = {}
     for src in _REGISTRY.values():
         for t in src.tools():
-            reg[f"{src.key}.{t.name}"] = t
+            reg[f"{src.key}__{t.name}"] = t  # __ not . — OpenAI-compatible function-name rules
     return reg

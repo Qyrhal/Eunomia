@@ -75,7 +75,7 @@ class EndToEndSmokeTests(TestCase):
         self.assertEqual(rec["id"], rid)
 
         # 3. finance_summary
-        fin = call("up_bank.finance_summary", {"since": "2000-01-01T00:00:00Z"})
+        fin = call("up_bank__finance_summary", {"since": "2000-01-01T00:00:00Z"})
         blobs.append(json.dumps(fin))
         self.assertEqual(fin["balance"], 1000.0)
         self.assertTrue(any(cat["category"] == "home" for cat in fin["spend_by_category"]))

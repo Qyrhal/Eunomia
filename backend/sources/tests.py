@@ -46,7 +46,7 @@ class DiscoveryTests(TestCase):
 
     def test_tool_registry_namespaces_by_source_key(self):
         registry.discover()
-        self.assertIn("example.ping", registry.tool_registry())
+        self.assertIn("example__ping", registry.tool_registry())
 
 
 class RunSyncTests(TestCase):
