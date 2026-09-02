@@ -76,3 +76,26 @@ class RunSyncTests(TestCase):
         self.assertNotIn("fake", [s.key for s in registry.enabled()])
         Connector.objects.create(kind="fake", enabled=True)
         self.assertIn("fake", [s.key for s in registry.enabled()])
+
+
+class ProviderSharingTests(TestCase):
+    def test_sources_can_share_one_provider_connector(self):
+        class A(FakeSource):
+            key = "prov_a"
+            provider = "prov"
+
+        class B(FakeSource):
+            key = "prov_b"
+            provider = "prov"
+
+        registry.register(A())
+        registry.register(B())
+        Connector.objects.create(kind="prov", enabled=True)
+        c = Connector.objects.get(kind="prov")
+        c.credentials = {"nested": {"token": "SHARED"}}
+        c.save()
+
+        keys = {s.key for s in registry.enabled()}
+        self.assertTrue({"prov_a", "prov_b"} <= keys)
+        self.assertEqual(registry._secret_values(registry.get("prov_a")), ["SHARED"])
+        self.assertEqual(registry._secret_values(registry.get("prov_b")), ["SHARED"])

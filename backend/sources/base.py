@@ -23,8 +23,12 @@ class ToolSpec:
 
 
 class Source(abc.ABC):
-    #: stable identifier, e.g. "up_bank"
+    #: stable identifier, e.g. "up_bank" or "google_gmail"
     key: str = ""
+    #: the credential holder this source reads. Several sources can share one
+    #: (e.g. google_gmail / google_calendar / google_drive -> "google"). Defaults
+    #: to `key`. Matches a connectors.Connector row's `kind`.
+    provider: str = ""
     #: human label for the admin UI
     label: str = ""
     #: envelope `type` values this source emits, e.g. ["up.transaction", "up.account"]
@@ -33,6 +37,10 @@ class Source(abc.ABC):
     auth_kind: str = "token"
     #: dotted paths into the stored credentials dict that must always be vault-masked
     secret_fields: list[str] = []
+
+    @property
+    def provider_key(self) -> str:
+        return self.provider or self.key
 
     @abc.abstractmethod
     def sync(self, mode: str, cursor: str | None = None) -> SyncResult:

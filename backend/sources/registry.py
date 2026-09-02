@@ -38,20 +38,30 @@ def all() -> list[Source]:
     return list(_REGISTRY.values())
 
 
+def connector_for(src: Source):
+    """The connectors.Connector row that holds this source's credentials."""
+    from connectors.models import Connector
+
+    return Connector.objects.filter(kind=src.provider_key).first()
+
+
+def credentials_for(src: Source) -> dict:
+    conn = connector_for(src)
+    return (conn.credentials or {}) if conn else {}
+
+
 def enabled() -> list[Source]:
     from connectors.models import Connector
 
     on = set(
         Connector.objects.filter(enabled=True).values_list("kind", flat=True)
     )
-    return [s for s in _REGISTRY.values() if s.key in on]
+    return [s for s in _REGISTRY.values() if s.provider_key in on]
 
 
 def _secret_values(src: Source) -> list[str]:
     """Resolve `src.secret_fields` against the stored credentials dict."""
-    from connectors.models import Connector
-
-    conn = Connector.objects.filter(kind=src.key).first()
+    conn = connector_for(src)
     if not conn:
         return []
     creds = conn.credentials or {}
