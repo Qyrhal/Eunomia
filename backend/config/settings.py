@@ -32,6 +32,7 @@ INSTALLED_APPS = [
     "connectors",
     "aiassist",
     "analytics",
+    "masking",
 ]
 
 MIDDLEWARE = [
