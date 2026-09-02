@@ -18,6 +18,36 @@ services:
     volumes:
       - eunomia-data:/data
 
+  worker:
+    build: ./backend
+    command: sh -c "python manage.py migrate --noinput && python manage.py run_worker"
+    environment:
+      - SECRET_KEY=${SECRET_KEY}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      - EUNOMIA_API_TOKEN=${EUNOMIA_API_TOKEN}
+      - SQLITE_PATH=/data/db.sqlite3
+      - GOOGLE_OAUTH_CLIENT_ID=${GOOGLE_OAUTH_CLIENT_ID}
+      - GOOGLE_OAUTH_CLIENT_SECRET=${GOOGLE_OAUTH_CLIENT_SECRET}
+    volumes:
+      - eunomia-data:/data
+    depends_on:
+      - backend
+
+  mcp:
+    build: ./backend
+    command: python mcp_server.py --http --host 0.0.0.0 --port 8765
+    environment:
+      - SECRET_KEY=${SECRET_KEY}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      - EUNOMIA_API_TOKEN=${EUNOMIA_API_TOKEN}
+      - SQLITE_PATH=/data/db.sqlite3
+    ports:
+      - "8765:8765"
+    volumes:
+      - eunomia-data:/data
+    depends_on:
+      - backend
+
   frontend:
     build:
       context: ./frontend

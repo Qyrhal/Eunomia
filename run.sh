@@ -62,6 +62,14 @@ echo -e "${BOLD}==>${RESET} starting backend  ${DIM}http://localhost:8000${RESET
 (cd backend && uv run manage.py runserver 8000) &
 pids+=($!)
 
+echo -e "${BOLD}==>${RESET} starting sync worker (APScheduler)"
+(cd backend && uv run manage.py run_worker) &
+pids+=($!)
+
+echo -e "${BOLD}==>${RESET} starting MCP server ${DIM}http://localhost:8765/mcp${RESET}"
+(cd backend && uv run mcp_server.py --http) &
+pids+=($!)
+
 echo -e "${BOLD}==>${RESET} starting frontend ${DIM}http://localhost:3000${RESET}"
 (cd frontend && bun run dev) &
 pids+=($!)
