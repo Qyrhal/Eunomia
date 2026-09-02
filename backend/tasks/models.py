@@ -66,6 +66,11 @@ class Task(models.Model):
 
     tags = models.ManyToManyField(Tag, blank=True, related_name="tasks")
 
+    # arbitrary agent-set key/values — the unstructured half of the task graph (#38)
+    props = models.JSONField(default=dict, blank=True)
+    # whether this task has a vector in cache_vec (id = "task:<uuid>")
+    has_embedding = models.BooleanField(default=False)
+
     # set by the AI assistant / MCP callers when it creates or edits a task on your behalf
     created_by_ai = models.BooleanField(default=False)
 
