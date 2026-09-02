@@ -24,3 +24,26 @@ class VaultSecret(models.Model):
 
     def __str__(self):
         return self.token
+
+
+class AuditEvent(models.Model):
+    """Append-only: every time a token became a real value, or a value was
+    revealed to a human. Records the token strings and the actor — never the
+    real values."""
+
+    KIND_REVEAL = "reveal"        # a human clicked "reveal" in the vault inspector
+    KIND_TOOL_INPUT = "tool_input"  # tokens resolved on the way into a tool
+    KIND_OUTBOUND = "outbound"    # tokens re-hydrated for an external API call
+    KIND_CHOICES = [(KIND_REVEAL, "reveal"), (KIND_TOOL_INPUT, "tool input"), (KIND_OUTBOUND, "outbound")]
+
+    kind = models.CharField(max_length=16, choices=KIND_CHOICES)
+    actor = models.CharField(max_length=120, blank=True, default="")
+    tokens = models.JSONField(default=list)
+    detail = models.CharField(max_length=300, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [models.Index(fields=["created_at"]), models.Index(fields=["kind"])]
+
+    def __str__(self):
+        return f"{self.kind} {self.actor} {self.tokens}"

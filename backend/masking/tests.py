@@ -121,7 +121,8 @@ class BoundaryTests(TestCase):
             ["grep", "-rl", "--include=*.py", "detokenize", str(root)],
             capture_output=True, text=True,
         ).stdout.split()
-        allowed = {"masking/boundary.py", "masking/vault.py"}
+        # boundary = the two resolve_* paths; audit.reveal = the one human-reveal path (#22)
+        allowed = {"masking/boundary.py", "masking/vault.py", "masking/audit.py"}
         offenders = {
             rel
             for h in hits

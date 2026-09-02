@@ -33,4 +33,4 @@ def call(name: str, args: dict):
     tools = all_tools()
     if name not in tools:
         return {"error": f"unknown tool {name}"}
-    return tools[name]["impl"](**resolve_tool_input(args or {}))
+    return tools[name]["impl"](**resolve_tool_input(args or {}, actor=f"tool:{name}"))

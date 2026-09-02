@@ -8,32 +8,42 @@ real values. Two directions:
 - :func:`resolve_outbound` — a source's HTTP client calls this on the fully
   assembled request pieces immediately before hitting the external API.
 
-Tool *return values* are never passed through here. Neither is anything a logger,
-serializer, or the cache touches. A grep test enforces that.
+Every crossing is written to the audit log (#36) — token strings + actor, never
+values. Tool *return values* are never passed through here. A grep test enforces
+that ``detokenize`` is called nowhere else.
 """
 
+from . import audit
+from .models import AuditEvent
 from .vault import TOKEN_RE, detokenize
 
 
-def _resolve_str(s: str) -> str:
-    return TOKEN_RE.sub(lambda m: detokenize(m.group(0)) or m.group(0), s)
-
-
-def _walk(obj):
+def _walk(obj, seen: set):
     if isinstance(obj, str):
-        return _resolve_str(obj)
+        def _rep(m):
+            tok = m.group(0)
+            seen.add(tok)
+            return detokenize(tok) or tok
+
+        return TOKEN_RE.sub(_rep, obj)
     if isinstance(obj, dict):
-        return {k: _walk(v) for k, v in obj.items()}
+        return {k: _walk(v, seen) for k, v in obj.items()}
     if isinstance(obj, (list, tuple)):
-        return type(obj)(_walk(v) for v in obj)
+        return type(obj)(_walk(v, seen) for v in obj)
     return obj
 
 
-def resolve_tool_input(args):
-    """Deep-replace every token in a tool-call argument structure. audit: #36."""
-    return _walk(args)
+def resolve_tool_input(args, actor: str = ""):
+    """Deep-replace every token in a tool-call argument structure."""
+    seen: set = set()
+    out = _walk(args, seen)
+    audit.record(AuditEvent.KIND_TOOL_INPUT, actor, seen)
+    return out
 
 
-def resolve_outbound(payload):
-    """Deep-replace every token in an outbound request payload. audit: #36."""
-    return _walk(payload)
+def resolve_outbound(payload, actor: str = ""):
+    """Deep-replace every token in an outbound request payload."""
+    seen: set = set()
+    out = _walk(payload, seen)
+    audit.record(AuditEvent.KIND_OUTBOUND, actor, seen)
+    return out
