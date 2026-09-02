@@ -2,11 +2,18 @@ from unittest.mock import patch
 
 from django.test import TestCase
 
+from connectors.models import AppSettings
+
 from .models import EmbedCache
 from .service import DIM, embed
 
 
 class EmbedStubTests(TestCase):
+    def setUp(self):
+        s = AppSettings.load()
+        s.embedding_backend = AppSettings.EMBED_STUB
+        s.save()
+
     def test_stub_returns_dim_sized_vectors_in_order(self):
         vs = embed(["alpha", "beta", "gamma"])
         self.assertEqual(len(vs), 3)

@@ -6,20 +6,37 @@ from .crypto import decrypt, encrypt
 
 
 class AppSettings(models.Model):
-    """Singleton row (pk=1) holding everything the Settings page edits."""
+    """Singleton row (pk=1) holding deployment-wide configuration."""
 
-    system_prompt = models.TextField(
-        default="You are Eunomia, a personal AI assistant that helps manage tasks, "
-        "reminders, calendar events and general organisation. Be concise and proactive. "
-        "You can read upcoming calendar meetings and recent Up Bank transactions, and turn "
-        "them into tasks when asked (e.g. meeting-prep tasks, bill follow-ups)."
+    # --- external embedding API (the "api" embedding backend / #29) ---
+    EMBED_API, EMBED_LOCAL, EMBED_STUB = "api", "local", "stub"
+    embedding_backend = models.CharField(
+        max_length=10,
+        default=EMBED_API,
+        choices=[(EMBED_API, "OpenAI-compatible API"), (EMBED_LOCAL, "Local (sentence-transformers)"), (EMBED_STUB, "Stub")],
     )
-
+    embedding_model = models.CharField(max_length=200, blank=True, default="")
     llm_base_url = models.CharField(
-        max_length=300, blank=True, default="https://api.openai.com/v1"
+        max_length=300, blank=True, default="",
+        help_text="OpenAI-compatible base URL for the 'api' embedding backend (also fits Ollama's /v1).",
     )
-    llm_model = models.CharField(max_length=200, blank=True, default="gpt-4o-mini")
     llm_api_key_encrypted = models.TextField(blank=True, default="")
+
+    # --- Hermes notification channel (#9 / #39) ---
+    hermes_webhook_url = models.CharField(
+        max_length=400, blank=True, default="",
+        help_text="Base URL of the Hermes gateway webhook adapter, e.g. http://127.0.0.1:8644/webhooks",
+    )
+    hermes_webhook_secret_encrypted = models.TextField(blank=True, default="")
+
+    # --- PII detector knobs (#28) ---
+    pii_allowlist = models.JSONField(default=list, blank=True)
+    pii_disabled_sources = models.JSONField(default=list, blank=True)
+    pii_min_confidence = models.FloatField(default=0.5)
+
+    # --- misc ---
+    vip_senders = models.JSONField(default=list, blank=True, help_text="Sender addresses for the 'VIP email' trigger.")
+    sync_intervals = models.JSONField(default=dict, blank=True, help_text='{"up_bank": 900, ...} seconds per source.')
 
     theme = models.JSONField(
         default=dict,
@@ -44,6 +61,17 @@ class AppSettings(models.Model):
     @llm_api_key.setter
     def llm_api_key(self, value: str):
         self.llm_api_key_encrypted = encrypt(value)
+
+    @property
+    def hermes_webhook_secret(self) -> str:
+        return decrypt(self.hermes_webhook_secret_encrypted)
+
+    @hermes_webhook_secret.setter
+    def hermes_webhook_secret(self, value: str):
+        self.hermes_webhook_secret_encrypted = encrypt(value)
+
+    def sync_interval(self, source_key: str, default: int = 900) -> int:
+        return int((self.sync_intervals or {}).get(source_key, default))
 
 
 class Connector(models.Model):

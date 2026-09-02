@@ -32,7 +32,7 @@ def _cfg():
     return {
         "backend": getattr(row, "embedding_backend", None) or "stub",
         "base_url": (getattr(row, "llm_base_url", "") or "").rstrip("/"),
-        "model": getattr(row, "embedding_model", "") or getattr(row, "llm_model", "") or "",
+        "model": getattr(row, "embedding_model", "") or "",
         "api_key": getattr(row, "llm_api_key", "") or "",
     }
 

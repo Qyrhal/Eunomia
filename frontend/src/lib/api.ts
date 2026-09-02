@@ -61,10 +61,17 @@ export type Task = {
 };
 
 export type AppSettings = {
-  system_prompt: string;
+  embedding_backend: "api" | "local" | "stub";
+  embedding_model: string;
   llm_base_url: string;
-  llm_model: string;
   llm_api_key_set: boolean;
+  hermes_webhook_url: string;
+  hermes_webhook_secret_set: boolean;
+  pii_allowlist: string[];
+  pii_disabled_sources: string[];
+  pii_min_confidence: number;
+  vip_senders: string[];
+  sync_intervals: Record<string, number>;
   theme: { mode?: "light" | "dark" | "system"; accent?: string };
 };
 
