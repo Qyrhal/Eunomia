@@ -33,6 +33,7 @@ INSTALLED_APPS = [
     "aiassist",
     "analytics",
     "masking",
+    "embeddings",
 ]
 
 MIDDLEWARE = [
