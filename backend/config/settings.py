@@ -34,6 +34,7 @@ INSTALLED_APPS = [
     "analytics",
     "masking",
     "embeddings",
+    "cache",
 ]
 
 MIDDLEWARE = [
