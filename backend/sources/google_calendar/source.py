@@ -4,7 +4,7 @@ from datetime import timedelta
 
 from django.utils import timezone
 
-from sources._google import google_client, persist_refreshed_token
+from sources._google import google_client, google_push_webhook, persist_refreshed_token
 from sources.base import Source, SyncResult
 
 
@@ -52,3 +52,6 @@ class GoogleCalendarSource(Source):
             "links": [],
             "deleted": raw.get("status") == "cancelled",
         }
+
+    def webhook(self, request):
+        return google_push_webhook(self, request)

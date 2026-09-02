@@ -1,3 +1,4 @@
+from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -30,3 +31,24 @@ class SourceSyncView(APIView):
         if registry.get(key) is None:
             return Response({"detail": f"no source {key}"}, status=404)
         return Response(sync_source(key, mode="poll"))
+
+
+class SourceWebhookView(APIView):
+    """POST /api/sources/<key>/webhook -> the source verifies the provider's
+    signature itself (an external provider can't send our bearer token), then
+    the translated records go straight through the ingest pipeline.
+    """
+
+    permission_classes = [AllowAny]
+
+    def post(self, request, key):
+        src = registry.get(key)
+        if src is None:
+            return Response({"detail": f"no source {key}"}, status=404)
+        raws = src.webhook(request)
+        if raws is None:
+            return Response({"detail": "rejected (bad signature or unhandled event)"}, status=400)
+        from cache.ingest import ingest
+
+        report = ingest(key, raws, src.map, secret_values=registry._secret_values(src))
+        return Response(report.as_dict())

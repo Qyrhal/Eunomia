@@ -153,5 +153,65 @@ class UpBankSource(Source):
                 name="ping",
                 schema={"type": "object", "properties": {}},
                 impl=lambda: {"ok": self._client().ping()},
-            )
+            ),
+            ToolSpec(
+                name="finance_summary",
+                schema={"type": "object", "properties": {"since": {"type": "string", "description": "ISO date; default 30d ago"}}},
+                impl=finance_summary,
+            ),
         ]
+
+
+def finance_summary(since: str | None = None) -> dict:
+    """Balance + spend-by-category/day + recent transactions, computed from the
+    cached Up Bank records (#42). Every field comes straight off a transaction or
+    account — no invented metrics (it's a personal bank account).
+    """
+    from datetime import timedelta
+
+    from django.utils import timezone
+
+    from cache.models import CacheRecord
+
+    since = since or (timezone.now() - timedelta(days=30)).isoformat()
+
+    accounts = CacheRecord.objects.filter(type="up.account", deleted=False)
+    balance_cents = sum((a.payload or {}).get("balance_cents", 0) for a in accounts)
+
+    txns = CacheRecord.objects.filter(
+        type="up.transaction", deleted=False, occurred_at__gte=since
+    ).order_by("-occurred_at")
+
+    by_cat: dict[str, int] = {}
+    by_day: dict[str, int] = {}
+    for t in txns:
+        cents = (t.payload or {}).get("amount_cents", 0)
+        if cents >= 0:
+            continue
+        cat = (t.payload or {}).get("category") or "uncategorised"
+        by_cat[cat] = by_cat.get(cat, 0) - cents
+        day = t.occurred_at.date().isoformat() if t.occurred_at else "?"
+        by_day[day] = by_day.get(day, 0) - cents
+
+    return {
+        "since": since,
+        "balance": round(balance_cents / 100, 2),
+        "accounts": [
+            {"name": a.title, "balance": (a.payload or {}).get("balance")}
+            for a in accounts
+        ],
+        "spend_by_category": sorted(
+            [{"category": k, "amount": round(v / 100, 2)} for k, v in by_cat.items()],
+            key=lambda r: -r["amount"],
+        ),
+        "spend_by_day": sorted(
+            [{"day": k, "amount": round(v / 100, 2)} for k, v in by_day.items()],
+            key=lambda r: r["day"],
+        ),
+        "recent_transactions": [
+            {"description": t.title, "amount": (t.payload or {}).get("amount"),
+             "status": (t.payload or {}).get("status"),
+             "occurred_at": t.occurred_at.isoformat() if t.occurred_at else None}
+            for t in txns[:20]
+        ],
+    }

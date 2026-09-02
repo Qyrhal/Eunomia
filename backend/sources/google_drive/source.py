@@ -2,7 +2,7 @@
 
 from django.utils import timezone
 
-from sources._google import google_client, persist_refreshed_token
+from sources._google import google_client, google_push_webhook, persist_refreshed_token
 from sources.base import Source, SyncResult, ToolSpec
 
 
@@ -71,3 +71,6 @@ class GoogleDriveSource(Source):
             return {"error": f"fetch failed: {e}"}
         persist_refreshed_token(self, client)
         return {"id": record_id, "title": rec.title, "text": tokenize_text(text, source="google_drive")[:20000]}
+
+    def webhook(self, request):
+        return google_push_webhook(self, request)
