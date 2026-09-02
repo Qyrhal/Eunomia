@@ -69,3 +69,22 @@ class TaskGraphTests(TestCase):
     def test_vid_shape(self):
         t = Task.objects.get(pk=create_task("v")["id"])
         self.assertEqual(vid(t), f"task:{t.id}")
+
+
+class DateCoercionTests(TestCase):
+    def setUp(self):
+        from connectors.models import AppSettings
+        s = AppSettings.load(); s.embedding_backend = AppSettings.EMBED_STUB; s.save()
+
+    def test_create_task_accepts_a_bare_date_string(self):
+        from django.utils import timezone as tz
+        out = create_task("call bank", due_at="2026-09-02")
+        t = Task.objects.get(pk=out["id"])
+        self.assertIsNotNone(t.due_at)
+        self.assertFalse(tz.is_naive(t.due_at))
+
+    def test_schedule_task_accepts_iso_datetime(self):
+        tid = create_task("x")["id"]
+        from tasks.graph import schedule_task
+        schedule_task(tid, "2026-06-01T09:00:00Z")
+        self.assertIsNotNone(Task.objects.get(pk=tid).due_at)

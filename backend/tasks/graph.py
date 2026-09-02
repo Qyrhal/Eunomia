@@ -41,10 +41,27 @@ def index_task(task) -> None:
 
 # --- agent write tools --------------------------------------------------------
 
+def _aware(value):
+    """Coerce an agent-supplied date/datetime string to an aware datetime."""
+    if not value or not isinstance(value, str):
+        return value or None
+    from datetime import datetime, time
+
+    from django.utils.dateparse import parse_date, parse_datetime
+
+    dt = parse_datetime(value)
+    if dt is None:
+        d = parse_date(value)
+        dt = datetime.combine(d, time()) if d else None
+    if dt is None:
+        return None
+    return timezone.make_aware(dt) if timezone.is_naive(dt) else dt
+
+
 def create_task(title, notes="", project=None, due_at=None, priority=0, tags=None, props=None):
     proj, _ = Project.objects.get_or_create(name=project or "Inbox")
     task = Task.objects.create(
-        project=proj, title=title, notes=notes or "", due_at=due_at or None,
+        project=proj, title=title, notes=notes or "", due_at=_aware(due_at),
         priority=int(priority or 0), props=props or {}, created_by_ai=True,
     )
     for name in tags or []:
@@ -60,7 +77,7 @@ def update_task(id, **fields):
         return {"error": f"no task {id}"}
     for key in ("title", "notes", "due_at", "priority", "flagged", "completed", "props"):
         if key in fields and fields[key] is not None:
-            setattr(task, key, fields[key])
+            setattr(task, key, _aware(fields[key]) if key == "due_at" else fields[key])
     if fields.get("completed"):
         task.completed_at = timezone.now()
     if "tags" in fields and fields["tags"] is not None:
@@ -92,10 +109,10 @@ def schedule_task(id, when):
     task = Task.objects.filter(pk=id).first()
     if not task:
         return {"error": f"no task {id}"}
-    task.due_at = when
+    task.due_at = _aware(when)
     task.save(update_fields=["due_at", "updated_at"])
     # a time-relative trigger (#39) can be registered against this due date
-    return {"id": str(task.id), "scheduled_for": when}
+    return {"id": str(task.id), "scheduled_for": task.due_at.isoformat() if task.due_at else None}
 
 
 def task_links(id, rel=None):
