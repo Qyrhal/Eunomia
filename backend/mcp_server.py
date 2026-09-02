@@ -1,75 +1,93 @@
-"""Standalone MCP server exposing Eunomia's tasks/calendar tools over stdio.
+"""Eunomia MCP server — exposes the full tool registry to Hermes / any MCP client.
 
-Run with: uv run mcp_server.py
-Point Claude Desktop / another MCP client at this command; it shares the same
-sqlite database as the Django app (via DJANGO_SETTINGS_MODULE=config.settings).
+    python mcp_server.py                 # stdio (Claude Desktop, local clients)
+    python mcp_server.py --http          # streamable HTTP on 127.0.0.1:8765
+    python mcp_server.py --http --host 100.x.y.z --port 8765
+
+HTTP requires `Authorization: Bearer $EUNOMIA_API_TOKEN` when that env var is set
+(same token as the REST surface — see config/auth.py). Bind to the tailscale /
+netbird interface, never 0.0.0.0.
+
+Tools, their schemas, and token de-tokenisation all come from `tools.registry`,
+so this file never needs editing when a source or tool is added.
 """
 
+import argparse
+import inspect
 import os
 
 import django
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
+# Single-user local tool server: the MCP transport owns the event loop and the
+# tools are short reads/writes, so running the ORM in-loop is fine and keeps
+# every call on the one connection that has the FTS5 / sqlite-vec vtables.
+os.environ.setdefault("DJANGO_ALLOW_ASYNC_UNSAFE", "1")
 django.setup()
 
 from mcp.server.mcpserver import MCPServer  # noqa: E402
 
-from aiassist import tools as t  # noqa: E402
+from tools.registry import all_tools, call  # noqa: E402
 
-mcp = MCPServer("eunomia")
-
-
-@mcp.tool()
-def list_tasks(completed: bool | None = None, flagged: bool | None = None, project_name: str | None = None) -> list[dict]:
-    """List tasks/reminders, optionally filtered by completion, flagged state, or project name."""
-    return t.list_tasks(completed=completed, flagged=flagged, project_name=project_name)
+mcp = MCPServer("eunomia", instructions="Eunomia — your masked personal data layer. "
+                "Search/get/list your Google, bank and heypocket data; manage tasks; "
+                "register watches that ping you. Secrets and PII are already masked.")
 
 
-@mcp.tool()
-def create_task(
-    title: str,
-    notes: str = "",
-    project_name: str | None = None,
-    due_at: str | None = None,
-    priority: int = 0,
-    allocated_minutes: int | None = None,
-    flagged: bool = False,
-) -> dict:
-    """Create a new task/reminder."""
-    return t.create_task(
-        title=title,
-        notes=notes,
-        project_name=project_name,
-        due_at=due_at,
-        priority=priority,
-        allocated_minutes=allocated_minutes,
-        flagged=flagged,
-    )
+def _make_tool(name: str, schema: dict):
+    props = (schema or {}).get("properties", {}) or {}
+    required = set((schema or {}).get("required", []))
+    params = [
+        inspect.Parameter(
+            key, inspect.Parameter.KEYWORD_ONLY,
+            default=inspect.Parameter.empty if key in required else None,
+            annotation={"string": str, "integer": int, "boolean": bool,
+                        "object": dict, "array": list}.get(spec.get("type"), str),
+        )
+        for key, spec in props.items()
+    ]
+
+    def impl(**kwargs):
+        return call(name, {k: v for k, v in kwargs.items() if v is not None})
+
+    impl.__name__ = name
+    impl.__signature__ = inspect.Signature(params)
+    impl.__doc__ = (schema or {}).get("description", f"Eunomia tool: {name}")
+    return impl
 
 
-@mcp.tool()
-def update_task(task_id: str, **fields) -> dict:
-    """Update or complete an existing task by id."""
-    return t.update_task(task_id, **fields)
+def _register_all():
+    for name, spec in all_tools().items():
+        mcp.add_tool(_make_tool(name, spec["schema"]), name=name)
 
 
-@mcp.tool()
-def list_calendar_events(days_ahead: int = 7, max_results: int = 20) -> list[dict] | dict:
-    """List upcoming Google Calendar events, e.g. to draft meeting-prep tasks."""
-    return t.list_calendar_events(days_ahead=days_ahead, max_results=max_results)
-
-
-@mcp.tool()
-def list_recent_transactions(days: int = 7) -> list[dict] | dict:
-    """List recent settled Up Bank transactions, e.g. to draft finance follow-up tasks."""
-    return t.list_recent_transactions(days=days)
-
-
-@mcp.tool()
-def search_emails(query: str, max_results: int = 5) -> list[dict] | dict:
-    """Search Gmail (subject/sender/date/snippet only) using Gmail search syntax."""
-    return t.search_emails(query, max_results=max_results)
+_register_all()
 
 
 if __name__ == "__main__":
-    mcp.run()
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--http", action="store_true")
+    ap.add_argument("--host", default="127.0.0.1")
+    ap.add_argument("--port", type=int, default=8765)
+    args = ap.parse_args()
+
+    if not args.http:
+        mcp.run()
+    else:
+        import uvicorn
+        from starlette.middleware.base import BaseHTTPMiddleware
+        from starlette.responses import JSONResponse
+
+        token = os.environ.get("EUNOMIA_API_TOKEN", "")
+
+        class Bearer(BaseHTTPMiddleware):
+            async def dispatch(self, request, call_next):
+                if token:
+                    got = request.headers.get("authorization", "")
+                    if got != f"Bearer {token}":
+                        return JSONResponse({"error": "unauthorized"}, status_code=401)
+                return await call_next(request)
+
+        app = mcp.streamable_http_app(host=args.host)
+        app.add_middleware(Bearer)
+        uvicorn.run(app, host=args.host, port=args.port)

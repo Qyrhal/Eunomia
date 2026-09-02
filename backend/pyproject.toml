@@ -22,6 +22,7 @@ dependencies = [
     "python-dotenv>=1.2.3",
     "apscheduler>=3.10",
     "sqlite-vec>=0.1.9",
+    "uvicorn>=0.52.4",
 ]
 
 [project.optional-dependencies]

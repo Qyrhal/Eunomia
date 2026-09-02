@@ -515,6 +515,7 @@ dependencies = [
     { name = "mcp" },
     { name = "python-dotenv" },
     { name = "sqlite-vec" },
+    { name = "uvicorn" },
 ]
 
 [package.optional-dependencies]
@@ -540,6 +541,7 @@ requires-dist = [
     { name = "python-dotenv", specifier = ">=1.2.3" },
     { name = "sentence-transformers", marker = "extra == 'local-embeddings'", specifier = ">=3.0" },
     { name = "sqlite-vec", specifier = ">=0.1.9" },
+    { name = "uvicorn", specifier = ">=0.52.4" },
 ]
 provides-extras = ["local-embeddings"]
 
