@@ -156,6 +156,131 @@ test.describe("Tasks page", () => {
     expect(task.notes).toBe("edited notes");
   });
 
+  test("pressing Escape while editing discards changes", async ({ page }) => {
+    await goToProject(page);
+    await page.getByPlaceholder("New reminder…").fill("Untouched title");
+    await page.getByRole("button", { name: "Add" }).click();
+    const row = page.locator("li", { hasText: "Untouched title" });
+    await expect(row).toBeVisible();
+
+    await row.getByRole("button", { name: "Edit" }).click();
+    const titleInput = page.locator("li").filter({ has: page.locator('button:has-text("Save")') }).locator("input").first();
+    await titleInput.fill("Should not persist");
+    await titleInput.press("Escape");
+
+    await expect(page.getByText("Untouched title")).toBeVisible();
+    await expect(page.getByText("Should not persist")).not.toBeVisible();
+  });
+
+  test("pressing Enter in the title field while editing saves it", async ({ page }) => {
+    await goToProject(page);
+    await page.getByPlaceholder("New reminder…").fill("Original title");
+    await page.getByRole("button", { name: "Add" }).click();
+    const row = page.locator("li", { hasText: "Original title" });
+    await expect(row).toBeVisible();
+
+    await row.getByRole("button", { name: "Edit" }).click();
+    const titleInput = page.locator("li").filter({ has: page.locator('button:has-text("Save")') }).locator("input").first();
+    await titleInput.fill("Saved via Enter");
+    await titleInput.press("Enter");
+
+    await expect(page.getByText("Saved via Enter")).toBeVisible();
+    await expect(page.getByText("Original title")).not.toBeVisible();
+  });
+
+  test("the Add button re-enables (for the next task) after a task is created", async ({ page }) => {
+    await goToProject(page);
+    await page.getByPlaceholder("New reminder…").fill("Slow add");
+    await page.getByRole("button", { name: "Add" }).click();
+    await expect(page.getByText("Slow add")).toBeVisible();
+
+    // the title field is cleared on success, so the button is disabled again
+    // only because it's empty — typing re-enables it, proving it isn't stuck
+    // in the in-flight "Adding…" state
+    await page.getByPlaceholder("New reminder…").fill("Another task");
+    await expect(page.getByRole("button", { name: "Add" })).toBeEnabled();
+  });
+
+  test("the Add button stays disabled with an empty title", async ({ page }) => {
+    await goToProject(page);
+    await expect(page.getByRole("button", { name: "Add" })).toBeDisabled();
+    await page.getByPlaceholder("New reminder…").fill("Now valid");
+    await expect(page.getByRole("button", { name: "Add" })).toBeEnabled();
+  });
+
+  test("a due date is shown as a relative label (Today/Tomorrow) instead of a raw timestamp", async ({ page }) => {
+    await goToProject(page);
+    await page.getByPlaceholder("New reminder…").fill("Relative due date task");
+    await page.getByRole("button", { name: "Tomorrow" }).first().click();
+    await page.getByRole("button", { name: "Add" }).click();
+
+    const row = page.locator("li", { hasText: "Relative due date task" });
+    await expect(row.getByText(/^Tomorrow, /)).toBeVisible();
+  });
+
+  test("a past-due, incomplete task is flagged as overdue", async ({ page, request }) => {
+    await request.post(`${API}/api/tasks/`, {
+      data: { title: "Overdue thing", project: projectId, due_at: "2020-01-01T09:00:00Z" },
+    });
+    await goToProject(page);
+
+    const row = page.locator("li", { hasText: "Overdue thing" });
+    await expect(row.getByText(/^Overdue · /)).toBeVisible();
+  });
+
+  test("completing an overdue task clears the overdue label", async ({ page, request }) => {
+    await request.post(`${API}/api/tasks/`, {
+      data: { title: "Overdue then done", project: projectId, due_at: "2020-01-01T09:00:00Z" },
+    });
+    await goToProject(page);
+
+    const row = page.locator("li", { hasText: "Overdue then done" });
+    await expect(row.getByText(/^Overdue · /)).toBeVisible();
+    await row.getByRole("button", { name: "Mark done" }).click();
+
+    await page.getByText("Show completed").click();
+    const completedRow = page.locator("li", { hasText: "Overdue then done" });
+    await expect(completedRow.getByText(/^Overdue · /)).not.toBeVisible();
+    await expect(completedRow.getByText(/2020/)).toBeVisible();
+  });
+
+  test("editing a task's project via the edit form moves it", async ({ page, request }) => {
+    const other = await createProject(request, `E2E other ${Date.now()}`);
+    await goToProject(page);
+    await page.getByPlaceholder("New reminder…").fill("Movable task");
+    await page.getByRole("button", { name: "Add" }).click();
+    const row = page.locator("li", { hasText: "Movable task" });
+    await expect(row).toBeVisible();
+
+    await row.getByRole("button", { name: "Edit" }).click();
+    const editingLi = page.locator("li").filter({ has: page.locator('button:has-text("Save")') });
+    await editingLi.locator("select").last().selectOption(other.id);
+    await page.getByRole("button", { name: "Save" }).click();
+
+    await expect(page.getByText("Movable task")).not.toBeVisible();
+
+    const tasks = await (await request.get(`${API}/api/tasks/?project=${other.id}`)).json();
+    expect(tasks.some((t: { title: string }) => t.title === "Movable task")).toBe(true);
+
+    await deleteProject(request, other.id);
+  });
+
+  test("editing a task's priority via the edit form persists", async ({ page, request }) => {
+    await goToProject(page);
+    await page.getByPlaceholder("New reminder…").fill("Prioritize me");
+    await page.getByRole("button", { name: "Add" }).click();
+    const row = page.locator("li", { hasText: "Prioritize me" });
+    await expect(row).toBeVisible();
+
+    await row.getByRole("button", { name: "Edit" }).click();
+    await page.locator("li").filter({ has: page.locator('button:has-text("Save")') }).getByTitle("High").click();
+    await page.getByRole("button", { name: "Save" }).click();
+
+    const tasks = await (await request.get(`${API}/api/tasks/?project=${projectId}`)).json();
+    const task = tasks.find((t: { title: string }) => t.title === "Prioritize me");
+    expect(task.priority).toBe(3);
+  });
+
   test("cancelling an edit discards changes", async ({ page }) => {
     await goToProject(page);
     await page.getByPlaceholder("New reminder…").fill("Unchanged title");
