@@ -6,6 +6,7 @@ import DueDatePicker from "@/components/DueDatePicker";
 import TagInput from "@/components/TagInput";
 import Toast, { ToastState } from "@/components/Toast";
 import { api, Project, Task, TaskContext } from "@/lib/api";
+import { formatDueDate } from "@/lib/dueDate";
 import { parseQuickAdd } from "@/lib/quickAdd";
 
 const RECURRENCES: { value: Task["recurrence"]; label: string }[] = [
@@ -80,6 +81,82 @@ type Draft = {
   recurrence: Task["recurrence"];
 };
 
+// Shared body for the add-task form and the inline edit form: notes, due
+// date, priority, recurrence and tags. Title input + submit buttons differ
+// between the two callers so those stay in each caller.
+function TaskFields({
+  notes,
+  onNotesChange,
+  dueAt,
+  onDueAtChange,
+  priority,
+  onPriorityChange,
+  recurrence,
+  onRecurrenceChange,
+  tags,
+  onTagsChange,
+  tagSuggestions,
+  project,
+  onProjectChange,
+  projects,
+  notesPlaceholder = "Notes (optional)",
+}: {
+  notes: string;
+  onNotesChange: (v: string) => void;
+  dueAt: string;
+  onDueAtChange: (v: string) => void;
+  priority: 0 | 1 | 2 | 3;
+  onPriorityChange: (v: 0 | 1 | 2 | 3) => void;
+  recurrence: Task["recurrence"];
+  onRecurrenceChange: (v: Task["recurrence"]) => void;
+  tags: string[];
+  onTagsChange: (v: string[]) => void;
+  tagSuggestions: string[];
+  project?: string;
+  onProjectChange?: (v: string) => void;
+  projects?: Project[];
+  notesPlaceholder?: string;
+}) {
+  return (
+    <>
+      <textarea
+        value={notes}
+        onChange={(e) => onNotesChange(e.target.value)}
+        placeholder={notesPlaceholder}
+        rows={2}
+        className="field px-3 py-2 text-[12.5px]"
+      />
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <DueDatePicker value={dueAt} onChange={onDueAtChange} />
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
+            <span className="eyebrow">Priority</span>
+            <PrioritySelect value={priority} onChange={onPriorityChange} />
+          </div>
+          <RecurrenceSelect value={recurrence} onChange={onRecurrenceChange} />
+        </div>
+      </div>
+      <TagInput value={tags} onChange={onTagsChange} suggestions={tagSuggestions} />
+      {projects && onProjectChange && (
+        <label className="flex items-center gap-2 text-[12px]" style={{ color: "var(--text-muted)" }}>
+          Project
+          <select
+            value={project}
+            onChange={(e) => onProjectChange(e.target.value)}
+            className="field px-2.5 py-1.5 text-[12.5px]"
+          >
+            {projects.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+    </>
+  );
+}
+
 export default function TasksPage() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [activeProject, setActiveProject] = useState<string | "all">("all");
@@ -93,6 +170,7 @@ export default function TasksPage() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState<Draft | null>(null);
   const [saving, setSaving] = useState(false);
+  const [addingTask, setAddingTask] = useState(false);
   const [showNewProject, setShowNewProject] = useState(false);
   const [newProjectName, setNewProjectName] = useState("");
   const [newProjectColor, setNewProjectColor] = useState("#a8752f");
@@ -183,33 +261,38 @@ export default function TasksPage() {
   }
 
   async function addTask() {
-    if (!newTitle.trim()) return;
-    let projectId = activeProject !== "all" ? activeProject : projects[0]?.id;
-    if (!projectId) {
-      const created = await api.post<Project>("/api/projects/", { name: "Inbox" });
-      projectId = created.id;
-      loadProjects();
+    if (!newTitle.trim() || addingTask) return;
+    setAddingTask(true);
+    try {
+      let projectId = activeProject !== "all" ? activeProject : projects[0]?.id;
+      if (!projectId) {
+        const created = await api.post<Project>("/api/projects/", { name: "Inbox" });
+        projectId = created.id;
+        loadProjects();
+      }
+      // shorthand like "#tag" or "tomorrow 3pm" in the title only fills in fields
+      // the user hasn't already set explicitly via the date picker / tag input
+      const parsed = parseQuickAdd(newTitle);
+      await api.post("/api/tasks/", {
+        title: parsed.title || newTitle.trim(),
+        notes: newNotes,
+        project: projectId,
+        due_at: newDueAt || parsed.due_at || null,
+        priority: newPriority,
+        tags: newTags.length ? newTags : parsed.tags,
+        recurrence: newRecurrence,
+      });
+      setNewTitle("");
+      setNewNotes("");
+      setNewDueAt("");
+      setNewPriority(0);
+      setNewTags([]);
+      setNewRecurrence("none");
+      loadTasks();
+      loadAllTags();
+    } finally {
+      setAddingTask(false);
     }
-    // shorthand like "#tag" or "tomorrow 3pm" in the title only fills in fields
-    // the user hasn't already set explicitly via the date picker / tag input
-    const parsed = parseQuickAdd(newTitle);
-    await api.post("/api/tasks/", {
-      title: parsed.title || newTitle.trim(),
-      notes: newNotes,
-      project: projectId,
-      due_at: newDueAt || parsed.due_at || null,
-      priority: newPriority,
-      tags: newTags.length ? newTags : parsed.tags,
-      recurrence: newRecurrence,
-    });
-    setNewTitle("");
-    setNewNotes("");
-    setNewDueAt("");
-    setNewPriority(0);
-    setNewTags([]);
-    setNewRecurrence("none");
-    loadTasks();
-    loadAllTags();
   }
 
   async function toggleComplete(task: Task) {
@@ -491,28 +574,28 @@ export default function TasksPage() {
               placeholder="New reminder… try “call mom tomorrow 3pm #family”"
               className="flex-1 field px-3 py-2 text-[13.5px]"
             />
-            <button onClick={addTask} className="px-4 text-[13px] font-medium field flex items-center gap-1.5" style={{ color: "var(--accent)" }}>
-              <Plus size={14} /> Add
+            <button
+              onClick={addTask}
+              disabled={addingTask || !newTitle.trim()}
+              className="px-4 text-[13px] font-medium field flex items-center gap-1.5 disabled:opacity-40"
+              style={{ color: "var(--accent)" }}
+            >
+              <Plus size={14} /> {addingTask ? "Adding…" : "Add"}
             </button>
           </div>
-          <textarea
-            value={newNotes}
-            onChange={(e) => setNewNotes(e.target.value)}
-            placeholder="Notes (optional)"
-            rows={2}
-            className="field px-3 py-2 text-[12.5px]"
+          <TaskFields
+            notes={newNotes}
+            onNotesChange={setNewNotes}
+            dueAt={newDueAt}
+            onDueAtChange={setNewDueAt}
+            priority={newPriority}
+            onPriorityChange={setNewPriority}
+            recurrence={newRecurrence}
+            onRecurrenceChange={setNewRecurrence}
+            tags={newTags}
+            onTagsChange={setNewTags}
+            tagSuggestions={allTags}
           />
-          <div className="flex items-center justify-between flex-wrap gap-3">
-            <DueDatePicker value={newDueAt} onChange={setNewDueAt} />
-            <div className="flex items-center gap-3">
-              <div className="flex items-center gap-2">
-                <span className="eyebrow">Priority</span>
-                <PrioritySelect value={newPriority} onChange={setNewPriority} />
-              </div>
-              <RecurrenceSelect value={newRecurrence} onChange={setNewRecurrence} />
-            </div>
-          </div>
-          <TagInput value={newTags} onChange={setNewTags} suggestions={allTags} />
         </div>
 
         <ul className="ledger overflow-hidden hairline-rows">
@@ -522,41 +605,30 @@ export default function TasksPage() {
                 <input
                   value={editDraft.title}
                   onChange={(e) => setEditDraft({ ...editDraft, title: e.target.value })}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.shiftKey) saveEdit();
+                    if (e.key === "Escape") cancelEdit();
+                  }}
                   className="field px-3 py-2 text-[13.5px]"
                   autoFocus
                 />
-                <textarea
-                  value={editDraft.notes}
-                  onChange={(e) => setEditDraft({ ...editDraft, notes: e.target.value })}
-                  placeholder="Notes"
-                  rows={2}
-                  className="field px-3 py-2 text-[12.5px]"
+                <TaskFields
+                  notes={editDraft.notes}
+                  notesPlaceholder="Notes"
+                  onNotesChange={(v) => setEditDraft({ ...editDraft, notes: v })}
+                  dueAt={editDraft.due_at}
+                  onDueAtChange={(v) => setEditDraft({ ...editDraft, due_at: v })}
+                  priority={editDraft.priority}
+                  onPriorityChange={(v) => setEditDraft({ ...editDraft, priority: v })}
+                  recurrence={editDraft.recurrence}
+                  onRecurrenceChange={(v) => setEditDraft({ ...editDraft, recurrence: v })}
+                  tags={editDraft.tags}
+                  onTagsChange={(tags) => setEditDraft({ ...editDraft, tags })}
+                  tagSuggestions={allTags}
+                  project={editDraft.project}
+                  onProjectChange={(v) => setEditDraft({ ...editDraft, project: v })}
+                  projects={projects}
                 />
-                <div className="flex items-center justify-between flex-wrap gap-3">
-                  <DueDatePicker value={editDraft.due_at} onChange={(v) => setEditDraft({ ...editDraft, due_at: v })} />
-                  <div className="flex items-center gap-3">
-                    <div className="flex items-center gap-2">
-                      <span className="eyebrow">Priority</span>
-                      <PrioritySelect value={editDraft.priority} onChange={(v) => setEditDraft({ ...editDraft, priority: v })} />
-                    </div>
-                    <RecurrenceSelect value={editDraft.recurrence} onChange={(v) => setEditDraft({ ...editDraft, recurrence: v })} />
-                  </div>
-                </div>
-                <TagInput value={editDraft.tags} onChange={(tags) => setEditDraft({ ...editDraft, tags })} suggestions={allTags} />
-                <label className="flex items-center gap-2 text-[12px]" style={{ color: "var(--text-muted)" }}>
-                  Project
-                  <select
-                    value={editDraft.project}
-                    onChange={(e) => setEditDraft({ ...editDraft, project: e.target.value })}
-                    className="field px-2.5 py-1.5 text-[12.5px]"
-                  >
-                    {projects.map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
                 <div className="flex items-center gap-2 pt-1">
                   <button
                     onClick={saveEdit}
@@ -629,11 +701,19 @@ export default function TasksPage() {
                       </div>
                     )}
                     <div className="flex items-center gap-2 mt-1 flex-wrap">
-                      {t.due_at && (
-                        <span className="text-[11.5px] font-mono" style={{ color: "var(--text-muted)" }}>
-                          {new Date(t.due_at).toLocaleString()}
-                        </span>
-                      )}
+                      {t.due_at && (() => {
+                        const { label, overdue } = formatDueDate(t.due_at);
+                        const isOverdue = overdue && !t.completed;
+                        return (
+                          <span
+                            className="text-[11.5px] font-mono"
+                            title={new Date(t.due_at).toLocaleString()}
+                            style={{ color: isOverdue ? "var(--critical)" : "var(--text-muted)" }}
+                          >
+                            {isOverdue ? `Overdue · ${label}` : label}
+                          </span>
+                        );
+                      })()}
                       {t.tags.map((tag) => (
                         <span key={tag} className="px-1.5 py-0.5 text-[10.5px]" style={{ background: "var(--surface-2)", color: "var(--text-muted)" }}>
                           #{tag}
