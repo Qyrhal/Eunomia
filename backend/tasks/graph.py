@@ -42,20 +42,23 @@ def index_task(task) -> None:
 # --- agent write tools --------------------------------------------------------
 
 def _aware(value):
-    """Coerce an agent-supplied date/datetime string to an aware datetime."""
-    if not value or not isinstance(value, str):
-        return value or None
-    from datetime import datetime, time
+    """Coerce an agent-supplied date/datetime string to an aware datetime.
 
-    from django.utils.dateparse import parse_date, parse_datetime
+    Aware inputs pass through; naive datetimes and bare dates are interpreted
+    in the operator's configured timezone (AppSettings.user_timezone, set by
+    the installing agent) — NOT the server's clock zone (homelab boxes run
+    UTC). See tasks.timezone_utils.
+    """
+    from tasks.timezone_utils import parse_user_datetime
 
-    dt = parse_datetime(value)
-    if dt is None:
-        d = parse_date(value)
-        dt = datetime.combine(d, time()) if d else None
-    if dt is None:
-        return None
-    return timezone.make_aware(dt) if timezone.is_naive(dt) else dt
+    return parse_user_datetime(value)
+
+
+def _due_fields(task):
+    """Canonical + operator-local rendering of a task's due_at for agents."""
+    from tasks.timezone_utils import local_fields
+
+    return local_fields(task.due_at)
 
 
 def create_task(title, notes="", project=None, due_at=None, priority=0, tags=None, props=None):
@@ -68,7 +71,7 @@ def create_task(title, notes="", project=None, due_at=None, priority=0, tags=Non
         tag, _ = Tag.objects.get_or_create(name=name)
         task.tags.add(tag)
     index_task(task)
-    return {"id": str(task.id), "created": True}
+    return {"id": str(task.id), "created": True, "due_at": _due_fields(task)}
 
 
 def update_task(id, **fields):
@@ -87,7 +90,7 @@ def update_task(id, **fields):
             task.tags.add(tag)
     task.save()
     index_task(task)
-    return {"id": str(task.id), "updated": True}
+    return {"id": str(task.id), "updated": True, "due_at": _due_fields(task)}
 
 
 def link_task(id, rel, target_id):
@@ -112,7 +115,7 @@ def schedule_task(id, when):
     task.due_at = _aware(when)
     task.save(update_fields=["due_at", "updated_at"])
     # a time-relative trigger (#39) can be registered against this due date
-    return {"id": str(task.id), "scheduled_for": task.due_at.isoformat() if task.due_at else None}
+    return {"id": str(task.id), "scheduled_for": _due_fields(task)}
 
 
 def task_links(id, rel=None):
@@ -151,6 +154,7 @@ def search_tasks(query, limit=20):
         "results": [
             {"id": str(t.id), "title": t.title, "completed": t.completed,
              "due_at": t.due_at.isoformat() if t.due_at else None,
+             "due": _due_fields(t),
              "tags": list(t.tags.values_list("name", flat=True))}
             for t in rows
         ]

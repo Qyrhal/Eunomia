@@ -22,6 +22,16 @@ class AppSettings(models.Model):
     )
     llm_api_key_encrypted = models.TextField(blank=True, default="")
 
+    # --- agent/operator timezone (naive agent dates are interpreted here) ---
+    user_timezone = models.CharField(
+        max_length=64,
+        blank=True,
+        default="",
+        help_text="IANA timezone (e.g. Australia/Melbourne) used to interpret "
+        "naive agent-supplied dates and render datetimes back to the agent. "
+        "Set once at deployment by the installing agent; empty = UTC.",
+    )
+
     # --- Hermes notification channel (#9 / #39) ---
     hermes_webhook_url = models.CharField(
         max_length=400, blank=True, default="",

@@ -15,6 +15,7 @@ class AppSettingsSerializer(serializers.ModelSerializer):
             "embedding_backend",
             "embedding_model",
             "llm_base_url",
+            "user_timezone",
             "llm_api_key",
             "llm_api_key_set",
             "hermes_webhook_url",
