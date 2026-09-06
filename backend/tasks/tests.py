@@ -210,3 +210,25 @@ class DemoSeedTests(TestCase):
         connector = Connector.objects.get(kind=Connector.Kind.UP_BANK)
         self.assertFalse(connector.config.get("demo"))
         self.assertFalse(connector.enabled)
+
+
+class TimezoneHandlingTests(TestCase):
+    """Naive agent dates follow AppSettings.user_timezone, not the server zone."""
+
+    def test_naive_due_at_interpreted_in_user_timezone(self):
+        from connectors.models import AppSettings
+
+        from .serializers import TaskSerializer
+
+        AppSettings.load().user_timezone = "Australia/Melbourne"
+        s = TaskSerializer(context={})
+        dt = s.fields["due_at"].to_internal_value("2026-09-07T17:00:00")
+        # Melbourne is UTC+10 in September: 5pm local == 07:00 UTC
+        self.assertEqual(dt.isoformat(), "2026-09-07T07:00:00+00:00")
+
+    def test_aware_due_at_keeps_explicit_offset(self):
+        from .serializers import TaskSerializer
+
+        s = TaskSerializer(context={})
+        dt = s.fields["due_at"].to_internal_value("2026-09-07T17:00:00+02:00")
+        self.assertEqual(dt.utcoffset().total_seconds(), 7200)

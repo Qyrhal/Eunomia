@@ -3,7 +3,21 @@ from datetime import timedelta
 
 from rest_framework import serializers
 
+from tasks.timezone_utils import parse_user_datetime
+
 from .models import Project, Tag, Task
+
+
+class UserTzDateTimeField(serializers.DateTimeField):
+    """Naive datetimes and bare dates are interpreted in the operator's
+    configured timezone (AppSettings.user_timezone), not the server zone.
+    Aware inputs keep their explicit offset. Mirrors tasks.graph._aware."""
+
+    def to_internal_value(self, value):
+        parsed = parse_user_datetime(value)
+        if parsed is None:
+            self.fail("invalid")
+        return parsed
 
 
 def _advance(dt, recurrence):
@@ -64,6 +78,7 @@ class ProjectSerializer(serializers.ModelSerializer):
 class TaskSerializer(serializers.ModelSerializer):
     tags = TagListField(required=False)
     subtask_count = serializers.IntegerField(source="subtasks.count", read_only=True)
+    due_at = UserTzDateTimeField(required=False, allow_null=True)
 
     class Meta:
         model = Task
