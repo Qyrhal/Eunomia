@@ -43,6 +43,19 @@ class TaskViewSet(viewsets.ModelViewSet):
     search_fields = ["title", "notes"]
 
 
+class TaskLinksView(APIView):
+    """GET /api/tasks/<id>/links/ -> the task's typed graph edges (both
+    directions), the same list the task_links MCP tool returns (#48)."""
+
+    def get(self, request, pk):
+        from tasks.graph import task_links
+
+        out = task_links(pk)
+        if "error" in out:
+            return Response(out, status=404)
+        return Response(out)
+
+
 class TaskContextView(APIView):
     """GET -> a quick, non-AI look at anything already connected that mentions
     this task's title: a matching calendar event or email thread. Read-only,
