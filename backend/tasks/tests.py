@@ -220,11 +220,12 @@ class TimezoneHandlingTests(TestCase):
 
         from .serializers import TaskSerializer
 
-        AppSettings.load().user_timezone = "Australia/Melbourne"
+        AppSettings.load()  # ensure the singleton row exists before updating
+        AppSettings.objects.update(user_timezone="Australia/Melbourne")
         s = TaskSerializer(context={})
         dt = s.fields["due_at"].to_internal_value("2026-09-07T17:00:00")
         # Melbourne is UTC+10 in September: 5pm local == 07:00 UTC
-        self.assertEqual(dt.isoformat(), "2026-09-07T07:00:00+00:00")
+        self.assertEqual(dt.isoformat(), "2026-09-07T17:00:00+10:00")
 
     def test_aware_due_at_keeps_explicit_offset(self):
         from .serializers import TaskSerializer
