@@ -98,6 +98,7 @@ class TaskSerializer(serializers.ModelSerializer):
             "completed",
             "completed_at",
             "tags",
+            "props",
             "created_by_ai",
             "order",
             "created_at",
