@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 from django.utils import timezone
 from faker import Faker
 
-from .models import Connector, DemoCalendarEvent, DemoEmail, DemoRecording, DemoTransaction
+from .models import Connector, DemoRecording, DemoTransaction
 
 ACCOUNTS = ["Spending", "Saver"]
 
@@ -152,136 +152,6 @@ def build_demo_transactions(days: int = 7) -> list[dict]:
         }
         for t in qs
     ]
-
-
-# ---- Google (Calendar + Gmail) ----
-
-MEETING_TITLES = [
-    "Team standup",
-    "1:1 with manager",
-    "Dentist appointment",
-    "Client kickoff — Acme Corp",
-    "Product review",
-    "Lunch with Sam",
-    "Doctor's appointment",
-    "Sprint planning",
-    "Interview — Backend Engineer",
-    "Coffee catch-up",
-    "Board meeting",
-    "Design review",
-]
-
-EMAIL_TEMPLATES = [
-    ("Invoice #{n} is due", "billing"),
-    ("Your booking is confirmed", "reservations"),
-    ("Re: project timeline", "colleague"),
-    ("Receipt from your order", "receipts"),
-    ("Meeting notes — {topic}", "colleague"),
-    ("Your subscription renews soon", "billing"),
-    ("Action needed: verify your account", "support"),
-]
-
-
-def seed_demo_google_data(seed: int | None = None) -> dict:
-    fake = Faker()
-    if seed is not None:
-        Faker.seed(seed)
-        random.seed(seed)
-
-    clear_demo_google_data()
-
-    now = timezone.now()
-    events = []
-    for _ in range(14):
-        start = (now + timedelta(days=random.randint(-5, 14))).replace(
-            hour=random.randint(8, 17), minute=random.choice([0, 15, 30, 45]), second=0, microsecond=0
-        )
-        events.append(
-            DemoCalendarEvent(
-                summary=random.choice(MEETING_TITLES),
-                start_at=start,
-                end_at=start + timedelta(minutes=random.choice([30, 45, 60])),
-                attendees=[fake.email() for _ in range(random.randint(0, 3))],
-            )
-        )
-    DemoCalendarEvent.objects.bulk_create(events)
-
-    emails = []
-    for _ in range(22):
-        subject_template, sender_kind = random.choice(EMAIL_TEMPLATES)
-        subject = subject_template.format(n=random.randint(1000, 9999), topic=fake.bs())
-        emails.append(
-            DemoEmail(
-                subject=subject,
-                sender=f"{sender_kind}@{fake.domain_name()}",
-                snippet=fake.sentence(nb_words=16),
-                received_at=now - timedelta(days=random.randint(0, 14), hours=random.randint(0, 23)),
-                unread=random.random() < 0.3,
-            )
-        )
-    DemoEmail.objects.bulk_create(emails)
-
-    connector, _ = Connector.objects.get_or_create(kind=Connector.Kind.GOOGLE)
-    connector.enabled = True
-    connector.config = {**connector.config, "demo": True}
-    connector.save()
-
-    return {"events": len(events), "emails": len(emails)}
-
-
-def clear_demo_google_data() -> dict:
-    events_removed = DemoCalendarEvent.objects.count()
-    DemoCalendarEvent.objects.all().delete()
-    emails_removed = DemoEmail.objects.count()
-    DemoEmail.objects.all().delete()
-
-    connector = Connector.objects.filter(kind=Connector.Kind.GOOGLE).first()
-    if connector and connector.config.get("demo"):
-        connector.config = {k: v for k, v in connector.config.items() if k != "demo"}
-        connector.enabled = bool(connector.credentials_encrypted)
-        connector.save()
-
-    return {"events_removed": events_removed, "emails_removed": emails_removed}
-
-
-def is_google_demo_mode() -> bool:
-    connector = Connector.objects.filter(kind=Connector.Kind.GOOGLE, enabled=True).first()
-    return bool(connector and connector.config.get("demo"))
-
-
-def build_demo_calendar_events(days_ahead: int = 7, max_results: int = 20) -> list[dict]:
-    """Shape matches `aiassist.tools.list_calendar_events`'s real-API output."""
-    now = timezone.now()
-    qs = DemoCalendarEvent.objects.filter(start_at__gte=now, start_at__lte=now + timedelta(days=days_ahead))
-    return [
-        {
-            "summary": e.summary,
-            "start": {"dateTime": e.start_at.isoformat()},
-            "end": {"dateTime": e.end_at.isoformat()},
-            "attendees": list(e.attendees),
-        }
-        for e in qs[:max_results]
-    ]
-
-
-def build_demo_calendar_events_today() -> int:
-    now = timezone.now()
-    start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    return DemoCalendarEvent.objects.filter(start_at__gte=start, start_at__lt=start + timedelta(days=1)).count()
-
-
-def build_demo_gmail_search(query: str = "", max_results: int = 5) -> list[dict]:
-    """Shape matches `aiassist.tools.search_emails`'s real-API output. `query` is
-    ignored — demo mode doesn't implement Gmail search syntax, it just returns
-    the most recent fake emails."""
-    qs = DemoEmail.objects.order_by("-received_at")[:max_results]
-    return [
-        {"subject": e.subject, "from": e.sender, "date": e.received_at.isoformat(), "snippet": e.snippet} for e in qs
-    ]
-
-
-def build_demo_gmail_unread_count() -> int:
-    return DemoEmail.objects.filter(unread=True).count()
 
 
 # ---- PocketAI ----

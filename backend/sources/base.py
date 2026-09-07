@@ -23,11 +23,11 @@ class ToolSpec:
 
 
 class Source(abc.ABC):
-    #: stable identifier, e.g. "up_bank" or "google_gmail"
+    #: stable identifier, e.g. "up_bank" or "heypocket"
     key: str = ""
     #: the credential holder this source reads. Several sources can share one
-    #: (e.g. google_gmail / google_calendar / google_drive -> "google"). Defaults
-    #: to `key`. Matches a connectors.Connector row's `kind`.
+    #: connector kind. Defaults to `key`. Matches a connectors.Connector row's
+    #: `kind`.
     provider: str = ""
     #: human label for the admin UI
     label: str = ""

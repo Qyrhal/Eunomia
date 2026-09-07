@@ -12,13 +12,11 @@ class DemoSource(Source):
     key = "demo"
     provider = "demo"
     label = "Demo data"
-    record_types = ["up.transaction", "up.account", "gcal.event", "gmail.message", "heypocket.recording"]
+    record_types = ["up.transaction", "up.account", "heypocket.recording"]
     auth_kind = "token"
 
     def sync(self, mode, cursor=None) -> SyncResult:
-        from connectors.models import (
-            DemoCalendarEvent, DemoEmail, DemoRecording, DemoTransaction,
-        )
+        from connectors.models import DemoRecording, DemoTransaction
 
         records: list[dict] = []
         accounts = {}
@@ -28,10 +26,6 @@ class DemoSource(Source):
             accounts[t.account] += t.amount_cents
         for name, cents in accounts.items():
             records.append({"_kind": "acct", "name": name, "cents": cents})
-        for e in DemoCalendarEvent.objects.all():
-            records.append({"_kind": "event", "obj": e})
-        for m in DemoEmail.objects.all():
-            records.append({"_kind": "email", "obj": m})
         for r in DemoRecording.objects.all():
             records.append({"_kind": "rec", "obj": r})
         return SyncResult(records=records, cursor="demo")
@@ -49,15 +43,6 @@ class DemoSource(Source):
             return _env(f"demo:up.account:{raw['name']}", "demo", "up.account", raw["name"],
                         raw["name"], f"{raw['name']} account", None,
                         {"balance_cents": raw["cents"], "balance": f"{raw['cents']/100:.2f}"})
-        if k == "event":
-            e = raw["obj"]
-            return _env(f"demo:gcal.event:{e.id}", "demo", "gcal.event", str(e.id),
-                        e.summary, e.summary, e.start_at, {"attendees": e.attendees})
-        if k == "email":
-            m = raw["obj"]
-            return _env(f"demo:gmail.message:{m.id}", "demo", "gmail.message", str(m.id),
-                        m.subject, f"{m.sender} — {m.subject} — {m.snippet}", m.received_at,
-                        {"from": m.sender, "unread": m.unread})
         if k == "rec":
             r = raw["obj"]
             return _env(f"demo:heypocket.recording:{r.id}", "demo", "heypocket.recording", str(r.id),

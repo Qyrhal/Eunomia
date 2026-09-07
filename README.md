@@ -1,7 +1,7 @@
 # Eunomia
 
 A **collection of tools exposed over MCP**, for [Hermes](https://github.com/nousresearch/hermes-agent)
-or Claude Code. Eunomia pulls your Google Workspace, Up Bank and heypocket data
+or Claude Code. Eunomia pulls your Up Bank and heypocket data
 into one local store, indexes everything for keyword + semantic search, and
 exposes it — plus task management and any app reachable through Nango,
 Composio or Open Connector — to Hermes/Claude over MCP.
@@ -13,7 +13,7 @@ exists for inspecting the cache, sources and connectors.
 
 ```
  sources ──sync──▶ ingest pipeline ──▶ cache (sqlite: rows + FTS5 + sqlite-vec)
- (Google, Up Bank,        │  embed                  │
+ (Up Bank,                │  embed                  │
   heypocket, demo)        └─────────────────────────┼──▶ tools: search / get / list / links
                                                       │    + per-source + task + managed-connector
                                                       ▼
@@ -83,23 +83,17 @@ tailscale / netbird — **never public**.
    A webhook-triggered Hermes run gets a constrained toolset by default — add
    `toolsets: [...]` to the route so Hermes may call Eunomia's tools in reply.
 
-Google Calendar / Drive **push** needs a public CA-trusted HTTPS callback, which
-a tailscale-only box doesn't have — Eunomia polls those instead (Gmail can use a
-Pub/Sub pull). See `docs/research/google-workspace-push.md`.
-
 ## Connectors
 
-Google OAuth needs a Google Cloud OAuth client (Calendar + Gmail + Drive APIs,
-redirect URI `http://localhost:8000/api/connectors/google/callback`). Paste the
-client id/secret into the Google card on the Connectors page, or set
-`GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` in `backend/.env`.
-Up Bank: a personal access token. heypocket: an API key.
+Up Bank: a personal access token from api.up.com.au. heypocket: an API key.
+Both are entered on the Connectors page and stored encrypted at rest; Open
+Connector is optional and only needed if you want to broker other apps.
 
 ## Demo data
 
 ```bash
 cd backend
-uv run manage.py seed_demo            # bank + calendar + email + recordings + tasks, synced into the cache
+uv run manage.py seed_demo            # bank + recordings + tasks, synced into the cache
 uv run manage.py seed_demo --clear
 ```
 
@@ -113,7 +107,7 @@ cd frontend && bun run test           # needs the backend on :8000
 ## Docker
 
 ```bash
-cp .env.example .env    # fill SECRET_KEY, ENCRYPTION_KEY, EUNOMIA_API_TOKEN, Google creds
+cp .env.example .env    # fill SECRET_KEY, ENCRYPTION_KEY, EUNOMIA_API_TOKEN
 docker compose up --build
 ```
 

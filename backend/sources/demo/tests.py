@@ -3,9 +3,7 @@ from django.test import TestCase
 from django.utils import timezone
 
 from cache.models import CacheRecord
-from connectors.models import (
-    AppSettings, Connector, DemoCalendarEvent, DemoEmail, DemoRecording, DemoTransaction,
-)
+from connectors.models import AppSettings, Connector, DemoRecording, DemoTransaction
 from sources import registry
 
 from .source import DemoSource
@@ -19,8 +17,6 @@ class DemoSourceTests(TestCase):
                                        amount_cents=-550, created_at=now)
         DemoTransaction.objects.create(account="Spending", description="Salary", category="Income",
                                        amount_cents=300000, created_at=now)
-        DemoCalendarEvent.objects.create(summary="Standup", start_at=now, end_at=now, attendees=["a@x.com"])
-        DemoEmail.objects.create(subject="Hi", sender="b@x.com", snippet="hello", received_at=now, unread=True)
         DemoRecording.objects.create(title="Sync", duration_seconds=600, tags=["work"], recorded_at=now)
         Connector.objects.create(kind="demo", enabled=True)
         registry.register(DemoSource())
@@ -29,9 +25,9 @@ class DemoSourceTests(TestCase):
         report, _ = registry.run_sync("demo")
         types = set(CacheRecord.objects.values_list("type", flat=True))
         self.assertTrue(
-            {"up.transaction", "up.account", "gcal.event", "gmail.message", "heypocket.recording"} <= types
+            {"up.transaction", "up.account", "heypocket.recording"} <= types
         )
-        self.assertTrue(report.written >= 6)
+        self.assertTrue(report.written >= 4)
 
     def test_demo_account_balance_is_derived(self):
         registry.run_sync("demo")

@@ -44,9 +44,9 @@ EUNOMIA_API_TOKEN=$(python3 -c "import secrets; print(secrets.token_urlsafe(32))
 inside a throwaway container instead:
 `docker run --rm python:3.12-slim sh -c "pip install -q cryptography && python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\""`
 
-If the operator has Google Workspace / Up Bank / heypocket creds ready, ask
-for them now too (`GOOGLE_OAUTH_CLIENT_ID/SECRET`, etc). Not required to get
-Eunomia running — those connectors can be added later from the frontend.
+If the operator has Up Bank / heypocket creds ready, ask for them now too.
+Not required to get Eunomia running — those connectors can be added later
+from the frontend.
 
 ---
 
@@ -60,9 +60,6 @@ EUNOMIA_API_TOKEN=${EUNOMIA_API_TOKEN}
 FRONTEND_URL=http://localhost:3000
 NEXT_PUBLIC_API_URL=http://localhost:8000
 NEXT_PUBLIC_API_TOKEN=${EUNOMIA_API_TOKEN}
-GOOGLE_OAUTH_CLIENT_ID=
-GOOGLE_OAUTH_CLIENT_SECRET=
-GOOGLE_OAUTH_REDIRECT_URI=http://localhost:8000/api/connectors/google/callback
 EOF
 
 docker compose up -d --build
@@ -269,5 +266,5 @@ Full webhook route shape and the reasoning behind this design:
 ## Step 4 — hand back to the operator
 
 Tell them: what got installed (Docker or k3s), where the frontend is
-(`http://localhost:3000`), and that Google/Up Bank/heypocket connectors are
-still empty until they paste creds in on the Connectors page.
+(`http://localhost:3000`), and that Up Bank/heypocket connectors are still
+empty until they paste creds in on the Connectors page.

@@ -94,7 +94,7 @@ export default function SettingsPage() {
         <div className="flex-1">
           <div className="text-[13.5px] font-medium">Connectors</div>
           <div className="text-[12px]" style={{ color: "var(--text-muted)" }}>
-            Google, Up Bank, PocketAI, Open Connector — credentials and connection status
+            Up Bank, PocketAI, Open Connector — credentials and connection status
           </div>
         </div>
         <span className="text-[12px]" style={{ color: "var(--accent)" }}>
@@ -179,7 +179,7 @@ export default function SettingsPage() {
         <div className="eyebrow">Demo data</div>
         <p className="text-[13px]" style={{ color: "var(--text-secondary)" }}>
           Populate ~50 realistic fake tasks across 4 demo projects (prefixed &ldquo;Demo — &rdquo;), plus
-          fake Up Bank transactions, Google Calendar events, Gmail messages, and PocketAI recordings —
+          fake Up Bank transactions and PocketAI recordings —
           Finance, the dashboard, Connectors, and the assistant&apos;s tools all switch to it
           automatically, no real credentials needed. Re-seeding replaces the previous batch; clearing
           puts every connector back to however it was before — never touches a real connection.

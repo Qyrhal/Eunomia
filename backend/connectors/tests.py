@@ -5,13 +5,11 @@ from .demo_seed import (
     build_demo_finance_summary,
     build_demo_week_summary,
     clear_demo_bank_data,
-    clear_demo_google_data,
     clear_demo_pocket_data,
     seed_demo_bank_data,
-    seed_demo_google_data,
     seed_demo_pocket_data,
 )
-from .models import AppSettings, Connector, DemoCalendarEvent, DemoEmail, DemoRecording, DemoTransaction
+from .models import AppSettings, Connector, DemoRecording, DemoTransaction
 
 
 class ConnectorListViewTests(TestCase):
@@ -64,22 +62,22 @@ class ConnectorCredentialsTests(TestCase):
     def test_patching_one_credential_field_does_not_drop_the_others(self):
         # Regression test: ConnectorSerializer.update used to do
         # `instance.credentials = credentials`, replacing the whole dict.
-        # Saving just the client secret after the client ID was already
-        # stored would silently wipe the client ID.
+        # Saving just the API key after the base URL was already stored
+        # would silently wipe the base URL.
         self.client.patch(
-            "/api/connectors/google",
-            {"credentials": {"client_id": "abc.apps.googleusercontent.com"}},
+            "/api/connectors/pocketai",
+            {"config": {"base_url": "https://example.com"}},
             content_type="application/json",
         )
         self.client.patch(
-            "/api/connectors/google",
-            {"credentials": {"client_secret": "GOCSPX-secret"}},
+            "/api/connectors/pocketai",
+            {"credentials": {"api_key": "pk-secret"}},
             content_type="application/json",
         )
 
-        connector = Connector.objects.get(kind=Connector.Kind.GOOGLE)
-        self.assertEqual(connector.credentials["client_id"], "abc.apps.googleusercontent.com")
-        self.assertEqual(connector.credentials["client_secret"], "GOCSPX-secret")
+        connector = Connector.objects.get(kind=Connector.Kind.POCKETAI)
+        self.assertEqual(connector.config["base_url"], "https://example.com")
+        self.assertEqual(connector.credentials["api_key"], "pk-secret")
 
 
 class DemoBankDataTests(TestCase):
@@ -171,36 +169,6 @@ class DemoBankDataTests(TestCase):
         )
         summary = build_demo_week_summary(timezone.now() - timezone.timedelta(days=1))
         self.assertEqual(summary, {"transaction_count": 1, "spent": 5.5})
-
-
-class DemoGoogleDataTests(TestCase):
-    def test_seed_enables_google_and_creates_events_and_emails(self):
-        seed_demo_google_data(seed=1)
-        connector = Connector.objects.get(kind=Connector.Kind.GOOGLE)
-        self.assertTrue(connector.enabled)
-        self.assertTrue(connector.config["demo"])
-        self.assertGreater(DemoCalendarEvent.objects.count(), 0)
-        self.assertGreater(DemoEmail.objects.count(), 0)
-
-    def test_clear_removes_everything_and_disables_demo_mode(self):
-        seed_demo_google_data(seed=1)
-        result = clear_demo_google_data()
-        self.assertGreater(result["events_removed"], 0)
-        self.assertGreater(result["emails_removed"], 0)
-        self.assertEqual(DemoCalendarEvent.objects.count(), 0)
-        self.assertEqual(DemoEmail.objects.count(), 0)
-        connector = Connector.objects.get(kind=Connector.Kind.GOOGLE)
-        self.assertNotIn("demo", connector.config)
-        self.assertFalse(connector.enabled)
-
-    def test_snapshot_reports_demo_google_activity_without_a_real_token(self):
-        seed_demo_google_data(seed=1)
-        response = self.client.get("/api/connectors/snapshot")
-        data = response.json()["google"]
-        self.assertIsNotNone(data)
-        self.assertNotIn("error", data)
-        self.assertIn("calendar_events_today", data)
-        self.assertIn("gmail_unread", data)
 
 
 class DemoPocketDataTests(TestCase):

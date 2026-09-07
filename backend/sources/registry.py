@@ -53,9 +53,13 @@ def credentials_for(src: Source) -> dict:
 def enabled() -> list[Source]:
     from connectors.models import Connector
 
-    on = set(
-        Connector.objects.filter(enabled=True).values_list("kind", flat=True)
-    )
+    # Filtered in Python, not the DB: SQLite's JSON1 key lookup treats a
+    # missing key as NULL, so `.exclude(config__demo=True)` also drops rows
+    # that never had a "demo" key at all.
+    on = {
+        c.kind for c in Connector.objects.filter(enabled=True)
+        if not (c.config or {}).get("demo")
+    }
     return [s for s in _REGISTRY.values() if s.provider_key in on]
 
 

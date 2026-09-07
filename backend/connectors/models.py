@@ -55,7 +55,6 @@ class AppSettings(models.Model):
 
 class Connector(models.Model):
     class Kind(models.TextChoices):
-        GOOGLE = "google", "Google (Calendar + Gmail)"
         UP_BANK = "up_bank", "Up Bank"
         POCKETAI = "pocketai", "PocketAI"
         OPEN_CONNECTOR = "open_connector", "Open Connector"
@@ -97,37 +96,6 @@ class DemoTransaction(models.Model):
 
     def __str__(self):
         return f"{self.description} ({self.amount_cents / 100:.2f})"
-
-
-class DemoCalendarEvent(models.Model):
-    """Fake Google Calendar events for demo mode."""
-
-    summary = models.CharField(max_length=200)
-    start_at = models.DateTimeField()
-    end_at = models.DateTimeField()
-    attendees = models.JSONField(default=list)
-
-    class Meta:
-        ordering = ["start_at"]
-
-    def __str__(self):
-        return self.summary
-
-
-class DemoEmail(models.Model):
-    """Fake Gmail messages for demo mode."""
-
-    subject = models.CharField(max_length=200)
-    sender = models.CharField(max_length=200)
-    snippet = models.CharField(max_length=300)
-    received_at = models.DateTimeField()
-    unread = models.BooleanField(default=False)
-
-    class Meta:
-        ordering = ["-received_at"]
-
-    def __str__(self):
-        return self.subject
 
 
 class DemoRecording(models.Model):

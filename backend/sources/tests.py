@@ -70,6 +70,13 @@ class RunSyncTests(TestCase):
         Connector.objects.create(kind="fake", enabled=True)
         self.assertIn("fake", [s.key for s in registry.enabled()])
 
+    def test_enabled_excludes_demo_mode_connectors(self):
+        # Regression: a connector left in demo mode (no real credentials) must
+        # not be polled for real by the scheduler — it used to be, and spammed
+        # the live API with empty/garbage auth every cycle.
+        Connector.objects.create(kind="fake", enabled=True, config={"demo": True})
+        self.assertNotIn("fake", [s.key for s in registry.enabled()])
+
 
 class ProviderSharingTests(TestCase):
     def test_sources_can_share_one_provider_connector(self):

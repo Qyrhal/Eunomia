@@ -1,15 +1,10 @@
-import os
-
-from django.shortcuts import redirect
 from django.utils import timezone
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .clients import GoogleClient, OpenConnectorClient, PocketAIClient, UpBankClient, google_oauth_flow
+from .clients import OpenConnectorClient, PocketAIClient, UpBankClient
 from .demo_seed import (
-    build_demo_calendar_events_today,
     build_demo_finance_summary,
-    build_demo_gmail_unread_count,
     build_demo_pocket_summary,
     build_demo_week_summary,
 )
@@ -62,8 +57,6 @@ class ConnectorTestView(APIView):
                 ok = connector.config.get("demo") or PocketAIClient(
                     connector.credentials, connector.config.get("base_url")
                 ).ping()
-            elif kind == Connector.Kind.GOOGLE:
-                ok = connector.config.get("demo") or bool(connector.credentials.get("refresh_token"))
             elif kind == Connector.Kind.OPEN_CONNECTOR:
                 ok = OpenConnectorClient(connector.credentials, connector.config.get("base_url")).ping()
             else:
@@ -71,92 +64,6 @@ class ConnectorTestView(APIView):
         except Exception as exc:  # surfaced to the settings UI, not swallowed
             return Response({"ok": False, "error": str(exc)}, status=200)
         return Response({"ok": ok})
-
-
-def _google_client_config(connector: Connector):
-    """Client ID/secret come from the Google connector's saved credentials (set in
-    Settings); fall back to env vars so a deployment can also configure it that way."""
-    creds = connector.credentials
-    client_id = creds.get("client_id") or os.environ.get("GOOGLE_OAUTH_CLIENT_ID", "")
-    client_secret = creds.get("client_secret") or os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET", "")
-    redirect_uri = os.environ.get(
-        "GOOGLE_OAUTH_REDIRECT_URI", "http://localhost:8000/api/connectors/google/callback"
-    )
-    return {
-        "web": {
-            "client_id": client_id,
-            "client_secret": client_secret,
-            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-            "token_uri": "https://oauth2.googleapis.com/token",
-            "redirect_uris": [redirect_uri],
-        }
-    }, redirect_uri
-
-
-class GoogleAuthStartView(APIView):
-    """Redirects the browser into Google's consent screen."""
-
-    def get(self, request):
-        connector, _ = Connector.objects.get_or_create(kind=Connector.Kind.GOOGLE)
-        config, redirect_uri = _google_client_config(connector)
-        if not config["web"]["client_id"] or not config["web"]["client_secret"]:
-            return Response(
-                {"detail": "Save a Google OAuth client ID and secret in Settings first."},
-                status=400,
-            )
-        flow = google_oauth_flow(config, redirect_uri)
-        auth_url, _ = flow.authorization_url(
-            access_type="offline", include_granted_scopes="true", prompt="consent"
-        )
-        return redirect(auth_url)
-
-
-class GoogleAuthCallbackView(APIView):
-    """Google redirects back here with ?code=...; we exchange it and store tokens."""
-
-    def get(self, request):
-        connector, _ = Connector.objects.get_or_create(kind=Connector.Kind.GOOGLE)
-        config, redirect_uri = _google_client_config(connector)
-        flow = google_oauth_flow(config, redirect_uri)
-        flow.fetch_token(code=request.query_params.get("code"))
-        creds = flow.credentials
-
-        connector.credentials = {
-            "token": creds.token,
-            "refresh_token": creds.refresh_token,
-            "client_id": creds.client_id,
-            "client_secret": creds.client_secret,
-        }
-        connector.enabled = True
-        connector.save()
-
-        frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:3000")
-        return redirect(f"{frontend_url}/settings?connected=google")
-
-
-class GoogleCalendarEventsView(APIView):
-    def get(self, request):
-        connector = Connector.objects.filter(kind=Connector.Kind.GOOGLE, enabled=True).first()
-        if not connector:
-            return Response({"detail": "Google is not connected"}, status=400)
-        client = GoogleClient(connector.credentials)
-        events = client.calendar_events(max_results=int(request.query_params.get("max", 20)))
-        connector.credentials = client.refreshed_credentials_dict()
-        connector.save()
-        return Response(events)
-
-
-class GmailMessagesView(APIView):
-    def get(self, request):
-        connector = Connector.objects.filter(kind=Connector.Kind.GOOGLE, enabled=True).first()
-        if not connector:
-            return Response({"detail": "Google is not connected"}, status=400)
-        client = GoogleClient(connector.credentials)
-        query = request.query_params.get("q", "is:unread")
-        messages = client.gmail_messages(query=query, max_results=int(request.query_params.get("max", 20)))
-        connector.credentials = client.refreshed_credentials_dict()
-        connector.save()
-        return Response(messages)
 
 
 class UpBankTransactionsView(APIView):
@@ -169,7 +76,10 @@ class UpBankTransactionsView(APIView):
 
 
 class UpBankFinanceSummaryView(APIView):
-    """Backs the /finance page: balance, spend by category, recent transactions."""
+    """Backs the /finance page: balance, spend by category, recent transactions.
+
+    Always reads from the cache (populated by the periodic sync) rather than
+    calling Up Bank live on every page load."""
 
     def get(self, request):
         connector = Connector.objects.filter(kind=Connector.Kind.UP_BANK, enabled=True).first()
@@ -181,66 +91,41 @@ class UpBankFinanceSummaryView(APIView):
         since = timezone.now() - datetime.timedelta(days=days)
         if connector.config.get("demo"):
             return Response(build_demo_finance_summary(since))
-        try:
-            data = UpBankClient(connector.credentials).finance_summary(since.isoformat())
-        except Exception as exc:
-            return Response({"detail": str(exc)}, status=502)
-        return Response(data)
+        from sources.up_bank.source import finance_summary
+
+        return Response(finance_summary(since.isoformat()))
 
 
 class SnapshotView(APIView):
-    """Live, best-effort figures pulled straight from each connected account —
-    only ever the fields those APIs actually expose. Any connector that isn't
-    connected, or errors, comes back as null rather than failing the whole call."""
+    """Best-effort figures for each connected account, read from the cache
+    (populated by the periodic sync) rather than the live API. Any connector
+    that isn't connected comes back as null rather than failing the whole call."""
 
     def get(self, request):
         import datetime
 
-        result = {"google": None, "up_bank": None, "pocketai": None}
-
-        google = Connector.objects.filter(kind=Connector.Kind.GOOGLE, enabled=True).first()
-        if google and (google.config.get("demo") or google.credentials.get("refresh_token")):
-            try:
-                if google.config.get("demo"):
-                    result["google"] = {
-                        "calendar_events_today": build_demo_calendar_events_today(),
-                        "gmail_unread": build_demo_gmail_unread_count(),
-                    }
-                else:
-                    client = GoogleClient(google.credentials)
-                    result["google"] = {
-                        "calendar_events_today": client.calendar_events_today(),
-                        "gmail_unread": client.gmail_unread_count(),
-                    }
-                    google.credentials = client.refreshed_credentials_dict()
-                    google.save()
-            except Exception as exc:
-                result["google"] = {"error": str(exc)}
+        result = {"up_bank": None, "pocketai": None}
 
         up_bank = Connector.objects.filter(kind=Connector.Kind.UP_BANK, enabled=True).first()
         if up_bank and (up_bank.config.get("demo") or up_bank.credentials.get("personal_access_token")):
-            try:
-                since = (
-                    timezone.now() - datetime.timedelta(days=timezone.now().weekday())
-                ).replace(hour=0, minute=0, second=0, microsecond=0)
-                if up_bank.config.get("demo"):
-                    result["up_bank"] = build_demo_week_summary(since)
-                else:
-                    result["up_bank"] = UpBankClient(up_bank.credentials).week_summary(since.isoformat())
-            except Exception as exc:
-                result["up_bank"] = {"error": str(exc)}
+            since = (
+                timezone.now() - datetime.timedelta(days=timezone.now().weekday())
+            ).replace(hour=0, minute=0, second=0, microsecond=0)
+            if up_bank.config.get("demo"):
+                result["up_bank"] = build_demo_week_summary(since)
+            else:
+                from sources.up_bank.source import week_summary
+
+                result["up_bank"] = week_summary(since.isoformat())
 
         pocketai = Connector.objects.filter(kind=Connector.Kind.POCKETAI, enabled=True).first()
         if pocketai and (pocketai.config.get("demo") or pocketai.credentials.get("api_key")):
-            try:
-                if pocketai.config.get("demo"):
-                    result["pocketai"] = {"recordings_count": build_demo_pocket_summary(days=7)["recordings_count"]}
-                else:
-                    client = PocketAIClient(pocketai.credentials, pocketai.config.get("base_url"))
-                    data = client.recordings({"limit": 1})
-                    result["pocketai"] = {"recordings_count": len(data.get("data", data.get("recordings", [])))}
-            except Exception as exc:
-                result["pocketai"] = {"error": str(exc)}
+            if pocketai.config.get("demo"):
+                result["pocketai"] = {"recordings_count": build_demo_pocket_summary(days=7)["recordings_count"]}
+            else:
+                from sources.heypocket.source import summary
+
+                result["pocketai"] = {"recordings_count": summary(days=7)["recordings_count"]}
 
         return Response(result)
 
@@ -260,12 +145,6 @@ class PocketAISummaryView(APIView):
         if connector.config.get("demo"):
             return Response(build_demo_pocket_summary(days))
 
-        import datetime
+        from sources.heypocket.source import summary
 
-        since = (timezone.now() - datetime.timedelta(days=days)).strftime("%Y-%m-%d")
-        try:
-            client = PocketAIClient(connector.credentials, connector.config.get("base_url"))
-            data = client.summary(since)
-        except Exception as exc:
-            return Response({"detail": str(exc)}, status=502)
-        return Response(data)
+        return Response(summary(days))

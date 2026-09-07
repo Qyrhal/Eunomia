@@ -8,10 +8,8 @@ from datetime import timedelta
 
 from connectors.demo_seed import (
     clear_demo_bank_data,
-    clear_demo_google_data,
     clear_demo_pocket_data,
     seed_demo_bank_data,
-    seed_demo_google_data,
     seed_demo_pocket_data,
 )
 from django.utils import timezone
@@ -72,15 +70,12 @@ def seed_demo_data(seed: int | None = None) -> dict:
         Task.objects.filter(id=task_id).update(completed_at=backdated)
 
     bank = seed_demo_bank_data(seed=seed)
-    google = seed_demo_google_data(seed=seed)
     pocket = seed_demo_pocket_data(seed=seed)
 
     return {
         "projects": len(projects),
         "tasks": total_tasks,
         "transactions": bank["transactions"],
-        "calendar_events": google["events"],
-        "emails": google["emails"],
         "recordings": pocket["recordings"],
     }
 
@@ -90,12 +85,9 @@ def clear_demo_data() -> dict:
     count = qs.count()
     qs.delete()
     bank = clear_demo_bank_data()
-    google = clear_demo_google_data()
     pocket = clear_demo_pocket_data()
     return {
         "projects_removed": count,
         "transactions_removed": bank["transactions_removed"],
-        "calendar_events_removed": google["events_removed"],
-        "emails_removed": google["emails_removed"],
         "recordings_removed": pocket["recordings_removed"],
     }

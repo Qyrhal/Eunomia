@@ -140,12 +140,12 @@ class TaskApiTests(TestCase):
         self.client.patch(f"/api/tasks/{task.id}/", {"completed": True}, content_type="application/json")
         self.assertEqual(Task.objects.filter(title="one-off").count(), 1)
 
-    def test_task_context_endpoint_returns_matching_emails_and_events(self):
+    def test_task_context_endpoint_returns_matching_transactions_and_recordings(self):
         task = Task.objects.create(project=self.inbox, title="renew passport")
         response = self.client.get(f"/api/tasks/{task.id}/context/")
         self.assertEqual(response.status_code, 200)
-        self.assertIn("emails", response.json())
-        self.assertIn("events", response.json())
+        self.assertIn("transactions", response.json())
+        self.assertIn("recordings", response.json())
 
 
 class DemoSeedTests(TestCase):

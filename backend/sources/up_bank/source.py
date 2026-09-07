@@ -20,7 +20,7 @@ class UpBankSource(Source):
     key = "up_bank"
     provider = "up_bank"
     label = "Up Bank"
-    record_types = ["up.transaction", "up.account"]
+    record_types = ["up.transaction", "up.account", "up.category"]
     auth_kind = "token"
 
     # -- sync -----------------------------------------------------------------
@@ -48,6 +48,11 @@ class UpBankSource(Source):
         except Exception:
             pass
 
+        try:
+            records.extend(client.categories().get("data", []))
+        except Exception:
+            pass
+
         newest = max(
             (r["attributes"]["createdAt"] for r in records if r.get("type") == "transactions"),
             default=cursor or since,
@@ -61,6 +66,8 @@ class UpBankSource(Source):
             return self._map_txn(raw)
         if t == "accounts":
             return self._map_account(raw)
+        if t == "categories":
+            return self._map_category(raw)
         return None
 
     def _map_txn(self, raw: dict) -> dict:
@@ -110,6 +117,23 @@ class UpBankSource(Source):
             "deleted": False,
         }
 
+    def _map_category(self, raw: dict) -> dict:
+        a = raw["attributes"]
+        parent = (raw.get("relationships", {}).get("parent", {}).get("data") or {}).get("id")
+        return {
+            "id": f"up_bank:up.category:{raw['id']}",
+            "source": "up_bank",
+            "type": "up.category",
+            "external_id": raw["id"],
+            "title": a.get("name", ""),
+            "body_text": a.get("name", ""),
+            "occurred_at": None,
+            "url": "",
+            "payload": {"parent": parent},
+            "links": [],
+            "deleted": False,
+        }
+
     # -- webhook ----------------------------------------------------------------
     def webhook(self, request) -> list[dict] | None:
         creds = credentials_for(self)
@@ -149,16 +173,34 @@ class UpBankSource(Source):
     def tools(self) -> list[ToolSpec]:
         return [
             ToolSpec(
-                name="ping",
-                schema={"type": "object", "properties": {}},
-                impl=lambda: {"ok": self._client().ping()},
-            ),
-            ToolSpec(
                 name="finance_summary",
                 schema={"type": "object", "properties": {"since": {"type": "string", "description": "ISO date; default 30d ago"}}},
                 impl=finance_summary,
             ),
+            ToolSpec(
+                name="list_transactions",
+                schema={
+                    "type": "object",
+                    "properties": {
+                        "days": {"type": "integer", "description": "How many days back to look (default 30)"},
+                        "category": {"type": "string", "description": "Up Bank category id, e.g. 'restaurants-and-cafes'"},
+                        "limit": {"type": "integer"},
+                    },
+                },
+                impl=list_transactions,
+            ),
+            ToolSpec(
+                name="list_accounts",
+                schema={"type": "object", "properties": {}},
+                impl=list_accounts,
+            ),
         ]
+
+
+def _category_names() -> dict[str, str]:
+    from cache.models import CacheRecord
+
+    return dict(CacheRecord.objects.filter(type="up.category", deleted=False).values_list("external_id", "title"))
 
 
 def finance_summary(since: str | None = None) -> dict:
@@ -173,6 +215,7 @@ def finance_summary(since: str | None = None) -> dict:
     from cache.models import CacheRecord
 
     since = since or (timezone.now() - timedelta(days=30)).isoformat()
+    category_names = _category_names()
 
     accounts = CacheRecord.objects.filter(type="up.account", deleted=False)
     balance_cents = sum((a.payload or {}).get("balance_cents", 0) for a in accounts)
@@ -187,7 +230,8 @@ def finance_summary(since: str | None = None) -> dict:
         cents = (t.payload or {}).get("amount_cents", 0)
         if cents >= 0:
             continue
-        cat = (t.payload or {}).get("category") or "uncategorised"
+        cat_id = (t.payload or {}).get("category")
+        cat = category_names.get(cat_id, cat_id) or "uncategorised"
         by_cat[cat] = by_cat.get(cat, 0) - cents
         day = t.occurred_at.date().isoformat() if t.occurred_at else "?"
         by_day[day] = by_day.get(day, 0) - cents
@@ -214,3 +258,75 @@ def finance_summary(since: str | None = None) -> dict:
             for t in txns[:20]
         ],
     }
+
+
+def week_summary(since: str | None = None) -> dict:
+    """Settled transaction count + total spend since `since` (default: start of
+    week), computed from the cache — mirrors UpBankClient.week_summary's shape
+    without hitting the live API."""
+    from datetime import timedelta
+
+    from django.utils import timezone
+
+    from cache.models import CacheRecord
+
+    if since is None:
+        now = timezone.now()
+        since = (now - timedelta(days=now.weekday())).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        ).isoformat()
+
+    txns = CacheRecord.objects.filter(
+        type="up.transaction", deleted=False, occurred_at__gte=since, payload__status="SETTLED"
+    )
+    spent_cents = sum(
+        -(t.payload or {}).get("amount_cents", 0)
+        for t in txns
+        if (t.payload or {}).get("amount_cents", 0) < 0
+    )
+    return {"transaction_count": txns.count(), "spent": round(spent_cents / 100, 2)}
+
+
+def list_transactions(days: int = 30, category: str | None = None, limit: int = 50) -> list[dict]:
+    """Recent settled + pending transactions from the cache, e.g. for drafting
+    finance follow-up tasks (pay a bill, dispute a charge)."""
+    from datetime import timedelta
+
+    from django.utils import timezone
+
+    from cache.models import CacheRecord
+
+    since = timezone.now() - timedelta(days=days)
+    category_names = _category_names()
+    txns = CacheRecord.objects.filter(
+        type="up.transaction", deleted=False, occurred_at__gte=since
+    ).order_by("-occurred_at")
+    if category:
+        txns = txns.filter(payload__category=category)
+
+    return [
+        {
+            "description": t.title,
+            "amount": (t.payload or {}).get("amount"),
+            "status": (t.payload or {}).get("status"),
+            "category": category_names.get((t.payload or {}).get("category"), (t.payload or {}).get("category")),
+            "created_at": t.occurred_at.isoformat() if t.occurred_at else None,
+        }
+        for t in txns[: min(int(limit), 200)]
+    ]
+
+
+def list_accounts() -> list[dict]:
+    """Every cached Up Bank account and its last-synced balance."""
+    from cache.models import CacheRecord
+
+    accounts = CacheRecord.objects.filter(type="up.account", deleted=False)
+    return [
+        {
+            "name": a.title,
+            "balance": (a.payload or {}).get("balance"),
+            "account_type": (a.payload or {}).get("account_type"),
+            "ownership_type": (a.payload or {}).get("ownership_type"),
+        }
+        for a in accounts
+    ]

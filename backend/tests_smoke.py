@@ -45,7 +45,8 @@ class EndToEndSmokeTests(TestCase):
     def _sync(self):
         with patch("connectors.clients.UpBankClient.transactions",
                    return_value={"data": [TXN], "links": {}}), \
-             patch("connectors.clients.UpBankClient.accounts", return_value={"data": [ACCT]}):
+             patch("connectors.clients.UpBankClient.accounts", return_value={"data": [ACCT]}), \
+             patch("connectors.clients.UpBankClient.categories", return_value={"data": []}):
             return registry.run_sync("up_bank")
 
     def test_full_path(self):
@@ -63,3 +64,22 @@ class EndToEndSmokeTests(TestCase):
         fin = call("up_bank__finance_summary", {"since": "2000-01-01T00:00:00Z"})
         self.assertEqual(fin["balance"], 1000.0)
         self.assertTrue(any(cat["category"] == "home" for cat in fin["spend_by_category"]))
+
+        txns = call("up_bank__list_transactions", {"days": 365})
+        self.assertEqual(len(txns), 1)
+
+        accounts = call("up_bank__list_accounts", {})
+        self.assertEqual(accounts[0]["name"], "Spending")
+
+    def test_open_connector_tools_are_optional_and_never_raise(self):
+        # No open_connector Connector row configured at all — the tools must
+        # come back with an error dict, not throw, so a chat/MCP call never
+        # 500s just because this optional broker isn't set up.
+        self.assertEqual(
+            call("open_connector_call", {"action": "github.get_current_user"}),
+            {"error": "open_connector is not connected"},
+        )
+        self.assertEqual(
+            call("open_connector_list_connections", {}),
+            {"error": "open_connector is not connected"},
+        )

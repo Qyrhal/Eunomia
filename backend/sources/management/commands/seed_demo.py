@@ -13,14 +13,14 @@ class Command(BaseCommand):
 
     def handle(self, *args, **opts):
         from connectors.demo_seed import (
-            clear_demo_bank_data, clear_demo_google_data, clear_demo_pocket_data,
-            seed_demo_bank_data, seed_demo_google_data, seed_demo_pocket_data,
+            clear_demo_bank_data, clear_demo_pocket_data,
+            seed_demo_bank_data, seed_demo_pocket_data,
         )
         from connectors.models import Connector
         from tasks.demo_seed import clear_demo_data, seed_demo_data
 
         if opts["clear"]:
-            clear_demo_bank_data(); clear_demo_google_data(); clear_demo_pocket_data()
+            clear_demo_bank_data(); clear_demo_pocket_data()
             clear_demo_data()
             Connector.objects.filter(kind="demo").delete()
             from cache.models import CacheRecord
@@ -29,7 +29,7 @@ class Command(BaseCommand):
             return
 
         s = opts["seed"]
-        seed_demo_bank_data(seed=s); seed_demo_google_data(seed=s); seed_demo_pocket_data(seed=s)
+        seed_demo_bank_data(seed=s); seed_demo_pocket_data(seed=s)
         seed_demo_data(seed=s)
         Connector.objects.update_or_create(kind="demo", defaults={"enabled": True})
 

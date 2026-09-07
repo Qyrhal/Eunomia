@@ -51,28 +51,23 @@ fi
 
 cd ..
 
-pids=()
 cleanup() {
   echo -e "\n${DIM}shutting down...${RESET}"
-  kill "${pids[@]}" 2>/dev/null || true
+  kill -- -$$ 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM
 
 echo -e "${BOLD}==>${RESET} starting backend  ${DIM}http://localhost:8000${RESET}"
 (cd backend && uv run manage.py runserver 8000) &
-pids+=($!)
 
 echo -e "${BOLD}==>${RESET} starting sync worker (APScheduler)"
 (cd backend && uv run manage.py run_worker) &
-pids+=($!)
 
 echo -e "${BOLD}==>${RESET} starting MCP server ${DIM}http://localhost:8765/mcp${RESET}"
 (cd backend && uv run mcp_server.py --http) &
-pids+=($!)
 
 echo -e "${BOLD}==>${RESET} starting frontend ${DIM}http://localhost:3000${RESET}"
 (cd frontend && bun run dev) &
-pids+=($!)
 
 echo -e "\n${GREEN}${BOLD}Eunomia is running${RESET} — ${BOLD}http://localhost:3000${RESET}  ${DIM}(ctrl-c to stop)${RESET}\n"
 

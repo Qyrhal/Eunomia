@@ -70,7 +70,7 @@ export type AppSettings = {
 };
 
 export type Connector = {
-  kind: "google" | "up_bank" | "pocketai" | "open_connector";
+  kind: "up_bank" | "pocketai" | "open_connector";
   enabled: boolean;
   config: Record<string, unknown>;
   credentials_set: boolean;
@@ -95,7 +95,6 @@ export type WeekOverWeek = { this_week: number; last_week: number; delta_pct: nu
 export type UpcomingLoad = { day: string; count: number; minutes: number | null };
 
 export type Snapshot = {
-  google: { calendar_events_today: number; gmail_unread: number; error?: string } | null;
   up_bank: { transaction_count: number; spent: number; error?: string } | null;
   pocketai: { recordings_count: number; error?: string } | null;
 };
@@ -116,6 +115,6 @@ export type PocketSummary = {
 };
 
 export type TaskContext = {
-  emails: { subject?: string; from?: string; snippet?: string; date?: string }[];
-  events: { summary?: string; start?: unknown; end?: unknown }[];
+  transactions: { description?: string; amount?: string; occurred_at?: string | null }[];
+  recordings: { title?: string; occurred_at?: string | null }[];
 };

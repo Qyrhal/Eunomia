@@ -56,25 +56,6 @@ def poll_all() -> list[dict]:
     return out
 
 
-def renew_watch_channels() -> dict:
-    """Re-arm Google Calendar/Drive push channels nearing their 7-day expiry.
-
-    Only runs when the google Connector has a `watch_callback_url` in its config
-    (a public HTTPS endpoint — see docs/research/google-workspace-push.md). On a
-    tailscale-only box there is none, so this is a logged no-op and polling
-    covers freshness.
-    """
-    from connectors.models import Connector
-
-    conn = Connector.objects.filter(kind="google", enabled=True).first()
-    url = (conn.config or {}).get("watch_callback_url") if conn else None
-    if not url:
-        log.debug("renew_watch_channels: no watch_callback_url — polling only")
-        return {"skipped": "no public callback url"}
-    # Registration via events.watch / changes.watch goes here once a relay exists.
-    return {"noop": True, "callback": url}
-
-
 def backfill_embeddings(limit: int = 200) -> int:
     """Re-embed cache records + tasks that missed embedding (backend was down)."""
     from cache.models import CacheRecord
@@ -116,6 +97,5 @@ def build_scheduler():
         )
     sched.add_job(poll_all, "interval", seconds=300, id="poll_all", max_instances=1, coalesce=True)
     sched.add_job(backfill_embeddings, "interval", seconds=600, id="backfill_embeddings", max_instances=1)
-    sched.add_job(renew_watch_channels, "interval", hours=1, id="renew_watch_channels", max_instances=1)
 
     return sched

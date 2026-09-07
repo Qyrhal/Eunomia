@@ -44,28 +44,28 @@ class TaskViewSet(viewsets.ModelViewSet):
 
 
 class TaskContextView(APIView):
-    """GET -> a quick, non-AI look at anything already connected that mentions
-    this task's title: a matching calendar event or email thread. Read-only,
-    no LLM round-trip — just the same demo-aware tool functions the assistant uses."""
+    """GET -> Up Bank transactions / heypocket recordings whose title mentions
+    this task's title, e.g. surfacing the charge behind a "dispute this" task.
+    Read-only, backed by the cache (FTS/embedding search) — no live API calls."""
 
     def get(self, request, pk):
-        from aiassist.tools import list_calendar_events, search_emails
+        from cache.search import search as cache_search
 
         task = get_object_or_404(Task, pk=pk)
         words = [w for w in task.title.split() if len(w) > 3]
         query = " ".join(words[:4]) or task.title
 
-        emails = search_emails(query, max_results=3)
-        if isinstance(emails, dict):
-            emails = []
+        hits = cache_search(query, sources=["up_bank", "heypocket"], mode="keyword", limit=6)
+        transactions = [h for h in hits if h.type == "up.transaction"][:3]
+        recordings = [h for h in hits if h.type == "heypocket.recording"][:3]
 
-        events = list_calendar_events(days_ahead=14, max_results=20)
-        if isinstance(events, dict):
-            events = []
-        keywords = {w.lower() for w in words}
-        events = [e for e in events if keywords & set((e.get("summary") or "").lower().split())][:3]
-
-        return Response({"emails": emails, "events": events})
+        return Response({
+            "transactions": [
+                {"description": h.title, "amount": (h.payload or {}).get("amount"), "occurred_at": h.occurred_at}
+                for h in transactions
+            ],
+            "recordings": [{"title": h.title, "occurred_at": h.occurred_at} for h in recordings],
+        })
 
 
 class SeedDemoDataView(APIView):

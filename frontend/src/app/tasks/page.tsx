@@ -735,19 +735,19 @@ export default function TasksPage() {
                 {openSubtasks[t.id] && (
                   <div className="pl-11 pr-4 pb-3 flex flex-col gap-2" style={{ background: "var(--surface-2)" }}>
                     {taskContext[t.id] &&
-                      (taskContext[t.id].events.length > 0 || taskContext[t.id].emails.length > 0) && (
+                      (taskContext[t.id].transactions.length > 0 || taskContext[t.id].recordings.length > 0) && (
                         <div className="flex flex-col gap-1 pt-2 pb-1">
                           <div className="eyebrow flex items-center gap-1" style={{ color: "var(--text-muted)" }}>
                             <Link2 size={11} /> Related
                           </div>
-                          {taskContext[t.id].events.map((e, i) => (
-                            <div key={`e${i}`} className="text-[12px] truncate" style={{ color: "var(--text-secondary)" }}>
-                              📅 {e.summary}
+                          {taskContext[t.id].transactions.map((tx, i) => (
+                            <div key={`tx${i}`} className="text-[12px] truncate" style={{ color: "var(--text-secondary)" }}>
+                              💳 {tx.description} {tx.amount}
                             </div>
                           ))}
-                          {taskContext[t.id].emails.map((e, i) => (
-                            <div key={`m${i}`} className="text-[12px] truncate" style={{ color: "var(--text-secondary)" }}>
-                              ✉️ {e.subject}
+                          {taskContext[t.id].recordings.map((r, i) => (
+                            <div key={`r${i}`} className="text-[12px] truncate" style={{ color: "var(--text-secondary)" }}>
+                              🎙️ {r.title}
                             </div>
                           ))}
                         </div>
