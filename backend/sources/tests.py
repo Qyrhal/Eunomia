@@ -11,7 +11,6 @@ class FakeSource(Source):
     key = "fake"
     label = "Fake"
     record_types = ["fake.thing"]
-    secret_fields = ["nested.token"]
 
     def __init__(self, records=None):
         self._records = records or []
@@ -66,12 +65,6 @@ class RunSyncTests(TestCase):
         with self.assertRaises(KeyError):
             registry.run_sync("nope")
 
-    def test_secret_values_resolved_from_connector_credentials(self):
-        c = Connector.objects.create(kind="fake", enabled=True)
-        c.credentials = {"nested": {"token": "SECRET123"}}
-        c.save()
-        self.assertEqual(registry._secret_values(registry.get("fake")), ["SECRET123"])
-
     def test_enabled_reflects_connector_rows(self):
         self.assertNotIn("fake", [s.key for s in registry.enabled()])
         Connector.objects.create(kind="fake", enabled=True)
@@ -91,11 +84,6 @@ class ProviderSharingTests(TestCase):
         registry.register(A())
         registry.register(B())
         Connector.objects.create(kind="prov", enabled=True)
-        c = Connector.objects.get(kind="prov")
-        c.credentials = {"nested": {"token": "SHARED"}}
-        c.save()
 
         keys = {s.key for s in registry.enabled()}
         self.assertTrue({"prov_a", "prov_b"} <= keys)
-        self.assertEqual(registry._secret_values(registry.get("prov_a")), ["SHARED"])
-        self.assertEqual(registry._secret_values(registry.get("prov_b")), ["SHARED"])

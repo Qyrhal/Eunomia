@@ -22,7 +22,6 @@ class UpBankSource(Source):
     label = "Up Bank"
     record_types = ["up.transaction", "up.account"]
     auth_kind = "token"
-    secret_fields = ["personal_access_token"]
 
     # -- sync -----------------------------------------------------------------
     def _client(self) -> UpBankClient:

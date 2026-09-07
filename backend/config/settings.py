@@ -32,12 +32,10 @@ INSTALLED_APPS = [
     "connectors",
     "aiassist",
     "analytics",
-    "masking",
     "embeddings",
     "cache",
     "sources",
     "tools",
-    "triggers",
 ]
 
 MIDDLEWARE = [

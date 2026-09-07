@@ -65,15 +65,6 @@ class SyncTests(TestCase):
         self.assertTrue(CacheRecord.objects.filter(pk="up_bank:up.transaction:txn-1").exists())
         self.assertTrue(CacheRecord.objects.filter(pk="up_bank:up.account:acc-1").exists())
 
-    def test_pat_is_masked_in_the_cache(self):
-        txn = json.loads(json.dumps(TXN))
-        txn["attributes"]["message"] = "ref up:yeah:SECRETPAT"  # pretend the PAT leaked into data
-        with patch("connectors.clients.UpBankClient.transactions", return_value={"data": [txn], "links": {}}), \
-             patch("connectors.clients.UpBankClient.accounts", return_value={"data": []}):
-            registry.run_sync("up_bank")
-        rec = CacheRecord.objects.get(pk="up_bank:up.transaction:txn-1")
-        self.assertNotIn("SECRETPAT", rec.body_text)
-
 
 class WebhookTests(TestCase):
     def setUp(self):

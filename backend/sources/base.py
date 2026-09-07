@@ -35,8 +35,6 @@ class Source(abc.ABC):
     record_types: list[str] = []
     #: "oauth" | "api_key" | "token"
     auth_kind: str = "token"
-    #: dotted paths into the stored credentials dict that must always be vault-masked
-    secret_fields: list[str] = []
 
     @property
     def provider_key(self) -> str:

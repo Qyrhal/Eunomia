@@ -2,7 +2,7 @@
 
 It does what Hermes does with Eunomia: discover the tool catalogue, run an
 OpenAI-compatible tool-calling loop against a real LLM, and answer a question by
-calling Eunomia's tools. Used by mock_hermes.py (--agent) and tests_hermes_sim.py.
+calling Eunomia's tools. Used by tests_hermes_sim.py.
 
 Config (env, from backend/.env — gitignored):
     SIM_LLM_BASE_URL   OpenAI-compatible base, e.g. https://opencode.ai/zen/go/v1

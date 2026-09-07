@@ -22,20 +22,7 @@ class AppSettings(models.Model):
     )
     llm_api_key_encrypted = models.TextField(blank=True, default="")
 
-    # --- Hermes notification channel (#9 / #39) ---
-    hermes_webhook_url = models.CharField(
-        max_length=400, blank=True, default="",
-        help_text="Base URL of the Hermes gateway webhook adapter, e.g. http://127.0.0.1:8644/webhooks",
-    )
-    hermes_webhook_secret_encrypted = models.TextField(blank=True, default="")
-
-    # --- PII detector knobs (#28) ---
-    pii_allowlist = models.JSONField(default=list, blank=True)
-    pii_disabled_sources = models.JSONField(default=list, blank=True)
-    pii_min_confidence = models.FloatField(default=0.5)
-
     # --- misc ---
-    vip_senders = models.JSONField(default=list, blank=True, help_text="Sender addresses for the 'VIP email' trigger.")
     sync_intervals = models.JSONField(default=dict, blank=True, help_text='{"up_bank": 900, ...} seconds per source.')
 
     theme = models.JSONField(
@@ -62,14 +49,6 @@ class AppSettings(models.Model):
     def llm_api_key(self, value: str):
         self.llm_api_key_encrypted = encrypt(value)
 
-    @property
-    def hermes_webhook_secret(self) -> str:
-        return decrypt(self.hermes_webhook_secret_encrypted)
-
-    @hermes_webhook_secret.setter
-    def hermes_webhook_secret(self, value: str):
-        self.hermes_webhook_secret_encrypted = encrypt(value)
-
     def sync_interval(self, source_key: str, default: int = 900) -> int:
         return int((self.sync_intervals or {}).get(source_key, default))
 
@@ -79,6 +58,7 @@ class Connector(models.Model):
         GOOGLE = "google", "Google (Calendar + Gmail)"
         UP_BANK = "up_bank", "Up Bank"
         POCKETAI = "pocketai", "PocketAI"
+        OPEN_CONNECTOR = "open_connector", "Open Connector"
 
     kind = models.CharField(max_length=20, choices=Kind.choices, unique=True)
     enabled = models.BooleanField(default=False)

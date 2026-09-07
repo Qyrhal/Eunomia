@@ -48,9 +48,3 @@ class SyncTests(TestCase):
         self.assertEqual(src.provider_key, "pocketai")
         self.assertIn("heypocket", [s.key for s in registry.enabled()])
 
-    def test_api_key_masked_if_it_appears_in_data(self):
-        rec = dict(REC, summary="key pk-SECRETKEY leaked")
-        with patch("connectors.clients.PocketAIClient.recordings", return_value={"data": [rec]}):
-            registry.run_sync("heypocket")
-        r = CacheRecord.objects.get(pk="heypocket:heypocket.recording:rec-1")
-        self.assertNotIn("pk-SECRETKEY", r.body_text)

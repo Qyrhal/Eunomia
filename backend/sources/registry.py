@@ -59,22 +59,6 @@ def enabled() -> list[Source]:
     return [s for s in _REGISTRY.values() if s.provider_key in on]
 
 
-def _secret_values(src: Source) -> list[str]:
-    """Resolve `src.secret_fields` against the stored credentials dict."""
-    conn = connector_for(src)
-    if not conn:
-        return []
-    creds = conn.credentials or {}
-    out = []
-    for path in src.secret_fields:
-        cur = creds
-        for part in path.split("."):
-            cur = cur.get(part) if isinstance(cur, dict) else None
-        if isinstance(cur, str) and cur:
-            out.append(cur)
-    return out
-
-
 def run_sync(key: str, mode: str = "poll", cursor: str | None = None):
     """Sync one source through the ingest pipeline. Returns (IngestReport, cursor)."""
     from cache.ingest import ingest
@@ -83,7 +67,7 @@ def run_sync(key: str, mode: str = "poll", cursor: str | None = None):
     if src is None:
         raise KeyError(f"no source {key!r}")
     result = src.sync(mode, cursor)
-    report = ingest(key, result.records, src.map, secret_values=_secret_values(src))
+    report = ingest(key, result.records, src.map)
     return report, result.cursor
 
 

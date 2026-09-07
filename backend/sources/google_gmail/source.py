@@ -14,7 +14,6 @@ class GmailSource(Source):
     label = "Gmail"
     record_types = ["gmail.message"]
     auth_kind = "oauth"
-    secret_fields = ["token", "refresh_token", "client_secret"]
 
     def sync(self, mode, cursor=None) -> SyncResult:
         client = google_client(self)

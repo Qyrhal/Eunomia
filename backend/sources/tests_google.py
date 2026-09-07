@@ -86,13 +86,6 @@ class GoogleSyncTests(TestCase):
         self.assertEqual(report.written, 1)
         self.assertEqual(cursor, "2026-01-20T12:00:00Z")
 
-    def test_pii_in_email_snippet_is_masked(self):
-        msg = dict(GMAIL_MSG, snippet="call me on 0412 345 678")
-        with patch("connectors.clients.GoogleClient.gmail_list_detailed", return_value=[msg]), \
-             patch("sources._google.persist_refreshed_token"):
-            registry.run_sync("google_gmail")
-        rec = CacheRecord.objects.get(pk="google_gmail:gmail.message:m1")
-        self.assertNotIn("0412 345 678", rec.body_text)
 
 
 class DriveGetDocumentTests(TestCase):
@@ -103,13 +96,12 @@ class DriveGetDocumentTests(TestCase):
         registry.register(GoogleDriveSource())
         upsert(GoogleDriveSource().map(DRIVE_FILE))
 
-    def test_get_document_fetches_and_masks(self):
+    def test_get_document_fetches(self):
         src = registry.get("google_drive")
         with patch("connectors.clients.GoogleClient.drive_file_text", return_value="secret plan, email ceo@corp.com"), \
              patch("sources._google.persist_refreshed_token"):
             out = src._get_document("google_drive:gdrive.file:f1")
         self.assertIn("secret plan", out["text"])
-        self.assertNotIn("ceo@corp.com", out["text"])
 
     def test_get_document_rejects_non_drive_id(self):
         self.assertIn("error", registry.get("google_drive")._get_document("up_bank:up.transaction:1"))

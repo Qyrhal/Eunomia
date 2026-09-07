@@ -65,18 +65,12 @@ export type AppSettings = {
   embedding_model: string;
   llm_base_url: string;
   llm_api_key_set: boolean;
-  hermes_webhook_url: string;
-  hermes_webhook_secret_set: boolean;
-  pii_allowlist: string[];
-  pii_disabled_sources: string[];
-  pii_min_confidence: number;
-  vip_senders: string[];
   sync_intervals: Record<string, number>;
   theme: { mode?: "light" | "dark" | "system"; accent?: string };
 };
 
 export type Connector = {
-  kind: "google" | "up_bank" | "pocketai";
+  kind: "google" | "up_bank" | "pocketai" | "open_connector";
   enabled: boolean;
   config: Record<string, unknown>;
   credentials_set: boolean;

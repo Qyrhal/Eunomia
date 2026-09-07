@@ -1,41 +1,37 @@
 # Eunomia
 
-An **agentic data layer for [Hermes](https://github.com/nousresearch/hermes-agent)**.
-Eunomia pulls your Google Workspace, Up Bank and heypocket data into one local
-store, **masks every secret and matched PII behind reversible tokens**, indexes
-everything for keyword + semantic search, and exposes it to Hermes over MCP.
-Hermes can also register watches that fire a webhook back to it.
+A **collection of tools exposed over MCP**, for [Hermes](https://github.com/nousresearch/hermes-agent)
+or Claude Code. Eunomia pulls your Google Workspace, Up Bank and heypocket data
+into one local store, indexes everything for keyword + semantic search, and
+exposes it — plus task management and any app reachable through Nango,
+Composio or Open Connector — to Hermes/Claude over MCP.
 
-There is no dashboard. Hermes is the interface. A small admin frontend exists for
-inspecting the cache, the vault, sources and triggers.
+There is no dashboard. Hermes/Claude is the interface. A small admin frontend
+exists for inspecting the cache, sources and connectors.
 
 ## How it fits together
 
 ```
  sources ──sync──▶ ingest pipeline ──▶ cache (sqlite: rows + FTS5 + sqlite-vec)
- (Google, Up Bank,   │  mask secrets          │
-  heypocket, demo)   │  detect + tokenise PII  ├──▶ tools:  search / get / list / links
-                     │  embed                  │            + per-source + task + trigger
-                     └─ evaluate rules ─┐      │
-                                        ▼      ▼
- Hermes ◀── webhook (HMAC) ── triggers   MCP server (stdio + HTTP)  ◀── Hermes
- Hermes ──────────────────── REST /api/tools ──────────────────────────┘
+ (Google, Up Bank,        │  embed                  │
+  heypocket, demo)        └─────────────────────────┼──▶ tools: search / get / list / links
+                                                      │    + per-source + task + managed-connector
+                                                      ▼
+                                     MCP server (stdio + HTTP)  ◀── Hermes / Claude Code
+                                     REST /api/tools ───────────────────────┘
 ```
 
-- **Masking** — a declared credential or a detected email / phone / card / bank
-  number / API-key becomes `[eunomia:<type>:<n>]`. The real value lives in a
-  Fernet-encrypted vault; it is re-inserted only when Eunomia itself calls an
-  external API, and revealed to a human only through one audited endpoint. Every
-  crossing is logged (token strings + who, never the value).
 - **Sources** are plug-ins: drop a folder in `backend/sources/`, it registers
   itself (`auth` / `sync` / `map` / `tools` / `webhook`).
-- **Triggers** — record rules, time-relative schedules, and crons; each fires an
-  HMAC-signed POST to the Hermes gateway webhook adapter.
+- **Managed connectors** — Nango, Composio and Open Connector are broker
+  platforms that hold OAuth to many third-party apps; connect one and its
+  `managed_connector_call` / `managed_connector_list_connections` tools let
+  Hermes/Claude drive any app that broker supports.
 
 ## Layout
 
-- `backend/` — Django + DRF, uv-managed. Apps: `sources`, `cache`, `masking`,
-  `embeddings`, `triggers`, `tools`, plus `tasks` / `connectors` / `analytics`.
+- `backend/` — Django + DRF, uv-managed. Apps: `sources`, `cache`,
+  `embeddings`, `tools`, plus `tasks` / `connectors` / `analytics`.
   `mcp_server.py` is the MCP entrypoint.
 - `frontend/` — Next.js admin UI, bun-managed.
 
@@ -61,7 +57,7 @@ ENCRYPTION_KEY=<paste>
 EOF
 uv run manage.py migrate
 uv run manage.py runserver 8000        # API
-uv run manage.py run_worker            # sync + triggers (separate process)
+uv run manage.py run_worker            # sync (separate process)
 uv run mcp_server.py --http            # MCP over HTTP on 127.0.0.1:8765
 ```
 
@@ -86,10 +82,6 @@ tailscale / netbird — **never public**.
    ```
    A webhook-triggered Hermes run gets a constrained toolset by default — add
    `toolsets: [...]` to the route so Hermes may call Eunomia's tools in reply.
-3. **Notifications** — set the Hermes gateway webhook base URL and shared secret
-   in Eunomia's Settings (`hermes_webhook_url`, `hermes_webhook_secret`). Enable
-   or add triggers; each POSTs `X-Webhook-Signature-V2` (HMAC-SHA256 of
-   `<ts>.<body>`) to that route.
 
 Google Calendar / Drive **push** needs a public CA-trusted HTTPS callback, which
 a tailscale-only box doesn't have — Eunomia polls those instead (Gmail can use a

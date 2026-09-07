@@ -1,5 +1,5 @@
 """Reference source. Copy this folder, rename, and fill in the four parts:
-`sync` (fetch), `map` (raw -> envelope), `secret_fields`, `tools`.
+`sync` (fetch), `map` (raw -> envelope), `tools`.
 """
 
 from datetime import datetime, timezone
@@ -12,7 +12,6 @@ class ExampleSource(Source):
     label = "Example (reference stub)"
     record_types = ["example.note"]
     auth_kind = "token"
-    secret_fields = ["api_token"]
 
     def sync(self, mode, cursor=None) -> SyncResult:
         # A real source hits its API here, using `cursor` for delta pulls.

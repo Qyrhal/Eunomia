@@ -19,7 +19,6 @@ class HeyPocketSource(Source):
     label = "heypocket"
     record_types = ["heypocket.recording"]
     auth_kind = "api_key"
-    secret_fields = ["api_key"]
 
     def _client(self) -> PocketAIClient:
         conn = connector_for(self)

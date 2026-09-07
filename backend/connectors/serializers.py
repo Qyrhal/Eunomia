@@ -6,8 +6,6 @@ from .models import AppSettings, Connector
 class AppSettingsSerializer(serializers.ModelSerializer):
     llm_api_key = serializers.CharField(write_only=True, required=False, allow_blank=True)
     llm_api_key_set = serializers.SerializerMethodField()
-    hermes_webhook_secret = serializers.CharField(write_only=True, required=False, allow_blank=True)
-    hermes_webhook_secret_set = serializers.SerializerMethodField()
 
     class Meta:
         model = AppSettings
@@ -17,13 +15,6 @@ class AppSettingsSerializer(serializers.ModelSerializer):
             "llm_base_url",
             "llm_api_key",
             "llm_api_key_set",
-            "hermes_webhook_url",
-            "hermes_webhook_secret",
-            "hermes_webhook_secret_set",
-            "pii_allowlist",
-            "pii_disabled_sources",
-            "pii_min_confidence",
-            "vip_senders",
             "sync_intervals",
             "theme",
         ]
@@ -31,18 +22,12 @@ class AppSettingsSerializer(serializers.ModelSerializer):
     def get_llm_api_key_set(self, obj):
         return bool(obj.llm_api_key_encrypted)
 
-    def get_hermes_webhook_secret_set(self, obj):
-        return bool(obj.hermes_webhook_secret_encrypted)
-
     def update(self, instance, validated_data):
         api_key = validated_data.pop("llm_api_key", None)
-        webhook_secret = validated_data.pop("hermes_webhook_secret", None)
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
         if api_key:
             instance.llm_api_key = api_key
-        if webhook_secret:
-            instance.hermes_webhook_secret = webhook_secret
         instance.save()
         return instance
 

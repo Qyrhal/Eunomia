@@ -116,19 +116,6 @@ def build_scheduler():
         )
     sched.add_job(poll_all, "interval", seconds=300, id="poll_all", max_instances=1, coalesce=True)
     sched.add_job(backfill_embeddings, "interval", seconds=600, id="backfill_embeddings", max_instances=1)
-
-    from masking.audit import purge_old
-
-    sched.add_job(purge_old, "interval", hours=24, id="purge_audit", max_instances=1)
     sched.add_job(renew_watch_channels, "interval", hours=1, id="renew_watch_channels", max_instances=1)
-
-    # #35 renew_watch_channels, #12 up_bank_reconcile, #39 trigger schedules
-    # register additional jobs here.
-    try:
-        from triggers.scheduler import register_trigger_jobs
-
-        register_trigger_jobs(sched)
-    except ImportError:
-        pass
 
     return sched

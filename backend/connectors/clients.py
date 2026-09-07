@@ -183,6 +183,41 @@ class PocketAIClient:
         }
 
 
+class OpenConnectorClient:
+    """Thin proxy client for an Open Connector gateway
+    (https://github.com/oomol-lab/open-connector) — it holds OAuth/API-key
+    credentials for many third-party apps; this just forwards named actions
+    to it, so Eunomia doesn't need a hand-rolled client per app.
+
+    `action` is "{provider}.{action_name}", e.g. "github.get_current_user".
+    """
+
+    default_base_url = "http://localhost:3000"
+
+    def __init__(self, credentials: dict, base_url: str | None = None):
+        self.token = credentials.get("api_key", "")
+        self.base_url = (base_url or self.default_base_url).rstrip("/")
+
+    def _headers(self) -> dict:
+        return {"Authorization": f"Bearer {self.token}"} if self.token else {}
+
+    def ping(self) -> bool:
+        r = httpx.get(f"{self.base_url}/openapi.json", headers=self._headers(), timeout=10)
+        return r.status_code == 200
+
+    def list_connections(self) -> dict:
+        r = httpx.get(f"{self.base_url}/api/connections", headers=self._headers(), timeout=10)
+        r.raise_for_status()
+        return r.json()
+
+    def call_action(self, action: str, params: dict | None = None) -> dict:
+        r = httpx.post(
+            f"{self.base_url}/v1/actions/{action}", headers=self._headers(), json={"input": params or {}}, timeout=30
+        )
+        r.raise_for_status()
+        return r.json()
+
+
 def google_oauth_flow(client_config: dict, redirect_uri: str) -> Flow:
     return Flow.from_client_config(
         client_config, scopes=GOOGLE_SCOPES, redirect_uri=redirect_uri

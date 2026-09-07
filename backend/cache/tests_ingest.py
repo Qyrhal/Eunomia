@@ -3,7 +3,6 @@ from datetime import datetime, timezone as dt_tz
 from django.test import TestCase
 
 from connectors.models import AppSettings
-from masking.vault import detokenize
 
 from .ingest import ingest
 from .models import CacheLink, CacheRecord
@@ -35,14 +34,12 @@ class IngestTests(TestCase):
         s.embedding_backend = AppSettings.EMBED_STUB
         s.save()
 
-    def test_happy_path_writes_masks_embeds(self):
+    def test_happy_path_writes_embeds(self):
         rep = ingest("src", [{"id": 1, "title": "Lunch", "body": "email boss@corp.com re lunch"}], _map)
         self.assertEqual(rep.written, 1)
         rec = CacheRecord.objects.get(pk="src:x.n:1")
-        self.assertNotIn("boss@corp.com", rec.body_text)
+        self.assertIn("boss@corp.com", rec.body_text)
         self.assertTrue(rec.has_embedding)
-        tok = rec.body_text.split("email ")[1].split(" re")[0]
-        self.assertEqual(detokenize(tok), "boss@corp.com")
 
     def test_mapper_none_is_skipped(self):
         rep = ingest("src", [{"id": 2, "drop": True}], _map)
@@ -64,18 +61,6 @@ class IngestTests(TestCase):
         self.assertEqual(rep.written, 2)
         self.assertEqual(rep.failed, 1)
         self.assertEqual(CacheRecord.objects.count(), 2)
-
-    def test_credential_values_tokenized(self):
-        rep = ingest(
-            "src",
-            [{"id": 4, "title": "cfg", "body": "token is SEKRET-abc", "payload": {"k": "SEKRET-abc"}}],
-            _map,
-            secret_values=["SEKRET-abc"],
-        )
-        rec = CacheRecord.objects.get(pk="src:x.n:4")
-        self.assertNotIn("SEKRET-abc", rec.body_text)
-        self.assertNotIn("SEKRET-abc", str(rec.payload))
-        self.assertIn("[eunomia:credential:", rec.body_text)
 
     def test_links_created(self):
         ingest("src", [{"id": 5, "title": "A", "body": "a", "links": [{"rel": "about", "target": "src:x.n:6"}]}], _map)

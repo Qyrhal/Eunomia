@@ -5,7 +5,7 @@ from django.utils import timezone
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .clients import GoogleClient, PocketAIClient, UpBankClient, google_oauth_flow
+from .clients import GoogleClient, OpenConnectorClient, PocketAIClient, UpBankClient, google_oauth_flow
 from .demo_seed import (
     build_demo_calendar_events_today,
     build_demo_finance_summary,
@@ -64,6 +64,8 @@ class ConnectorTestView(APIView):
                 ).ping()
             elif kind == Connector.Kind.GOOGLE:
                 ok = connector.config.get("demo") or bool(connector.credentials.get("refresh_token"))
+            elif kind == Connector.Kind.OPEN_CONNECTOR:
+                ok = OpenConnectorClient(connector.credentials, connector.config.get("base_url")).ping()
             else:
                 return Response({"detail": "unknown connector"}, status=400)
         except Exception as exc:  # surfaced to the settings UI, not swallowed

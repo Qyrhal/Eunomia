@@ -50,5 +50,5 @@ class SourceWebhookView(APIView):
             return Response({"detail": "rejected (bad signature or unhandled event)"}, status=400)
         from cache.ingest import ingest
 
-        report = ingest(key, raws, src.map, secret_values=registry._secret_values(src))
+        report = ingest(key, raws, src.map)
         return Response(report.as_dict())

@@ -27,10 +27,7 @@ def all_tools() -> dict[str, dict]:
 
 
 def call(name: str, args: dict):
-    """Resolve tokens in `args` (the de-tokenization boundary), then run the tool."""
-    from masking.boundary import resolve_tool_input
-
     tools = all_tools()
     if name not in tools:
         return {"error": f"unknown tool {name}"}
-    return tools[name]["impl"](**resolve_tool_input(args or {}, actor=f"tool:{name}"))
+    return tools[name]["impl"](**(args or {}))

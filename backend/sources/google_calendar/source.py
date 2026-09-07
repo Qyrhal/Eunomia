@@ -14,7 +14,6 @@ class GoogleCalendarSource(Source):
     label = "Google Calendar"
     record_types = ["gcal.event"]
     auth_kind = "oauth"
-    secret_fields = ["token", "refresh_token", "client_secret"]
 
     def sync(self, mode, cursor=None) -> SyncResult:
         client = google_client(self)

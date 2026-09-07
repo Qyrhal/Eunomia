@@ -2,14 +2,12 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Bell, CheckSquare, Database, KeyRound, Plug, RadioTower, Settings, Wallet } from "lucide-react";
+import { CheckSquare, Database, Plug, RadioTower, Settings, Wallet } from "lucide-react";
 import HourRing from "./HourRing";
 
 const NAV = [
   { href: "/data", label: "Data", icon: Database },
   { href: "/sources", label: "Sources", icon: RadioTower },
-  { href: "/triggers", label: "Triggers", icon: Bell },
-  { href: "/vault", label: "Vault", icon: KeyRound },
   { href: "/tasks", label: "Tasks", icon: CheckSquare },
   { href: "/finance", label: "Finance", icon: Wallet },
   { href: "/connectors", label: "Connectors", icon: Plug },

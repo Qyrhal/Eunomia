@@ -12,7 +12,6 @@ class GoogleDriveSource(Source):
     label = "Google Drive"
     record_types = ["gdrive.file"]
     auth_kind = "oauth"
-    secret_fields = ["token", "refresh_token", "client_secret"]
 
     def sync(self, mode, cursor=None) -> SyncResult:
         client = google_client(self)
@@ -59,7 +58,6 @@ class GoogleDriveSource(Source):
 
     def _get_document(self, record_id: str) -> dict:
         from cache.search import get
-        from masking.vault import tokenize_text
 
         rec = get(record_id)
         if not rec or rec.source != "google_drive":
@@ -70,7 +68,7 @@ class GoogleDriveSource(Source):
         except Exception as e:
             return {"error": f"fetch failed: {e}"}
         persist_refreshed_token(self, client)
-        return {"id": record_id, "title": rec.title, "text": tokenize_text(text, source="google_drive")[:20000]}
+        return {"id": record_id, "title": rec.title, "text": text[:20000]}
 
     def webhook(self, request):
         return google_push_webhook(self, request)

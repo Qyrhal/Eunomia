@@ -4,7 +4,6 @@ from django.test import TestCase
 
 from cache.search import upsert
 from connectors.models import AppSettings
-from masking.vault import tokenize
 
 from . import registry
 from .generic import get, search
@@ -51,11 +50,6 @@ class RegistryTests(TestCase):
     def test_register_tool_and_call(self):
         registry.register_tool("echo", {"type": "object"}, lambda **kw: kw)
         self.assertEqual(registry.call("echo", {"a": 1}), {"a": 1})
-
-    def test_call_resolves_tokens_in_args(self):
-        tok = tokenize("secret@x.com", "email")
-        registry.register_tool("passthru", {"type": "object"}, lambda **kw: kw)
-        self.assertEqual(registry.call("passthru", {"to": tok}), {"to": "secret@x.com"})
 
     def test_unknown_tool(self):
         self.assertEqual(registry.call("nope", {}), {"error": "unknown tool nope"})

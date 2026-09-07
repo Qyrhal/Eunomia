@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Calendar, Landmark, Mic } from "lucide-react";
+import { Calendar, Landmark, Mic, Plug2 } from "lucide-react";
 import { api, API_BASE, Connector } from "@/lib/api";
 
 type FieldDef = { key: string; label: string; placeholder: string; secret: boolean };
@@ -50,9 +50,27 @@ const CONNECTOR_META: Record<
       { key: "api_key", label: "API key", placeholder: "pk_…", secret: true },
     ],
   },
+  open_connector: {
+    label: "Open Connector",
+    icon: <Plug2 size={16} />,
+    help: (
+      <>
+        Points at a self-hosted{" "}
+        <a href="https://github.com/oomol-lab/open-connector" target="_blank" rel="noreferrer" className="underline" style={{ color: "var(--accent)" }}>
+          Open Connector
+        </a>{" "}
+        gateway — its own runtime token, not an app-specific credential. Exposes any app it brokers as
+        the <code className="font-mono">open_connector_call</code> tool.
+      </>
+    ),
+    fields: [
+      { key: "base_url", label: "Base URL", placeholder: "http://localhost:3000", secret: false },
+      { key: "api_key", label: "Runtime token", placeholder: "…", secret: true },
+    ],
+  },
 };
 
-const ORDER: Connector["kind"][] = ["google", "up_bank", "pocketai"];
+const ORDER: Connector["kind"][] = ["google", "up_bank", "pocketai", "open_connector"];
 
 export default function ConnectorsPage() {
   const [connectors, setConnectors] = useState<Connector[]>([]);

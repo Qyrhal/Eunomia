@@ -14,7 +14,6 @@ class DemoSource(Source):
     label = "Demo data"
     record_types = ["up.transaction", "up.account", "gcal.event", "gmail.message", "heypocket.recording"]
     auth_kind = "token"
-    secret_fields = []
 
     def sync(self, mode, cursor=None) -> SyncResult:
         from connectors.models import (
