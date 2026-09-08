@@ -22,13 +22,13 @@ class TokenOkTests(TestCase):
 class ApiPermissionTests(TestCase):
     @override_settings(EUNOMIA_API_TOKEN="s3cr3t")
     def test_api_route_rejected_without_token(self):
-        self.assertEqual(self.client.get("/api/tasks/").status_code, 403)
+        self.assertEqual(self.client.get("/api/tools").status_code, 403)
 
     @override_settings(EUNOMIA_API_TOKEN="s3cr3t")
     def test_api_route_ok_with_token(self):
-        resp = self.client.get("/api/tasks/", HTTP_AUTHORIZATION="Bearer s3cr3t")
+        resp = self.client.get("/api/tools", HTTP_AUTHORIZATION="Bearer s3cr3t")
         self.assertEqual(resp.status_code, 200)
 
     def test_api_route_open_when_unset(self):
         with override_settings(EUNOMIA_API_TOKEN=""):
-            self.assertEqual(self.client.get("/api/tasks/").status_code, 200)
+            self.assertEqual(self.client.get("/api/tools").status_code, 200)

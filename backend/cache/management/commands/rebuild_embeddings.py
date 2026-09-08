@@ -1,5 +1,4 @@
-"""Re-embed every cache record (and, once #38 lands, every task) with the
-currently-configured backend. Run after switching `embedding_backend` or model —
+"""Re-embed every cache record with the currently-configured backend. Run after switching `embedding_backend` or model —
 stored vectors from a different model are not comparable.
 """
 

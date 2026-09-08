@@ -76,12 +76,10 @@ def renew_watch_channels() -> dict:
 
 
 def backfill_embeddings(limit: int = 200) -> int:
-    """Re-embed cache records + tasks that missed embedding (backend was down)."""
+    """Re-embed cache records that missed embedding (backend was down)."""
     from cache.models import CacheRecord
     from cache.search import set_embedding
     from embeddings.service import embed
-    from tasks.graph import index_task
-    from tasks.models import Task
 
     n = 0
     recs = list(
@@ -93,9 +91,6 @@ def backfill_embeddings(limit: int = 200) -> int:
         for r, v in zip(recs, vecs):
             set_embedding(r.id, v)
             n += 1
-    for t in Task.objects.filter(has_embedding=False)[:limit]:
-        index_task(t)
-        n += 1
     return n
 
 

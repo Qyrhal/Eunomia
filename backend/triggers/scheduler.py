@@ -20,10 +20,9 @@ def run_cron(trigger_key: str):
 def plan_schedules():
     """Hourly: fire any `schedule` trigger whose anchor+offset landed in the last hour.
 
-    spec = {anchor: "task.due_at"|"record.occurred_at", filter: {...}, offset_s: int}
+    spec = {anchor: "record.occurred_at", filter: {...}, offset_s: int}
     """
     from cache.models import CacheRecord
-    from tasks.models import Task
 
     from .delivery import fire
 
@@ -36,10 +35,7 @@ def plan_schedules():
         offset = timedelta(seconds=int(spec.get("offset_s", 0)))
         flt = spec.get("filter", {})
 
-        if anchor == "task.due_at":
-            qs = Task.objects.filter(completed=False, due_at__isnull=False, **flt)
-            items = [(f"task:{t.id}", t.due_at, t.title) for t in qs]
-        elif anchor == "record.occurred_at":
+        if anchor == "record.occurred_at":
             qs = CacheRecord.objects.filter(deleted=False, occurred_at__isnull=False, **flt)
             items = [(r.id, r.occurred_at, r.title) for r in qs]
         else:

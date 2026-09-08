@@ -97,29 +97,6 @@ class ScheduleTests(TestCase):
         s.hermes_webhook_url = "http://h/webhooks"
         s.save()
 
-    def test_plan_schedules_fires_for_task_in_window(self):
-        from tasks.models import Project, Task
-
-        proj = Project.objects.create(name="P")
-        # due in ~23h -> with offset -86400 the fire time is ~1h ago -> inside the window
-        Task.objects.create(project=proj, title="pay rent", due_at=timezone.now() + timedelta(hours=23, minutes=30))
-        Trigger.objects.create(key="due", kind="schedule", enabled=True,
-                               spec={"anchor": "task.due_at", "offset_s": -86400})
-        with patch("triggers.delivery.httpx.post", return_value=_Resp(200)) as p:
-            plan_schedules()
-        p.assert_called_once()
-
-    def test_plan_schedules_no_double_fire(self):
-        from tasks.models import Project, Task
-
-        proj = Project.objects.create(name="P")
-        Task.objects.create(project=proj, title="x", due_at=timezone.now() + timedelta(hours=23, minutes=30))
-        Trigger.objects.create(key="due", kind="schedule", enabled=True,
-                               spec={"anchor": "task.due_at", "offset_s": -86400})
-        with patch("triggers.delivery.httpx.post", return_value=_Resp(200)) as p:
-            plan_schedules()
-            plan_schedules()
-        p.assert_called_once()
 
 
 class ToolTests(TestCase):
@@ -130,7 +107,7 @@ class ToolTests(TestCase):
 
         ensure_builtins()
         keys = set(Trigger.objects.values_list("key", flat=True))
-        self.assertTrue({"big_transaction", "vip_email", "task_due_soon", "daily_digest"} <= keys)
+        self.assertTrue({"big_transaction", "vip_email", "daily_digest"} <= keys)
         self.assertFalse(Trigger.objects.get(pk="daily_digest").enabled)
 
     def test_tools_registered(self):

@@ -20,7 +20,7 @@ import httpx
 
 SYSTEM = (
     "You are a personal assistant with live access to the user's data through tools "
-    "(mail, calendar, bank transactions, files, tasks, and watches). Answer from tool "
+    "(mail, calendar, bank transactions, files, and watches). Answer from tool "
     "results only — never invent figures or events. Values like [eunomia:email:3] are "
     "masked handles; treat them as opaque and pass them back verbatim when a tool needs "
     "one. Be concise."

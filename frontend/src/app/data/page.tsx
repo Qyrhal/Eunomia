@@ -61,7 +61,7 @@ export default function DataBrowser() {
             autoFocus
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search your mail, calendar, transactions, files, tasks…"
+            placeholder="Search your mail, calendar, transactions, files…"
             className="field flex-1 px-3 py-2 text-[13.5px]"
           />
         </div>

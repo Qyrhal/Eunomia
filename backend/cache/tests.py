@@ -53,7 +53,7 @@ class UpsertTests(TestCase):
 
     def test_agent_links_survive_resync(self):
         upsert(env("a:x.n:1", "A", "a", type="x.n", source="a"))
-        CacheLink.objects.create(source_id="a:x.n:1", rel="about", target_id="task:t1", origin="agent")
+        CacheLink.objects.create(source_id="a:x.n:1", rel="about", target_id="b:y.m:9", origin="agent")
         upsert(env("a:x.n:1", "A", "a3", type="x.n", source="a"))
         self.assertEqual(CacheLink.objects.filter(origin="agent").count(), 1)
 

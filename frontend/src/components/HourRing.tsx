@@ -1,6 +1,6 @@
 /** The signature mark: a twelve-tick dial, after the Horae — Eunomia's sisters
  * and the keepers of the hours and seasons. Used as the wordmark glyph, a
- * watermark behind the completion figure, and the shape of a checked task. */
+ * watermark behind the completion figure, and the shape of a checked item. */
 // Fixed to 3dp: Math.cos/sin can differ in the last float digit between the
 // server and browser JS engines, which is enough to fail SSR hydration.
 const round = (n: number) => Math.round(n * 1000) / 1000;

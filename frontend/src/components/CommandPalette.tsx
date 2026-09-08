@@ -2,19 +2,17 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Bell, CheckSquare, Database, KeyRound, Plug, RadioTower, Settings, Wallet } from "lucide-react";
-import { api, Project } from "@/lib/api";
+import { Bell, Database, KeyRound, Plug, RadioTower, Settings, Wallet } from "lucide-react";
 
 type Item = { label: string; hint?: string; go: () => void };
 
-const PAGE_LABELS = ["Data", "Sources", "Triggers", "Vault", "Tasks", "Finance", "Connectors", "Settings"];
-const PAGE_ICONS = [Database, RadioTower, Bell, KeyRound, CheckSquare, Wallet, Plug, Settings];
-const PAGE_HREFS = ["/data", "/sources", "/triggers", "/vault", "/tasks", "/finance", "/connectors", "/settings"];
+const PAGE_LABELS = ["Data", "Sources", "Triggers", "Vault", "Finance", "Connectors", "Settings"];
+const PAGE_ICONS = [Database, RadioTower, Bell, KeyRound, Wallet, Plug, Settings];
+const PAGE_HREFS = ["/data", "/sources", "/triggers", "/vault", "/finance", "/connectors", "/settings"];
 
 export default function CommandPalette() {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
-  const [projects, setProjects] = useState<Project[]>([]);
   const [index, setIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const router = useRouter();
@@ -36,7 +34,6 @@ export default function CommandPalette() {
     if (!open) return;
     setQuery("");
     setIndex(0);
-    api.get<Project[]>("/api/projects/").then(setProjects).catch(() => setProjects([]));
     setTimeout(() => inputRef.current?.focus(), 0);
   }, [open]);
 
@@ -44,7 +41,6 @@ export default function CommandPalette() {
 
   const items: Item[] = [
     ...PAGE_LABELS.map((label, i) => ({ label, go: () => router.push(PAGE_HREFS[i]) })),
-    ...projects.map((p) => ({ label: p.name, hint: "project", go: () => router.push(`/tasks?project=${p.id}`) })),
   ].filter((item) => item.label.toLowerCase().includes(query.toLowerCase()));
 
   function choose(item: Item) {
@@ -80,7 +76,7 @@ export default function CommandPalette() {
               choose(items[index]);
             }
           }}
-          placeholder="Jump to a page or project…"
+          placeholder="Jump to a page…"
           className="w-full px-4 py-3 text-[14px]"
           style={{ background: "transparent", borderBottom: "1px solid var(--border)" }}
         />

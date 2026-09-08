@@ -25,7 +25,7 @@ const plexMono = IBM_Plex_Mono({
 
 export const metadata: Metadata = {
   title: "Eunomia",
-  description: "A personal register for tasks, time, and money",
+  description: "A personal register for data, time, and money",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

@@ -16,7 +16,7 @@ import {
 const KINDS = ["record_rule", "schedule", "cron"] as const;
 const SAMPLE: Record<string, string> = {
   record_rule: '{\n  "types": ["up.transaction"],\n  "match": [["payload.amount_cents", "lt", -20000]]\n}',
-  schedule: '{\n  "anchor": "task.due_at",\n  "offset_s": -86400\n}',
+  schedule: '{\n  "anchor": "record.occurred_at",\n  "offset_s": -86400\n}',
   cron: '{\n  "cron": "0 8 * * *",\n  "payload": {"kind": "digest"}\n}',
 };
 
