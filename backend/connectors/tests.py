@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 from django.test import TestCase
 from django.utils import timezone
 
@@ -241,3 +243,17 @@ class DemoPocketDataTests(TestCase):
         data = response.json()
         self.assertNotIn("todos", data)
         self.assertNotIn("action_items", data)
+
+
+class PocketAIClientTests(TestCase):
+    def test_search_posts_query_body(self):
+        from connectors.clients import PocketAIClient
+
+        with patch("connectors.clients.httpx.post") as post:
+            post.return_value.json.return_value = {"success": True, "data": {"userProfile": {}}}
+            result = PocketAIClient({"api_key": "pk-x"}).search("meeting")
+
+        self.assertEqual(result, {"success": True, "data": {"userProfile": {}}})
+        url = post.call_args[0][0]
+        self.assertEqual(url, "https://public.heypocketai.com/api/v1/public/search")
+        self.assertEqual(post.call_args[1]["json"], {"query": "meeting"})
