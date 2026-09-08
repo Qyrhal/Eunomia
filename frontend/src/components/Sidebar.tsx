@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Bell, CheckSquare, Database, KeyRound, Plug, RadioTower, Settings, Wallet } from "lucide-react";
+import { Bell, Database, KeyRound, Plug, RadioTower, Settings, Wallet } from "lucide-react";
 import HourRing from "./HourRing";
 
 const NAV = [
@@ -10,7 +10,6 @@ const NAV = [
   { href: "/sources", label: "Sources", icon: RadioTower },
   { href: "/triggers", label: "Triggers", icon: Bell },
   { href: "/vault", label: "Vault", icon: KeyRound },
-  { href: "/tasks", label: "Tasks", icon: CheckSquare },
   { href: "/finance", label: "Finance", icon: Wallet },
   { href: "/connectors", label: "Connectors", icon: Plug },
   { href: "/settings", label: "Settings", icon: Settings },

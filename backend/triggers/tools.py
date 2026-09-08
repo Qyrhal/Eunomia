@@ -102,8 +102,6 @@ BUILTINS = [
          spec={"types": ["up.transaction"], "match": [["payload.amount_cents", "lt", -20000]]}),
     dict(key="vip_email", kind="record_rule",
          spec={"types": ["gmail.message"], "match": [["payload.vip", "eq", True]]}),
-    dict(key="task_due_soon", kind="schedule",
-         spec={"anchor": "task.due_at", "filter": {}, "offset_s": -86400}),
     dict(key="daily_digest", kind="cron", spec={"cron": "0 8 * * *", "payload": {"kind": "digest"}}),
 ]
 

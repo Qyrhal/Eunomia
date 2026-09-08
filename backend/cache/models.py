@@ -32,7 +32,7 @@ class CacheRecord(models.Model):
 
 
 class CacheLink(models.Model):
-    """Typed edge between two cache records (or tasks: `task:<uuid>`)."""
+    """Typed edge between two cache records."""
 
     ORIGIN_SYNC, ORIGIN_AGENT = "sync", "agent"
 

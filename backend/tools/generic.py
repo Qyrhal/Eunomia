@@ -1,13 +1,6 @@
 """Generic read-only tools over the cache (#7). All strings may contain
 `[eunomia:*]` tokens — callers treat them as opaque handles.
-
-#48: tasks are first-class search/get/links citizens alongside cache records.
-A task is addressed by its UUID or its graph vid (`task:<uuid>`); hits report
-source="tasks", type="task". Filters `sources=["tasks"]` / `types=["task"]`
-select just the task leg.
 """
-
-from itertools import zip_longest
 
 from django.core.exceptions import FieldError
 
@@ -16,9 +9,6 @@ from cache import search as cs
 _SNIPPET = 200
 # columns an agent may sort/filter on — anything else is a clean error, not a 500
 _FIELDS = {"occurred_at", "ingested_at", "updated_at", "title", "type", "source", "id", "external_id"}
-
-TASK_SOURCE = "tasks"
-TASK_TYPE = "task"
 
 
 def safe(fn):
@@ -60,57 +50,6 @@ def _full(rec) -> dict:
     }
 
 
-def _task_hit(t) -> dict:
-    from tasks.timezone_utils import local_fields
-
-    body = t.notes or ""
-    return {
-        "id": str(t.id),
-        "vid": f"{TASK_TYPE}:{t.id}",
-        "source": TASK_SOURCE,
-        "type": TASK_TYPE,
-        "title": t.title,
-        "snippet": body[:_SNIPPET] + ("…" if len(body) > _SNIPPET else ""),
-        "occurred_at": t.due_at.isoformat() if t.due_at else None,
-        "due": local_fields(t.due_at),
-        "url": t.url or None,
-    }
-
-
-def _task_full(t) -> dict:
-    from tasks.timezone_utils import local_fields
-
-    return {
-        "id": str(t.id),
-        "vid": f"{TASK_TYPE}:{t.id}",
-        "source": TASK_SOURCE,
-        "type": TASK_TYPE,
-        "external_id": str(t.id),
-        "title": t.title,
-        "body_text": t.notes,
-        "occurred_at": t.due_at.isoformat() if t.due_at else None,
-        "due": local_fields(t.due_at),
-        "url": t.url or None,
-        "payload": {
-            "project": t.project.name,
-            "tags": list(t.tags.values_list("name", flat=True)),
-            "props": t.props,
-            "priority": t.priority,
-            "completed": t.completed,
-            "flagged": t.flagged,
-            "allocated_minutes": t.allocated_minutes,
-        },
-        "links": cs.links(f"{TASK_TYPE}:{t.id}"),
-    }
-
-
-def _resolve_task(id):
-    """Bare task UUID or task:<uuid> vid -> Task | None (cache-shaped ids -> None)."""
-    from tasks.graph import resolve_task
-
-    return resolve_task(id)
-
-
 @safe
 def search(query, sources=None, types=None, since=None, until=None, mode="hybrid", limit=20):
     limit = min(int(limit), 100)
@@ -120,13 +59,6 @@ def search(query, sources=None, types=None, since=None, until=None, mode="hybrid
             mode=mode, limit=limit,
         )
     ]
-    src, typ = set(sources or []), set(types or [])
-    if (not src or TASK_SOURCE in src) and (not typ or TASK_TYPE in typ):
-        from tasks.graph import search_task_records
-
-        task_hits = [_task_hit(t) for t in search_task_records(query, mode=mode, limit=limit)]
-        # interleave so tasks stay visible even when cache hits fill the limit
-        hits = [h for pair in zip_longest(hits, task_hits) for h in pair if h is not None]
     return {"results": hits[:limit]}
 
 
@@ -135,9 +67,6 @@ def get(id):
     rec = cs.get(id)
     if rec:
         return _full(rec)
-    task = _resolve_task(id)
-    if task:
-        return _task_full(task)
     return {"error": "not found"}
 
 
@@ -154,9 +83,7 @@ def list(type=None, filters=None, sort="-occurred_at", limit=50):
 
 @safe
 def links(id, rel=None):
-    # tasks key their edges under task:<uuid> — accept the bare UUID too (#48)
-    task = _resolve_task(id)
-    return {"links": cs.links(f"{TASK_TYPE}:{task.id}" if task else id, rel)}
+    return {"links": cs.links(id, rel)}
 
 
 SCHEMAS = {
