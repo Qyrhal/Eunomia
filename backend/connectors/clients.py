@@ -144,10 +144,10 @@ class PocketAIClient:
         return r.json()
 
     def search(self, query: str) -> dict:
-        r = httpx.get(
+        r = httpx.post(
             f"{self.base_url}/public/search",
             headers=self._headers(),
-            params={"q": query},
+            json={"query": query},
             timeout=10,
         )
         r.raise_for_status()
