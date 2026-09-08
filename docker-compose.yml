@@ -1,8 +1,9 @@
 services:
   backend:
     build: ./backend
+    restart: always
     ports:
-      - "8000:8000"
+      - "${BACKEND_PORT:-8000}:8000"
     environment:
       - SECRET_KEY=${SECRET_KEY}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY}
@@ -20,6 +21,7 @@ services:
 
   worker:
     build: ./backend
+    restart: always
     command: sh -c "python manage.py migrate --noinput && python manage.py run_worker"
     environment:
       - SECRET_KEY=${SECRET_KEY}
@@ -35,6 +37,7 @@ services:
 
   mcp:
     build: ./backend
+    restart: always
     command: python mcp_server.py --http --host 0.0.0.0 --port 8765
     environment:
       - SECRET_KEY=${SECRET_KEY}
@@ -53,7 +56,8 @@ services:
       context: ./frontend
       args:
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
-        NEXT_PUBLIC_API_TOKEN: ${EUNOMIA_API_TOKEN:-}
+        NEXT_PUBLIC_API_TOKEN: ${NEXT_PUBLIC_API_TOKEN:-}
+    restart: always
     ports:
       - "3000:3000"
     depends_on:
