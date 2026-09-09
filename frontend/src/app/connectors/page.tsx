@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Calendar, Landmark, Mic } from "lucide-react";
-import { api, API_BASE, Connector } from "@/lib/api";
+import { Landmark, Mic } from "lucide-react";
+import { api, Connector } from "@/lib/api";
 
 type FieldDef = { key: string; label: string; placeholder: string; secret: boolean };
 
@@ -10,24 +10,6 @@ const CONNECTOR_META: Record<
   Connector["kind"],
   { label: string; icon: React.ReactNode; help?: React.ReactNode; fields: FieldDef[] }
 > = {
-  google: {
-    label: "Google — Calendar + Gmail",
-    icon: <Calendar size={16} />,
-    help: (
-      <>
-        Create an OAuth client at{" "}
-        <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noreferrer" className="underline" style={{ color: "var(--accent)" }}>
-          console.cloud.google.com
-        </a>{" "}
-        (Calendar + Gmail APIs enabled) with redirect URI{" "}
-        <code className="font-mono">{API_BASE}/api/connectors/google/callback</code>.
-      </>
-    ),
-    fields: [
-      { key: "client_id", label: "Client ID", placeholder: "…apps.googleusercontent.com", secret: false },
-      { key: "client_secret", label: "Client secret", placeholder: "GOCSPX-…", secret: true },
-    ],
-  },
   up_bank: {
     label: "Up Bank",
     icon: <Landmark size={16} />,
@@ -52,7 +34,7 @@ const CONNECTOR_META: Record<
   },
 };
 
-const ORDER: Connector["kind"][] = ["google", "up_bank", "pocketai"];
+const ORDER: Connector["kind"][] = ["up_bank", "pocketai"];
 
 export default function ConnectorsPage() {
   const [connectors, setConnectors] = useState<Connector[]>([]);
@@ -78,7 +60,7 @@ export default function ConnectorsPage() {
     for (const f of meta.fields) {
       const v = values[f.key];
       if (!v) continue;
-      if (f.secret || f.key === "client_id") credentials[f.key] = v;
+      if (f.secret) credentials[f.key] = v;
       else config[f.key] = v;
     }
     const body: Record<string, unknown> = { enabled: true };
@@ -163,19 +145,6 @@ export default function ConnectorsPage() {
                   <button onClick={() => save(kind)} className="px-4 py-2 text-[13px] font-medium text-white" style={{ background: "var(--accent)" }}>
                     {savedFlash[kind] ? "Saved" : "Save"}
                   </button>
-                  {kind === "google" && (
-                    <a
-                      href={`${API_BASE}/api/connectors/google/auth/start`}
-                      className="px-4 py-2 text-[13px] font-medium"
-                      style={{
-                        background: "var(--surface-2)",
-                        color: c.credentials_set ? "var(--text-primary)" : "var(--text-muted)",
-                        pointerEvents: c.credentials_set ? "auto" : "none",
-                      }}
-                    >
-                      Connect with Google
-                    </a>
-                  )}
                   <button onClick={() => test(kind)} className="px-4 py-2 text-[13px]" style={{ color: "var(--accent)" }}>
                     Test connection
                   </button>
