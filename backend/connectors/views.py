@@ -267,3 +267,113 @@ class PocketAISummaryView(APIView):
         except Exception as exc:
             return Response({"detail": str(exc)}, status=502)
         return Response(data)
+
+
+def _demo_recordings():
+    rows = DemoRecording.objects.all().order_by("-recorded_at")[:50]
+    return [
+        {
+            "id": f"demo-{r.id}",
+            "title": r.title,
+            "summary": f"Demo recording: {r.title}",
+            "duration": r.duration_seconds,
+            "tags": [{"name": t} for t in r.tags],
+            "recording_at": r.recorded_at.isoformat(),
+            "url": "",
+        }
+        for r in rows
+    ]
+
+
+def _demo_search(query):
+    rows = DemoRecording.objects.filter(title__icontains=query).order_by("-recorded_at")[:20]
+    return {
+        "success": True,
+        "data": {
+            "results": [
+                {
+                    "id": f"demo-{r.id}",
+                    "title": r.title,
+                    "summary": f"Demo recording: {r.title}",
+                    "duration": r.duration_seconds,
+                    "tags": [{"name": t} for t in r.tags],
+                    "recording_at": r.recorded_at.isoformat(),
+                }
+                for r in rows
+            ]
+        },
+    }
+
+
+class PocketAIAllView(APIView):
+    """All heypocket recordings (paginated) — backs the Meetings page."""
+
+    def get(self, request):
+        connector = Connector.objects.filter(kind=Connector.Kind.POCKETAI, enabled=True).first()
+        if not connector:
+            return Response({"detail": "PocketAI is not connected"}, status=400)
+
+        if connector.config.get("demo"):
+            return Response({"demo": True, "recordings": _demo_recordings()})
+
+        limit = min(int(request.query_params.get("limit", 50)), 200)
+        offset = int(request.query_params.get("offset", 0))
+        try:
+            client = PocketAIClient(connector.credentials, connector.config.get("base_url"))
+            data = client.recordings({"limit": limit, "offset": offset})
+        except Exception as exc:
+            return Response({"detail": str(exc)}, status=502)
+        recordings = data.get("data", data.get("recordings", []))
+        return Response({"recordings": recordings, "count": len(recordings)})
+
+
+class PocketAISearchView(APIView):
+    """Full-text search across heypocket recordings.
+
+    The PocketAI /public/search endpoint returns synthesized insights under
+    data.userProfile.dynamicContext[] — high-level meeting takeaways, not
+    per-recording results. We surface those as "insights" alongside any
+    recording-level matches the API may also return."""
+
+    def get(self, request):
+        connector = Connector.objects.filter(kind=Connector.Kind.POCKETAI, enabled=True).first()
+        if not connector:
+            return Response({"detail": "PocketAI is not connected"}, status=400)
+
+        query = request.query_params.get("q", "").strip()
+        if not query:
+            return Response({"detail": "query param 'q' is required"}, status=400)
+
+        if connector.config.get("demo"):
+            return Response({"demo": True, "results": _demo_search(query)})
+
+        try:
+            client = PocketAIClient(connector.credentials, connector.config.get("base_url"))
+            data = client.search(query)
+        except Exception as exc:
+            return Response({"detail": str(exc)}, status=502)
+        # Normalize the response: the API returns insights under
+        # data.userProfile.dynamicContext; pass through results if present.
+        user_profile = (data.get("data") or {}).get("userProfile") or {}
+        return Response({
+            "success": data.get("success", True),
+            "insights": user_profile.get("dynamicContext", []),
+            "static_facts": user_profile.get("staticFacts", []),
+            "recordings": data.get("data", {}).get("recordings", []),
+        })
+
+
+class PocketAIDetailView(APIView):
+    """Full detail for a single recording — transcript + summarizations."""
+
+    def get(self, request, recording_id):
+        connector = Connector.objects.filter(kind=Connector.Kind.POCKETAI, enabled=True).first()
+        if not connector:
+            return Response({"detail": "PocketAI is not connected"}, status=400)
+
+        try:
+            client = PocketAIClient(connector.credentials, connector.config.get("base_url"))
+            data = client.recording(recording_id)
+        except Exception as exc:
+            return Response({"detail": str(exc)}, status=502)
+        return Response(data)

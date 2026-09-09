@@ -2,13 +2,13 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Bell, Database, KeyRound, Plug, RadioTower, Settings, Wallet } from "lucide-react";
+import { Landmark, Mic, Plug, Settings } from "lucide-react";
 
 type Item = { label: string; hint?: string; go: () => void };
 
-const PAGE_LABELS = ["Data", "Sources", "Triggers", "Vault", "Finance", "Connectors", "Settings"];
-const PAGE_ICONS = [Database, RadioTower, Bell, KeyRound, Wallet, Plug, Settings];
-const PAGE_HREFS = ["/data", "/sources", "/triggers", "/vault", "/finance", "/connectors", "/settings"];
+const PAGE_LABELS = ["Finance", "Meetings", "Connectors", "Settings"];
+const PAGE_ICONS = [Landmark, Mic, Plug, Settings];
+const PAGE_HREFS = ["/finance", "/meetings", "/connectors", "/settings"];
 
 export default function CommandPalette() {
   const [open, setOpen] = useState(false);

@@ -34,7 +34,6 @@ export type AppSettings = {
   embedding_backend: "api" | "local" | "stub";
   embedding_model: string;
   llm_base_url: string;
-  llm_api_key_set: boolean;
   hermes_webhook_url: string;
   hermes_webhook_secret_set: boolean;
   pii_allowlist: string[];
@@ -46,19 +45,11 @@ export type AppSettings = {
 };
 
 export type Connector = {
-  kind: "google" | "up_bank" | "pocketai";
+  kind: "up_bank" | "pocketai";
   enabled: boolean;
   config: Record<string, unknown>;
   credentials_set: boolean;
   updated_at: string;
-};
-
-export type ChatMessage = { role: "user" | "assistant" | "system" | "tool"; content: string };
-
-export type Snapshot = {
-  google: { calendar_events_today: number; gmail_unread: number; error?: string } | null;
-  up_bank: { transaction_count: number; spent: number; error?: string } | null;
-  pocketai: { recordings_count: number; error?: string } | null;
 };
 
 export type FinanceSummary = {

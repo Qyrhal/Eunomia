@@ -2,15 +2,12 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Bell, Database, KeyRound, Plug, RadioTower, Settings, Wallet } from "lucide-react";
+import { Landmark, Mic, Plug, Settings } from "lucide-react";
 import HourRing from "./HourRing";
 
 const NAV = [
-  { href: "/data", label: "Data", icon: Database },
-  { href: "/sources", label: "Sources", icon: RadioTower },
-  { href: "/triggers", label: "Triggers", icon: Bell },
-  { href: "/vault", label: "Vault", icon: KeyRound },
-  { href: "/finance", label: "Finance", icon: Wallet },
+  { href: "/finance", label: "Finance", icon: Landmark },
+  { href: "/meetings", label: "Meetings", icon: Mic },
   { href: "/connectors", label: "Connectors", icon: Plug },
   { href: "/settings", label: "Settings", icon: Settings },
 ];
