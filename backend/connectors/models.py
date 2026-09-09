@@ -45,7 +45,7 @@ class AppSettings(models.Model):
     pii_min_confidence = models.FloatField(default=0.5)
 
     # --- misc ---
-    vip_senders = models.JSONField(default=list, blank=True, help_text="Sender addresses for the 'VIP email' trigger.")
+    vip_senders = models.JSONField(default=list, blank=True, help_text="Sender addresses for the 'VIP email' reminder.")
     sync_intervals = models.JSONField(default=dict, blank=True, help_text='{"up_bank": 900, ...} seconds per source.')
 
     theme = models.JSONField(
