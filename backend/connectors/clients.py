@@ -153,6 +153,16 @@ class PocketAIClient:
         r.raise_for_status()
         return r.json()
 
+    def recording(self, recording_id: str) -> dict:
+        """Full detail for a single recording — transcript + summarizations."""
+        r = httpx.get(
+            f"{self.base_url}/public/recordings/{recording_id}",
+            headers=self._headers(),
+            timeout=15,
+        )
+        r.raise_for_status()
+        return r.json()
+
     def summary(self, since_iso_date: str) -> dict:
         """Recording count/duration/tags since a given date. Every field comes
         straight off the recording resource (`duration`, `tags`) — the API has

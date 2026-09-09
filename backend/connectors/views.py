@@ -328,7 +328,12 @@ class PocketAIAllView(APIView):
 
 
 class PocketAISearchView(APIView):
-    """Full-text search across heypocket recordings."""
+    """Full-text search across heypocket recordings.
+
+    The PocketAI /public/search endpoint returns synthesized insights under
+    data.userProfile.dynamicContext[] — high-level meeting takeaways, not
+    per-recording results. We surface those as "insights" alongside any
+    recording-level matches the API may also return."""
 
     def get(self, request):
         connector = Connector.objects.filter(kind=Connector.Kind.POCKETAI, enabled=True).first()
@@ -345,6 +350,30 @@ class PocketAISearchView(APIView):
         try:
             client = PocketAIClient(connector.credentials, connector.config.get("base_url"))
             data = client.search(query)
+        except Exception as exc:
+            return Response({"detail": str(exc)}, status=502)
+        # Normalize the response: the API returns insights under
+        # data.userProfile.dynamicContext; pass through results if present.
+        user_profile = (data.get("data") or {}).get("userProfile") or {}
+        return Response({
+            "success": data.get("success", True),
+            "insights": user_profile.get("dynamicContext", []),
+            "static_facts": user_profile.get("staticFacts", []),
+            "recordings": data.get("data", {}).get("recordings", []),
+        })
+
+
+class PocketAIDetailView(APIView):
+    """Full detail for a single recording — transcript + summarizations."""
+
+    def get(self, request, recording_id):
+        connector = Connector.objects.filter(kind=Connector.Kind.POCKETAI, enabled=True).first()
+        if not connector:
+            return Response({"detail": "PocketAI is not connected"}, status=400)
+
+        try:
+            client = PocketAIClient(connector.credentials, connector.config.get("base_url"))
+            data = client.recording(recording_id)
         except Exception as exc:
             return Response({"detail": str(exc)}, status=502)
         return Response(data)
