@@ -9,6 +9,8 @@ from .views import (
     GoogleAuthStartView,
     GoogleCalendarEventsView,
     PocketAISummaryView,
+    PocketAISearchView,
+    PocketAIAllView,
     SettingsView,
     SnapshotView,
     UpBankFinanceSummaryView,
@@ -28,4 +30,6 @@ urlpatterns = [
     path("connectors/up_bank/transactions", UpBankTransactionsView.as_view()),
     path("connectors/up_bank/finance-summary", UpBankFinanceSummaryView.as_view()),
     path("connectors/pocketai/summary", PocketAISummaryView.as_view()),
+    path("connectors/pocketai/recordings", PocketAIAllView.as_view()),
+    path("connectors/pocketai/search", PocketAISearchView.as_view()),
 ]

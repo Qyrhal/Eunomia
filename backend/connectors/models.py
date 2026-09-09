@@ -12,7 +12,7 @@ class AppSettings(models.Model):
     EMBED_API, EMBED_LOCAL, EMBED_STUB = "api", "local", "stub"
     embedding_backend = models.CharField(
         max_length=10,
-        default=EMBED_API,
+        default=EMBED_STUB,
         choices=[(EMBED_API, "OpenAI-compatible API"), (EMBED_LOCAL, "Local (sentence-transformers)"), (EMBED_STUB, "Stub")],
     )
     embedding_model = models.CharField(max_length=200, blank=True, default="")

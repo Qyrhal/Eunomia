@@ -30,24 +30,25 @@ class ConnectorListViewTests(TestCase):
 
 
 class AppSettingsCryptoTests(TestCase):
-    def test_llm_api_key_round_trips_encrypted(self):
+    def test_api_never_exposes_the_webhook_secret_only_whether_it_is_set(self):
         settings_row = AppSettings.load()
-        settings_row.llm_api_key = "sk-secret"
-        settings_row.save()
-
-        reloaded = AppSettings.objects.get(pk=1)
-        self.assertNotEqual(reloaded.llm_api_key_encrypted, "sk-secret")
-        self.assertEqual(reloaded.llm_api_key, "sk-secret")
-
-    def test_api_never_exposes_the_key_only_whether_it_is_set(self):
-        settings_row = AppSettings.load()
-        settings_row.llm_api_key = "sk-secret"
+        settings_row.hermes_webhook_secret = "shh-secret"
         settings_row.save()
 
         response = self.client.get("/api/settings")
         self.assertEqual(response.status_code, 200)
-        self.assertNotIn("sk-secret", response.content.decode())
-        self.assertTrue(response.json()["llm_api_key_set"])
+        self.assertNotIn("shh-secret", response.content.decode())
+        self.assertTrue(response.json()["hermes_webhook_secret_set"])
+
+    def test_settings_endpoints_does_not_include_sk_placeholder(self):
+        # Regression test: the old serializer exposed llm_api_key/llm_api_key_set.
+        # Removing them entirely means the /api/settings response must not contain
+        # any sk-* placeholder or key-related field names.
+        response = self.client.get("/api/settings")
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertNotIn("llm_api_key", data)
+        self.assertNotIn("llm_api_key_set", data)
 
 
 class ConnectorCredentialsTests(TestCase):
