@@ -89,6 +89,7 @@ class Connector(models.Model):
         GOOGLE = "google", "Google (Calendar + Gmail)"
         UP_BANK = "up_bank", "Up Bank"
         POCKETAI = "pocketai", "PocketAI"
+        TWENTY = "twenty", "Twenty CRM"
 
     kind = models.CharField(max_length=20, choices=Kind.choices, unique=True)
     enabled = models.BooleanField(default=False)

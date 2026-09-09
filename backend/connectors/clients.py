@@ -15,6 +15,161 @@ GOOGLE_SCOPES = [
     "https://www.googleapis.com/auth/drive.readonly",
 ]
 
+# ---------------------------------------------------------------------------
+# Twenty CRM (self-hosted)
+# ---------------------------------------------------------------------------
+
+#: default base URL when none is supplied via config
+DEFAULT_TWENTY_BASE_URL = "http://localhost:3001"
+
+
+class TwentyClient:
+    """REST + GraphQL client for Twenty CRM (self-hosted).
+
+    Auth: Bearer token (personal access token or session JWT) supplied as
+    ``api_token`` in the connector credentials dict.
+
+    Resource model follows Twenty's API conventions:
+      - people    -> /api/v1/people
+      - companies -> /api/v1/companies
+      - deals     -> /api/v1/deals
+      - tasks     -> /api/v1/tasks
+      - notes     -> /api/v1/notes
+    GraphQL endpoint: /graphql (POST, JSON body with ``query`` field).
+    """
+
+    def __init__(self, credentials: dict, base_url: str | None = None):
+        self.api_token = credentials.get("api_token", "")
+        self.base_url = (
+            base_url or credentials.get("base_url", DEFAULT_TWENTY_BASE_URL)
+        ).rstrip("/")
+
+    def _headers(self) -> dict:
+        if self.api_token:
+            return {
+                "Authorization": f"Bearer {self.api_token}",
+                "Accept": "application/json",
+            }
+        return {"Accept": "application/json"}
+
+    def _get(self, path: str, params: dict | None = None, timeout: float = 15) -> dict:
+        r = httpx.get(
+            f"{self.base_url}/{path}",
+            headers=self._headers(),
+            params=params,
+            timeout=timeout,
+        )
+        r.raise_for_status()
+        return r.json() if r.text.strip() else {}
+
+    def _post_graphql(
+        self, query: str, variables: dict | None = None, timeout: float = 15
+    ) -> dict:
+        payload: dict = {"query": query}
+        if variables:
+            payload["variables"] = variables
+        r = httpx.post(
+            f"{self.base_url}/graphql",
+            headers=self._headers(),
+            json=payload,
+            timeout=timeout,
+        )
+        r.raise_for_status()
+        return r.json()
+
+    # -- ping ----------------------------------------------------------------
+
+    def ping(self) -> bool:
+        """Health check: hit /healthz."""
+        try:
+            r = httpx.get(f"{self.base_url}/healthz", headers=self._headers(), timeout=10)
+            return r.status_code == 200
+        except Exception:
+            return False
+
+    # -- resource listing ---------------------------------------------------
+
+    def people(self, limit: int = 50, cursor: str | None = None) -> dict:
+        """List people (contacts). Returns the raw Twenty list response."""
+        params: dict = {"limit": limit} if limit else {}
+        if cursor:
+            params["after"] = cursor
+        return self._get("api/v1/people", params=params)
+
+    def companies(self, limit: int = 50, cursor: str | None = None) -> dict:
+        params = {"limit": limit} if limit else {}
+        if cursor:
+            params["after"] = cursor
+        return self._get("api/v1/companies", params=params)
+
+    def deals(self, limit: int = 50, cursor: str | None = None) -> dict:
+        params = {"limit": limit} if limit else {}
+        if cursor:
+            params["after"] = cursor
+        return self._get("api/v1/deals", params=params)
+
+    def tasks(self, limit: int = 50, cursor: str | None = None) -> dict:
+        params = {"limit": limit} if limit else {}
+        if cursor:
+            params["after"] = cursor
+        return self._get("api/v1/tasks", params=params)
+
+    def notes(self, limit: int = 50, cursor: str | None = None) -> dict:
+        params = {"limit": limit} if limit else {}
+        if cursor:
+            params["after"] = cursor
+        return self._get("api/v1/notes", params=params)
+
+    # -- single resource fetch ----------------------------------------------
+
+    def person(self, id: str) -> dict:
+        return self._get(f"api/v1/people/{id}")
+
+    def company(self, id: str) -> dict:
+        return self._get(f"api/v1/companies/{id}")
+
+    def deal(self, id: str) -> dict:
+        return self._get(f"api/v1/deals/{id}")
+
+    def task(self, id: str) -> dict:
+        return self._get(f"api/v1/tasks/{id}")
+
+    def note(self, id: str) -> dict:
+        return self._get(f"api/v1/notes/{id}")
+
+    # -- GraphQL convenience -------------------------------------------------
+
+    def gql(self, query: str, variables: dict | None = None) -> dict:
+        """Run an arbitrary GraphQL query and return the parsed JSON body."""
+        return self._post_graphql(query, variables)
+
+    # -- dashboard-style summary --------------------------------------------
+
+    def summary(self) -> dict:
+        """Quick counts for the main CRM objects. All fields come straight off
+        Twenty's list endpoints — no invented metrics."""
+        counts: dict[str, int] = {}
+        for name, fn in [
+            ("people", self.people),
+            ("companies", self.companies),
+            ("deals", self.deals),
+            ("tasks", self.tasks),
+            ("notes", self.notes),
+        ]:
+            try:
+                data = fn(limit=1)
+                # Twenty list responses use a ``data`` envelope
+                rows = data.get("data") or data.get("items") or []
+                counts[name] = len(rows) if isinstance(rows, list) else 0
+            except Exception:
+                counts[name] = -1  # mark as errored
+        return counts
+
+
+# ---------------------------------------------------------------------------
+# Up Bank
+# ---------------------------------------------------------------------------
+
 
 class UpBankClient:
     base_url = "https://api.up.com.au/api/v1"
@@ -50,18 +205,22 @@ class UpBankClient:
         return r.json()
 
     def finance_summary(self, since_iso: str) -> dict:
-        """Balance across accounts + settled spend broken down by category since `since_iso`.
+        """Balance across accounts + settled spend broken down by category since
+        ``since_iso``.
 
-        Every field here comes straight off the transaction/account/category resources —
-        no invented metrics (Up's API has no notion of "net profit" etc., this is a
-        personal bank account).
+        Every field here comes straight off the transaction/account/category
+        resources — no invented metrics (this is a personal bank account).
         """
         accounts = self.accounts().get("data", [])
         balance = sum(a["attributes"]["balance"]["valueInBaseUnits"] for a in accounts) / 100
 
-        cat_names = {c["id"]: c["attributes"]["name"] for c in self.categories().get("data", [])}
+        cat_names = {
+            c["id"]: c["attributes"]["name"] for c in self.categories().get("data", [])
+        }
 
-        data = self.transactions({"filter[since]": since_iso, "page[size]": 100}).get("data", [])
+        data = self.transactions({"filter[since]": since_iso, "page[size]": 100}).get(
+            "data", []
+        )
         settled = [t for t in data if t["attributes"]["status"] == "SETTLED"]
 
         spend_by_category: dict[str, int] = {}
@@ -71,7 +230,9 @@ class UpBankClient:
             if cents >= 0:
                 continue
             cat = t["relationships"].get("category", {}).get("data")
-            name = cat_names.get(cat["id"], "Uncategorised") if cat else "Uncategorised"
+            name = (
+                cat_names.get(cat["id"], "Uncategorised") if cat else "Uncategorised"
+            )
             spend_by_category[name] = spend_by_category.get(name, 0) - cents
             day = t["attributes"]["createdAt"][:10]
             spend_by_day[day] = spend_by_day.get(day, 0) - cents
@@ -79,15 +240,24 @@ class UpBankClient:
         return {
             "balance": round(balance, 2),
             "accounts": [
-                {"name": a["attributes"]["displayName"], "balance": a["attributes"]["balance"]["value"]}
+                {
+                    "name": a["attributes"]["displayName"],
+                    "balance": a["attributes"]["balance"]["value"],
+                }
                 for a in accounts
             ],
             "spend_by_category": sorted(
-                [{"category": k, "amount": round(v / 100, 2)} for k, v in spend_by_category.items()],
+                [
+                    {"category": k, "amount": round(v / 100, 2)}
+                    for k, v in spend_by_category.items()
+                ],
                 key=lambda r: -r["amount"],
             ),
             "spend_by_day": sorted(
-                [{"day": k, "amount": round(v / 100, 2)} for k, v in spend_by_day.items()],
+                [
+                    {"day": k, "amount": round(v / 100, 2)}
+                    for k, v in spend_by_day.items()
+                ],
                 key=lambda r: r["day"],
             ),
             "recent_transactions": [
@@ -96,15 +266,20 @@ class UpBankClient:
                     "amount": t["attributes"]["amount"]["value"],
                     "created_at": t["attributes"]["createdAt"],
                 }
-                for t in sorted(data, key=lambda t: t["attributes"]["createdAt"], reverse=True)[:20]
+                for t in sorted(
+                    data, key=lambda t: t["attributes"]["createdAt"], reverse=True
+                )[:20]
             ],
         }
 
     def week_summary(self, since_iso: str) -> dict:
-        """Settled transaction count + total spend (negative amounts) since `since_iso`."""
+        """Settled transaction count + total spend (negative amounts) since
+        ``since_iso``."""
         data = self.transactions({"filter[since]": since_iso, "page[size]": 100})
         rows = [
-            t for t in data.get("data", []) if t.get("attributes", {}).get("status") == "SETTLED"
+            t
+            for t in data.get("data", [])
+            if t.get("attributes", {}).get("status") == "SETTLED"
         ]
         spend_cents = sum(
             -t["attributes"]["amount"]["valueInBaseUnits"]
@@ -112,6 +287,11 @@ class UpBankClient:
             if t["attributes"]["amount"]["valueInBaseUnits"] < 0
         )
         return {"transaction_count": len(rows), "spent": spend_cents / 100}
+
+
+# ---------------------------------------------------------------------------
+# PocketAI (heypocket)
+# ---------------------------------------------------------------------------
 
 
 class PocketAIClient:
@@ -165,9 +345,11 @@ class PocketAIClient:
 
     def summary(self, since_iso_date: str) -> dict:
         """Recording count/duration/tags since a given date. Every field comes
-        straight off the recording resource (`duration`, `tags`) — the API has
-        no dedicated action-items/todos field, so this doesn't invent one."""
-        data = self.recordings({"start_date": since_iso_date, "limit": 100}).get("data", [])
+        straight off the recording resource (``duration``, ``tags``) — the API
+        has no dedicated action-items/todos field, so this doesn't invent one."""
+        data = self.recordings({"start_date": since_iso_date, "limit": 100}).get(
+            "data", []
+        )
 
         tag_counts: dict[str, int] = {}
         for r in data:
@@ -177,9 +359,15 @@ class PocketAIClient:
 
         return {
             "recordings_count": len(data),
-            "total_duration_minutes": round(sum(r.get("duration", 0) for r in data) / 60, 1),
+            "total_duration_minutes": round(
+                sum(r.get("duration", 0) for r in data) / 60, 1
+            ),
             "tag_breakdown": sorted(
-                [{"tag": k, "count": v} for k, v in tag_counts.items()], key=lambda row: -row["count"]
+                [
+                    {"tag": k, "count": v}
+                    for k, v in tag_counts.items()
+                ],
+                key=lambda row: -row["count"],
             ),
             "recent_recordings": [
                 {
@@ -188,9 +376,16 @@ class PocketAIClient:
                     "recorded_at": r.get("recording_at") or r.get("created_at"),
                     "tags": [tag.get("name") for tag in r.get("tags", [])],
                 }
-                for r in sorted(data, key=lambda r: r.get("recording_at") or "", reverse=True)[:10]
+                for r in sorted(
+                    data, key=lambda r: r.get("recording_at") or "", reverse=True
+                )[:10]
             ],
         }
+
+
+# ---------------------------------------------------------------------------
+# Google (Calendar + Gmail)
+# ---------------------------------------------------------------------------
 
 
 def google_oauth_flow(client_config: dict, redirect_uri: str) -> Flow:
@@ -224,23 +419,35 @@ class GoogleClient:
             "token": self._creds.token,
         }
 
-    def calendar_events(self, calendar_id="primary", max_results=20, **kwargs) -> list:
+    def calendar_events(
+        self, calendar_id: str = "primary", max_results: int = 20, **kwargs
+    ) -> list:
         from datetime import datetime, timezone as dt_timezone
 
-        kwargs.setdefault("timeMin", datetime.now(dt_timezone.utc).isoformat())
+        kwargs.setdefault(
+            "timeMin", datetime.now(dt_timezone.utc).isoformat()
+        )
         service = build("calendar", "v3", credentials=self._creds)
         result = (
             service.events()
-            .list(calendarId=calendar_id, maxResults=max_results, singleEvents=True, orderBy="startTime", **kwargs)
+            .list(
+                calendarId=calendar_id,
+                maxResults=max_results,
+                singleEvents=True,
+                orderBy="startTime",
+                **kwargs,
+            )
             .execute()
         )
         return result.get("items", [])
 
-    def create_calendar_event(self, calendar_id="primary", **body) -> dict:
+    def create_calendar_event(self, calendar_id: str = "primary", **body) -> dict:
         service = build("calendar", "v3", credentials=self._creds)
-        return service.events().insert(calendarId=calendar_id, body=body).execute()
+        return service.events().insert(
+            calendarId=calendar_id, body=body
+        ).execute()
 
-    def gmail_messages(self, query="is:unread", max_results=20) -> list:
+    def gmail_messages(self, query: str = "is:unread", max_results: int = 20) -> list:
         service = build("gmail", "v1", credentials=self._creds)
         result = (
             service.users()
@@ -252,13 +459,21 @@ class GoogleClient:
 
     def gmail_message(self, message_id: str) -> dict:
         service = build("gmail", "v1", credentials=self._creds)
-        return service.users().messages().get(userId="me", id=message_id, format="full").execute()
+        return service.users().messages().get(
+            userId="me", id=message_id, format="full"
+        ).execute()
 
     def gmail_search(self, query: str, max_results: int = 5) -> list[dict]:
-        """Compact search results — subject/from/date/snippet, not the full body,
-        to keep this cheap enough to hand straight to an LLM as tool output."""
+        """Compact search results — subject/from/date/snippet, not the full
+        body, to keep this cheap enough to hand straight to an LLM as tool
+        output."""
         service = build("gmail", "v1", credentials=self._creds)
-        listing = service.users().messages().list(userId="me", q=query, maxResults=max_results).execute()
+        listing = (
+            service.users()
+            .messages()
+            .list(userId="me", q=query, maxResults=max_results)
+            .execute()
+        )
         results = []
         for item in listing.get("messages", []):
             msg = (
@@ -272,7 +487,9 @@ class GoogleClient:
                 )
                 .execute()
             )
-            headers = {h["name"]: h["value"] for h in msg.get("payload", {}).get("headers", [])}
+            headers = {
+                h["name"]: h["value"] for h in msg.get("payload", {}).get("headers", [])
+            }
             results.append(
                 {
                     "subject": headers.get("Subject", ""),
@@ -284,45 +501,79 @@ class GoogleClient:
         return results
 
     def gmail_list_detailed(self, query: str, max_results: int = 100) -> list[dict]:
-        """id + Subject/From/Date + snippet per message — envelope-shaped, no body (#21)."""
+        """id + Subject/From/Date + snippet per message — envelope-shaped, no
+        body (#21)."""
         service = build("gmail", "v1", credentials=self._creds)
-        listing = service.users().messages().list(userId="me", q=query, maxResults=max_results).execute()
+        listing = (
+            service.users()
+            .messages()
+            .list(userId="me", q=query, maxResults=max_results)
+            .execute()
+        )
         out = []
         for item in listing.get("messages", []):
             msg = service.users().messages().get(
-                userId="me", id=item["id"], format="metadata",
+                userId="me",
+                id=item["id"],
+                format="metadata",
                 metadataHeaders=["Subject", "From", "To", "Date"],
             ).execute()
-            headers = {h["name"]: h["value"] for h in msg.get("payload", {}).get("headers", [])}
-            out.append({
-                "id": item["id"], "threadId": msg.get("threadId"),
-                "subject": headers.get("Subject", ""), "from": headers.get("From", ""),
-                "to": headers.get("To", ""), "date": headers.get("Date", ""),
-                "snippet": msg.get("snippet", ""),
-                "labelIds": msg.get("labelIds", []),
-                "internalDate": msg.get("internalDate"),
-            })
+            headers = {
+                h["name"]: h["value"] for h in msg.get("payload", {}).get("headers", [])
+            }
+            out.append(
+                {
+                    "id": item["id"],
+                    "threadId": msg.get("threadId"),
+                    "subject": headers.get("Subject", ""),
+                    "from": headers.get("From", ""),
+                    "to": headers.get("To", ""),
+                    "date": headers.get("Date", ""),
+                    "snippet": msg.get("snippet", ""),
+                    "labelIds": msg.get("labelIds", []),
+                    "internalDate": msg.get("internalDate"),
+                }
+            )
         return out
 
-    def drive_files(self, query: str = "trashed = false", page_size: int = 100) -> list[dict]:
+    def drive_files(
+        self, query: str = "trashed = false", page_size: int = 100
+    ) -> list[dict]:
         """File metadata only — body is fetched on demand (#41)."""
         service = build("drive", "v3", credentials=self._creds)
-        result = service.files().list(
-            q=query, pageSize=page_size, orderBy="modifiedTime desc",
-            fields="files(id,name,mimeType,modifiedTime,createdTime,webViewLink,owners(emailAddress),size)",
-        ).execute()
+        result = (
+            service.files()
+            .list(
+                q=query,
+                pageSize=page_size,
+                orderBy="modifiedTime desc",
+                fields=(
+                    "files(id,name,mimeType,modifiedTime,createdTime,"
+                    "webViewLink,owners(emailAddress),size)"
+                ),
+            )
+            .execute()
+        )
         return result.get("files", [])
 
     def drive_file_text(self, file_id: str, mime_type: str = "") -> str:
         """On-demand plain-text body for a Drive file (#41)."""
         service = build("drive", "v3", credentials=self._creds)
         if mime_type == "application/vnd.google-apps.document":
-            return service.files().export(fileId=file_id, mimeType="text/plain").execute().decode("utf-8", "replace")
+            return (
+                service.files()
+                .export(fileId=file_id, mimeType="text/plain")
+                .execute()
+                .decode("utf-8", "replace")
+            )
         data = service.files().get_media(fileId=file_id).execute()
-        return data.decode("utf-8", "replace") if isinstance(data, bytes) else str(data)
+        return (
+            data.decode("utf-8", "replace") if isinstance(data, bytes) else str(data)
+        )
 
     def gmail_unread_count(self) -> int:
-        """Uses the list response's resultSizeEstimate rather than paginating everything."""
+        """Uses the list response's ``resultSizeEstimate`` rather than
+        paginating everything."""
         service = build("gmail", "v1", credentials=self._creds)
         result = (
             service.users()
@@ -332,7 +583,7 @@ class GoogleClient:
         )
         return result.get("resultSizeEstimate", 0)
 
-    def calendar_events_today(self, calendar_id="primary") -> int:
+    def calendar_events_today(self, calendar_id: str = "primary") -> int:
         from datetime import datetime, timedelta, timezone as dt_timezone
 
         now = datetime.now(dt_timezone.utc)

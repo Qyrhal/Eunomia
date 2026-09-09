@@ -45,7 +45,7 @@ export type AppSettings = {
 };
 
 export type Connector = {
-  kind: "up_bank" | "pocketai";
+  kind: "up_bank" | "pocketai" | "twenty";
   enabled: boolean;
   config: Record<string, unknown>;
   credentials_set: boolean;

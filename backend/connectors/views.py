@@ -5,7 +5,7 @@ from django.utils import timezone
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .clients import GoogleClient, PocketAIClient, UpBankClient, google_oauth_flow
+from .clients import GoogleClient, PocketAIClient, TwentyClient, UpBankClient, google_oauth_flow
 from .demo_seed import (
     build_demo_calendar_events_today,
     build_demo_finance_summary,
@@ -64,6 +64,8 @@ class ConnectorTestView(APIView):
                 ).ping()
             elif kind == Connector.Kind.GOOGLE:
                 ok = connector.config.get("demo") or bool(connector.credentials.get("refresh_token"))
+            elif kind == Connector.Kind.TWENTY:
+                ok = connector.config.get("demo") or TwentyClient(connector.credentials, connector.config.get("base_url")).ping()
             else:
                 return Response({"detail": "unknown connector"}, status=400)
         except Exception as exc:  # surfaced to the settings UI, not swallowed
@@ -194,7 +196,7 @@ class SnapshotView(APIView):
     def get(self, request):
         import datetime
 
-        result = {"google": None, "up_bank": None, "pocketai": None}
+        result = {"google": None, "up_bank": None, "pocketai": None, "twenty_crm": None}
 
         google = Connector.objects.filter(kind=Connector.Kind.GOOGLE, enabled=True).first()
         if google and (google.config.get("demo") or google.credentials.get("refresh_token")):
@@ -240,7 +242,104 @@ class SnapshotView(APIView):
             except Exception as exc:
                 result["pocketai"] = {"error": str(exc)}
 
+        twenty = Connector.objects.filter(kind=Connector.Kind.TWENTY, enabled=True).first()
+        if twenty and (twenty.config.get("demo") or twenty.credentials.get("api_token")):
+            try:
+                result["twenty_crm"] = TwentyClient(twenty.credentials, twenty.config.get("base_url")).summary()
+            except Exception as exc:
+                result["twenty_crm"] = {"error": str(exc)}
+
         return Response(result)
+
+
+class TwentyCRMPeopleView(APIView):
+    """GET /api/connectors/twenty/people -> list people (contacts) from Twenty CRM."""
+
+    def get(self, request):
+        connector = Connector.objects.filter(kind=Connector.Kind.TWENTY, enabled=True).first()
+        if not connector:
+            return Response({"detail": "Twenty CRM is not connected"}, status=400)
+        limit = int(request.query_params.get("limit", 50))
+        cursor = request.query_params.get("cursor")
+        try:
+            data = TwentyClient(connector.credentials, connector.config.get("base_url")).people(
+                limit=limit, cursor=cursor
+            )
+        except Exception as exc:
+            return Response({"detail": str(exc)}, status=502)
+        return Response(data)
+
+
+class TwentyCRMCompaniesView(APIView):
+    """GET /api/connectors/twenty/companies -> list companies from Twenty CRM."""
+
+    def get(self, request):
+        connector = Connector.objects.filter(kind=Connector.Kind.TWENTY, enabled=True).first()
+        if not connector:
+            return Response({"detail": "Twenty CRM is not connected"}, status=400)
+        limit = int(request.query_params.get("limit", 50))
+        cursor = request.query_params.get("cursor")
+        try:
+            data = TwentyClient(connector.credentials, connector.config.get("base_url")).companies(
+                limit=limit, cursor=cursor
+            )
+        except Exception as exc:
+            return Response({"detail": str(exc)}, status=502)
+        return Response(data)
+
+
+class TwentyCRMDealsView(APIView):
+    """GET /api/connectors/twenty/deals -> list deals from Twenty CRM."""
+
+    def get(self, request):
+        connector = Connector.objects.filter(kind=Connector.Kind.TWENTY, enabled=True).first()
+        if not connector:
+            return Response({"detail": "Twenty CRM is not connected"}, status=400)
+        limit = int(request.query_params.get("limit", 50))
+        cursor = request.query_params.get("cursor")
+        try:
+            data = TwentyClient(connector.credentials, connector.config.get("base_url")).deals(
+                limit=limit, cursor=cursor
+            )
+        except Exception as exc:
+            return Response({"detail": str(exc)}, status=502)
+        return Response(data)
+
+
+class TwentyCRMTasksView(APIView):
+    """GET /api/connectors/twenty/tasks -> list tasks from Twenty CRM."""
+
+    def get(self, request):
+        connector = Connector.objects.filter(kind=Connector.Kind.TWENTY, enabled=True).first()
+        if not connector:
+            return Response({"detail": "Twenty CRM is not connected"}, status=400)
+        limit = int(request.query_params.get("limit", 50))
+        cursor = request.query_params.get("cursor")
+        try:
+            data = TwentyClient(connector.credentials, connector.config.get("base_url")).tasks(
+                limit=limit, cursor=cursor
+            )
+        except Exception as exc:
+            return Response({"detail": str(exc)}, status=502)
+        return Response(data)
+
+
+class TwentyCRMNotesView(APIView):
+    """GET /api/connectors/twenty/notes -> list notes from Twenty CRM."""
+
+    def get(self, request):
+        connector = Connector.objects.filter(kind=Connector.Kind.TWENTY, enabled=True).first()
+        if not connector:
+            return Response({"detail": "Twenty CRM is not connected"}, status=400)
+        limit = int(request.query_params.get("limit", 50))
+        cursor = request.query_params.get("cursor")
+        try:
+            data = TwentyClient(connector.credentials, connector.config.get("base_url")).notes(
+                limit=limit, cursor=cursor
+            )
+        except Exception as exc:
+            return Response({"detail": str(exc)}, status=502)
+        return Response(data)
 
 
 class PocketAISummaryView(APIView):

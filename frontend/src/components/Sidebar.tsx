@@ -2,13 +2,14 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Landmark, Mic, Plug, Settings } from "lucide-react";
+import { Landmark, Mic, Plug, Settings, Briefcase } from "lucide-react";
 import HourRing from "./HourRing";
 
 const NAV = [
   { href: "/finance", label: "Finance", icon: Landmark },
   { href: "/meetings", label: "Meetings", icon: Mic },
   { href: "/connectors", label: "Connectors", icon: Plug },
+  { href: "/crm", label: "CRM", icon: Briefcase },
   { href: "/settings", label: "Settings", icon: Settings },
 ];
 

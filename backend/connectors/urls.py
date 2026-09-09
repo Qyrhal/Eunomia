@@ -14,6 +14,11 @@ from .views import (
     PocketAIAllView,
     SettingsView,
     SnapshotView,
+    TwentyCRMCompaniesView,
+    TwentyCRMPeopleView,
+    TwentyCRMDealsView,
+    TwentyCRMTasksView,
+    TwentyCRMNotesView,
     UpBankFinanceSummaryView,
     UpBankTransactionsView,
 )
@@ -34,4 +39,9 @@ urlpatterns = [
     path("connectors/pocketai/recordings", PocketAIAllView.as_view()),
     path("connectors/pocketai/recording/<str:recording_id>", PocketAIDetailView.as_view()),
     path("connectors/pocketai/search", PocketAISearchView.as_view()),
+    path("connectors/twenty/people", TwentyCRMPeopleView.as_view()),
+    path("connectors/twenty/companies", TwentyCRMCompaniesView.as_view()),
+    path("connectors/twenty/deals", TwentyCRMDealsView.as_view()),
+    path("connectors/twenty/tasks", TwentyCRMTasksView.as_view()),
+    path("connectors/twenty/notes", TwentyCRMNotesView.as_view()),
 ]

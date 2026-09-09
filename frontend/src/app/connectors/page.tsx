@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Landmark, Mic } from "lucide-react";
+import { Landmark, Mic, Plug, Settings, Users, Building2, DollarSign, CheckSquare, FileText } from "lucide-react";
 import { api, Connector } from "@/lib/api";
 
 type FieldDef = { key: string; label: string; placeholder: string; secret: boolean };
@@ -32,9 +32,26 @@ const CONNECTOR_META: Record<
       { key: "api_key", label: "API key", placeholder: "pk_…", secret: true },
     ],
   },
+  twenty: {
+    label: "Twenty CRM",
+    icon: <Building2 size={16} />,
+    help: (
+      <>
+        Point this at your self-hosted Twenty instance. A personal access token works for read access;{" "}
+        <a href="http://192.168.8.196:3001" target="_blank" rel="noreferrer" className="underline" style={{ color: "var(--accent)" }}>
+          open Twenty
+        </a>{" "}
+        to create one.
+      </>
+    ),
+    fields: [
+      { key: "base_url", label: "Base URL", placeholder: "http://192.168.8.196:3001", secret: false },
+      { key: "api_token", label: "API token", placeholder: "Bearer …", secret: true },
+    ],
+  },
 };
 
-const ORDER: Connector["kind"][] = ["up_bank", "pocketai"];
+const ORDER: Connector["kind"][] = ["up_bank", "pocketai", "twenty"];
 
 export default function ConnectorsPage() {
   const [connectors, setConnectors] = useState<Connector[]>([]);
