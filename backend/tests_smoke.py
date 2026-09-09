@@ -1,7 +1,6 @@
 """End-to-end smoke (#45): the whole path in one test —
 
   source sync -> ingest (mask + PII + embed) -> cache -> MCP/REST tools
-  -> trigger rule -> HMAC-signed webhook back to Hermes
 
 and the security gate: no raw secret or PII appears in any tool response.
 """
@@ -101,34 +100,3 @@ class EndToEndSmokeTests(TestCase):
         call("echo", {"value": tok})
         self.assertNotIn("[eunomia:", json.dumps(captured))  # resolved to a real value
         self.assertTrue(AuditEvent.objects.filter(kind=AuditEvent.KIND_TOOL_INPUT, actor="tool:echo").exists())
-
-    def test_trigger_rule_fires_signed_webhook_to_hermes(self):
-        from triggers.tools import create_trigger
-
-        create_trigger("smoke_big_txn", "record_rule",
-                       {"types": ["up.transaction"], "match": [["payload.amount_cents", "lt", -100000]]},
-                       webhook_route="eunomia")
-
-        posted = {}
-
-        class _R:
-            status_code = 200
-
-        def _capture(url, content=None, timeout=None, headers=None):
-            posted.update(url=url, body=content, headers=headers)
-            return _R()
-
-        with patch("triggers.delivery.httpx.post", side_effect=_capture), \
-             patch("triggers.delivery.time.sleep"):
-            self._sync()
-
-        self.assertEqual(posted["url"], "http://127.0.0.1:8644/webhooks/eunomia")
-        body, ts = posted["body"], posted["headers"]["X-Webhook-Timestamp"]
-        expect = hmac.new(b"hermes-shared-secret", f"{ts}.{body}".encode(), hashlib.sha256).hexdigest()
-        self.assertEqual(posted["headers"]["X-Webhook-Signature-V2"], expect)
-        payload = json.loads(body)
-        self.assertEqual(payload["trigger"], "smoke_big_txn")
-        self.assertEqual(payload["entity"]["id"], "up_bank:up.transaction:smoke-1")
-        # the webhook body must not leak raw values either
-        self.assertNotIn(EMAIL, body)
-        self.assertNotIn(PAT, body)

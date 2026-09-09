@@ -35,7 +35,6 @@ INSTALLED_APPS = [
     "cache",
     "sources",
     "tools",
-    "triggers",
 ]
 
 MIDDLEWARE = [

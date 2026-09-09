@@ -4,7 +4,7 @@
 
 Checks the tool catalogue loads, search/list run, and no obvious secret pattern
 appears in a search response. Exit 0 = ok. This is the live-instance companion to
-tests_smoke.py (which covers the full ingest -> trigger -> webhook path in-process).
+tests_smoke.py (which covers the full ingest -> webhook path in-process).
 """
 
 import argparse

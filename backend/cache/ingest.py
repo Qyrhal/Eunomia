@@ -4,7 +4,6 @@ One entrypoint, :func:`ingest`, called by the scheduler (#34), webhook endpoints
 (#35), and on-demand refresh. Stages, per record:
 
   map -> credential-mask -> PII tokenize -> upsert (idempotent) -> embed -> link
-  -> trigger-rule eval
 
 Partial failure is isolated: a bad record is recorded and skipped, the batch
 continues. Embedding failure is non-fatal (backfill retries).
@@ -80,14 +79,6 @@ def _embed_record(rec):
     set_embedding(rec.id, embed([text])[0])
 
 
-def _eval_rules(rec):
-    try:
-        from triggers.rules import evaluate_record
-    except ImportError:
-        return
-    evaluate_record(rec)
-
-
 def ingest(source_key: str, raw_records, map_fn, *, secret_values=None) -> IngestReport:
     from cache.search import upsert
 
@@ -113,7 +104,6 @@ def ingest(source_key: str, raw_records, map_fn, *, secret_values=None) -> Inges
                     _embed_record(rec)
                 except Exception as e:  # non-fatal — backfill will retry
                     report.errors.append(f"embed {rec.id}: {e}")
-                _eval_rules(rec)
         except Exception as e:
             report.failed += 1
             report.errors.append(f"{getattr(raw, 'get', lambda *_: '?')('id') if isinstance(raw, dict) else '?'}: {e}")
