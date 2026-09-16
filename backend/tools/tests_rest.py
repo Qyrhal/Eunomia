@@ -17,11 +17,11 @@ class ToolRestTests(TestCase):
                 "external_id": "1", "title": "Rent", "body_text": "monthly rent", "occurred_at": _T,
                 "url": "", "payload": {}, "links": [], "deleted": False})
 
-    def test_catalogue_lists_generic_tools(self):
+    def test_catalogue_lists_generic_and_task_and_trigger_tools(self):
         r = self.client.get("/api/tools")
         self.assertEqual(r.status_code, 200)
         names = {t["name"] for t in r.json()}
-        self.assertTrue({"search", "get", "list", "links"} <= names)
+        self.assertTrue({"search", "get", "list", "links", "create_task", "create_trigger"} <= names)
         for t in r.json():
             self.assertIn("schema", t)
 
@@ -42,3 +42,8 @@ class ToolRestTests(TestCase):
         r = self.client.post("/api/tools/get", {"wrong": 1}, content_type="application/json")
         self.assertEqual(r.status_code, 200)
         self.assertIn("error", r.json())
+
+    def test_create_task_via_rest(self):
+        r = self.client.post("/api/tools/create_task", {"title": "from rest"}, content_type="application/json")
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(r.json()["created"])

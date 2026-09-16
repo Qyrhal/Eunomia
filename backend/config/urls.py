@@ -7,4 +7,5 @@ urlpatterns = [
     path("api/", include("sources.urls")),
     path("api/", include("masking.urls")),
     path("api/", include("tools.urls")),
+    path("api/", include("tasks.urls")),
 ]

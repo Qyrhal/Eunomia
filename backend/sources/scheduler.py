@@ -117,5 +117,10 @@ def build_scheduler():
     sched.add_job(purge_old, "interval", hours=24, id="purge_audit", max_instances=1)
     sched.add_job(renew_watch_channels, "interval", hours=1, id="renew_watch_channels", max_instances=1)
 
+    # #49 triggers: schedule anchors hourly + a 5-minute cron tick (DB-read)
+    from triggers.scheduler import register_trigger_jobs
+
+    register_trigger_jobs(sched)
+
     # #35 renew_watch_channels, #12 up_bank_reconcile
     return sched

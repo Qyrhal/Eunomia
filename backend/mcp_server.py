@@ -30,7 +30,7 @@ from mcp.server.mcpserver import MCPServer  # noqa: E402
 from tools.registry import all_tools, call  # noqa: E402
 
 mcp = MCPServer("eunomia", instructions="Eunomia — your masked personal data layer. "
-                "Search/get/list your Google, bank and heypocket data; "
+                "Search/get/list your Google, bank and heypocket data; manage tasks; "
                 "register watches that ping you. Secrets and PII are already masked.")
 
 
