@@ -2,18 +2,24 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { LayoutDashboard, Mic, Plug, Settings, Wallet } from "lucide-react";
+import { LayoutDashboard, Settings } from "lucide-react";
+import SuitMark from "./SuitMark";
+import { sources, type SourceRow } from "@/lib/api";
 
-type Item = { label: string; go: () => void };
+type IconType = React.ComponentType<{ size?: number; color?: string; strokeWidth?: number }>;
+type Item = { label: string; icon: IconType; go: () => void };
 
-const PAGE_LABELS = ["Dashboard", "Finance", "Meetings", "Connectors", "Settings"];
-const PAGE_ICONS = [LayoutDashboard, Wallet, Mic, Plug, Settings];
-const PAGE_HREFS = ["/", "/finance", "/meetings", "/connectors", "/settings"];
+const STATIC_ITEMS: { label: string; href: string; icon: IconType }[] = [
+  { label: "Dashboard", href: "/", icon: LayoutDashboard },
+  { label: "Connectors", href: "/connectors", icon: SuitMark },
+  { label: "Settings", href: "/settings", icon: Settings },
+];
 
 export default function CommandPalette() {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [index, setIndex] = useState(0);
+  const [rows, setRows] = useState<SourceRow[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
   const router = useRouter();
 
@@ -35,13 +41,20 @@ export default function CommandPalette() {
     setQuery("");
     setIndex(0);
     setTimeout(() => inputRef.current?.focus(), 0);
+    sources
+      .list()
+      .then(setRows)
+      .catch(() => setRows([]));
   }, [open]);
 
   if (!open) return null;
 
-  const items: Item[] = PAGE_LABELS.map((label, i) => ({ label, go: () => router.push(PAGE_HREFS[i]) })).filter((item) =>
-    item.label.toLowerCase().includes(query.toLowerCase())
-  );
+  const connectorItems: Item[] = rows
+    .filter((r) => r.connected)
+    .map((r) => ({ label: r.label, icon: SuitMark, go: () => router.push(`/connectors/${r.key}`) }));
+  const staticItems: Item[] = STATIC_ITEMS.map((s) => ({ label: s.label, icon: s.icon, go: () => router.push(s.href) }));
+
+  const items = [...staticItems, ...connectorItems].filter((item) => item.label.toLowerCase().includes(query.toLowerCase()));
 
   function choose(item: Item) {
     item.go();
@@ -83,7 +96,7 @@ export default function CommandPalette() {
         />
         <ul className="max-h-72 overflow-y-auto">
           {items.map((item, i) => {
-            const Icon = PAGE_ICONS[PAGE_LABELS.indexOf(item.label)];
+            const Icon = item.icon;
             return (
               <li key={item.label}>
                 <button
@@ -94,7 +107,7 @@ export default function CommandPalette() {
                     color: "var(--ink)",
                   }}
                 >
-                  {Icon && <Icon size={14} color="var(--ink-faint)" />}
+                  <Icon size={14} color="var(--ink-faint)" />
                   <span className="flex-1 truncate">{item.label}</span>
                 </button>
               </li>

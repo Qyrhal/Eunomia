@@ -113,32 +113,12 @@ export type Snapshot = {
   pocketai: { recordings_count: number } | null;
 };
 
-export type FinanceSummary = {
-  balance: number;
-  accounts: { name: string; balance: string }[];
-  spend_by_category: { category: string; amount: number }[];
-  spend_by_day: { day: string; amount: number }[];
-  recent_transactions: { description: string; amount: string; created_at: string }[];
-};
-
-export type PocketSummary = {
-  recordings_count: number;
-  total_duration_minutes: number;
-  tag_breakdown: { tag: string; count: number }[];
-  recent_recordings: { title: string; duration_minutes: number; recorded_at: string; tags: string[] }[];
-};
-
 export const connectors = {
   list: () => api.get<Connector[]>("/api/connectors"),
   get: (kind: ConnectorKind) => api.get<Connector>(`/api/connectors/${kind}`),
   update: (kind: ConnectorKind, body: ConnectorUpdate) => api.put<Connector>(`/api/connectors/${kind}`, body),
   test: (kind: ConnectorKind) => api.post<{ ok: boolean; error?: string }>(`/api/connectors/${kind}/test`),
   snapshot: () => api.get<Snapshot>("/api/snapshot"),
-  upBankFinanceSummary: (days = 30) => api.get<FinanceSummary>(`/api/connectors/up_bank/finance-summary?days=${days}`),
-  pocketaiSummary: (days = 30) => api.get<PocketSummary>(`/api/connectors/pocketai/summary?days=${days}`),
-  pocketaiAll: (limit = 50) => api.get<{ data: Record<string, unknown>[] }>(`/api/connectors/pocketai/all?limit=${limit}`),
-  pocketaiSearch: (query: string) => api.get<{ data: Record<string, unknown>[] }>(`/api/connectors/pocketai/search?query=${encodeURIComponent(query)}`),
-  pocketaiDetail: (recordingId: string) => api.get<Record<string, unknown>>(`/api/connectors/pocketai/detail/${recordingId}`),
 };
 
 // ---------------------------------------------------------------------------
@@ -160,6 +140,7 @@ export type SourceRow = {
   record_types: string[];
   connected: boolean;
   sync_status: SyncStatus;
+  record_count: number;
 };
 
 export const sources = {
@@ -172,9 +153,32 @@ export const sources = {
 // tools
 // ---------------------------------------------------------------------------
 
+// A record as the generic `search`/`list` tools summarise it (no payload).
+export type ToolHit = {
+  id: string;
+  source: string;
+  type: string;
+  title: string;
+  snippet: string;
+  occurred_at: string | null;
+  url: string | null;
+};
+
+// A record as the generic `get` tool returns it in full.
+export type ToolRecord = ToolHit & {
+  external_id: string;
+  body_text: string;
+  payload: Record<string, unknown>;
+};
+
 export const tools = {
   catalogue: () => api.get<Record<string, unknown>>("/api/tools"),
   call: (name: string, body?: Record<string, unknown>) => api.post<Record<string, unknown>>(`/api/tools/${name}`, body ?? {}),
+  search: (body: { query: string; sources?: string[]; limit?: number }) =>
+    api.post<{ results: ToolHit[] } | { error: string }>("/api/tools/search", body),
+  list: (body: { filters?: Record<string, unknown>; sort?: string; limit?: number }) =>
+    api.post<{ results: ToolHit[] } | { error: string }>("/api/tools/list", body),
+  get: (id: string) => api.post<ToolRecord | { error: string }>("/api/tools/get", { id }),
 };
 
 // ---------------------------------------------------------------------------

@@ -24,6 +24,17 @@ async def _sync_status_rows(owner) -> dict[str, dict]:
     return out
 
 
+async def _record_counts(owner) -> dict[str, int]:
+    """Cached-record count per source key, for the dashboard's totals -- a
+    single grouped count, not a per-source query."""
+    conn = get_connection()
+    rows = await conn.query(
+        "SELECT source, count() AS count FROM cache_record WHERE owner = $owner AND deleted = false GROUP BY source",
+        {"owner": owner},
+    )
+    return {row["source"]: row["count"] for row in rows}
+
+
 def _status_out(row: dict | None) -> dict:
     if not row:
         return {"cursor": "", "last_run": None, "last_ok": None, "last_error": "", "consecutive_failures": 0}
@@ -40,6 +51,7 @@ def _status_out(row: dict | None) -> dict:
 async def list_sources(user: User = Depends(current_user)) -> list[dict]:
     statuses = await _sync_status_rows(user.id)
     enabled_keys = {src.key for src in await registry.enabled(user.id)}
+    counts = await _record_counts(user.id)
     return [
         {
             "key": src.key,
@@ -48,6 +60,7 @@ async def list_sources(user: User = Depends(current_user)) -> list[dict]:
             "record_types": src.record_types,
             "connected": src.key in enabled_keys,
             "sync_status": _status_out(statuses.get(src.key)),
+            "record_count": counts.get(src.key, 0),
         }
         for src in registry.all()
     ]
