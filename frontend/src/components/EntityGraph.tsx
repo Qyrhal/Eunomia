@@ -44,7 +44,16 @@ function layout(graph: EntityGraphData): { nodes: LaidOutNode[]; links: LaidOutL
 
   for (let i = 0; i < 300; i++) sim.tick();
 
-  return { nodes, links };
+  // forceLink mutates each link's source/target from an id string into the
+  // resolved node object once the simulation runs — normalize back to plain
+  // id strings so downstream Set.has(id) lookups keep working.
+  const resolvedLinks: LaidOutLink[] = links.map((l) => ({
+    source: typeof l.source === "string" ? l.source : (l.source as unknown as LaidOutNode).id,
+    target: typeof l.target === "string" ? l.target : (l.target as unknown as LaidOutNode).id,
+    label: l.label,
+  }));
+
+  return { nodes, links: resolvedLinks };
 }
 
 export default function EntityGraph() {
@@ -177,9 +186,22 @@ export default function EntityGraph() {
                       <Blobatar name={n.name || n.id} animate="hover" size={r * 2} background="circle" />
                     </foreignObject>
                   </>
+                ) : n.kind === "organisation" ? (
+                  <rect
+                    x={-r * 0.82}
+                    y={-r * 0.82}
+                    width={r * 1.64}
+                    height={r * 1.64}
+                    rx={4}
+                    fill={KIND_COLOR[n.kind]}
+                    stroke={isHovered ? "var(--felt)" : "none"}
+                    strokeWidth={isHovered ? 2 : 0}
+                    opacity={isSelected || isHovered ? 1 : 0.85}
+                  />
                 ) : (
-                  <circle
-                    r={r}
+                  <path
+                    d={`M0,${-r * 1.15} C${r * 0.75},${-r * 1.15} ${r * 0.95},${-r * 0.2} 0,${r * 1.05}
+                        C${-r * 0.95},${-r * 0.2} ${-r * 0.75},${-r * 1.15} 0,${-r * 1.15} Z`}
                     fill={KIND_COLOR[n.kind]}
                     stroke={isHovered ? "var(--felt)" : "none"}
                     strokeWidth={isHovered ? 2 : 0}
