@@ -1,114 +1,93 @@
 # Eunomia
 
-A **collection of tools exposed over MCP**, for [Hermes](https://github.com/nousresearch/hermes-agent)
-or Claude Code. Eunomia pulls your Up Bank and heypocket data
-into one local store, indexes everything for keyword + semantic search, and
-exposes it — plus task management and any app reachable through Nango,
-Composio or Open Connector — to Hermes/Claude over MCP.
-
-There is no dashboard. Hermes/Claude is the interface. A small admin frontend
-exists for inspecting the cache, sources and connectors.
+A personal data hub with real multi-user accounts. Eunomia pulls your Up
+Bank and heypocket data (and anything else behind a `Source` plug-in) into
+one searchable store, extracts a people/organisation/location memory graph
+from it, and exposes everything identically through a web dashboard and an
+MCP server — so an agent (Claude Desktop/Code) and the UI have the same
+read/write power.
 
 ## How it fits together
 
 ```
- sources ──sync──▶ ingest pipeline ──▶ cache (sqlite: rows + FTS5 + sqlite-vec)
- (Up Bank,                │  embed                  │
-  heypocket, demo)        └─────────────────────────┼──▶ tools: search / get / list / links
-                                                      │    + per-source + task + managed-connector
-                                                      ▼
-                                     MCP server (stdio + HTTP)  ◀── Hermes / Claude Code
-                                     REST /api/tools ───────────────────────┘
+ sources ──sync──▶ ingest pipeline ──▶ cache (SurrealDB: rows + FTS + vector index)
+ (Up Bank,                │  embed + extract entities    │
+  heypocket, demo)        └───────────────────────────────┼──▶ tools: search / get / list / links
+                                                            │    + per-source tools
+                                                            ▼
+                                     MCP server (stdio + HTTP :8765)  ◀── Claude Desktop/Code
+                                     REST /api/* (:8001)  ◀── frontend (:3000)
 ```
 
-- **Sources** are plug-ins: drop a folder in `backend/sources/`, it registers
-  itself (`auth` / `sync` / `map` / `tools` / `webhook`).
-- **Managed connectors** — Nango, Composio and Open Connector are broker
-  platforms that hold OAuth to many third-party apps; connect one and its
-  `managed_connector_call` / `managed_connector_list_connections` tools let
-  Hermes/Claude drive any app that broker supports.
+- **Sources** are plug-ins under `backend/sources/`; each registers itself
+  (`auth` / `sync` / `map` / `tools`).
+- **Auth** is per-user: register/login issues a signed session cookie for
+  the browser; a personal long-lived API token (minted in Settings or via
+  `POST /api/auth/token`) authenticates MCP/agent connections instead.
 
-## Layout
-
-- `backend/` — Django + DRF, uv-managed. Apps: `sources`, `cache`,
-  `embeddings`, `tools`, plus `tasks` / `connectors` / `analytics`.
-  `mcp_server.py` is the MCP entrypoint.
-- `frontend/` — Next.js admin UI, bun-managed.
-
-## Run it (dev)
+## Run it
 
 ```bash
-./run.sh
+cp .env.example .env    # fill in ENCRYPTION_KEY, JWT_SECRET, OPENAI_API_KEY
+docker compose up --build
 ```
 
-Starts, together: the API (`:8000`), the sync **worker**, the **MCP server**
-(`:8765/mcp`), and the frontend (`:3000`). Stop with ctrl-c.
+This brings up four services: `surrealdb` (`:8000`), `backend` (`:8001`),
+`frontend` (`:3000`), and `mcp` (`:8765`).
 
-By hand:
+1. Visit **http://localhost:3000** and register an account (the first
+   registered user becomes the only user, unless you add more).
+2. Follow the onboarding wizard: confirm your password, connect one data
+   source (Up Bank / heypocket / Open Connector), and set an OpenAI API key
+   if one isn't already configured server-wide.
+3. The dashboard shows sync health for connected sources and an entity
+   network graph (people/organisations/locations) extracted from your data.
 
-```bash
-cd backend
-uv sync
-python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"  # -> ENCRYPTION_KEY
-cat > .env <<EOF
-SECRET_KEY=dev-secret
-ENCRYPTION_KEY=<paste>
-# EUNOMIA_API_TOKEN=<long random string>   # leave unset for open access on a trusted LAN
-EOF
-uv run manage.py migrate
-uv run manage.py runserver 8000        # API
-uv run manage.py run_worker            # sync (separate process)
-uv run mcp_server.py --http            # MCP over HTTP on 127.0.0.1:8765
-```
+## Connecting an MCP client
 
-Local semantic search uses an embedding backend chosen in Settings:
-`api` (any OpenAI-compatible `/embeddings`, incl. Ollama's — no extra deps, the
-default), `local` (`uv sync --extra local-embeddings` for `bge-small`), or
-`stub`.
-
-## Connecting Hermes
-
-Eunomia and Hermes are meant to run on the **same host**, reachable over
-tailscale / netbird — **never public**.
-
-1. **Set `EUNOMIA_API_TOKEN`** and bind services to the tailscale/netbird
-   interface, not `0.0.0.0`.
-2. **Point Hermes at the MCP server** — in `~/.hermes/config.yaml`:
-   ```yaml
-   mcp_servers:
-     eunomia:
-       url: http://127.0.0.1:8765/mcp
-       headers: { Authorization: "Bearer ${EUNOMIA_API_TOKEN}" }
+1. Mint a personal API token: Settings → "Generate API token", or
+   `POST /api/auth/token` while logged in (shown once — store it).
+2. Point your client at the `mcp` service. For Claude Desktop/Code, add to
+   its MCP config:
+   ```json
+   {
+     "mcpServers": {
+       "eunomia": {
+         "url": "http://localhost:8765/mcp",
+         "headers": { "Authorization": "Bearer <your-token>" }
+       }
+     }
+   }
    ```
-   A webhook-triggered Hermes run gets a constrained toolset by default — add
-   `toolsets: [...]` to the route so Hermes may call Eunomia's tools in reply.
+   Or run it directly over stdio instead of the `mcp` container:
+   ```bash
+   cd backend && EUNOMIA_API_TOKEN=<your-token> uv run mcp_server.py
+   ```
 
 ## Connectors
 
 Up Bank: a personal access token from api.up.com.au. heypocket: an API key.
 Both are entered on the Connectors page and stored encrypted at rest; Open
-Connector is optional and only needed if you want to broker other apps.
-
-## Demo data
-
-```bash
-cd backend
-uv run manage.py seed_demo            # bank + recordings + tasks, synced into the cache
-uv run manage.py seed_demo --clear
-```
+Connector is optional and only needed to broker other apps.
 
 ## Tests
 
 ```bash
-cd backend && uv run manage.py test
-cd frontend && bun run test           # needs the backend on :8000
+cd backend && uv run pytest tests -q
+cd frontend && bun run test           # Playwright, needs the stack running
+
+# Live smoke test against a running docker-compose stack:
+cd backend && uv run python scripts/smoke_live.py --base http://localhost:8001
 ```
 
-## Docker
+## Local dev (without Docker)
 
 ```bash
-cp .env.example .env    # fill SECRET_KEY, ENCRYPTION_KEY, EUNOMIA_API_TOKEN
-docker compose up --build
-```
+cd backend
+uv sync
+uv run uvicorn app.main:app --reload --port 8001   # needs a local SurrealDB (see docker-compose.yml)
 
-Brings up `backend`, `worker`, `mcp` (`:8765`) and `frontend`.
+cd frontend
+bun install
+bun run dev
+```

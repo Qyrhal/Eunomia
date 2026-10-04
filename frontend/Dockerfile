@@ -3,10 +3,8 @@ WORKDIR /app
 COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile
 COPY . .
-ARG NEXT_PUBLIC_API_URL=http://localhost:8000
+ARG NEXT_PUBLIC_API_URL=http://localhost:8001
 ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
-ARG NEXT_PUBLIC_API_TOKEN=
-ENV NEXT_PUBLIC_API_TOKEN=$NEXT_PUBLIC_API_TOKEN
 RUN bun run build
 
 FROM oven/bun:1
