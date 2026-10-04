@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Fraunces, IBM_Plex_Sans, IBM_Plex_Mono } from "next/font/google";
 import "./globals.css";
+import "blobatar/motion.css";
 import ThemeProvider from "@/components/ThemeProvider";
 
 const fraunces = Fraunces({

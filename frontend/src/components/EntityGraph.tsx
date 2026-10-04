@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { forceCenter, forceCollide, forceLink, forceManyBody, forceSimulation, type SimulationNodeDatum } from "d3-force";
 import { X } from "lucide-react";
+import { Blobatar } from "@blobatar/react";
 import { entities, type EntityDetail, type EntityGraph as EntityGraphData, type EntityKind } from "@/lib/api";
 
 const WIDTH = 640;
@@ -152,6 +153,8 @@ export default function EntityGraph() {
           })}
           {visibleNodes.map((n) => {
             const isHovered = hovered === n.id;
+            const isSelected = selected?.id === n.id;
+            const r = isHovered || isSelected ? 12 : 10;
             return (
               <g
                 key={n.id}
@@ -161,13 +164,28 @@ export default function EntityGraph() {
                 onMouseEnter={() => setHovered(n.id)}
                 onMouseLeave={() => setHovered((h) => (h === n.id ? null : h))}
               >
-                <circle
-                  r={isHovered || selected?.id === n.id ? 12 : 10}
-                  fill={KIND_COLOR[n.kind]}
-                  stroke={isHovered ? "var(--signal)" : "none"}
-                  strokeWidth={isHovered ? 2 : 0}
-                  opacity={selected?.id === n.id || isHovered ? 1 : 0.85}
-                />
+                {n.kind === "person" ? (
+                  <>
+                    <circle
+                      r={r + 1}
+                      fill="var(--surface-raised)"
+                      stroke={isHovered ? "var(--signal)" : "none"}
+                      strokeWidth={isHovered ? 2 : 0}
+                      opacity={isSelected || isHovered ? 1 : 0.9}
+                    />
+                    <foreignObject x={-r} y={-r} width={r * 2} height={r * 2} style={{ overflow: "visible" }}>
+                      <Blobatar name={n.name || n.id} animate="hover" size={r * 2} background="circle" />
+                    </foreignObject>
+                  </>
+                ) : (
+                  <circle
+                    r={r}
+                    fill={KIND_COLOR[n.kind]}
+                    stroke={isHovered ? "var(--signal)" : "none"}
+                    strokeWidth={isHovered ? 2 : 0}
+                    opacity={isSelected || isHovered ? 1 : 0.85}
+                  />
+                )}
                 <text
                   x={0}
                   y={24}
@@ -186,11 +204,16 @@ export default function EntityGraph() {
         {selected && (
           <div className="ledger p-5 w-72 shrink-0 flex flex-col gap-4" style={{ maxHeight: HEIGHT, overflowY: "auto" }}>
             <div className="flex items-start justify-between gap-2">
-              <div>
-                <span className="eyebrow" style={{ color: KIND_COLOR[selected.kind] }}>
-                  {selected.kind}
-                </span>
-                <div className="text-[14.5px] font-medium mt-1">{selected.name}</div>
+              <div className="flex items-center gap-3">
+                {selected.kind === "person" && (
+                  <Blobatar name={selected.name || selected.id} animate="hover" size={36} background="circle" />
+                )}
+                <div>
+                  <span className="eyebrow" style={{ color: KIND_COLOR[selected.kind] }}>
+                    {selected.kind}
+                  </span>
+                  <div className="text-[14.5px] font-medium mt-1">{selected.name}</div>
+                </div>
               </div>
               <button onClick={() => setSelected(null)} aria-label="Close" style={{ color: "var(--ink-faint)" }}>
                 <X size={15} />
