@@ -10,13 +10,16 @@ import {
   type Simulation,
   type SimulationNodeDatum,
 } from "d3-force";
-import { X } from "lucide-react";
+import { Minus, Plus, RotateCcw, X } from "lucide-react";
 import { Blobatar } from "@blobatar/react";
 import { entities, type EntityDetail, type EntityGraph as EntityGraphData, type EntityKind } from "@/lib/api";
 
 const WIDTH = 640;
 const HEIGHT = 420;
 const DRAG_THRESHOLD = 4; // px of movement before a pointerdown counts as a drag, not a click
+const ZOOM_MIN = 0.5;
+const ZOOM_MAX = 2.5;
+const ZOOM_STEP = 0.2;
 
 const KIND_COLOR: Record<EntityKind, string> = {
   person: "var(--kind-person)",
@@ -42,11 +45,46 @@ export default function EntityGraph() {
   const [hovered, setHovered] = useState<string | null>(null);
   const [visibleKinds, setVisibleKinds] = useState<Set<EntityKind>>(new Set(ALL_KINDS));
   const [nodes, setNodes] = useState<LaidOutNode[]>([]);
+  const [view, setView] = useState({ zoom: 1, x: 0, y: 0 });
 
   const svgRef = useRef<SVGSVGElement | null>(null);
   const simRef = useRef<Simulation<LaidOutNode, undefined> | null>(null);
   const linksRef = useRef<LaidOutLink[]>([]);
   const draggingRef = useRef<{ id: string; moved: boolean } | null>(null);
+  const panRef = useRef<{ startX: number; startY: number; originX: number; originY: number } | null>(null);
+
+  function zoomBy(factor: number) {
+    setView((v) => ({ ...v, zoom: Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, v.zoom * factor)) }));
+  }
+
+  function resetView() {
+    setView({ zoom: 1, x: 0, y: 0 });
+  }
+
+  function onCanvasWheel(e: React.WheelEvent) {
+    e.preventDefault();
+    zoomBy(e.deltaY < 0 ? 1.1 : 0.9);
+  }
+
+  function onCanvasPointerDown(e: React.PointerEvent<SVGSVGElement>) {
+    if (e.target !== e.currentTarget) return; // a node/link handled its own pointerdown
+    (e.target as SVGSVGElement).setPointerCapture(e.pointerId);
+    panRef.current = { startX: e.clientX, startY: e.clientY, originX: view.x, originY: view.y };
+  }
+
+  function onCanvasPointerMove(e: React.PointerEvent<SVGSVGElement>) {
+    const pan = panRef.current;
+    if (!pan) return;
+    setView((v) => ({
+      ...v,
+      x: pan.originX + (e.clientX - pan.startX) / v.zoom,
+      y: pan.originY + (e.clientY - pan.startY) / v.zoom,
+    }));
+  }
+
+  function onCanvasPointerUp() {
+    panRef.current = null;
+  }
 
   function toggleKind(kind: EntityKind) {
     setVisibleKinds((prev) => {
@@ -106,6 +144,7 @@ export default function EntityGraph() {
   }
 
   function onNodePointerDown(e: React.PointerEvent, n: LaidOutNode) {
+    e.stopPropagation();
     e.currentTarget.setPointerCapture(e.pointerId);
     draggingRef.current = { id: n.id, moved: false };
     n.fx = n.x;
@@ -201,15 +240,23 @@ export default function EntityGraph() {
       </div>
 
       <div className="flex gap-4">
-        <svg
-          ref={svgRef}
-          viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
-          width="100%"
-          height={HEIGHT}
-          role="img"
-          aria-label="Entity relationship graph"
-          style={{ touchAction: "none" }}
-        >
+        <div className="relative" style={{ width: "100%" }}>
+          <svg
+            ref={svgRef}
+            viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
+            width="100%"
+            height={HEIGHT}
+            role="img"
+            aria-label="Entity relationship graph"
+            className="ledger"
+            style={{ touchAction: "none", userSelect: "none", WebkitUserSelect: "none", cursor: panRef.current ? "grabbing" : "default" }}
+            onWheel={onCanvasWheel}
+            onPointerDown={onCanvasPointerDown}
+            onPointerMove={onCanvasPointerMove}
+            onPointerUp={onCanvasPointerUp}
+            onPointerCancel={onCanvasPointerUp}
+          >
+          <g transform={`translate(${WIDTH / 2},${HEIGHT / 2}) scale(${view.zoom}) translate(${-WIDTH / 2 + view.x},${-HEIGHT / 2 + view.y})`}>
           {visibleLinks.map((l, i) => (
             <line
               key={i}
@@ -286,7 +333,21 @@ export default function EntityGraph() {
               </g>
             );
           })}
-        </svg>
+          </g>
+          </svg>
+
+          <div className="absolute bottom-3 right-3 flex gap-1">
+            <button type="button" className="pill" aria-label="Zoom in" onClick={() => zoomBy(1 + ZOOM_STEP)}>
+              <Plus size={13} />
+            </button>
+            <button type="button" className="pill" aria-label="Zoom out" onClick={() => zoomBy(1 - ZOOM_STEP)}>
+              <Minus size={13} />
+            </button>
+            <button type="button" className="pill" aria-label="Reset view" onClick={resetView}>
+              <RotateCcw size={13} />
+            </button>
+          </div>
+        </div>
 
         {selected && (
           <div className="ledger p-5 w-72 shrink-0 flex flex-col gap-4" style={{ maxHeight: HEIGHT, overflowY: "auto" }}>
