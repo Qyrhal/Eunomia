@@ -6,7 +6,7 @@ export default function StatRing({
   max,
   size = 96,
   strokeWidth = 8,
-  color = "var(--signal)",
+  color = "var(--felt)",
   trackColor = "var(--surface-raised)",
   valueLabel,
   label,
@@ -68,16 +68,13 @@ export default function StatRing({
           {valueLabel && (
             <span
               className="font-display"
-              style={{ color: "var(--ink)", fontWeight: 600, lineHeight: 1, fontSize: size * 0.22 }}
+              style={{ color: "var(--ink)", fontWeight: 700, lineHeight: 1, fontSize: size * 0.22 }}
             >
               {valueLabel}
             </span>
           )}
           {label && (
-            <span
-              className="font-mono"
-              style={{ color: "var(--ink-dim)", fontSize: Math.max(9, size * 0.075), marginTop: 4 }}
-            >
+            <span style={{ color: "var(--ink-dim)", fontSize: Math.max(9, size * 0.075), marginTop: 4 }}>
               {label}
             </span>
           )}

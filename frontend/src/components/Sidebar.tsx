@@ -3,15 +3,16 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LayoutDashboard, Mic, Plug, Settings, Wallet } from "lucide-react";
+import { LayoutDashboard, Mic, Settings, Wallet } from "lucide-react";
 import HourRing from "./HourRing";
+import SuitMark from "./SuitMark";
 import { sources, type SyncStatus } from "@/lib/api";
 
 const NAV = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard, sourceKey: null },
   { href: "/finance", label: "Finance", icon: Wallet, sourceKey: "up_bank" },
   { href: "/meetings", label: "Meetings", icon: Mic, sourceKey: "heypocket" },
-  { href: "/connectors", label: "Connectors", icon: Plug, sourceKey: null },
+  { href: "/connectors", label: "Connectors", icon: SuitMark, sourceKey: null },
   { href: "/settings", label: "Settings", icon: Settings, sourceKey: null },
 ];
 

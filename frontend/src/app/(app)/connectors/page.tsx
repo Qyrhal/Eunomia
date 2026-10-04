@@ -16,7 +16,7 @@ const CONNECTOR_META: Record<
     help: (
       <>
         Generate a token at{" "}
-        <a href="https://api.up.com.au" target="_blank" rel="noreferrer" className="underline" style={{ color: "var(--accent)" }}>
+        <a href="https://api.up.com.au" target="_blank" rel="noreferrer" className="underline" style={{ color: "var(--ink)" }}>
           api.up.com.au
         </a>
         .
@@ -38,7 +38,7 @@ const CONNECTOR_META: Record<
     help: (
       <>
         Points at a self-hosted{" "}
-        <a href="https://github.com/oomol-lab/open-connector" target="_blank" rel="noreferrer" className="underline" style={{ color: "var(--accent)" }}>
+        <a href="https://github.com/oomol-lab/open-connector" target="_blank" rel="noreferrer" className="underline" style={{ color: "var(--ink)" }}>
           Open Connector
         </a>{" "}
         gateway — its own runtime token, not an app-specific credential. Exposes any app it brokers as
@@ -120,12 +120,12 @@ export default function ConnectorsPage() {
             <div key={kind} className="ledger p-6 flex flex-col gap-4">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2.5">
-                  <div className="w-8 h-8 flex items-center justify-center" style={{ background: "var(--surface-raised)", color: "var(--ink-dim)" }}>
+                  <div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: "var(--surface-raised)", color: "var(--ink-dim)" }}>
                     {meta.icon}
                   </div>
                   <div className="text-[13.5px] font-medium">{meta.label}</div>
                 </div>
-                <span className="eyebrow" style={{ color: isDemo ? "var(--accent)" : connected ? "var(--good)" : "var(--ink-faint)" }}>
+                <span className="eyebrow" style={{ color: isDemo ? "var(--warning)" : connected ? "var(--good)" : "var(--ink-faint)" }}>
                   {isDemo ? "Demo data" : connected ? "Connected" : "Not connected"}
                 </span>
               </div>
@@ -160,10 +160,10 @@ export default function ConnectorsPage() {
 
               <div className="flex items-center gap-4 pt-1" style={{ borderTop: "1px solid var(--border)" }}>
                 <div className="flex items-center gap-2 pt-4">
-                  <button onClick={() => save(kind)} className="px-4 py-2 text-[13px] font-medium text-white" style={{ background: "var(--accent)" }}>
+                  <button onClick={() => save(kind)} className="px-4 py-2 text-[13px] font-medium rounded-xl" style={{ background: "var(--felt)", color: "var(--canvas)" }}>
                     {savedFlash[kind] ? "Saved" : "Save"}
                   </button>
-                  <button onClick={() => test(kind)} className="px-4 py-2 text-[13px]" style={{ color: "var(--accent)" }}>
+                  <button onClick={() => test(kind)} className="px-4 py-2 text-[13px]" style={{ color: "var(--ink)" }}>
                     Test connection
                   </button>
                   {testResult[kind] && (

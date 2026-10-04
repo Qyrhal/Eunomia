@@ -67,15 +67,15 @@ export default function RegisterPage() {
         <button
           type="submit"
           disabled={busy}
-          className="px-4 py-2.5 text-[13px] font-medium text-white disabled:opacity-50"
-          style={{ background: "var(--accent)" }}
+          className="px-4 py-2.5 text-[13px] font-medium rounded-xl disabled:opacity-50"
+          style={{ background: "var(--felt)", color: "var(--canvas)" }}
         >
           {busy ? "Creating account…" : "Create account"}
         </button>
 
         <p className="text-[12.5px]" style={{ color: "var(--ink-faint)" }}>
           Already have an account?{" "}
-          <Link href="/login" className="underline" style={{ color: "var(--accent)" }}>
+          <Link href="/login" className="underline" style={{ color: "var(--ink)" }}>
             Sign in
           </Link>
         </p>

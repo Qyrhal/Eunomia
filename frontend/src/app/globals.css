@@ -1,61 +1,45 @@
 @import "tailwindcss";
 
-/* ---- Eunomia: "mission control" ----
-   A single-operator instrument panel for a personal memory hub. Dark graphite
-   canvas, rounded dark cards, phosphor-teal reserved for the one thing that's
-   actually new or needs attention — never for general decoration. Light mode
-   remains available as an explicit opt-in via data-theme="light". */
+/* ---- Eunomia ----
+   A calm, confident instrument panel for a personal memory hub. Dark canvas,
+   soft rounded cards, one muted felt-green accent reserved for the thing
+   that's healthy, primary, or actually new — never for general decoration.
+   Single theme, no light mode. */
 
 :root {
   color-scheme: dark;
-  --canvas: #0a0c0f;
-  --surface: #14171c;
-  --surface-raised: #1c2026;
-  --ink: #eceff3;
-  --ink-dim: #8a93a3;
-  --ink-faint: #5b6472;
-  --border: rgba(236, 239, 243, 0.1);
-  --border-strong: rgba(236, 239, 243, 0.2);
-  --accent: #bb8640;
-  --signal: #5eead4;
-  --series-1: #8b5cf6;
-  --series-2: #60a5fa;
-  --series-3: #f472b6;
-  --series-4: #fbbf24;
-  --kind-person: #4fd1c5;
-  --kind-organisation: #60a5fa;
-  --kind-location: #86efac;
-  --good: #34d399;
-  --warning: #fbbf24;
-  --critical: #fb7185;
+  --canvas: #0b0d0f;
+  --surface: #16191d;
+  --surface-raised: #20242a;
+  --ink: #f2f4f6;
+  --ink-dim: #9aa3ad;
+  --ink-faint: #7a8390;
+  --border: rgba(242, 244, 246, 0.08);
+  --border-strong: rgba(242, 244, 246, 0.16);
+  --felt: #3fa873;
+  --good: #3fa873;
+  --warning: #c9a35c;
+  --critical: #c1685c;
 
-  --font-display: var(--font-fraunces);
-  --font-sans: var(--font-plex-sans);
+  /* a small, muted palette for entity kinds — distinct from each other and
+     from --felt, so the single accent still reads as "the" accent. */
+  --kind-person: #6f9bc9;
+  --kind-organisation: #a692c9;
+  --kind-location: #c98a5a;
+
+  /* chart/category series — muted, none competing with --felt. */
+  --series-1: #8b7fc9;
+  --series-2: #6f9bc9;
+  --series-3: #c98aa0;
+  --series-4: #c9a35c;
+
+  --font-display: var(--font-inter);
+  --font-sans: var(--font-inter);
   --font-mono: var(--font-plex-mono);
-}
 
-:root[data-theme="light"] {
-  color-scheme: light;
-  --canvas: #ecece4;
-  --surface: #fbfbf8;
-  --surface-raised: #f2f1e8;
-  --ink: #182524;
-  --ink-dim: #48605a;
-  --ink-faint: #82938c;
-  --border: rgba(24, 37, 36, 0.14);
-  --border-strong: rgba(24, 37, 36, 0.28);
-  --accent: #a8752f;
-  --signal: #0f9488;
-  --series-1: #7c3aed;
-  --series-2: #2563eb;
-  --series-3: #db2777;
-  --series-4: #a8752f;
-  --kind-person: #1f8a75;
-  --kind-organisation: #235c99;
-  --kind-location: #b03f28;
-  --good: #2f8f4e;
-  --warning: #a8752f;
-  --critical: #b03f28;
+  --radius-card: 18px;
+  --radius-field: 10px;
+  --radius-control: 12px;
 }
 
 * {
@@ -69,9 +53,9 @@ body {
 }
 
 .font-display {
-  font-family: var(--font-display), Georgia, serif;
-  font-feature-settings: "ss01" 1;
-  letter-spacing: -0.01em;
+  font-family: var(--font-display), system-ui, sans-serif;
+  font-weight: 700;
+  letter-spacing: -0.02em;
 }
 
 .font-mono {
@@ -82,19 +66,18 @@ body {
 .surface {
   background: var(--surface);
   border: 1px solid var(--border);
+  border-radius: var(--radius-card);
 }
 
 .ledger {
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-card);
 }
 
 .eyebrow {
-  font-family: var(--font-mono), ui-monospace, monospace;
-  font-size: 10.5px;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
+  font-size: 11.5px;
+  letter-spacing: 0.01em;
   color: var(--ink-faint);
 }
 
@@ -105,7 +88,7 @@ body {
 .field {
   background: var(--surface-raised);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-field);
   color: var(--ink);
   font-family: var(--font-sans), system-ui, sans-serif;
 }
@@ -128,7 +111,7 @@ body {
 }
 
 .pill[aria-pressed="true"] {
-  border-color: var(--signal);
+  border-color: var(--felt);
   color: var(--ink);
 }
 
@@ -143,11 +126,11 @@ body {
 }
 
 ::selection {
-  background: var(--accent);
-  color: var(--surface);
+  background: var(--felt);
+  color: var(--canvas);
 }
 
 :focus-visible {
-  outline: 2px solid var(--signal);
+  outline: 2px solid var(--felt);
   outline-offset: 2px;
 }

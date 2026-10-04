@@ -169,7 +169,7 @@ export default function EntityGraph() {
                     <circle
                       r={r + 1}
                       fill="var(--surface-raised)"
-                      stroke={isHovered ? "var(--signal)" : "none"}
+                      stroke={isHovered ? "var(--felt)" : "none"}
                       strokeWidth={isHovered ? 2 : 0}
                       opacity={isSelected || isHovered ? 1 : 0.9}
                     />
@@ -181,7 +181,7 @@ export default function EntityGraph() {
                   <circle
                     r={r}
                     fill={KIND_COLOR[n.kind]}
-                    stroke={isHovered ? "var(--signal)" : "none"}
+                    stroke={isHovered ? "var(--felt)" : "none"}
                     strokeWidth={isHovered ? 2 : 0}
                     opacity={isSelected || isHovered ? 1 : 0.85}
                   />
@@ -192,7 +192,7 @@ export default function EntityGraph() {
                   textAnchor="middle"
                   fontSize={10.5}
                   fontFamily="var(--font-mono), ui-monospace, monospace"
-                  fill={isHovered ? "var(--signal)" : "var(--ink-dim)"}
+                  fill={isHovered ? "var(--felt)" : "var(--ink-dim)"}
                 >
                   {n.name.length > 16 ? `${n.name.slice(0, 15)}…` : n.name}
                 </text>

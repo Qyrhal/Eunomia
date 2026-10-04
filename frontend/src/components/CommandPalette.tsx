@@ -54,7 +54,11 @@ export default function CommandPalette() {
       style={{ background: "rgba(0,0,0,0.35)" }}
       onClick={() => setOpen(false)}
     >
-      <div className="w-full max-w-md ledger overflow-hidden" onClick={(e) => e.stopPropagation()}>
+      <div
+        className="w-full max-w-md ledger overflow-hidden"
+        style={{ boxShadow: "0 24px 60px rgba(0,0,0,0.5)" }}
+        onClick={(e) => e.stopPropagation()}
+      >
         <input
           ref={inputRef}
           value={query}

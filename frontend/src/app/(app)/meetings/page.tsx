@@ -24,7 +24,7 @@ export default function MeetingsPage() {
           <p className="text-[13.5px] mb-5" style={{ color: "var(--ink-dim)" }}>
             PocketAI isn&apos;t connected — nothing to transcribe yet.
           </p>
-          <Link href="/connectors" className="px-4 py-2 text-[13px] font-medium text-white inline-block" style={{ background: "var(--accent)" }}>
+          <Link href="/connectors" className="px-4 py-2 text-[13px] font-medium rounded-xl inline-block" style={{ background: "var(--felt)", color: "var(--canvas)" }}>
             Connect PocketAI
           </Link>
         </div>

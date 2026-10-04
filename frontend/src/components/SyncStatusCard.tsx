@@ -49,7 +49,7 @@ export default function SyncStatusCard({ source, onSync, syncing }: { source: So
         onClick={onSync}
         disabled={syncing}
         className="self-start field px-3 py-1.5 text-[12px] disabled:opacity-40"
-        style={{ color: "var(--accent)" }}
+        style={{ color: "var(--ink)" }}
       >
         {syncing ? "Syncing…" : "Sync now"}
       </button>

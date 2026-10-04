@@ -7,6 +7,7 @@ import { entities, sources, type SourceRow } from "@/lib/api";
 import SyncStatusCard from "@/components/SyncStatusCard";
 import EntityGraph from "@/components/EntityGraph";
 import StatRing from "@/components/StatRing";
+import SuitMark from "@/components/SuitMark";
 
 const HEALTH_CAP = 5;
 
@@ -65,7 +66,7 @@ export default function DashboardPage() {
           strokeWidth={12}
           value={healthy}
           max={total}
-          color="var(--signal)"
+          color="var(--felt)"
           valueLabel={rows ? `${healthy}/${total}` : "–"}
           label="sources healthy"
           ariaLabel={`${healthy} of ${total} sources syncing cleanly`}
@@ -127,7 +128,7 @@ export default function DashboardPage() {
           <ul className="ledger overflow-hidden hairline-rows">
             {disconnected.map((s) => (
               <li key={s.key} className="px-4 py-3.5 flex items-center gap-4">
-                <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: "var(--ink-faint)" }} aria-hidden />
+                <SuitMark size={13} color="var(--ink-faint)" />
                 <div className="flex-1 min-w-0">
                   <div className="text-[13.5px] font-medium">{s.label}</div>
                   <div className="text-[12px] mt-0.5" style={{ color: "var(--ink-dim)" }}>

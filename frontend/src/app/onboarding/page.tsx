@@ -124,8 +124,8 @@ export default function OnboardingPage() {
             </p>
             <button
               onClick={() => setStep(1)}
-              className="self-start px-4 py-2.5 text-[13px] font-medium text-white"
-              style={{ background: "var(--accent)" }}
+              className="self-start px-4 py-2.5 text-[13px] font-medium rounded-xl"
+              style={{ background: "var(--felt)", color: "var(--canvas)" }}
             >
               Let&apos;s go
             </button>
@@ -148,8 +148,8 @@ export default function OnboardingPage() {
                   }}
                   className="flex-1 field px-3 py-2 text-[12.5px] flex items-center justify-center gap-1.5"
                   style={{
-                    borderColor: kind === k ? "var(--accent)" : "var(--border)",
-                    color: kind === k ? "var(--accent)" : "var(--ink-dim)",
+                    borderColor: kind === k ? "var(--felt)" : "var(--border)",
+                    color: kind === k ? "var(--felt)" : "var(--ink-dim)",
                   }}
                 >
                   {CONNECTOR_META[k].icon}
@@ -183,8 +183,8 @@ export default function OnboardingPage() {
               <button
                 onClick={saveConnector}
                 disabled={busy}
-                className="px-4 py-2.5 text-[13px] font-medium text-white disabled:opacity-50"
-                style={{ background: "var(--accent)" }}
+                className="px-4 py-2.5 text-[13px] font-medium rounded-xl disabled:opacity-50"
+                style={{ background: "var(--felt)", color: "var(--canvas)" }}
               >
                 {connectSaved ? "Saved" : busy ? "Saving…" : "Save & continue"}
               </button>
@@ -226,8 +226,8 @@ export default function OnboardingPage() {
               <button
                 onClick={saveApiKey}
                 disabled={busy}
-                className="px-4 py-2.5 text-[13px] font-medium text-white disabled:opacity-50"
-                style={{ background: "var(--accent)" }}
+                className="px-4 py-2.5 text-[13px] font-medium rounded-xl disabled:opacity-50"
+                style={{ background: "var(--felt)", color: "var(--canvas)" }}
               >
                 {busy ? "Finishing…" : "Finish"}
               </button>

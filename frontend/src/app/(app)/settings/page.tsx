@@ -35,7 +35,7 @@ export default function SettingsPage() {
       </div>
 
       <Link href="/connectors" className="ledger p-5 flex items-center gap-3.5 hover:opacity-90">
-        <div className="w-8 h-8 flex items-center justify-center" style={{ background: "var(--surface-raised)", color: "var(--ink-dim)" }}>
+        <div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: "var(--surface-raised)", color: "var(--ink-dim)" }}>
           <Plug size={16} />
         </div>
         <div className="flex-1">
@@ -44,7 +44,7 @@ export default function SettingsPage() {
             Up Bank, PocketAI, Open Connector — credentials and connection status
           </div>
         </div>
-        <span className="text-[12px]" style={{ color: "var(--accent)" }}>
+        <span className="text-[12px]" style={{ color: "var(--ink)" }}>
           Manage →
         </span>
       </Link>
@@ -66,32 +66,7 @@ export default function SettingsPage() {
         </label>
       </section>
 
-      <section className="ledger p-6 flex flex-col gap-4">
-        <div className="eyebrow">Theme</div>
-        <label className="text-[13px] flex flex-col gap-1.5" style={{ color: "var(--ink-dim)" }}>
-          Mode
-          <select
-            className="field px-3 py-2.5 text-[13.5px]"
-            value={settings.theme.mode || "system"}
-            onChange={(e) => setSettings({ ...settings, theme: { ...settings.theme, mode: e.target.value as "light" | "dark" } })}
-          >
-            <option value="system">System</option>
-            <option value="light">Light</option>
-            <option value="dark">Dark</option>
-          </select>
-        </label>
-        <label className="text-[13px] flex flex-col gap-1.5" style={{ color: "var(--ink-dim)" }}>
-          Accent color
-          <input
-            type="color"
-            className="w-16 h-9 field p-1"
-            value={settings.theme.accent || "#a8752f"}
-            onChange={(e) => setSettings({ ...settings, theme: { ...settings.theme, accent: e.target.value } })}
-          />
-        </label>
-      </section>
-
-      <button onClick={saveSettings} className="self-start px-5 py-2.5 text-[13px] font-medium text-white" style={{ background: "var(--accent)" }}>
+      <button onClick={saveSettings} className="self-start px-5 py-2.5 text-[13px] font-medium rounded-xl" style={{ background: "var(--felt)", color: "var(--canvas)" }}>
         {saved ? "Saved" : "Save settings"}
       </button>
     </div>
