@@ -1,13 +1,22 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { forceCenter, forceCollide, forceLink, forceManyBody, forceSimulation, type SimulationNodeDatum } from "d3-force";
+import { useEffect, useRef, useState } from "react";
+import {
+  forceCenter,
+  forceCollide,
+  forceLink,
+  forceManyBody,
+  forceSimulation,
+  type Simulation,
+  type SimulationNodeDatum,
+} from "d3-force";
 import { X } from "lucide-react";
 import { Blobatar } from "@blobatar/react";
 import { entities, type EntityDetail, type EntityGraph as EntityGraphData, type EntityKind } from "@/lib/api";
 
 const WIDTH = 640;
 const HEIGHT = 420;
+const DRAG_THRESHOLD = 4; // px of movement before a pointerdown counts as a drag, not a click
 
 const KIND_COLOR: Record<EntityKind, string> = {
   person: "var(--kind-person)",
@@ -24,37 +33,7 @@ const KIND_LABEL: Record<EntityKind, string> = {
 const ALL_KINDS: EntityKind[] = ["person", "organisation", "location"];
 
 type LaidOutNode = SimulationNodeDatum & { id: string; kind: EntityKind; name: string };
-type LaidOutLink = { source: string; target: string; label: string };
-
-function layout(graph: EntityGraphData): { nodes: LaidOutNode[]; links: LaidOutLink[] } {
-  const nodes: LaidOutNode[] = graph.nodes.map((n) => ({ ...n }));
-  const links: LaidOutLink[] = graph.edges.map((e) => ({ source: e.source, target: e.target, label: e.label }));
-
-  const sim = forceSimulation(nodes)
-    .force(
-      "link",
-      forceLink(links as unknown as { source: string; target: string }[])
-        .id((d) => (d as LaidOutNode).id)
-        .distance(90)
-    )
-    .force("charge", forceManyBody().strength(-140))
-    .force("center", forceCenter(WIDTH / 2, HEIGHT / 2))
-    .force("collide", forceCollide(26))
-    .stop();
-
-  for (let i = 0; i < 300; i++) sim.tick();
-
-  // forceLink mutates each link's source/target from an id string into the
-  // resolved node object once the simulation runs — normalize back to plain
-  // id strings so downstream Set.has(id) lookups keep working.
-  const resolvedLinks: LaidOutLink[] = links.map((l) => ({
-    source: typeof l.source === "string" ? l.source : (l.source as unknown as LaidOutNode).id,
-    target: typeof l.target === "string" ? l.target : (l.target as unknown as LaidOutNode).id,
-    label: l.label,
-  }));
-
-  return { nodes, links: resolvedLinks };
-}
+type LaidOutLink = { source: LaidOutNode; target: LaidOutNode; label: string };
 
 export default function EntityGraph() {
   const [graph, setGraph] = useState<EntityGraphData | null>(null);
@@ -62,6 +41,12 @@ export default function EntityGraph() {
   const [selected, setSelected] = useState<EntityDetail | null>(null);
   const [hovered, setHovered] = useState<string | null>(null);
   const [visibleKinds, setVisibleKinds] = useState<Set<EntityKind>>(new Set(ALL_KINDS));
+  const [nodes, setNodes] = useState<LaidOutNode[]>([]);
+
+  const svgRef = useRef<SVGSVGElement | null>(null);
+  const simRef = useRef<Simulation<LaidOutNode, undefined> | null>(null);
+  const linksRef = useRef<LaidOutLink[]>([]);
+  const draggingRef = useRef<{ id: string; moved: boolean } | null>(null);
 
   function toggleKind(kind: EntityKind) {
     setVisibleKinds((prev) => {
@@ -79,7 +64,76 @@ export default function EntityGraph() {
       .catch((e) => setError(e instanceof Error ? e.message : "Could not load the entity graph."));
   }, []);
 
-  const laidOut = useMemo(() => (graph ? layout(graph) : null), [graph]);
+  // Live force simulation: runs continuously (not a one-shot layout) so
+  // dragging a node and releasing it lets physics settle it back in.
+  useEffect(() => {
+    if (!graph) return;
+
+    const simNodes: LaidOutNode[] = graph.nodes.map((n) => ({ ...n }));
+    const byId = new Map(simNodes.map((n) => [n.id, n]));
+    const links: LaidOutLink[] = graph.edges
+      .map((e) => {
+        const source = byId.get(e.source);
+        const target = byId.get(e.target);
+        return source && target ? { source, target, label: e.label } : null;
+      })
+      .filter((l): l is LaidOutLink => l !== null);
+    linksRef.current = links;
+
+    const sim = forceSimulation(simNodes)
+      .force("link", forceLink(links).distance(90).strength(0.5))
+      .force("charge", forceManyBody().strength(-160))
+      .force("center", forceCenter(WIDTH / 2, HEIGHT / 2))
+      .force("collide", forceCollide(26))
+      .on("tick", () => setNodes([...sim.nodes()]));
+
+    simRef.current = sim;
+    return () => {
+      sim.stop();
+      simRef.current = null;
+    };
+  }, [graph]);
+
+  function svgPoint(e: React.PointerEvent): { x: number; y: number } {
+    const svg = svgRef.current;
+    const ctm = svg?.getScreenCTM();
+    if (!svg || !ctm) return { x: 0, y: 0 };
+    const pt = svg.createSVGPoint();
+    pt.x = e.clientX;
+    pt.y = e.clientY;
+    const p = pt.matrixTransform(ctm.inverse());
+    return { x: p.x, y: p.y };
+  }
+
+  function onNodePointerDown(e: React.PointerEvent, n: LaidOutNode) {
+    e.currentTarget.setPointerCapture(e.pointerId);
+    draggingRef.current = { id: n.id, moved: false };
+    n.fx = n.x;
+    n.fy = n.y;
+    simRef.current?.alphaTarget(0.3).restart();
+  }
+
+  function onNodePointerMove(e: React.PointerEvent, n: LaidOutNode) {
+    const drag = draggingRef.current;
+    if (!drag || drag.id !== n.id) return;
+    const { x, y } = svgPoint(e);
+    if (!drag.moved && (Math.abs(x - (n.fx ?? x)) > DRAG_THRESHOLD || Math.abs(y - (n.fy ?? y)) > DRAG_THRESHOLD)) {
+      drag.moved = true;
+    }
+    n.fx = x;
+    n.fy = y;
+    setNodes((prev) => [...prev]);
+  }
+
+  function onNodePointerUp(e: React.PointerEvent, n: LaidOutNode) {
+    const drag = draggingRef.current;
+    if (!drag || drag.id !== n.id) return;
+    n.fx = null;
+    n.fy = null;
+    simRef.current?.alphaTarget(0);
+    draggingRef.current = null;
+    if (!drag.moved) selectNode(n.id);
+  }
 
   async function selectNode(id: string) {
     try {
@@ -113,63 +167,74 @@ export default function EntityGraph() {
     );
   }
 
-  const byId = new Map(laidOut!.nodes.map((n) => [n.id, n]));
-  const visibleNodes = laidOut!.nodes.filter((n) => visibleKinds.has(n.kind));
+  const visibleNodes = nodes.filter((n) => visibleKinds.has(n.kind));
   const visibleIds = new Set(visibleNodes.map((n) => n.id));
-  const visibleLinks = laidOut!.links.filter((l) => visibleIds.has(l.source) && visibleIds.has(l.target));
+  const visibleLinks = linksRef.current.filter((l) => visibleIds.has(l.source.id) && visibleIds.has(l.target.id));
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="flex gap-2">
-        {ALL_KINDS.map((kind) => {
-          const active = visibleKinds.has(kind);
-          return (
-            <button
-              key={kind}
-              type="button"
-              className="pill"
-              aria-pressed={active}
-              onClick={() => toggleKind(kind)}
-            >
-              <span
-                className="w-2 h-2 rounded-full shrink-0"
-                style={{ background: KIND_COLOR[kind], opacity: active ? 1 : 0.4 }}
-                aria-hidden
-              />
-              {KIND_LABEL[kind]}
-            </button>
-          );
-        })}
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex gap-2">
+          {ALL_KINDS.map((kind) => {
+            const active = visibleKinds.has(kind);
+            return (
+              <button
+                key={kind}
+                type="button"
+                className="pill"
+                aria-pressed={active}
+                onClick={() => toggleKind(kind)}
+              >
+                <span
+                  className="w-2 h-2 rounded-full shrink-0"
+                  style={{ background: KIND_COLOR[kind], opacity: active ? 1 : 0.4 }}
+                  aria-hidden
+                />
+                {KIND_LABEL[kind]}
+              </button>
+            );
+          })}
+        </div>
+        <span className="text-[11px]" style={{ color: "var(--ink-faint)" }}>
+          Drag to rearrange
+        </span>
       </div>
 
       <div className="flex gap-4">
-        <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} width="100%" height={HEIGHT} role="img" aria-label="Entity relationship graph">
-          {visibleLinks.map((l, i) => {
-            const a = byId.get(l.source);
-            const b = byId.get(l.target);
-            if (!a || !b) return null;
-            return (
-              <line
-                key={i}
-                x1={a.x}
-                y1={a.y}
-                x2={b.x}
-                y2={b.y}
-                stroke="var(--border-strong)"
-                strokeWidth={1}
-              />
-            );
-          })}
+        <svg
+          ref={svgRef}
+          viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
+          width="100%"
+          height={HEIGHT}
+          role="img"
+          aria-label="Entity relationship graph"
+          style={{ touchAction: "none" }}
+        >
+          {visibleLinks.map((l, i) => (
+            <line
+              key={i}
+              x1={l.source.x}
+              y1={l.source.y}
+              x2={l.target.x}
+              y2={l.target.y}
+              stroke="var(--border-strong)"
+              strokeWidth={1}
+            />
+          ))}
           {visibleNodes.map((n) => {
             const isHovered = hovered === n.id;
             const isSelected = selected?.id === n.id;
-            const r = isHovered || isSelected ? 12 : 10;
+            const isDragging = draggingRef.current?.id === n.id;
+            const r = isHovered || isSelected || isDragging ? 12 : 10;
             return (
               <g
                 key={n.id}
                 transform={`translate(${n.x},${n.y})`}
-                style={{ cursor: "pointer" }}
-                onClick={() => selectNode(n.id)}
+                style={{ cursor: isDragging ? "grabbing" : "grab", touchAction: "none" }}
+                onPointerDown={(e) => onNodePointerDown(e, n)}
+                onPointerMove={(e) => onNodePointerMove(e, n)}
+                onPointerUp={(e) => onNodePointerUp(e, n)}
+                onPointerCancel={(e) => onNodePointerUp(e, n)}
                 onMouseEnter={() => setHovered(n.id)}
                 onMouseLeave={() => setHovered((h) => (h === n.id ? null : h))}
               >
@@ -178,9 +243,9 @@ export default function EntityGraph() {
                     <circle
                       r={r + 1}
                       fill="var(--surface-raised)"
-                      stroke={isHovered ? "var(--felt)" : "none"}
-                      strokeWidth={isHovered ? 2 : 0}
-                      opacity={isSelected || isHovered ? 1 : 0.9}
+                      stroke={isHovered || isDragging ? "var(--felt)" : "none"}
+                      strokeWidth={isHovered || isDragging ? 2 : 0}
+                      opacity={isSelected || isHovered || isDragging ? 1 : 0.9}
                     />
                     <foreignObject x={-r} y={-r} width={r * 2} height={r * 2} style={{ overflow: "visible" }}>
                       <Blobatar name={n.name || n.id} animate="hover" size={r * 2} background="circle" />
@@ -194,18 +259,18 @@ export default function EntityGraph() {
                     height={r * 1.64}
                     rx={4}
                     fill={KIND_COLOR[n.kind]}
-                    stroke={isHovered ? "var(--felt)" : "none"}
-                    strokeWidth={isHovered ? 2 : 0}
-                    opacity={isSelected || isHovered ? 1 : 0.85}
+                    stroke={isHovered || isDragging ? "var(--felt)" : "none"}
+                    strokeWidth={isHovered || isDragging ? 2 : 0}
+                    opacity={isSelected || isHovered || isDragging ? 1 : 0.85}
                   />
                 ) : (
                   <path
                     d={`M0,${-r * 1.15} C${r * 0.75},${-r * 1.15} ${r * 0.95},${-r * 0.2} 0,${r * 1.05}
                         C${-r * 0.95},${-r * 0.2} ${-r * 0.75},${-r * 1.15} 0,${-r * 1.15} Z`}
                     fill={KIND_COLOR[n.kind]}
-                    stroke={isHovered ? "var(--felt)" : "none"}
-                    strokeWidth={isHovered ? 2 : 0}
-                    opacity={isSelected || isHovered ? 1 : 0.85}
+                    stroke={isHovered || isDragging ? "var(--felt)" : "none"}
+                    strokeWidth={isHovered || isDragging ? 2 : 0}
+                    opacity={isSelected || isHovered || isDragging ? 1 : 0.85}
                   />
                 )}
                 <text
@@ -214,7 +279,7 @@ export default function EntityGraph() {
                   textAnchor="middle"
                   fontSize={10.5}
                   fontFamily="var(--font-mono), ui-monospace, monospace"
-                  fill={isHovered ? "var(--felt)" : "var(--ink-dim)"}
+                  fill={isHovered || isDragging ? "var(--felt)" : "var(--ink-dim)"}
                 >
                   {n.name.length > 16 ? `${n.name.slice(0, 15)}…` : n.name}
                 </text>

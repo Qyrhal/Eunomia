@@ -3,14 +3,13 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { LayoutDashboard, LogOut, Settings } from "lucide-react";
+import { LayoutDashboard, LogOut, Plug, Settings } from "lucide-react";
 import HourRing from "./HourRing";
-import SuitMark from "./SuitMark";
 import { auth, sources, type Me, type SourceRow } from "@/lib/api";
 
 const STATIC_NAV = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/connectors", label: "Connectors", icon: SuitMark },
+  { href: "/connectors", label: "Connectors", icon: Plug },
   { href: "/settings", label: "Settings", icon: Settings },
 ];
 
@@ -104,7 +103,7 @@ export default function Sidebar() {
                   background: active ? "var(--surface-raised)" : "transparent",
                 }}
               >
-                <SuitMark size={13} />
+                <Plug size={13} />
                 <span className="flex-1 truncate">{s.label}</span>
                 <span
                   className="w-1.5 h-1.5 rounded-full shrink-0"

@@ -2,8 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { LayoutDashboard, Settings } from "lucide-react";
-import SuitMark from "./SuitMark";
+import { LayoutDashboard, Plug, Settings } from "lucide-react";
 import { sources, type SourceRow } from "@/lib/api";
 
 type IconType = React.ComponentType<{ size?: number; color?: string; strokeWidth?: number }>;
@@ -11,7 +10,7 @@ type Item = { label: string; icon: IconType; go: () => void };
 
 const STATIC_ITEMS: { label: string; href: string; icon: IconType }[] = [
   { label: "Dashboard", href: "/", icon: LayoutDashboard },
-  { label: "Connectors", href: "/connectors", icon: SuitMark },
+  { label: "Connectors", href: "/connectors", icon: Plug },
   { label: "Settings", href: "/settings", icon: Settings },
 ];
 
@@ -51,7 +50,7 @@ export default function CommandPalette() {
 
   const connectorItems: Item[] = rows
     .filter((r) => r.connected)
-    .map((r) => ({ label: r.label, icon: SuitMark, go: () => router.push(`/connectors/${r.key}`) }));
+    .map((r) => ({ label: r.label, icon: Plug, go: () => router.push(`/connectors/${r.key}`) }));
   const staticItems: Item[] = STATIC_ITEMS.map((s) => ({ label: s.label, icon: s.icon, go: () => router.push(s.href) }));
 
   const items = [...staticItems, ...connectorItems].filter((item) => item.label.toLowerCase().includes(query.toLowerCase()));

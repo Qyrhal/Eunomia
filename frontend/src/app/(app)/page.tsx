@@ -2,12 +2,11 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { ArrowRight } from "lucide-react";
+import { ArrowRight, Plug } from "lucide-react";
 import { entities, sources, type SourceRow } from "@/lib/api";
 import SyncStatusCard from "@/components/SyncStatusCard";
 import EntityGraph from "@/components/EntityGraph";
 import StatRing from "@/components/StatRing";
-import SuitMark from "@/components/SuitMark";
 
 function relativeTime(iso: string | null): string {
   if (!iso) return "never synced";
@@ -113,7 +112,7 @@ export default function DashboardPage() {
               <div key={s.key} className="ledger p-5 flex flex-col gap-4">
                 <div className="flex items-center gap-2.5">
                   <div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: "var(--surface-raised)", color: "var(--ink-dim)" }}>
-                    <SuitMark size={14} />
+                    <Plug size={14} />
                   </div>
                   <div className="text-[13.5px] font-medium">{s.label}</div>
                 </div>
