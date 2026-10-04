@@ -13,7 +13,7 @@ class ExampleSource(Source):
     record_types = ["example.note"]
     auth_kind = "token"
 
-    async def sync(self, mode, cursor=None) -> SyncResult:
+    async def sync(self, owner, mode, cursor=None) -> SyncResult:
         # A real source hits its API here, using `cursor` for delta pulls.
         return SyncResult(records=[], cursor=cursor)
 
@@ -44,7 +44,7 @@ class ExampleSource(Source):
         ]
 
 
-async def _ping() -> dict:
+async def _ping(owner) -> dict:
     return {"ok": True, "source": SOURCE.key}
 
 

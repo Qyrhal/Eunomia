@@ -12,31 +12,44 @@ from surrealdb import AsyncSurreal
 from app.config import settings
 
 SCHEMA_STATEMENTS = [
-    # singleton app settings (id = app_settings:singleton)
+    # accounts
+    "DEFINE TABLE IF NOT EXISTS user SCHEMAFULL;",
+    "DEFINE FIELD IF NOT EXISTS email ON user TYPE string;",
+    "DEFINE FIELD IF NOT EXISTS password_hash ON user TYPE string;",
+    "DEFINE FIELD IF NOT EXISTS api_token_hash ON user TYPE option<string>;",
+    "DEFINE FIELD IF NOT EXISTS onboarded_at ON user TYPE option<datetime>;",
+    "DEFINE FIELD IF NOT EXISTS created_at ON user TYPE datetime DEFAULT time::now();",
+    "DEFINE INDEX IF NOT EXISTS user_email_unique ON user FIELDS email UNIQUE;",
+    # per-user app settings (id = app_settings:⟨user_id⟩, one row per user)
     "DEFINE TABLE IF NOT EXISTS app_settings SCHEMAFULL;",
+    "DEFINE FIELD IF NOT EXISTS owner ON app_settings TYPE record<user>;",
     'DEFINE FIELD IF NOT EXISTS embedding_model ON app_settings TYPE string DEFAULT "text-embedding-3-small";',
     "DEFINE FIELD IF NOT EXISTS sync_intervals ON app_settings FLEXIBLE TYPE object DEFAULT {};",
     "DEFINE FIELD IF NOT EXISTS theme ON app_settings FLEXIBLE TYPE object DEFAULT {};",
     "DEFINE FIELD IF NOT EXISTS updated_at ON app_settings TYPE datetime DEFAULT time::now();",
-    # connector credentials
+    "DEFINE INDEX IF NOT EXISTS app_settings_owner_unique ON app_settings FIELDS owner UNIQUE;",
+    # connector credentials (owned, not global)
     "DEFINE TABLE IF NOT EXISTS connector SCHEMAFULL;",
+    "DEFINE FIELD IF NOT EXISTS owner ON connector TYPE record<user>;",
     "DEFINE FIELD IF NOT EXISTS kind ON connector TYPE string "
     'ASSERT $value IN ["up_bank","pocketai","open_connector","demo"];',
     "DEFINE FIELD IF NOT EXISTS enabled ON connector TYPE bool DEFAULT false;",
     "DEFINE FIELD IF NOT EXISTS config ON connector FLEXIBLE TYPE object DEFAULT {};",
     'DEFINE FIELD IF NOT EXISTS credentials_encrypted ON connector TYPE string DEFAULT "";',
     "DEFINE FIELD IF NOT EXISTS updated_at ON connector TYPE datetime DEFAULT time::now();",
-    "DEFINE INDEX IF NOT EXISTS connector_kind_unique ON connector FIELDS kind UNIQUE;",
-    # sync health -- the "what's next / what's not" data source
+    "DEFINE INDEX IF NOT EXISTS connector_owner_kind_unique ON connector FIELDS owner, kind UNIQUE;",
+    # sync health -- the "what's next / what's not" data source (owned)
     "DEFINE TABLE IF NOT EXISTS sync_status SCHEMAFULL;",
+    "DEFINE FIELD IF NOT EXISTS owner ON sync_status TYPE record<user>;",
     'DEFINE FIELD IF NOT EXISTS cursor ON sync_status TYPE string DEFAULT "";',
     "DEFINE FIELD IF NOT EXISTS last_run ON sync_status TYPE option<datetime>;",
     "DEFINE FIELD IF NOT EXISTS last_ok ON sync_status TYPE option<datetime>;",
     'DEFINE FIELD IF NOT EXISTS last_error ON sync_status TYPE string DEFAULT "";',
     "DEFINE FIELD IF NOT EXISTS consecutive_failures ON sync_status TYPE int DEFAULT 0;",
     "DEFINE FIELD IF NOT EXISTS last_report ON sync_status FLEXIBLE TYPE object DEFAULT {};",
-    # canonical record store
+    # canonical record store (owned)
     "DEFINE TABLE IF NOT EXISTS cache_record SCHEMAFULL;",
+    "DEFINE FIELD IF NOT EXISTS owner ON cache_record TYPE record<user>;",
     "DEFINE FIELD IF NOT EXISTS source ON cache_record TYPE string;",
     "DEFINE FIELD IF NOT EXISTS type ON cache_record TYPE string;",
     "DEFINE FIELD IF NOT EXISTS external_id ON cache_record TYPE string;",

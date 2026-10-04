@@ -36,3 +36,13 @@ async def surreal_db():
     finally:
         db_module._db = previous
         await conn.close()
+
+
+@pytest_asyncio.fixture
+async def owner(surreal_db):
+    """A `user` row's RecordID -- every per-user table now requires one."""
+    rows = await surreal_db.query(
+        "CREATE user SET email = $email, password_hash = 'x' RETURN AFTER",
+        {"email": "owner@example.com"},
+    )
+    return rows[0]["id"]

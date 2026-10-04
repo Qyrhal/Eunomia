@@ -38,45 +38,48 @@ def all() -> list[Source]:
     return list(_REGISTRY.values())
 
 
-async def connector_for(src: Source) -> dict | None:
-    """The connector row that holds this source's credentials."""
+async def connector_for(owner, src: Source) -> dict | None:
+    """The connector row that holds this source's credentials, scoped to `owner`."""
     from connectors.service import get_connector
 
-    return await get_connector(src.provider_key)
+    return await get_connector(owner, src.provider_key)
 
 
-async def credentials_for(src: Source) -> dict:
+async def credentials_for(owner, src: Source) -> dict:
     import json
 
     from connectors.crypto import decrypt
 
-    conn = await connector_for(src)
+    conn = await connector_for(owner, src)
     if not conn:
         return {}
     raw = decrypt(conn.get("credentials_encrypted", ""))
     return json.loads(raw) if raw else {}
 
 
-async def enabled() -> list[Source]:
+async def enabled(owner) -> list[Source]:
     from app.db import db as get_connection
 
     conn = get_connection()
-    rows = await conn.query("SELECT kind, config FROM connector WHERE enabled = true")
+    rows = await conn.query(
+        "SELECT kind, config FROM connector WHERE owner = $owner AND enabled = true", {"owner": owner}
+    )
     # filtered in Python, not the DB -- a missing "demo" key and an explicit
     # false both need to count as "not demo mode".
     on = {r["kind"] for r in rows if not (r.get("config") or {}).get("demo")}
     return [s for s in _REGISTRY.values() if s.provider_key in on]
 
 
-async def run_sync(key: str, mode: str = "poll", cursor: str | None = None):
-    """Sync one source through the ingest pipeline. Returns (IngestReport, cursor)."""
+async def run_sync(owner, key: str, mode: str = "poll", cursor: str | None = None):
+    """Sync one source through the ingest pipeline, scoped to `owner`.
+    Returns (IngestReport, cursor)."""
     from cache.ingest import ingest
 
     src = get(key)
     if src is None:
         raise KeyError(f"no source {key!r}")
-    result = await src.sync(mode, cursor)
-    report = await ingest(key, result.records, src.map)
+    result = await src.sync(owner, mode, cursor)
+    report = await ingest(owner, key, result.records, src.map)
     return report, result.cursor
 
 

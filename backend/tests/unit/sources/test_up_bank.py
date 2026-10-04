@@ -69,13 +69,13 @@ def test_map_unknown_type_skipped():
 
 
 @respx.mock
-async def test_sync_pulls_transactions_accounts_categories(surreal_db, monkeypatch):
+async def test_sync_pulls_transactions_accounts_categories(surreal_db, owner, monkeypatch):
     monkeypatch.setattr(settings, "EMBEDDINGS_BACKEND", "stub")
 
     conn = surreal_db
     await conn.query(
-        "CREATE connector SET kind = 'up_bank', enabled = true, credentials_encrypted = $enc",
-        {"enc": encrypt(json.dumps({"personal_access_token": "up:yeah:SECRETPAT"}))},
+        "CREATE connector SET owner = $owner, kind = 'up_bank', enabled = true, credentials_encrypted = $enc",
+        {"owner": owner, "enc": encrypt(json.dumps({"personal_access_token": "up:yeah:SECRETPAT"}))},
     )
 
     respx.get("https://api.up.com.au/api/v1/transactions").mock(
@@ -87,7 +87,7 @@ async def test_sync_pulls_transactions_accounts_categories(surreal_db, monkeypat
     )
 
     src = UpBankSource()
-    result = await src.sync("poll")
+    result = await src.sync(owner, "poll")
 
     kinds = {r["type"] for r in result.records}
     assert kinds == {"transactions", "accounts", "categories"}

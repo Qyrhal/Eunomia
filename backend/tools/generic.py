@@ -35,7 +35,7 @@ def _hit(rec) -> dict:
     }
 
 
-async def _full(rec) -> dict:
+async def _full(owner, rec) -> dict:
     return {
         "id": rec.id,
         "source": rec.source,
@@ -46,39 +46,39 @@ async def _full(rec) -> dict:
         "occurred_at": rec.occurred_at.isoformat() if rec.occurred_at else None,
         "url": rec.url or None,
         "payload": rec.payload,
-        "links": await cs.links(rec.id),
+        "links": await cs.links(owner, rec.id),
     }
 
 
 @safe
-async def search(query, sources=None, types=None, since=None, until=None, mode="hybrid", limit=20):
+async def search(owner, query, sources=None, types=None, since=None, until=None, mode="hybrid", limit=20):
     rows = await cs.search(
-        query, sources=sources, types=types, since=since, until=until,
+        owner, query, sources=sources, types=types, since=since, until=until,
         mode=mode, limit=min(int(limit), 100),
     )
     return {"results": [_hit(r) for r in rows]}
 
 
 @safe
-async def get(id):
-    rec = await cs.get(id)
-    return await _full(rec) if rec else {"error": "not found"}
+async def get(owner, id):
+    rec = await cs.get(owner, id)
+    return await _full(owner, rec) if rec else {"error": "not found"}
 
 
 @safe
-async def list(type=None, filters=None, sort="-occurred_at", limit=50):
+async def list(owner, type=None, filters=None, sort="-occurred_at", limit=50):
     if sort.lstrip("-") not in _FIELDS:
         return {"error": f"unknown sort field {sort!r}; use one of {sorted(_FIELDS)}"}
     bad = {k.split("__")[0] for k in (filters or {})} - _FIELDS - {"payload"}
     if bad:
         return {"error": f"unknown filter field(s) {sorted(bad)}; use one of {sorted(_FIELDS)} or payload__*"}
-    rows = await cs.list_records(type=type, filters=filters or {}, sort=sort, limit=min(int(limit), 200))
+    rows = await cs.list_records(owner, type=type, filters=filters or {}, sort=sort, limit=min(int(limit), 200))
     return {"results": [_hit(r) for r in rows]}
 
 
 @safe
-async def links(id, rel=None):
-    return {"links": await cs.links(id, rel)}
+async def links(owner, id, rel=None):
+    return {"links": await cs.links(owner, id, rel)}
 
 
 SCHEMAS = {

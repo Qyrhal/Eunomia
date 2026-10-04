@@ -29,7 +29,7 @@ class IngestReport:
         }
 
 
-async def _embed_record(rec) -> None:
+async def _embed_record(owner, rec) -> None:
     from cache.search import set_embedding
     from embeddings.service import embed
 
@@ -37,10 +37,10 @@ async def _embed_record(rec) -> None:
     if not text:
         return
     vec = (await embed([text]))[0]
-    await set_embedding(rec.id, vec)
+    await set_embedding(owner, rec.id, vec)
 
 
-async def ingest(source_key: str, raw_records, map_fn) -> IngestReport:
+async def ingest(owner, source_key: str, raw_records, map_fn) -> IngestReport:
     from cache.search import upsert
 
     report = IngestReport(source=source_key)
@@ -52,7 +52,7 @@ async def ingest(source_key: str, raw_records, map_fn) -> IngestReport:
                 continue
             env.setdefault("source", source_key)
 
-            rec, changed = await upsert(env)
+            rec, changed = await upsert(owner, env)
             if not changed:
                 report.skipped += 1
                 continue
@@ -60,7 +60,7 @@ async def ingest(source_key: str, raw_records, map_fn) -> IngestReport:
 
             if not rec.deleted:
                 try:
-                    await _embed_record(rec)
+                    await _embed_record(owner, rec)
                 except Exception as e:  # non-fatal -- backfill will retry
                     report.errors.append(f"embed {rec.id}: {e}")
         except Exception as e:

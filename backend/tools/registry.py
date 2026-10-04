@@ -30,8 +30,8 @@ def all_tools() -> dict[str, dict]:
     return reg
 
 
-async def call(name: str, args: dict) -> dict:
+async def call(name: str, args: dict, owner) -> dict:
     tools = all_tools()
     if name not in tools:
         return {"error": f"unknown tool {name}"}
-    return await tools[name]["impl"](**(args or {}))
+    return await tools[name]["impl"](owner, **(args or {}))

@@ -35,12 +35,16 @@ class CacheRecord:
     embedding: list[float] | None = None
 
 
-def _rid(record_id: str) -> RecordID:
-    return RecordID("cache_record", record_id)
+def _rid(owner: RecordID, record_id: str) -> RecordID:
+    return RecordID("cache_record", f"{owner.id}:{record_id}")
 
 
 def _literal(rid: RecordID | str) -> str:
-    return rid.id if isinstance(rid, RecordID) else str(rid)
+    """The caller-facing record id -- the owner-id prefix baked into the
+    SurrealDB record id is internal; callers never see or pass it."""
+    raw = rid.id if isinstance(rid, RecordID) else str(rid)
+    _, _, rest = raw.partition(":")
+    return rest or raw
 
 
 def _row_to_record(row: dict) -> CacheRecord:
@@ -75,13 +79,13 @@ def _hash_envelope(env: dict) -> str:
     return hashlib.sha256(blob.encode()).hexdigest()
 
 
-async def _reconcile_links(conn, rid: RecordID, links_spec: list[dict]) -> None:
+async def _reconcile_links(conn, owner: RecordID, rid: RecordID, links_spec: list[dict]) -> None:
     await conn.query("DELETE linked_to WHERE in = $id AND origin = 'sync'", {"id": rid})
     for link in links_spec:
         try:
             await conn.query(
                 "RELATE $in->linked_to->$out SET rel = $rel, origin = 'sync'",
-                {"in": rid, "out": _rid(link["target"]), "rel": link["rel"]},
+                {"in": rid, "out": _rid(owner, link["target"]), "rel": link["rel"]},
             )
         except Exception:
             # (in, out, rel) unique index — edge already exists; idempotent
@@ -89,10 +93,10 @@ async def _reconcile_links(conn, rid: RecordID, links_spec: list[dict]) -> None:
             pass
 
 
-async def upsert(env: dict) -> tuple[CacheRecord, bool]:
-    """Insert or update one envelope. Returns (record, changed)."""
+async def upsert(owner: RecordID, env: dict) -> tuple[CacheRecord, bool]:
+    """Insert or update one envelope, scoped to `owner`. Returns (record, changed)."""
     conn = get_connection()
-    rid = _rid(env["id"])
+    rid = _rid(owner, env["id"])
     h = _hash_envelope(env)
 
     existing = await _select_one(conn, rid)
@@ -103,12 +107,13 @@ async def upsert(env: dict) -> tuple[CacheRecord, bool]:
         return _row_to_record(existing), False
 
     rows = await conn.query(
-        "UPSERT $id SET source = $source, type = $type, external_id = $external_id, "
+        "UPSERT $id SET owner = $owner, source = $source, type = $type, external_id = $external_id, "
         "title = $title, body_text = $body_text, occurred_at = $occurred_at, url = $url, "
         "payload = $payload, content_hash = $content_hash, ingested_at = $ingested_at, "
         "updated_at = $updated_at, deleted = $deleted RETURN AFTER",
         {
             "id": rid,
+            "owner": owner,
             "source": env["source"],
             "type": env["type"],
             "external_id": env["external_id"],
@@ -124,18 +129,20 @@ async def upsert(env: dict) -> tuple[CacheRecord, bool]:
         },
     )
     rec = _row_to_record(rows[0])
-    await _reconcile_links(conn, rid, env.get("links", []))
+    await _reconcile_links(conn, owner, rid, env.get("links", []))
     return rec, True
 
 
-async def set_embedding(record_id: str, vector: list[float]) -> None:
+async def set_embedding(owner: RecordID, record_id: str, vector: list[float]) -> None:
     if len(vector) != DIM:
         raise ValueError(f"embedding dim {len(vector)} != {DIM}")
     conn = get_connection()
-    await conn.query("UPDATE $id SET embedding = $embedding", {"id": _rid(record_id), "embedding": vector})
+    await conn.query(
+        "UPDATE $id SET embedding = $embedding", {"id": _rid(owner, record_id), "embedding": vector}
+    )
 
 
-async def _keyword_ids(conn, q: str, limit: int) -> list[str]:
+async def _keyword_ids(conn, owner: RecordID, q: str, limit: int) -> list[str]:
     # cache_record_fts_idx is a composite BM25 index over (title, body_text), but
     # this SurrealDB version only resolves the `@N@` match operator against the
     # FIRST field of a composite search index (title) -- body_text-only matches
@@ -144,23 +151,23 @@ async def _keyword_ids(conn, q: str, limit: int) -> list[str]:
     # fields (functionally correct; just not BM25-ranked for body-only hits).
     rows = await conn.query(
         "SELECT id, search::score(1) AS score FROM cache_record "
-        "WHERE title @1@ $q AND deleted = false ORDER BY score DESC LIMIT $limit",
-        {"q": q, "limit": limit},
+        "WHERE owner = $owner AND title @1@ $q AND deleted = false ORDER BY score DESC LIMIT $limit",
+        {"owner": owner, "q": q, "limit": limit},
     )
     ids = [_literal(r["id"]) for r in rows]
     if len(ids) < limit:
-        seen = [_rid(i) for i in ids]
+        seen = [_rid(owner, i) for i in ids]
         extra = await conn.query(
-            "SELECT id FROM cache_record WHERE "
+            "SELECT id FROM cache_record WHERE owner = $owner AND "
             "string::contains(string::lowercase(body_text), string::lowercase($q)) "
             "AND deleted = false AND id NOT IN $seen LIMIT $limit",
-            {"q": q, "seen": seen, "limit": limit - len(ids)},
+            {"owner": owner, "q": q, "seen": seen, "limit": limit - len(ids)},
         )
         ids.extend(_literal(r["id"]) for r in extra)
     return ids[:limit]
 
 
-async def _semantic_ids(conn, q: str, limit: int) -> list[str]:
+async def _semantic_ids(conn, owner: RecordID, q: str, limit: int) -> list[str]:
     from embeddings.service import embed
 
     vec = (await embed([q]))[0]
@@ -168,8 +175,8 @@ async def _semantic_ids(conn, q: str, limit: int) -> list[str]:
     # parameter -- so `limit` (always an int from this module's call sites) is
     # interpolated directly rather than passed as $limit.
     rows = await conn.query(
-        f"SELECT id FROM cache_record WHERE embedding <|{int(limit)}|> $vec AND deleted = false",
-        {"vec": vec},
+        f"SELECT id FROM cache_record WHERE owner = $owner AND embedding <|{int(limit)}|> $vec AND deleted = false",
+        {"owner": owner, "vec": vec},
     )
     return [_literal(r["id"]) for r in rows]
 
@@ -183,6 +190,7 @@ def _rrf(*ranked_lists: list[str]) -> list[str]:
 
 
 async def search(
+    owner: RecordID,
     q,
     *,
     sources=None,
@@ -196,17 +204,17 @@ async def search(
     conn = get_connection()
     pool = max(limit * 4, 40)
     if mode == "keyword":
-        ids = await _keyword_ids(conn, q, pool)
+        ids = await _keyword_ids(conn, owner, q, pool)
     elif mode == "semantic":
-        ids = await _semantic_ids(conn, q, pool)
+        ids = await _semantic_ids(conn, owner, q, pool)
     else:
-        ids = _rrf(await _keyword_ids(conn, q, pool), await _semantic_ids(conn, q, pool))
+        ids = _rrf(await _keyword_ids(conn, owner, q, pool), await _semantic_ids(conn, owner, q, pool))
 
     if not ids:
         return []
 
-    conditions = ["id IN $ids", "deleted = false"]
-    params: dict = {"ids": [_rid(i) for i in ids]}
+    conditions = ["id IN $ids", "owner = $owner", "deleted = false"]
+    params: dict = {"ids": [_rid(owner, i) for i in ids], "owner": owner}
     if sources:
         conditions.append("source IN $sources")
         params["sources"] = sources
@@ -226,16 +234,18 @@ async def search(
     return recs[offset : offset + limit]
 
 
-async def get(record_id: str) -> CacheRecord | None:
+async def get(owner: RecordID, record_id: str) -> CacheRecord | None:
     conn = get_connection()
-    row = await _select_one(conn, _rid(record_id))
+    row = await _select_one(conn, _rid(owner, record_id))
     return _row_to_record(row) if row else None
 
 
-async def list_records(type=None, *, filters=None, sort="-occurred_at", limit=50, offset=0) -> list[CacheRecord]:
+async def list_records(
+    owner: RecordID, type=None, *, filters=None, sort="-occurred_at", limit=50, offset=0
+) -> list[CacheRecord]:
     conn = get_connection()
-    conditions = ["deleted = false"]
-    params: dict = {}
+    conditions = ["owner = $owner", "deleted = false"]
+    params: dict = {"owner": owner}
     if type:
         conditions.append("type = $type")
         params["type"] = type
@@ -257,9 +267,9 @@ async def list_records(type=None, *, filters=None, sort="-occurred_at", limit=50
     return [_row_to_record(r) for r in rows]
 
 
-async def links(record_id: str, rel: str | None = None) -> list[dict]:
+async def links(owner: RecordID, record_id: str, rel: str | None = None) -> list[dict]:
     conn = get_connection()
-    rid = _rid(record_id)
+    rid = _rid(owner, record_id)
     out = []
     fwd_q = "SELECT rel, out FROM linked_to WHERE in = $id" + (" AND rel = $rel" if rel else "")
     back_q = "SELECT rel, in FROM linked_to WHERE out = $id" + (" AND rel = $rel" if rel else "")

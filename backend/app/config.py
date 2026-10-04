@@ -1,14 +1,22 @@
 """App settings, read from environment / .env (pydantic-settings)."""
 
+import logging
+import secrets
 from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+log = logging.getLogger("eunomia.config")
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    EUNOMIA_API_TOKEN: str | None = None
+    # Signs browser-session JWTs (app/auth.py). If unset, a random secret is
+    # generated at startup -- fine for a single process / local dev, but it
+    # means existing sessions won't survive a restart and multi-process
+    # deployments must set this explicitly so every process agrees.
+    JWT_SECRET: str = ""
 
     SURREAL_URL: str = "ws://localhost:8000/rpc"
     SURREAL_USER: str = "root"
@@ -29,3 +37,10 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+if not settings.JWT_SECRET:
+    settings.JWT_SECRET = secrets.token_urlsafe(32)
+    log.warning(
+        "JWT_SECRET not set -- generated a random one for this process. "
+        "Sessions won't survive a restart; set JWT_SECRET explicitly in production."
+    )

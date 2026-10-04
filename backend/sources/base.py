@@ -41,8 +41,8 @@ class Source(abc.ABC):
         return self.provider or self.key
 
     @abc.abstractmethod
-    async def sync(self, mode: str, cursor: str | None = None) -> SyncResult:
-        """Fetch raw records. `mode` in {"poll", "webhook", "backfill"}."""
+    async def sync(self, owner, mode: str, cursor: str | None = None) -> SyncResult:
+        """Fetch raw records for `owner`. `mode` in {"poll", "webhook", "backfill"}."""
 
     @abc.abstractmethod
     def map(self, raw: dict) -> dict | None:
@@ -52,6 +52,6 @@ class Source(abc.ABC):
         """Per-source MCP/REST tools beyond the generic ones."""
         return []
 
-    async def webhook(self, request) -> list[dict] | None:
+    async def webhook(self, owner, request) -> list[dict] | None:
         """Verify + translate a provider push into raw dicts (or None)."""
         return None

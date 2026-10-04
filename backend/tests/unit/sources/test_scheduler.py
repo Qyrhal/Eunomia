@@ -38,7 +38,7 @@ def test_backoff_table():
 
 
 @respx.mock
-async def test_sync_source_success_records_health(surreal_db, monkeypatch):
+async def test_sync_source_success_records_health(surreal_db, owner, monkeypatch):
     monkeypatch.setattr(settings, "EMBEDDINGS_BACKEND", "stub")
 
     registry._REGISTRY.clear()
@@ -46,8 +46,8 @@ async def test_sync_source_success_records_health(surreal_db, monkeypatch):
     try:
         conn = surreal_db
         await conn.query(
-            "CREATE connector SET kind = 'up_bank', enabled = true, credentials_encrypted = $enc",
-            {"enc": encrypt(json.dumps({"personal_access_token": "secret"}))},
+            "CREATE connector SET owner = $owner, kind = 'up_bank', enabled = true, credentials_encrypted = $enc",
+            {"owner": owner, "enc": encrypt(json.dumps({"personal_access_token": "secret"}))},
         )
 
         respx.get("https://api.up.com.au/api/v1/transactions").mock(
@@ -56,10 +56,10 @@ async def test_sync_source_success_records_health(surreal_db, monkeypatch):
         respx.get("https://api.up.com.au/api/v1/accounts").mock(return_value=Response(200, json={"data": []}))
         respx.get("https://api.up.com.au/api/v1/categories").mock(return_value=Response(200, json={"data": []}))
 
-        report = await sync_source("up_bank")
+        report = await sync_source(owner, "up_bank")
         assert report["written"] == 1
 
-        st = await conn.select(RecordID("sync_status", "up_bank"))
+        st = await conn.select(RecordID("sync_status", f"{owner.id}:up_bank"))
         if isinstance(st, list):
             st = st[0]
         assert st["consecutive_failures"] == 0
@@ -69,14 +69,14 @@ async def test_sync_source_success_records_health(surreal_db, monkeypatch):
         registry._REGISTRY.clear()
 
 
-async def test_sync_source_failure_records_health_without_raising(surreal_db):
+async def test_sync_source_failure_records_health_without_raising(surreal_db, owner):
     registry._REGISTRY.clear()
     try:
         # no source registered under this key -> run_sync raises KeyError internally
-        result = await sync_source("no-such-source")
+        result = await sync_source(owner, "no-such-source")
         assert "error" in result
 
-        st = await surreal_db.select(RecordID("sync_status", "no-such-source"))
+        st = await surreal_db.select(RecordID("sync_status", f"{owner.id}:no-such-source"))
         if isinstance(st, list):
             st = st[0]
         assert st["consecutive_failures"] == 1
@@ -85,7 +85,7 @@ async def test_sync_source_failure_records_health_without_raising(surreal_db):
         registry._REGISTRY.clear()
 
 
-async def test_build_scheduler_heypocket_interval_is_86400s(surreal_db):
+async def test_build_scheduler_heypocket_interval_is_86400s(surreal_db, owner):
     """The plan calls for heypocket to sync every 24h (86400s), not the
     900s default applied to other sources."""
     registry._REGISTRY.clear()
@@ -94,10 +94,10 @@ async def test_build_scheduler_heypocket_interval_is_86400s(surreal_db):
     registry.register(HeyPocketSource())
     try:
         conn = surreal_db
-        await conn.query("CREATE connector SET kind = 'pocketai', enabled = true")
+        await conn.query("CREATE connector SET owner = $owner, kind = 'pocketai', enabled = true", {"owner": owner})
 
         sched = await build_scheduler()
-        job = sched.get_job("sync:heypocket")
+        job = sched.get_job(f"sync:{owner.id}:heypocket")
         assert job is not None
         assert job.trigger.interval.total_seconds() == 86400
     finally:

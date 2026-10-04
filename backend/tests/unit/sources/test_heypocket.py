@@ -38,13 +38,13 @@ def test_map_missing_id_skipped():
 
 
 @respx.mock
-async def test_sync_pulls_recordings(surreal_db, monkeypatch):
+async def test_sync_pulls_recordings(surreal_db, owner, monkeypatch):
     monkeypatch.setattr(settings, "EMBEDDINGS_BACKEND", "stub")
 
     conn = surreal_db
     await conn.query(
-        "CREATE connector SET kind = 'pocketai', enabled = true, credentials_encrypted = $enc",
-        {"enc": encrypt(json.dumps({"api_key": "secret-key"}))},
+        "CREATE connector SET owner = $owner, kind = 'pocketai', enabled = true, credentials_encrypted = $enc",
+        {"owner": owner, "enc": encrypt(json.dumps({"api_key": "secret-key"}))},
     )
 
     respx.get("https://public.heypocketai.com/api/v1/public/recordings").mock(
@@ -52,7 +52,7 @@ async def test_sync_pulls_recordings(surreal_db, monkeypatch):
     )
 
     src = HeyPocketSource()
-    result = await src.sync("poll")
+    result = await src.sync(owner, "poll")
 
     assert len(result.records) == 1
     assert result.records[0]["id"] == "rec-1"

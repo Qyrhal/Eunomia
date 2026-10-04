@@ -38,11 +38,11 @@ class UpBankSource(Source):
     auth_kind = "token"
 
     # -- sync -----------------------------------------------------------------
-    async def _client(self) -> UpBankClient:
-        return UpBankClient(await credentials_for(self))
+    async def _client(self, owner) -> UpBankClient:
+        return UpBankClient(await credentials_for(owner, self))
 
-    async def sync(self, mode, cursor=None) -> SyncResult:
-        client = await self._client()
+    async def sync(self, owner, mode, cursor=None) -> SyncResult:
+        client = await self._client(owner)
         since = cursor or (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
         records: list[dict] = []
 
@@ -151,8 +151,8 @@ class UpBankSource(Source):
         }
 
     # -- webhook ----------------------------------------------------------------
-    async def webhook(self, request) -> list[dict] | None:
-        creds = await credentials_for(self)
+    async def webhook(self, owner, request) -> list[dict] | None:
+        creds = await credentials_for(owner, self)
         secret = creds.get("webhook_secret_key", "")
         sig = request.headers.get("X-Up-Authenticity-Signature", "")
         body = await request.body()
@@ -184,7 +184,7 @@ class UpBankSource(Source):
         if rel:
             import httpx
 
-            client = await self._client()
+            client = await self._client(owner)
             async with httpx.AsyncClient() as http:
                 resp = await http.get(rel, headers=client._headers(), timeout=15)
             data = resp.json().get("data")
@@ -228,28 +228,28 @@ def _iso(dt) -> str | None:
     return dt.isoformat() if hasattr(dt, "isoformat") else dt
 
 
-async def _category_names() -> dict[str, str]:
+async def _category_names(owner) -> dict[str, str]:
     from cache import search as cs
 
-    rows = await cs.list_records(type="up.category", limit=500)
+    rows = await cs.list_records(owner, type="up.category", limit=500)
     return {r.external_id: r.title for r in rows}
 
 
-async def finance_summary(since: str | None = None) -> dict:
+async def finance_summary(owner, since: str | None = None) -> dict:
     """Balance + spend-by-category/day + recent transactions, computed from the
     cache. Every field comes straight off a transaction or account -- no
     invented metrics (personal bank account)."""
     from cache import search as cs
 
     since = since or (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
-    category_names = await _category_names()
+    category_names = await _category_names(owner)
 
-    accounts = await cs.list_records(type="up.account", limit=200)
+    accounts = await cs.list_records(owner, type="up.account", limit=200)
     balance_cents = sum((a.payload or {}).get("balance_cents", 0) for a in accounts)
 
     txns = [
         t
-        for t in await cs.list_records(type="up.transaction", limit=2000)
+        for t in await cs.list_records(owner, type="up.transaction", limit=2000)
         if _iso(t.occurred_at) and _iso(t.occurred_at) >= since
     ]
     txns.sort(key=lambda t: _iso(t.occurred_at) or "", reverse=True)
@@ -288,17 +288,17 @@ async def finance_summary(since: str | None = None) -> dict:
     }
 
 
-async def list_transactions(days: int = 30, category: str | None = None, limit: int = 50) -> list[dict]:
+async def list_transactions(owner, days: int = 30, category: str | None = None, limit: int = 50) -> list[dict]:
     """Recent settled + pending transactions from the cache, e.g. for drafting
     finance follow-up tasks (pay a bill, dispute a charge)."""
     from cache import search as cs
 
     since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
-    category_names = await _category_names()
+    category_names = await _category_names(owner)
 
     txns = [
         t
-        for t in await cs.list_records(type="up.transaction", limit=2000)
+        for t in await cs.list_records(owner, type="up.transaction", limit=2000)
         if _iso(t.occurred_at) and _iso(t.occurred_at) >= since
     ]
     if category:
@@ -317,11 +317,11 @@ async def list_transactions(days: int = 30, category: str | None = None, limit: 
     ]
 
 
-async def list_accounts() -> list[dict]:
+async def list_accounts(owner) -> list[dict]:
     """Every cached Up Bank account and its last-synced balance."""
     from cache import search as cs
 
-    accounts = await cs.list_records(type="up.account", limit=200)
+    accounts = await cs.list_records(owner, type="up.account", limit=200)
     return [
         {
             "name": a.title,

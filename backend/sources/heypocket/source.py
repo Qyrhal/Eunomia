@@ -26,14 +26,14 @@ class HeyPocketSource(Source):
     record_types = ["heypocket.recording"]
     auth_kind = "api_key"
 
-    async def _client(self) -> PocketAIClient:
-        conn = await connector_for(self)
+    async def _client(self, owner) -> PocketAIClient:
+        conn = await connector_for(owner, self)
         base = (conn.get("config") or {}).get("base_url") if conn else None
-        return PocketAIClient(await credentials_for(self), base)
+        return PocketAIClient(await credentials_for(owner, self), base)
 
-    async def sync(self, mode, cursor=None) -> SyncResult:
+    async def sync(self, owner, mode, cursor=None) -> SyncResult:
         start = cursor or (datetime.now(timezone.utc) - timedelta(days=30)).date().isoformat()
-        client = await self._client()
+        client = await self._client(owner)
         data = (await client.recordings({"start_date": start, "limit": 200})).get("data", [])
         newest = max(
             (r.get("recording_at") or r.get("created_at") or "" for r in data),
@@ -99,7 +99,7 @@ def _iso(dt) -> str | None:
     return dt.isoformat() if hasattr(dt, "isoformat") else dt
 
 
-async def summary(days: int = 30) -> dict:
+async def summary(owner, days: int = 30) -> dict:
     """Recording count/duration/tags since `days` ago, computed from the cached
     heypocket records (populated by the periodic sync) rather than a live API
     call. Every field comes straight off a recording (`duration`, `tags`) --
@@ -110,7 +110,7 @@ async def summary(days: int = 30) -> dict:
     since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
     recs = [
         r
-        for r in await cs.list_records(type="heypocket.recording", limit=2000)
+        for r in await cs.list_records(owner, type="heypocket.recording", limit=2000)
         if _iso(r.occurred_at) and _iso(r.occurred_at) >= since
     ]
 
@@ -139,7 +139,7 @@ async def summary(days: int = 30) -> dict:
     }
 
 
-async def list_recordings(days: int = 30, tag: str | None = None, limit: int = 50) -> list[dict]:
+async def list_recordings(owner, days: int = 30, tag: str | None = None, limit: int = 50) -> list[dict]:
     """Cached recordings, optionally filtered by tag -- for surfacing "which
     meeting was that in" without a live API call."""
     from cache import search as cs
@@ -147,7 +147,7 @@ async def list_recordings(days: int = 30, tag: str | None = None, limit: int = 5
     since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
     recs = [
         r
-        for r in await cs.list_records(type="heypocket.recording", limit=2000)
+        for r in await cs.list_records(owner, type="heypocket.recording", limit=2000)
         if _iso(r.occurred_at) and _iso(r.occurred_at) >= since
     ]
     recs.sort(key=lambda r: _iso(r.occurred_at) or "", reverse=True)
@@ -166,11 +166,11 @@ async def list_recordings(days: int = 30, tag: str | None = None, limit: int = 5
     ]
 
 
-async def search_recordings(query: str) -> dict:
+async def search_recordings(owner, query: str) -> dict:
     """Hybrid search over cached heypocket recordings."""
     from cache import search as cs
 
-    rows = await cs.search(query, types=["heypocket.recording"], limit=20)
+    rows = await cs.search(owner, query, types=["heypocket.recording"], limit=20)
     return {
         "results": [
             {

@@ -104,7 +104,7 @@ class DemoSource(Source):
     record_types = ["up.transaction", "up.account", "heypocket.recording"]
     auth_kind = "token"
 
-    async def sync(self, mode, cursor=None) -> SyncResult:
+    async def sync(self, owner, mode, cursor=None) -> SyncResult:
         rng = random.Random(42)
         now = datetime.now(timezone.utc)
 
