@@ -35,6 +35,11 @@ class Settings(BaseSettings):
     # DB-backed user setting.
     EMBEDDINGS_BACKEND: Literal["openai", "stub"] = "openai"
 
+    # The frontend origin(s) allowed to make credentialed (cookie-session)
+    # cross-origin requests -- needed since the frontend (:3000) and this API
+    # (:8001) are different origins. Comma-separated for more than one.
+    CORS_ALLOWED_ORIGINS: str = "http://localhost:3000"
+
 
 settings = Settings()
 

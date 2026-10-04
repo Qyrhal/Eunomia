@@ -1,8 +1,6 @@
 import type { Metadata } from "next";
 import { Fraunces, IBM_Plex_Sans, IBM_Plex_Mono } from "next/font/google";
 import "./globals.css";
-import CommandPalette from "@/components/CommandPalette";
-import Sidebar from "@/components/Sidebar";
 import ThemeProvider from "@/components/ThemeProvider";
 
 const fraunces = Fraunces({
@@ -35,11 +33,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       className={`${fraunces.variable} ${plexSans.variable} ${plexMono.variable} h-full antialiased`}
     >
       <body className="min-h-full flex">
-        <ThemeProvider>
-          <Sidebar />
-          <main className="flex-1 min-w-0 p-8 md:p-10">{children}</main>
-          <CommandPalette />
-        </ThemeProvider>
+        <ThemeProvider>{children}</ThemeProvider>
       </body>
     </html>
   );

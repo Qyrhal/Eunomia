@@ -1,21 +1,38 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { CheckSquare, Database, Plug, RadioTower, Settings, Wallet } from "lucide-react";
+import { LayoutDashboard, Mic, Plug, Settings, Wallet } from "lucide-react";
 import HourRing from "./HourRing";
+import { sources, type SyncStatus } from "@/lib/api";
 
 const NAV = [
-  { href: "/data", label: "Data", icon: Database },
-  { href: "/sources", label: "Sources", icon: RadioTower },
-  { href: "/tasks", label: "Tasks", icon: CheckSquare },
-  { href: "/finance", label: "Finance", icon: Wallet },
-  { href: "/connectors", label: "Connectors", icon: Plug },
-  { href: "/settings", label: "Settings", icon: Settings },
+  { href: "/", label: "Dashboard", icon: LayoutDashboard, sourceKey: null },
+  { href: "/finance", label: "Finance", icon: Wallet, sourceKey: "up_bank" },
+  { href: "/meetings", label: "Meetings", icon: Mic, sourceKey: "heypocket" },
+  { href: "/connectors", label: "Connectors", icon: Plug, sourceKey: null },
+  { href: "/settings", label: "Settings", icon: Settings, sourceKey: null },
 ];
+
+function healthColor(status: SyncStatus | undefined): string | null {
+  if (!status) return null;
+  if (status.consecutive_failures === 0) return "var(--good)";
+  if (status.consecutive_failures <= 2) return "var(--warning)";
+  return "var(--critical)";
+}
 
 export default function Sidebar() {
   const pathname = usePathname();
+  const [statuses, setStatuses] = useState<Record<string, SyncStatus>>({});
+
+  useEffect(() => {
+    sources
+      .status()
+      .then(setStatuses)
+      .catch(() => {});
+  }, []);
+
   return (
     <nav
       className="w-60 shrink-0 flex flex-col gap-1 py-7"
@@ -28,8 +45,9 @@ export default function Sidebar() {
         </span>
       </div>
       <div className="px-4 flex flex-col gap-0.5">
-        {NAV.map(({ href, label, icon: Icon }) => {
+        {NAV.map(({ href, label, icon: Icon, sourceKey }) => {
           const active = pathname === href;
+          const dot = sourceKey ? healthColor(statuses[sourceKey]) : null;
           return (
             <Link
               key={href}
@@ -45,7 +63,8 @@ export default function Sidebar() {
                 style={{ background: active ? "var(--accent)" : "transparent" }}
               />
               <Icon size={15} strokeWidth={active ? 2.25 : 1.75} />
-              {label}
+              <span className="flex-1">{label}</span>
+              {dot && <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: dot }} aria-hidden />}
             </Link>
           );
         })}

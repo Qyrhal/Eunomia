@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { api, FinanceSummary } from "@/lib/api";
+import { connectors, type FinanceSummary } from "@/lib/api";
 
 const CATEGORY_COLORS = ["var(--series-1)", "var(--series-2)", "var(--series-3)", "var(--series-4)"];
 
@@ -11,8 +11,8 @@ export default function FinancePage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    api
-      .get<FinanceSummary>("/api/connectors/up_bank/finance-summary?days=30")
+    connectors
+      .upBankFinanceSummary(30)
       .then(setSummary)
       .catch((e) => setError(e.message));
   }, []);

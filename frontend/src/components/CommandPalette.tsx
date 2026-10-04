@@ -2,19 +2,17 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { CheckSquare, Database, Plug, RadioTower, Settings, Wallet } from "lucide-react";
-import { api, Project } from "@/lib/api";
+import { LayoutDashboard, Mic, Plug, Settings, Wallet } from "lucide-react";
 
-type Item = { label: string; hint?: string; go: () => void };
+type Item = { label: string; go: () => void };
 
-const PAGE_LABELS = ["Data", "Sources", "Tasks", "Finance", "Connectors", "Settings"];
-const PAGE_ICONS = [Database, RadioTower, CheckSquare, Wallet, Plug, Settings];
-const PAGE_HREFS = ["/data", "/sources", "/tasks", "/finance", "/connectors", "/settings"];
+const PAGE_LABELS = ["Dashboard", "Finance", "Meetings", "Connectors", "Settings"];
+const PAGE_ICONS = [LayoutDashboard, Wallet, Mic, Plug, Settings];
+const PAGE_HREFS = ["/", "/finance", "/meetings", "/connectors", "/settings"];
 
 export default function CommandPalette() {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
-  const [projects, setProjects] = useState<Project[]>([]);
   const [index, setIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const router = useRouter();
@@ -36,16 +34,14 @@ export default function CommandPalette() {
     if (!open) return;
     setQuery("");
     setIndex(0);
-    api.get<Project[]>("/api/projects/").then(setProjects).catch(() => setProjects([]));
     setTimeout(() => inputRef.current?.focus(), 0);
   }, [open]);
 
   if (!open) return null;
 
-  const items: Item[] = [
-    ...PAGE_LABELS.map((label, i) => ({ label, go: () => router.push(PAGE_HREFS[i]) })),
-    ...projects.map((p) => ({ label: p.name, hint: "project", go: () => router.push(`/tasks?project=${p.id}`) })),
-  ].filter((item) => item.label.toLowerCase().includes(query.toLowerCase()));
+  const items: Item[] = PAGE_LABELS.map((label, i) => ({ label, go: () => router.push(PAGE_HREFS[i]) })).filter((item) =>
+    item.label.toLowerCase().includes(query.toLowerCase())
+  );
 
   function choose(item: Item) {
     item.go();
@@ -58,10 +54,7 @@ export default function CommandPalette() {
       style={{ background: "rgba(0,0,0,0.35)" }}
       onClick={() => setOpen(false)}
     >
-      <div
-        className="w-full max-w-md ledger overflow-hidden"
-        onClick={(e) => e.stopPropagation()}
-      >
+      <div className="w-full max-w-md ledger overflow-hidden" onClick={(e) => e.stopPropagation()}>
         <input
           ref={inputRef}
           value={query}
@@ -80,15 +73,15 @@ export default function CommandPalette() {
               choose(items[index]);
             }
           }}
-          placeholder="Jump to a page or project…"
+          placeholder="Jump to a page…"
           className="w-full px-4 py-3 text-[14px]"
           style={{ background: "transparent", borderBottom: "1px solid var(--border)" }}
         />
         <ul className="max-h-72 overflow-y-auto">
           {items.map((item, i) => {
-            const Icon = i < PAGE_LABELS.length ? PAGE_ICONS[i] : null;
+            const Icon = PAGE_ICONS[PAGE_LABELS.indexOf(item.label)];
             return (
-              <li key={item.label + i}>
+              <li key={item.label}>
                 <button
                   onClick={() => choose(item)}
                   className="w-full flex items-center gap-2.5 px-4 py-2.5 text-[13px] text-left"
@@ -99,11 +92,6 @@ export default function CommandPalette() {
                 >
                   {Icon && <Icon size={14} color="var(--text-muted)" />}
                   <span className="flex-1 truncate">{item.label}</span>
-                  {item.hint && (
-                    <span className="eyebrow" style={{ color: "var(--text-muted)" }}>
-                      {item.hint}
-                    </span>
-                  )}
                 </button>
               </li>
             );

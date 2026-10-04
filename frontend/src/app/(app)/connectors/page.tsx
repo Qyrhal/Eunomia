@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { Landmark, Mic, Plug2 } from "lucide-react";
-import { api, Connector } from "@/lib/api";
+import { connectors as connectorsApi, type Connector } from "@/lib/api";
 
 type FieldDef = { key: string; label: string; placeholder: string; secret: boolean };
 
@@ -60,7 +60,7 @@ export default function ConnectorsPage() {
   const [testResult, setTestResult] = useState<Record<string, string>>({});
   const [savedFlash, setSavedFlash] = useState<Record<string, boolean>>({});
 
-  const load = () => api.get<Connector[]>("/api/connectors").then(setConnectors);
+  const load = () => connectorsApi.list().then(setConnectors);
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -84,15 +84,15 @@ export default function ConnectorsPage() {
     const body: Record<string, unknown> = { enabled: true };
     if (Object.keys(credentials).length) body.credentials = credentials;
     if (Object.keys(config).length) body.config = config;
-    await api.patch(`/api/connectors/${kind}`, body);
+    await connectorsApi.update(kind, body);
     setInputs((s) => ({ ...s, [kind]: {} }));
     setSavedFlash((s) => ({ ...s, [kind]: true }));
     setTimeout(() => setSavedFlash((s) => ({ ...s, [kind]: false })), 1400);
     load();
   }
 
-  async function test(kind: string) {
-    const res = await api.post<{ ok: boolean; error?: string }>(`/api/connectors/${kind}/test`);
+  async function test(kind: Connector["kind"]) {
+    const res = await connectorsApi.test(kind);
     setTestResult((r) => ({ ...r, [kind]: res.ok ? "connected" : res.error || "failed" }));
   }
 

@@ -1,12 +1,12 @@
 "use client";
 
 import { useEffect } from "react";
-import { api, AppSettings } from "@/lib/api";
+import { settings } from "@/lib/api";
 
 export default function ThemeProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
-    api
-      .get<AppSettings>("/api/settings")
+    settings
+      .get()
       .then((s) => {
         const root = document.documentElement;
         if (s.theme.mode === "light" || s.theme.mode === "dark") {
