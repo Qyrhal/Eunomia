@@ -8,9 +8,19 @@ from app.db import close_db, connect_db, ensure_schema
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    from sources.registry import discover
+    from sources.scheduler import build_scheduler
+
     db = await connect_db()
     await ensure_schema(db)
+
+    discover()
+    scheduler = await build_scheduler()
+    scheduler.start()
+
     yield
+
+    scheduler.shutdown()
     await close_db()
 
 

@@ -15,15 +15,15 @@ SCHEMA_STATEMENTS = [
     # singleton app settings (id = app_settings:singleton)
     "DEFINE TABLE IF NOT EXISTS app_settings SCHEMAFULL;",
     'DEFINE FIELD IF NOT EXISTS embedding_model ON app_settings TYPE string DEFAULT "text-embedding-3-small";',
-    "DEFINE FIELD IF NOT EXISTS sync_intervals ON app_settings TYPE object DEFAULT {};",
-    "DEFINE FIELD IF NOT EXISTS theme ON app_settings TYPE object DEFAULT {};",
+    "DEFINE FIELD IF NOT EXISTS sync_intervals ON app_settings FLEXIBLE TYPE object DEFAULT {};",
+    "DEFINE FIELD IF NOT EXISTS theme ON app_settings FLEXIBLE TYPE object DEFAULT {};",
     "DEFINE FIELD IF NOT EXISTS updated_at ON app_settings TYPE datetime DEFAULT time::now();",
     # connector credentials
     "DEFINE TABLE IF NOT EXISTS connector SCHEMAFULL;",
     "DEFINE FIELD IF NOT EXISTS kind ON connector TYPE string "
-    'ASSERT $value IN ["google","up_bank","pocketai","twenty","open_connector"];',
+    'ASSERT $value IN ["up_bank","pocketai","open_connector","demo"];',
     "DEFINE FIELD IF NOT EXISTS enabled ON connector TYPE bool DEFAULT false;",
-    "DEFINE FIELD IF NOT EXISTS config ON connector TYPE object DEFAULT {};",
+    "DEFINE FIELD IF NOT EXISTS config ON connector FLEXIBLE TYPE object DEFAULT {};",
     'DEFINE FIELD IF NOT EXISTS credentials_encrypted ON connector TYPE string DEFAULT "";',
     "DEFINE FIELD IF NOT EXISTS updated_at ON connector TYPE datetime DEFAULT time::now();",
     "DEFINE INDEX IF NOT EXISTS connector_kind_unique ON connector FIELDS kind UNIQUE;",
@@ -34,7 +34,7 @@ SCHEMA_STATEMENTS = [
     "DEFINE FIELD IF NOT EXISTS last_ok ON sync_status TYPE option<datetime>;",
     'DEFINE FIELD IF NOT EXISTS last_error ON sync_status TYPE string DEFAULT "";',
     "DEFINE FIELD IF NOT EXISTS consecutive_failures ON sync_status TYPE int DEFAULT 0;",
-    "DEFINE FIELD IF NOT EXISTS last_report ON sync_status TYPE object DEFAULT {};",
+    "DEFINE FIELD IF NOT EXISTS last_report ON sync_status FLEXIBLE TYPE object DEFAULT {};",
     # canonical record store
     "DEFINE TABLE IF NOT EXISTS cache_record SCHEMAFULL;",
     "DEFINE FIELD IF NOT EXISTS source ON cache_record TYPE string;",
@@ -44,7 +44,7 @@ SCHEMA_STATEMENTS = [
     'DEFINE FIELD IF NOT EXISTS body_text ON cache_record TYPE string DEFAULT "";',
     "DEFINE FIELD IF NOT EXISTS occurred_at ON cache_record TYPE option<datetime>;",
     'DEFINE FIELD IF NOT EXISTS url ON cache_record TYPE string DEFAULT "";',
-    "DEFINE FIELD IF NOT EXISTS payload ON cache_record TYPE object DEFAULT {};",
+    "DEFINE FIELD IF NOT EXISTS payload ON cache_record FLEXIBLE TYPE object DEFAULT {};",
     "DEFINE FIELD IF NOT EXISTS content_hash ON cache_record TYPE string;",
     "DEFINE FIELD IF NOT EXISTS ingested_at ON cache_record TYPE datetime;",
     "DEFINE FIELD IF NOT EXISTS updated_at ON cache_record TYPE datetime;",

@@ -1,0 +1,232 @@
+"""Thin bearer-token REST clients for the personal connectors.
+
+Each client takes the credentials dict stored (encrypted) on a Connector row.
+Ported from the Django version 1:1, just made async (httpx.AsyncClient).
+Google was removed from this codebase before the rewrite started -- no
+GoogleClient here.
+"""
+
+import httpx
+
+# ---------------------------------------------------------------------------
+# Up Bank
+# ---------------------------------------------------------------------------
+
+
+class UpBankClient:
+    base_url = "https://api.up.com.au/api/v1"
+
+    def __init__(self, credentials: dict):
+        self.token = credentials.get("personal_access_token", "")
+
+    def _headers(self):
+        return {"Authorization": f"Bearer {self.token}"}
+
+    async def ping(self) -> bool:
+        async with httpx.AsyncClient() as client:
+            r = await client.get(f"{self.base_url}/util/ping", headers=self._headers(), timeout=10)
+        return r.status_code == 200
+
+    async def accounts(self) -> dict:
+        async with httpx.AsyncClient() as client:
+            r = await client.get(f"{self.base_url}/accounts", headers=self._headers(), timeout=10)
+        r.raise_for_status()
+        return r.json()
+
+    async def transactions(self, params: dict | None = None) -> dict:
+        async with httpx.AsyncClient() as client:
+            r = await client.get(
+                f"{self.base_url}/transactions", headers=self._headers(), params=params or {}, timeout=10
+            )
+        r.raise_for_status()
+        return r.json()
+
+    async def categories(self) -> dict:
+        async with httpx.AsyncClient() as client:
+            r = await client.get(f"{self.base_url}/categories", headers=self._headers(), timeout=10)
+        r.raise_for_status()
+        return r.json()
+
+    async def finance_summary(self, since_iso: str) -> dict:
+        """Balance across accounts + settled spend broken down by category since
+        `since_iso`. Every field here comes straight off the transaction/account/
+        category resources -- no invented metrics (personal bank account)."""
+        accounts = (await self.accounts()).get("data", [])
+        balance = sum(a["attributes"]["balance"]["valueInBaseUnits"] for a in accounts) / 100
+
+        cat_names = {c["id"]: c["attributes"]["name"] for c in (await self.categories()).get("data", [])}
+
+        data = (await self.transactions({"filter[since]": since_iso, "page[size]": 100})).get("data", [])
+        settled = [t for t in data if t["attributes"]["status"] == "SETTLED"]
+
+        spend_by_category: dict[str, int] = {}
+        spend_by_day: dict[str, int] = {}
+        for t in settled:
+            cents = t["attributes"]["amount"]["valueInBaseUnits"]
+            if cents >= 0:
+                continue
+            cat = t["relationships"].get("category", {}).get("data")
+            name = cat_names.get(cat["id"], "Uncategorised") if cat else "Uncategorised"
+            spend_by_category[name] = spend_by_category.get(name, 0) - cents
+            day = t["attributes"]["createdAt"][:10]
+            spend_by_day[day] = spend_by_day.get(day, 0) - cents
+
+        return {
+            "balance": round(balance, 2),
+            "accounts": [
+                {"name": a["attributes"]["displayName"], "balance": a["attributes"]["balance"]["value"]}
+                for a in accounts
+            ],
+            "spend_by_category": sorted(
+                [{"category": k, "amount": round(v / 100, 2)} for k, v in spend_by_category.items()],
+                key=lambda r: -r["amount"],
+            ),
+            "spend_by_day": sorted(
+                [{"day": k, "amount": round(v / 100, 2)} for k, v in spend_by_day.items()],
+                key=lambda r: r["day"],
+            ),
+            "recent_transactions": [
+                {
+                    "description": t["attributes"]["description"],
+                    "amount": t["attributes"]["amount"]["value"],
+                    "created_at": t["attributes"]["createdAt"],
+                }
+                for t in sorted(data, key=lambda t: t["attributes"]["createdAt"], reverse=True)[:20]
+            ],
+        }
+
+    async def week_summary(self, since_iso: str) -> dict:
+        """Settled transaction count + total spend (negative amounts) since `since_iso`."""
+        data = await self.transactions({"filter[since]": since_iso, "page[size]": 100})
+        rows = [t for t in data.get("data", []) if t.get("attributes", {}).get("status") == "SETTLED"]
+        spend_cents = sum(
+            -t["attributes"]["amount"]["valueInBaseUnits"]
+            for t in rows
+            if t["attributes"]["amount"]["valueInBaseUnits"] < 0
+        )
+        return {"transaction_count": len(rows), "spent": spend_cents / 100}
+
+
+# ---------------------------------------------------------------------------
+# PocketAI (heypocket)
+# ---------------------------------------------------------------------------
+
+
+class PocketAIClient:
+    default_base_url = "https://public.heypocketai.com/api/v1"
+
+    def __init__(self, credentials: dict, base_url: str | None = None):
+        self.api_key = credentials.get("api_key", "")
+        self.base_url = (base_url or self.default_base_url).rstrip("/")
+
+    def _headers(self):
+        return {"Authorization": f"Bearer {self.api_key}"}
+
+    async def ping(self) -> bool:
+        async with httpx.AsyncClient() as client:
+            r = await client.get(
+                f"{self.base_url}/public/recordings", headers=self._headers(), params={"limit": 1}, timeout=10
+            )
+        return r.status_code == 200
+
+    async def recordings(self, params: dict | None = None) -> dict:
+        async with httpx.AsyncClient() as client:
+            r = await client.get(
+                f"{self.base_url}/public/recordings", headers=self._headers(), params=params or {}, timeout=10
+            )
+        r.raise_for_status()
+        return r.json()
+
+    async def search(self, query: str) -> dict:
+        async with httpx.AsyncClient() as client:
+            r = await client.post(
+                f"{self.base_url}/public/search", headers=self._headers(), json={"query": query}, timeout=10
+            )
+        r.raise_for_status()
+        return r.json()
+
+    async def recording(self, recording_id: str) -> dict:
+        """Full detail for a single recording -- transcript + summarizations."""
+        async with httpx.AsyncClient() as client:
+            r = await client.get(
+                f"{self.base_url}/public/recordings/{recording_id}", headers=self._headers(), timeout=15
+            )
+        r.raise_for_status()
+        return r.json()
+
+    async def summary(self, since_iso_date: str) -> dict:
+        """Recording count/duration/tags since a given date. Every field comes
+        straight off the recording resource (`duration`, `tags`) -- heypocket's
+        API has no dedicated action-items/todos field, so this doesn't invent
+        one."""
+        data = (await self.recordings({"start_date": since_iso_date, "limit": 100})).get("data", [])
+
+        tag_counts: dict[str, int] = {}
+        for r in data:
+            for tag in r.get("tags", []):
+                name = tag.get("name", "untagged")
+                tag_counts[name] = tag_counts.get(name, 0) + 1
+
+        return {
+            "recordings_count": len(data),
+            "total_duration_minutes": round(sum(r.get("duration", 0) for r in data) / 60, 1),
+            "tag_breakdown": sorted(
+                [{"tag": k, "count": v} for k, v in tag_counts.items()], key=lambda row: -row["count"]
+            ),
+            "recent_recordings": [
+                {
+                    "title": r.get("title", ""),
+                    "duration_minutes": round(r.get("duration", 0) / 60, 1),
+                    "recorded_at": r.get("recording_at") or r.get("created_at"),
+                    "tags": [tag.get("name") for tag in r.get("tags", [])],
+                }
+                for r in sorted(data, key=lambda r: r.get("recording_at") or "", reverse=True)[:10]
+            ],
+        }
+
+
+# ---------------------------------------------------------------------------
+# Open Connector gateway
+# ---------------------------------------------------------------------------
+
+
+class OpenConnectorClient:
+    """Thin proxy client for an Open Connector gateway
+    (https://github.com/oomol-lab/open-connector) -- it holds OAuth/API-key
+    credentials for many third-party apps; this just forwards named actions
+    to it, so Eunomia doesn't need a hand-rolled client per app.
+
+    `action` is "{provider}.{action_name}", e.g. "github.get_current_user".
+    """
+
+    default_base_url = "http://localhost:3000"
+
+    def __init__(self, credentials: dict, base_url: str | None = None):
+        self.token = credentials.get("api_key", "")
+        self.base_url = (base_url or self.default_base_url).rstrip("/")
+
+    def _headers(self) -> dict:
+        return {"Authorization": f"Bearer {self.token}"} if self.token else {}
+
+    async def ping(self) -> bool:
+        async with httpx.AsyncClient() as client:
+            r = await client.get(f"{self.base_url}/openapi.json", headers=self._headers(), timeout=10)
+        return r.status_code == 200
+
+    async def list_connections(self) -> dict:
+        async with httpx.AsyncClient() as client:
+            r = await client.get(f"{self.base_url}/api/connections", headers=self._headers(), timeout=10)
+        r.raise_for_status()
+        return r.json()
+
+    async def call_action(self, action: str, params: dict | None = None) -> dict:
+        async with httpx.AsyncClient() as client:
+            r = await client.post(
+                f"{self.base_url}/v1/actions/{action}",
+                headers=self._headers(),
+                json={"input": params or {}},
+                timeout=30,
+            )
+        r.raise_for_status()
+        return r.json()
+

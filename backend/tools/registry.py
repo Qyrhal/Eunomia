@@ -6,6 +6,8 @@ Async end to end: REST needs `async def` handlers for FastAPI concurrency and
 the `mcp` SDK supports async tool callables in both stdio and HTTP modes.
 """
 
+from sources.registry import tool_registry as source_tools
+
 from . import generic
 
 _EXTRA: dict[str, dict] = {}
@@ -21,16 +23,8 @@ def all_tools() -> dict[str, dict]:
     for name, impl in generic.IMPLS.items():
         reg[name] = {"schema": generic.SCHEMAS[name], "impl": impl}
 
-    # TODO(next phase): merge sources.registry.tool_registry() once the
-    # `sources` package exists -- see tools/registry.py@1825e11 for the exact
-    # merge shape to replicate (fq_name -> {"schema": spec.schema, "impl": spec.impl}).
-    try:
-        from sources.registry import tool_registry as source_tools
-
-        for fq_name, spec in source_tools().items():
-            reg[fq_name] = {"schema": spec.schema, "impl": spec.impl}
-    except ImportError:
-        pass
+    for fq_name, spec in source_tools().items():
+        reg[fq_name] = {"schema": spec.schema, "impl": spec.impl}
 
     reg.update(_EXTRA)
     return reg
