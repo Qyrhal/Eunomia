@@ -26,6 +26,7 @@ SCHEMA_STATEMENTS = [
     'DEFINE FIELD IF NOT EXISTS embedding_model ON app_settings TYPE string DEFAULT "text-embedding-3-small";',
     "DEFINE FIELD IF NOT EXISTS sync_intervals ON app_settings FLEXIBLE TYPE object DEFAULT {};",
     "DEFINE FIELD IF NOT EXISTS theme ON app_settings FLEXIBLE TYPE object DEFAULT {};",
+    'DEFINE FIELD IF NOT EXISTS openai_api_key_encrypted ON app_settings TYPE string DEFAULT "";',
     "DEFINE FIELD IF NOT EXISTS updated_at ON app_settings TYPE datetime DEFAULT time::now();",
     "DEFINE INDEX IF NOT EXISTS app_settings_owner_unique ON app_settings FIELDS owner UNIQUE;",
     # connector credentials (owned, not global)

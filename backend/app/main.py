@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.db import close_db, connect_db, ensure_schema
+from app.routers import auth, connectors, settings, sources, tools
 
 
 @asynccontextmanager
@@ -25,6 +26,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(lifespan=lifespan)
+
+app.include_router(auth.router, prefix="/api")
+app.include_router(settings.router, prefix="/api")
+app.include_router(connectors.router, prefix="/api")
+app.include_router(connectors.snapshot_router, prefix="/api")
+app.include_router(sources.router, prefix="/api")
+app.include_router(tools.router, prefix="/api")
 
 
 @app.get("/healthz")
