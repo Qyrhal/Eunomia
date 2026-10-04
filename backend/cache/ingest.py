@@ -1,11 +1,14 @@
 """The ingest pipeline: raw source record -> cache row.
 
 One entrypoint, :func:`ingest`, called by the scheduler, webhook endpoints, and
-on-demand refresh. Stages, per record: map -> upsert (idempotent) -> embed. No
-masking/PII stage (dropped per the FastAPI+SurrealDB rewrite plan).
+on-demand refresh. Stages, per record: map -> upsert (idempotent) -> embed ->
+extract entities. No masking/PII stage (dropped per the FastAPI+SurrealDB
+rewrite plan).
 
 Partial failure is isolated: a bad record is recorded and skipped, the batch
-continues. Embedding failure is non-fatal (backfill retries).
+continues. Embedding failure is non-fatal (backfill retries). Entity
+extraction failure is likewise non-fatal -- it's an enrichment step, not core
+pipeline.
 """
 
 from dataclasses import dataclass, field
@@ -40,6 +43,12 @@ async def _embed_record(owner, rec) -> None:
     await set_embedding(owner, rec.id, vec)
 
 
+async def _extract_record_entities(owner, rec) -> None:
+    from entities.extract import extract_entities
+
+    await extract_entities(owner, {"id": rec.id, "title": rec.title, "body_text": rec.body_text})
+
+
 async def ingest(owner, source_key: str, raw_records, map_fn) -> IngestReport:
     from cache.search import upsert
 
@@ -63,6 +72,11 @@ async def ingest(owner, source_key: str, raw_records, map_fn) -> IngestReport:
                     await _embed_record(owner, rec)
                 except Exception as e:  # non-fatal -- backfill will retry
                     report.errors.append(f"embed {rec.id}: {e}")
+
+                try:
+                    await _extract_record_entities(owner, rec)
+                except Exception as e:  # non-fatal -- enrichment, not core pipeline
+                    report.errors.append(f"extract {rec.id}: {e}")
         except Exception as e:
             report.failed += 1
             report.errors.append(
