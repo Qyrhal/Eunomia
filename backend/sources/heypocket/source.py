@@ -35,6 +35,21 @@ class HeyPocketSource(Source):
         start = cursor or (datetime.now(timezone.utc) - timedelta(days=30)).date().isoformat()
         client = await self._client(owner)
         data = (await client.recordings({"start_date": start, "limit": 200})).get("data", [])
+        # The list endpoint has no transcript/summary -- fetch each recording's
+        # detail so body_text actually carries real content instead of
+        # silently falling back to just the title.
+        for r in data:
+            rid = r.get("id") or r.get("recording_id")
+            if not rid:
+                continue
+            try:
+                detail = (await client.recording(rid)).get("data", {})
+            except Exception:
+                continue
+            segments = ((detail.get("transcript") or {}).get("segments")) or []
+            r["transcript_text"] = " ".join(s.get("text", "") for s in segments if s.get("text"))
+            r["summary"] = detail.get("summary")
+            r["notes"] = detail.get("notes")
         newest = max(
             (r.get("recording_at") or r.get("created_at") or "" for r in data),
             default=cursor or start,
@@ -46,7 +61,9 @@ class HeyPocketSource(Source):
         if not rid:
             return None
         tags = [t.get("name") for t in raw.get("tags", []) if isinstance(t, dict)]
-        body = " ".join(x for x in (raw.get("summary"), raw.get("transcript"), raw.get("notes")) if x) or raw.get(
+        body = " ".join(
+            x for x in (raw.get("summary"), raw.get("transcript_text"), raw.get("notes")) if x
+        ) or raw.get(
             "title", ""
         )
         return {
