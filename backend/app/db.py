@@ -103,3 +103,12 @@ async def get_db() -> AsyncIterator[AsyncSurreal]:
     if _db is None:
         raise RuntimeError("SurrealDB connection not initialized; check app lifespan.")
     yield _db
+
+
+def db() -> AsyncSurreal:
+    """Direct accessor for the pooled connection, for non-request call sites
+    (``cache``/``embeddings`` services) that aren't FastAPI route handlers and
+    so can't use the ``get_db`` dependency."""
+    if _db is None:
+        raise RuntimeError("SurrealDB connection not initialized; check app lifespan.")
+    return _db
