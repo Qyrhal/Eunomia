@@ -118,7 +118,7 @@ export default function OnboardingPage() {
 
         {step === 0 && (
           <div className="flex flex-col gap-5">
-            <p className="text-[13.5px]" style={{ color: "var(--text-secondary)" }}>
+            <p className="text-[13.5px]" style={{ color: "var(--ink-dim)" }}>
               You&apos;re signed in as <strong>{me.email}</strong>. Let&apos;s get you set up — two quick
               steps, then you&apos;re in.
             </p>
@@ -134,7 +134,7 @@ export default function OnboardingPage() {
 
         {step === 1 && (
           <div className="flex flex-col gap-4">
-            <p className="text-[13px]" style={{ color: "var(--text-secondary)" }}>
+            <p className="text-[13px]" style={{ color: "var(--ink-dim)" }}>
               Connect one data source to start. You can add the others later from Connectors.
             </p>
             <div className="flex gap-2">
@@ -149,7 +149,7 @@ export default function OnboardingPage() {
                   className="flex-1 field px-3 py-2 text-[12.5px] flex items-center justify-center gap-1.5"
                   style={{
                     borderColor: kind === k ? "var(--accent)" : "var(--border)",
-                    color: kind === k ? "var(--accent)" : "var(--text-secondary)",
+                    color: kind === k ? "var(--accent)" : "var(--ink-dim)",
                   }}
                 >
                   {CONNECTOR_META[k].icon}
@@ -160,7 +160,7 @@ export default function OnboardingPage() {
 
             <div className="flex flex-col gap-3">
               {CONNECTOR_META[kind].fields.map((f) => (
-                <label key={f.key} className="text-[12px] flex flex-col gap-1.5" style={{ color: "var(--text-secondary)" }}>
+                <label key={f.key} className="text-[12px] flex flex-col gap-1.5" style={{ color: "var(--ink-dim)" }}>
                   {f.label}
                   <input
                     type={f.secret ? "password" : "text"}
@@ -191,7 +191,7 @@ export default function OnboardingPage() {
               <button
                 onClick={() => (skipOpenAiStep ? finish() : setStep(2))}
                 className="px-4 py-2 text-[13px]"
-                style={{ color: "var(--text-muted)" }}
+                style={{ color: "var(--ink-faint)" }}
               >
                 {connectSaved ? "Continue" : "Skip for now"}
               </button>
@@ -201,11 +201,11 @@ export default function OnboardingPage() {
 
         {step === 2 && !skipOpenAiStep && (
           <div className="flex flex-col gap-4">
-            <p className="text-[13px]" style={{ color: "var(--text-secondary)" }}>
+            <p className="text-[13px]" style={{ color: "var(--ink-dim)" }}>
               Eunomia uses OpenAI for embeddings and entity-memory extraction. Paste a key now, or skip
               and add it later from Settings.
             </p>
-            <label className="text-[12px] flex flex-col gap-1.5" style={{ color: "var(--text-secondary)" }}>
+            <label className="text-[12px] flex flex-col gap-1.5" style={{ color: "var(--ink-dim)" }}>
               OpenAI API key
               <input
                 type="password"
@@ -231,7 +231,7 @@ export default function OnboardingPage() {
               >
                 {busy ? "Finishing…" : "Finish"}
               </button>
-              <button onClick={finish} className="px-4 py-2 text-[13px]" style={{ color: "var(--text-muted)" }}>
+              <button onClick={finish} className="px-4 py-2 text-[13px]" style={{ color: "var(--ink-faint)" }}>
                 Skip & finish
               </button>
             </div>

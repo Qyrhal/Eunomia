@@ -35,12 +35,12 @@ export default function SettingsPage() {
       </div>
 
       <Link href="/connectors" className="ledger p-5 flex items-center gap-3.5 hover:opacity-90">
-        <div className="w-8 h-8 flex items-center justify-center" style={{ background: "var(--surface-2)", color: "var(--text-secondary)" }}>
+        <div className="w-8 h-8 flex items-center justify-center" style={{ background: "var(--surface-raised)", color: "var(--ink-dim)" }}>
           <Plug size={16} />
         </div>
         <div className="flex-1">
           <div className="text-[13.5px] font-medium">Connectors</div>
-          <div className="text-[12px]" style={{ color: "var(--text-muted)" }}>
+          <div className="text-[12px]" style={{ color: "var(--ink-faint)" }}>
             Up Bank, PocketAI, Open Connector — credentials and connection status
           </div>
         </div>
@@ -51,10 +51,10 @@ export default function SettingsPage() {
 
       <section className="ledger p-6 flex flex-col gap-4">
         <div className="eyebrow">OpenAI</div>
-        <p className="text-[12.5px]" style={{ color: "var(--text-muted)" }}>
+        <p className="text-[12.5px]" style={{ color: "var(--ink-faint)" }}>
           Used for embeddings and entity-memory extraction.
         </p>
-        <label className="text-[13px] flex flex-col gap-1.5" style={{ color: "var(--text-secondary)" }}>
+        <label className="text-[13px] flex flex-col gap-1.5" style={{ color: "var(--ink-dim)" }}>
           API key {settings.openai_api_key_set && <span style={{ color: "var(--good)" }}>· set</span>}
           <input
             type="password"
@@ -68,7 +68,7 @@ export default function SettingsPage() {
 
       <section className="ledger p-6 flex flex-col gap-4">
         <div className="eyebrow">Theme</div>
-        <label className="text-[13px] flex flex-col gap-1.5" style={{ color: "var(--text-secondary)" }}>
+        <label className="text-[13px] flex flex-col gap-1.5" style={{ color: "var(--ink-dim)" }}>
           Mode
           <select
             className="field px-3 py-2.5 text-[13.5px]"
@@ -80,7 +80,7 @@ export default function SettingsPage() {
             <option value="dark">Dark</option>
           </select>
         </label>
-        <label className="text-[13px] flex flex-col gap-1.5" style={{ color: "var(--text-secondary)" }}>
+        <label className="text-[13px] flex flex-col gap-1.5" style={{ color: "var(--ink-dim)" }}>
           Accent color
           <input
             type="color"

@@ -34,7 +34,7 @@ export default function LoginPage() {
           <h1 className="font-display text-2xl">Sign in</h1>
         </div>
 
-        <label className="text-[13px] flex flex-col gap-1.5" style={{ color: "var(--text-secondary)" }}>
+        <label className="text-[13px] flex flex-col gap-1.5" style={{ color: "var(--ink-dim)" }}>
           Email
           <input
             type="email"
@@ -46,7 +46,7 @@ export default function LoginPage() {
           />
         </label>
 
-        <label className="text-[13px] flex flex-col gap-1.5" style={{ color: "var(--text-secondary)" }}>
+        <label className="text-[13px] flex flex-col gap-1.5" style={{ color: "var(--ink-dim)" }}>
           Password
           <input
             type="password"
@@ -72,7 +72,7 @@ export default function LoginPage() {
           {busy ? "Signing in…" : "Sign in"}
         </button>
 
-        <p className="text-[12.5px]" style={{ color: "var(--text-muted)" }}>
+        <p className="text-[12.5px]" style={{ color: "var(--ink-faint)" }}>
           No account yet?{" "}
           <Link href="/register" className="underline" style={{ color: "var(--accent)" }}>
             Register

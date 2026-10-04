@@ -103,7 +103,7 @@ export default function ConnectorsPage() {
       <div>
         <div className="eyebrow mb-2">Connectors</div>
         <h1 className="font-display text-3xl">Sealed accounts</h1>
-        <p className="text-[13px] mt-2" style={{ color: "var(--text-secondary)" }}>
+        <p className="text-[13px] mt-2" style={{ color: "var(--ink-dim)" }}>
           Every credential here is encrypted at rest and only ever used by your own instance —
           never sent anywhere but the provider it belongs to.
         </p>
@@ -120,32 +120,32 @@ export default function ConnectorsPage() {
             <div key={kind} className="ledger p-6 flex flex-col gap-4">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2.5">
-                  <div className="w-8 h-8 flex items-center justify-center" style={{ background: "var(--surface-2)", color: "var(--text-secondary)" }}>
+                  <div className="w-8 h-8 flex items-center justify-center" style={{ background: "var(--surface-raised)", color: "var(--ink-dim)" }}>
                     {meta.icon}
                   </div>
                   <div className="text-[13.5px] font-medium">{meta.label}</div>
                 </div>
-                <span className="eyebrow" style={{ color: isDemo ? "var(--accent)" : connected ? "var(--good)" : "var(--text-muted)" }}>
+                <span className="eyebrow" style={{ color: isDemo ? "var(--accent)" : connected ? "var(--good)" : "var(--ink-faint)" }}>
                   {isDemo ? "Demo data" : connected ? "Connected" : "Not connected"}
                 </span>
               </div>
 
               {isDemo && (
-                <p className="text-[12px]" style={{ color: "var(--text-muted)" }}>
+                <p className="text-[12px]" style={{ color: "var(--ink-faint)" }}>
                   Running on fake data seeded from Settings. Save a real token below to switch over,
                   or clear the demo data from Settings.
                 </p>
               )}
 
               {meta.help && (
-                <p className="text-[12px]" style={{ color: "var(--text-muted)" }}>
+                <p className="text-[12px]" style={{ color: "var(--ink-faint)" }}>
                   {meta.help}
                 </p>
               )}
 
               <div className="grid sm:grid-cols-2 gap-3">
                 {meta.fields.map((f) => (
-                  <label key={f.key} className="text-[12px] flex flex-col gap-1.5" style={{ color: "var(--text-secondary)" }}>
+                  <label key={f.key} className="text-[12px] flex flex-col gap-1.5" style={{ color: "var(--ink-dim)" }}>
                     {f.label}
                     <input
                       type={f.secret ? "password" : "text"}
@@ -167,7 +167,7 @@ export default function ConnectorsPage() {
                     Test connection
                   </button>
                   {testResult[kind] && (
-                    <span className="text-[12px] font-mono" style={{ color: "var(--text-muted)" }}>
+                    <span className="text-[12px] font-mono" style={{ color: "var(--ink-faint)" }}>
                       {testResult[kind]}
                     </span>
                   )}

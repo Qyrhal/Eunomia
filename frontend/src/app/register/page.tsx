@@ -34,7 +34,7 @@ export default function RegisterPage() {
           <h1 className="font-display text-2xl">Create your account</h1>
         </div>
 
-        <label className="text-[13px] flex flex-col gap-1.5" style={{ color: "var(--text-secondary)" }}>
+        <label className="text-[13px] flex flex-col gap-1.5" style={{ color: "var(--ink-dim)" }}>
           Email
           <input
             type="email"
@@ -46,7 +46,7 @@ export default function RegisterPage() {
           />
         </label>
 
-        <label className="text-[13px] flex flex-col gap-1.5" style={{ color: "var(--text-secondary)" }}>
+        <label className="text-[13px] flex flex-col gap-1.5" style={{ color: "var(--ink-dim)" }}>
           Password
           <input
             type="password"
@@ -73,7 +73,7 @@ export default function RegisterPage() {
           {busy ? "Creating account…" : "Create account"}
         </button>
 
-        <p className="text-[12.5px]" style={{ color: "var(--text-muted)" }}>
+        <p className="text-[12.5px]" style={{ color: "var(--ink-faint)" }}>
           Already have an account?{" "}
           <Link href="/login" className="underline" style={{ color: "var(--accent)" }}>
             Sign in

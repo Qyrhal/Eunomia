@@ -39,8 +39,8 @@ export default function Sidebar() {
       style={{ background: "var(--surface)", borderRight: "1px solid var(--border)" }}
     >
       <div className="px-7 pb-8 flex items-center gap-2.5">
-        <HourRing size={22} color="var(--accent)" />
-        <span className="font-display text-[19px]" style={{ color: "var(--text-primary)" }}>
+        <HourRing size={22} color="var(--ink)" />
+        <span className="font-display text-[19px]" style={{ color: "var(--ink)" }}>
           Eunomia
         </span>
       </div>
@@ -54,13 +54,13 @@ export default function Sidebar() {
               href={href}
               className="flex items-center gap-2.5 px-3 py-2 text-[13.5px] relative"
               style={{
-                color: active ? "var(--text-primary)" : "var(--text-secondary)",
+                color: active ? "var(--ink)" : "var(--ink-dim)",
                 fontWeight: active ? 600 : 400,
               }}
             >
               <span
                 className="absolute left-0 top-1.5 bottom-1.5 w-[2px]"
-                style={{ background: active ? "var(--accent)" : "transparent" }}
+                style={{ background: active ? "var(--ink)" : "transparent" }}
               />
               <Icon size={15} strokeWidth={active ? 2.25 : 1.75} />
               <span className="flex-1">{label}</span>

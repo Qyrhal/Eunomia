@@ -86,18 +86,18 @@ export default function CommandPalette() {
                   onClick={() => choose(item)}
                   className="w-full flex items-center gap-2.5 px-4 py-2.5 text-[13px] text-left"
                   style={{
-                    background: i === index ? "var(--surface-2)" : "transparent",
-                    color: "var(--text-primary)",
+                    background: i === index ? "var(--surface-raised)" : "transparent",
+                    color: "var(--ink)",
                   }}
                 >
-                  {Icon && <Icon size={14} color="var(--text-muted)" />}
+                  {Icon && <Icon size={14} color="var(--ink-faint)" />}
                   <span className="flex-1 truncate">{item.label}</span>
                 </button>
               </li>
             );
           })}
           {items.length === 0 && (
-            <li className="px-4 py-6 text-center text-[12.5px]" style={{ color: "var(--text-muted)" }}>
+            <li className="px-4 py-6 text-center text-[12.5px]" style={{ color: "var(--ink-faint)" }}>
               Nothing matches.
             </li>
           )}

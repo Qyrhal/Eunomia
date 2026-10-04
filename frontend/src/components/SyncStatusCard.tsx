@@ -31,10 +31,10 @@ export default function SyncStatusCard({ source, onSync, syncing }: { source: So
         </div>
         <span className="eyebrow">{source.key}</span>
       </div>
-      <div className="text-[12px]" style={{ color: "var(--text-secondary)" }}>
+      <div className="text-[12px]" style={{ color: "var(--ink-dim)" }}>
         {source.record_types.join(" · ")}
       </div>
-      <div className="text-[11.5px] font-mono" style={{ color: "var(--text-muted)" }}>
+      <div className="text-[11.5px] font-mono" style={{ color: "var(--ink-faint)" }}>
         {relativeTime(status.last_ok)}
         {status.consecutive_failures > 0 && (
           <span style={{ color: "var(--critical)" }}> · {status.consecutive_failures} failure{status.consecutive_failures === 1 ? "" : "s"} in a row</span>

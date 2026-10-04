@@ -1,82 +1,61 @@
 @import "tailwindcss";
 
-/* ---- Eunomia: "civic ledger" ----
-   Ink = deep verdigris (oxidised bronze), the metal of Greek instruments.
-   Accent = brass, the metal of a seal. A hairline register, not a bubble UI. */
+/* ---- Eunomia: "mission control" ----
+   A single-operator instrument panel for a personal memory hub. Dark graphite
+   canvas, rounded dark cards, phosphor-teal reserved for the one thing that's
+   actually new or needs attention — never for general decoration. Light mode
+   remains available as an explicit opt-in via data-theme="light". */
 
 :root {
-  color-scheme: light;
-  --plane: #ececE4;
-  --surface: #fbfbf8;
-  --surface-2: #f2f1e8;
-  --text-primary: #182524;
-  --text-secondary: #48605a;
-  --text-muted: #82938c;
-  --gridline: #d9d9cd;
-  --border: rgba(24, 37, 36, 0.14);
-  --border-strong: rgba(24, 37, 36, 0.28);
-  --accent: #a8752f;
-  --accent-ink: #6e4f1e;
-  --verdigris: #1f8a75;
-  --series-1: #a8752f;
-  --series-2: #1f8a75;
-  --series-3: #b03f28;
-  --series-4: #235c99;
-  --good: #2f8f4e;
-  --warning: #a8752f;
-  --critical: #b03f28;
+  color-scheme: dark;
+  --canvas: #0a0c0f;
+  --surface: #14171c;
+  --surface-raised: #1c2026;
+  --ink: #eceff3;
+  --ink-dim: #8a93a3;
+  --ink-faint: #5b6472;
+  --border: rgba(236, 239, 243, 0.1);
+  --border-strong: rgba(236, 239, 243, 0.2);
+  --accent: #bb8640;
+  --signal: #5eead4;
+  --series-1: #8b5cf6;
+  --series-2: #60a5fa;
+  --series-3: #f472b6;
+  --series-4: #fbbf24;
+  --kind-person: #4fd1c5;
+  --kind-organisation: #60a5fa;
+  --kind-location: #86efac;
+  --good: #34d399;
+  --warning: #fbbf24;
+  --critical: #fb7185;
 
   --font-display: var(--font-fraunces);
   --font-sans: var(--font-plex-sans);
   --font-mono: var(--font-plex-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    color-scheme: dark;
-    --plane: #0e1512;
-    --surface: #141e1a;
-    --surface-2: #1a2622;
-    --text-primary: #eceee6;
-    --text-secondary: #adbab3;
-    --text-muted: #728279;
-    --gridline: #26332d;
-    --border: rgba(236, 238, 230, 0.12);
-    --border-strong: rgba(236, 238, 230, 0.22);
-    --accent: #bb8640;
-    --accent-ink: #f3dfb8;
-    --verdigris: #2e9a82;
-    --series-1: #bb8640;
-    --series-2: #2e9a82;
-    --series-3: #db7052;
-    --series-4: #5488c7;
-    --good: #49b56a;
-    --warning: #bb8640;
-    --critical: #db7052;
-  }
-}
-
-:root[data-theme="dark"] {
-  color-scheme: dark;
-  --plane: #0e1512;
-  --surface: #141e1a;
-  --surface-2: #1a2622;
-  --text-primary: #eceee6;
-  --text-secondary: #adbab3;
-  --text-muted: #728279;
-  --gridline: #26332d;
-  --border: rgba(236, 238, 230, 0.12);
-  --border-strong: rgba(236, 238, 230, 0.22);
-  --accent: #bb8640;
-  --accent-ink: #f3dfb8;
-  --verdigris: #2e9a82;
-  --series-1: #bb8640;
-  --series-2: #2e9a82;
-  --series-3: #db7052;
-  --series-4: #5488c7;
-  --good: #49b56a;
-  --warning: #bb8640;
-  --critical: #db7052;
+:root[data-theme="light"] {
+  color-scheme: light;
+  --canvas: #ecece4;
+  --surface: #fbfbf8;
+  --surface-raised: #f2f1e8;
+  --ink: #182524;
+  --ink-dim: #48605a;
+  --ink-faint: #82938c;
+  --border: rgba(24, 37, 36, 0.14);
+  --border-strong: rgba(24, 37, 36, 0.28);
+  --accent: #a8752f;
+  --signal: #0f9488;
+  --series-1: #7c3aed;
+  --series-2: #2563eb;
+  --series-3: #db2777;
+  --series-4: #a8752f;
+  --kind-person: #1f8a75;
+  --kind-organisation: #235c99;
+  --kind-location: #b03f28;
+  --good: #2f8f4e;
+  --warning: #a8752f;
+  --critical: #b03f28;
 }
 
 * {
@@ -84,8 +63,8 @@
 }
 
 body {
-  background: var(--plane);
-  color: var(--text-primary);
+  background: var(--canvas);
+  color: var(--ink);
   font-family: var(--font-sans), system-ui, sans-serif;
 }
 
@@ -108,7 +87,7 @@ body {
 .ledger {
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: 12px;
 }
 
 .eyebrow {
@@ -116,7 +95,7 @@ body {
   font-size: 10.5px;
   letter-spacing: 0.14em;
   text-transform: uppercase;
-  color: var(--text-muted);
+  color: var(--ink-faint);
 }
 
 .hairline-rows > * + * {
@@ -124,15 +103,43 @@ body {
 }
 
 .field {
-  background: var(--surface-2);
+  background: var(--surface-raised);
   border: 1px solid var(--border);
-  border-radius: 4px;
-  color: var(--text-primary);
+  border-radius: 6px;
+  color: var(--ink);
   font-family: var(--font-sans), system-ui, sans-serif;
 }
 
 .field::placeholder {
-  color: var(--text-muted);
+  color: var(--ink-faint);
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 11px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-raised);
+  color: var(--ink-dim);
+  font-size: 12px;
+  line-height: 1;
+}
+
+.pill[aria-pressed="true"] {
+  border-color: var(--signal);
+  color: var(--ink);
+}
+
+.stat-ring-arc {
+  transition: stroke-dasharray 0.6s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stat-ring-arc {
+    transition: none;
+  }
 }
 
 ::selection {
@@ -141,6 +148,6 @@ body {
 }
 
 :focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--signal);
   outline-offset: 2px;
 }
