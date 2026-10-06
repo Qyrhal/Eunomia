@@ -58,7 +58,7 @@ pub const SCHEMA_STATEMENTS: &[&str] = &[
     "DEFINE INDEX IF NOT EXISTS vault_member_user_idx ON vault_member FIELDS user;",
     "DEFINE TABLE IF NOT EXISTS connector SCHEMAFULL;",
     "DEFINE FIELD IF NOT EXISTS owner ON connector TYPE record<user>;",
-    "DEFINE FIELD IF NOT EXISTS kind ON connector TYPE string ASSERT $value IN [\"up_bank\",\"pocketai\",\"open_connector\",\"demo\"];",
+    "DEFINE FIELD IF NOT EXISTS kind ON connector TYPE string ASSERT $value IN [\"up_bank\",\"pocketai\",\"open_connector\",\"github\",\"slack\",\"notion\",\"linear\",\"gmail\",\"google_calendar\",\"discord\",\"spotify\",\"todoist\",\"stripe\",\"demo\"];",
     "DEFINE FIELD IF NOT EXISTS enabled ON connector TYPE bool DEFAULT false;",
     "DEFINE FIELD IF NOT EXISTS config ON connector FLEXIBLE TYPE object DEFAULT {};",
     "DEFINE FIELD IF NOT EXISTS credentials_encrypted ON connector TYPE string DEFAULT \"\";",

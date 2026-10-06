@@ -9,7 +9,7 @@
 
 use std::time::Duration;
 
-use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue, AUTHORIZATION};
 use serde_json::{json, Value};
 
 use crate::error::{AppError, AppResult};
@@ -22,6 +22,28 @@ fn bearer_headers(token: &str) -> HeaderMap {
     let mut headers = HeaderMap::new();
     if !token.is_empty() {
         if let Ok(value) = HeaderValue::from_str(&format!("Bearer {token}")) {
+            headers.insert(AUTHORIZATION, value);
+        }
+    }
+    headers
+}
+
+/// `Authorization: Bot <token>` -- Discord's scheme, distinct from bearer.
+fn bot_headers(token: &str) -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    if !token.is_empty() {
+        if let Ok(value) = HeaderValue::from_str(&format!("Bot {token}")) {
+            headers.insert(AUTHORIZATION, value);
+        }
+    }
+    headers
+}
+
+/// `Authorization: <key>` with no scheme prefix -- Linear's API-key scheme.
+fn raw_key_headers(key: &str) -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    if !key.is_empty() {
+        if let Ok(value) = HeaderValue::from_str(key) {
             headers.insert(AUTHORIZATION, value);
         }
     }
@@ -57,6 +79,18 @@ async fn get_json(url: &str, headers: HeaderMap, query: &[(&str, String)], timeo
         .error_for_status()
         .map_err(|e| AppError::internal(e.to_string()))?;
     resp.json::<Value>().await.map_err(|e| AppError::internal(e.to_string()))
+}
+
+async fn post_status(url: &str, headers: HeaderMap, body: &Value, timeout_secs: u64) -> AppResult<bool> {
+    let resp = reqwest::Client::new()
+        .post(url)
+        .headers(headers)
+        .json(body)
+        .timeout(Duration::from_secs(timeout_secs))
+        .send()
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    Ok(resp.status().is_success())
 }
 
 async fn post_json(url: &str, headers: HeaderMap, body: &Value, timeout_secs: u64) -> AppResult<Value> {
@@ -409,6 +443,344 @@ impl OpenConnectorClient {
     pub async fn call_action(&self, action: &str, params: Option<&Value>) -> AppResult<Value> {
         let body = json!({"input": params.cloned().unwrap_or_else(|| json!({}))});
         post_json(&format!("{}/v1/actions/{action}", self.base_url), self.headers(), &body, 30).await
+    }
+}
+
+// ---------------------------------------------------------------------------
+// GitHub
+// ---------------------------------------------------------------------------
+
+pub struct GitHubClient {
+    token: String,
+}
+
+impl GitHubClient {
+    const BASE_URL: &'static str = "https://api.github.com";
+
+    pub fn new(credentials: &Value) -> Self {
+        Self { token: str_field(credentials, "personal_access_token") }
+    }
+
+    fn headers(&self) -> HeaderMap {
+        bearer_headers(&self.token)
+    }
+
+    pub async fn ping(&self) -> AppResult<bool> {
+        get_status(&format!("{}/user", Self::BASE_URL), self.headers(), &[], 10).await
+    }
+
+    /// Notifications across every repo this token can see -- the closest
+    /// thing GitHub's REST API has to a single activity feed.
+    pub async fn notifications(&self, since: Option<&str>) -> AppResult<Value> {
+        let mut params = vec![("all", "true".to_string()), ("per_page", "50".to_string())];
+        if let Some(since) = since {
+            params.push(("since", since.to_string()));
+        }
+        get_json(&format!("{}/notifications", Self::BASE_URL), self.headers(), &params, 15).await
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Slack
+// ---------------------------------------------------------------------------
+
+pub struct SlackClient {
+    bot_token: String,
+}
+
+impl SlackClient {
+    const BASE_URL: &'static str = "https://slack.com/api";
+
+    pub fn new(credentials: &Value) -> Self {
+        Self { bot_token: str_field(credentials, "bot_token") }
+    }
+
+    fn headers(&self) -> HeaderMap {
+        bearer_headers(&self.bot_token)
+    }
+
+    pub async fn ping(&self) -> AppResult<bool> {
+        // `auth.test` is a POST in Slack's API but 200s even with no body;
+        // GET-with-bearer works identically for a reachability check.
+        get_status(&format!("{}/auth.test", Self::BASE_URL), self.headers(), &[], 10).await
+    }
+
+    /// Channels/conversations this bot is a member of.
+    pub async fn conversations(&self) -> AppResult<Value> {
+        get_json(&format!("{}/conversations.list", Self::BASE_URL), self.headers(), &[("limit", "100".to_string())], 15).await
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Notion
+// ---------------------------------------------------------------------------
+
+pub struct NotionClient {
+    token: String,
+}
+
+impl NotionClient {
+    const BASE_URL: &'static str = "https://api.notion.com/v1";
+    const VERSION: &'static str = "2022-06-28";
+
+    pub fn new(credentials: &Value) -> Self {
+        Self { token: str_field(credentials, "integration_token") }
+    }
+
+    fn headers(&self) -> HeaderMap {
+        let mut headers = bearer_headers(&self.token);
+        if let Ok(name) = HeaderName::from_bytes(b"Notion-Version") {
+            headers.insert(name, HeaderValue::from_static(Self::VERSION));
+        }
+        headers
+    }
+
+    pub async fn ping(&self) -> AppResult<bool> {
+        get_status(&format!("{}/users/me", Self::BASE_URL), self.headers(), &[], 10).await
+    }
+
+    /// Pages/databases shared with this integration, newest-edited first.
+    pub async fn search(&self) -> AppResult<Value> {
+        let body = json!({"sort": {"direction": "descending", "timestamp": "last_edited_time"}, "page_size": 50});
+        post_json(&format!("{}/search", Self::BASE_URL), self.headers(), &body, 15).await
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Linear
+// ---------------------------------------------------------------------------
+
+pub struct LinearClient {
+    api_key: String,
+}
+
+impl LinearClient {
+    const BASE_URL: &'static str = "https://api.linear.app/graphql";
+
+    pub fn new(credentials: &Value) -> Self {
+        Self { api_key: str_field(credentials, "api_key") }
+    }
+
+    fn headers(&self) -> HeaderMap {
+        raw_key_headers(&self.api_key)
+    }
+
+    pub async fn ping(&self) -> AppResult<bool> {
+        let body = json!({"query": "{ viewer { id } }"});
+        post_status(Self::BASE_URL, self.headers(), &body, 10).await
+    }
+
+    /// Issues assigned to the token's owner, most recently updated first.
+    pub async fn assigned_issues(&self) -> AppResult<Value> {
+        let body = json!({
+            "query": "{ viewer { assignedIssues(first: 50, orderBy: updatedAt) { nodes { id identifier title description url state { name } updatedAt createdAt } } } }"
+        });
+        post_json(Self::BASE_URL, self.headers(), &body, 15).await
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Gmail
+// ---------------------------------------------------------------------------
+
+pub struct GmailClient {
+    access_token: String,
+}
+
+impl GmailClient {
+    const BASE_URL: &'static str = "https://gmail.googleapis.com/gmail/v1";
+
+    /// Google OAuth access tokens expire quickly (~1h); refreshing them is
+    /// not implemented here -- `access_token` must already be a live token
+    /// (e.g. refreshed by whatever flow issued the stored credentials).
+    pub fn new(credentials: &Value) -> Self {
+        Self { access_token: str_field(credentials, "access_token") }
+    }
+
+    fn headers(&self) -> HeaderMap {
+        bearer_headers(&self.access_token)
+    }
+
+    pub async fn ping(&self) -> AppResult<bool> {
+        get_status(&format!("{}/users/me/profile", Self::BASE_URL), self.headers(), &[], 10).await
+    }
+
+    pub async fn messages(&self, query: Option<&str>) -> AppResult<Value> {
+        let mut params = vec![("maxResults", "50".to_string())];
+        if let Some(q) = query {
+            params.push(("q", q.to_string()));
+        }
+        get_json(&format!("{}/users/me/messages", Self::BASE_URL), self.headers(), &params, 15).await
+    }
+
+    pub async fn message(&self, id: &str) -> AppResult<Value> {
+        get_json(&format!("{}/users/me/messages/{id}", Self::BASE_URL), self.headers(), &[("format", "metadata".to_string())], 15).await
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Google Calendar
+// ---------------------------------------------------------------------------
+
+pub struct GoogleCalendarClient {
+    access_token: String,
+}
+
+impl GoogleCalendarClient {
+    const BASE_URL: &'static str = "https://www.googleapis.com/calendar/v3";
+
+    /// Same caveat as `GmailClient` -- no OAuth refresh here.
+    pub fn new(credentials: &Value) -> Self {
+        Self { access_token: str_field(credentials, "access_token") }
+    }
+
+    fn headers(&self) -> HeaderMap {
+        bearer_headers(&self.access_token)
+    }
+
+    pub async fn ping(&self) -> AppResult<bool> {
+        get_status(&format!("{}/calendars/primary", Self::BASE_URL), self.headers(), &[], 10).await
+    }
+
+    pub async fn events(&self, time_min: &str) -> AppResult<Value> {
+        get_json(
+            &format!("{}/calendars/primary/events", Self::BASE_URL),
+            self.headers(),
+            &[("timeMin", time_min.to_string()), ("singleEvents", "true".to_string()), ("orderBy", "startTime".to_string()), ("maxResults", "100".to_string())],
+            15,
+        )
+        .await
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Discord
+// ---------------------------------------------------------------------------
+
+pub struct DiscordClient {
+    bot_token: String,
+    channel_id: String,
+}
+
+impl DiscordClient {
+    const BASE_URL: &'static str = "https://discord.com/api/v10";
+
+    pub fn new(credentials: &Value, config: &Value) -> Self {
+        Self {
+            bot_token: str_field(credentials, "bot_token"),
+            channel_id: config.get("channel_id").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+        }
+    }
+
+    fn headers(&self) -> HeaderMap {
+        bot_headers(&self.bot_token)
+    }
+
+    pub async fn ping(&self) -> AppResult<bool> {
+        get_status(&format!("{}/users/@me", Self::BASE_URL), self.headers(), &[], 10).await
+    }
+
+    /// Recent messages in the configured channel. Needs `channel_id` set in
+    /// the connector's `config` (no server-wide "all channels" sync -- the
+    /// bot would need to be told which channel matters).
+    pub async fn messages(&self) -> AppResult<Value> {
+        if self.channel_id.is_empty() {
+            return Ok(json!([]));
+        }
+        get_json(
+            &format!("{}/channels/{}/messages", Self::BASE_URL, self.channel_id),
+            self.headers(),
+            &[("limit", "50".to_string())],
+            15,
+        )
+        .await
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Spotify
+// ---------------------------------------------------------------------------
+
+pub struct SpotifyClient {
+    access_token: String,
+}
+
+impl SpotifyClient {
+    const BASE_URL: &'static str = "https://api.spotify.com/v1";
+
+    /// Same OAuth-refresh caveat as `GmailClient`.
+    pub fn new(credentials: &Value) -> Self {
+        Self { access_token: str_field(credentials, "access_token") }
+    }
+
+    fn headers(&self) -> HeaderMap {
+        bearer_headers(&self.access_token)
+    }
+
+    pub async fn ping(&self) -> AppResult<bool> {
+        get_status(&format!("{}/me", Self::BASE_URL), self.headers(), &[], 10).await
+    }
+
+    pub async fn recently_played(&self) -> AppResult<Value> {
+        get_json(&format!("{}/me/player/recently-played", Self::BASE_URL), self.headers(), &[("limit", "50".to_string())], 15).await
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Todoist
+// ---------------------------------------------------------------------------
+
+pub struct TodoistClient {
+    token: String,
+}
+
+impl TodoistClient {
+    const BASE_URL: &'static str = "https://api.todoist.com/rest/v2";
+
+    pub fn new(credentials: &Value) -> Self {
+        Self { token: str_field(credentials, "api_token") }
+    }
+
+    fn headers(&self) -> HeaderMap {
+        bearer_headers(&self.token)
+    }
+
+    pub async fn ping(&self) -> AppResult<bool> {
+        get_status(&format!("{}/projects", Self::BASE_URL), self.headers(), &[], 10).await
+    }
+
+    pub async fn tasks(&self) -> AppResult<Value> {
+        get_json(&format!("{}/tasks", Self::BASE_URL), self.headers(), &[], 15).await
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Stripe
+// ---------------------------------------------------------------------------
+
+pub struct StripeClient {
+    secret_key: String,
+}
+
+impl StripeClient {
+    const BASE_URL: &'static str = "https://api.stripe.com/v1";
+
+    pub fn new(credentials: &Value) -> Self {
+        Self { secret_key: str_field(credentials, "secret_key") }
+    }
+
+    fn headers(&self) -> HeaderMap {
+        // Stripe accepts its secret key as a bearer token on every endpoint,
+        // same as the Basic-auth form its docs lead with.
+        bearer_headers(&self.secret_key)
+    }
+
+    pub async fn ping(&self) -> AppResult<bool> {
+        get_status(&format!("{}/balance", Self::BASE_URL), self.headers(), &[], 10).await
+    }
+
+    pub async fn charges(&self) -> AppResult<Value> {
+        get_json(&format!("{}/charges", Self::BASE_URL), self.headers(), &[("limit", "50".to_string())], 15).await
     }
 }
 

@@ -147,7 +147,20 @@ export async function downloadExport(): Promise<void> {
 // connectors
 // ---------------------------------------------------------------------------
 
-export type ConnectorKind = "up_bank" | "pocketai" | "open_connector";
+export type ConnectorKind =
+  | "up_bank"
+  | "pocketai"
+  | "open_connector"
+  | "github"
+  | "slack"
+  | "notion"
+  | "linear"
+  | "gmail"
+  | "google_calendar"
+  | "discord"
+  | "spotify"
+  | "todoist"
+  | "stripe";
 
 export type Connector = {
   kind: ConnectorKind;

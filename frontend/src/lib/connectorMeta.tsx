@@ -1,4 +1,18 @@
-import { Landmark, Mic, Plug2 } from "lucide-react";
+import {
+  Calendar,
+  CheckSquare,
+  CreditCard,
+  GitBranch,
+  Landmark,
+  Mail,
+  MessageCircle,
+  MessagesSquare,
+  Mic,
+  Music,
+  Notebook,
+  Plug2,
+  Workflow,
+} from "lucide-react";
 import type { Connector } from "@/lib/api";
 
 export type FieldDef = { key: string; label: string; placeholder: string; secret: boolean };
@@ -73,9 +87,162 @@ export const CONNECTOR_META: Record<Connector["kind"], ConnectorMeta> = {
     sourceKey: null,
     webhooks: false,
   },
+  github: {
+    label: "GitHub",
+    description: "Pull in notifications across every repo your token can see.",
+    icon: <GitBranch size={18} />,
+    tint: "var(--connector-github)",
+    help: (
+      <>
+        Generate a{" "}
+        <a href="https://github.com/settings/tokens" target="_blank" rel="noreferrer" className="underline" style={{ color: "var(--ink)" }}>
+          personal access token
+        </a>{" "}
+        with the <code className="font-mono">notifications</code> scope.
+      </>
+    ),
+    fields: [{ key: "personal_access_token", label: "Personal access token", placeholder: "ghp_…", secret: true }],
+    sourceKey: "github",
+    webhooks: false,
+  },
+  slack: {
+    label: "Slack",
+    description: "Sync channels your bot has joined.",
+    icon: <MessagesSquare size={18} />,
+    tint: "var(--connector-slack)",
+    help: (
+      <>
+        Install a{" "}
+        <a href="https://api.slack.com/apps" target="_blank" rel="noreferrer" className="underline" style={{ color: "var(--ink)" }}>
+          Slack app
+        </a>{" "}
+        with a bot token (<code className="font-mono">xoxb-…</code>).
+      </>
+    ),
+    fields: [{ key: "bot_token", label: "Bot token", placeholder: "xoxb-…", secret: true }],
+    sourceKey: "slack",
+    webhooks: false,
+  },
+  notion: {
+    label: "Notion",
+    description: "Sync pages and databases shared with your integration.",
+    icon: <Notebook size={18} />,
+    tint: "var(--connector-notion)",
+    help: (
+      <>
+        Create an{" "}
+        <a href="https://www.notion.so/my-integrations" target="_blank" rel="noreferrer" className="underline" style={{ color: "var(--ink)" }}>
+          internal integration
+        </a>{" "}
+        and share the pages you want synced with it.
+      </>
+    ),
+    fields: [{ key: "integration_token", label: "Integration token", placeholder: "secret_…", secret: true }],
+    sourceKey: "notion",
+    webhooks: false,
+  },
+  linear: {
+    label: "Linear",
+    description: "Sync issues assigned to you.",
+    icon: <Workflow size={18} />,
+    tint: "var(--connector-linear)",
+    help: (
+      <>
+        Generate an API key from Linear's Settings → API page.
+      </>
+    ),
+    fields: [{ key: "api_key", label: "API key", placeholder: "lin_api_…", secret: true }],
+    sourceKey: "linear",
+    webhooks: false,
+  },
+  gmail: {
+    label: "Gmail",
+    description: "Sync recent messages.",
+    icon: <Mail size={18} />,
+    tint: "var(--connector-gmail)",
+    help: <>Paste a live OAuth access token with the Gmail readonly scope (no refresh is performed here).</>,
+    fields: [{ key: "access_token", label: "OAuth access token", placeholder: "ya29.…", secret: true }],
+    sourceKey: "gmail",
+    webhooks: false,
+  },
+  google_calendar: {
+    label: "Google Calendar",
+    description: "Sync upcoming and recent events on your primary calendar.",
+    icon: <Calendar size={18} />,
+    tint: "var(--connector-google-calendar)",
+    help: <>Paste a live OAuth access token with the Calendar readonly scope (no refresh is performed here).</>,
+    fields: [{ key: "access_token", label: "OAuth access token", placeholder: "ya29.…", secret: true }],
+    sourceKey: "google_calendar",
+    webhooks: false,
+  },
+  discord: {
+    label: "Discord",
+    description: "Sync recent messages from one channel your bot can read.",
+    icon: <MessageCircle size={18} />,
+    tint: "var(--connector-discord)",
+    help: (
+      <>
+        Create a bot in the{" "}
+        <a href="https://discord.com/developers/applications" target="_blank" rel="noreferrer" className="underline" style={{ color: "var(--ink)" }}>
+          Discord Developer Portal
+        </a>
+        , invite it to your server, then paste its bot token and the channel ID to watch.
+      </>
+    ),
+    fields: [
+      { key: "bot_token", label: "Bot token", placeholder: "…", secret: true },
+      { key: "channel_id", label: "Channel ID", placeholder: "123456789012345678", secret: false },
+    ],
+    sourceKey: "discord",
+    webhooks: false,
+  },
+  spotify: {
+    label: "Spotify",
+    description: "Sync your recently played tracks.",
+    icon: <Music size={18} />,
+    tint: "var(--connector-spotify)",
+    help: <>Paste a live OAuth access token with the recently-played scope (no refresh is performed here).</>,
+    fields: [{ key: "access_token", label: "OAuth access token", placeholder: "BQ…", secret: true }],
+    sourceKey: "spotify",
+    webhooks: false,
+  },
+  todoist: {
+    label: "Todoist",
+    description: "Sync your active tasks.",
+    icon: <CheckSquare size={18} />,
+    tint: "var(--connector-todoist)",
+    help: <>Find your API token under Todoist Settings → Integrations → Developer.</>,
+    fields: [{ key: "api_token", label: "API token", placeholder: "…", secret: true }],
+    sourceKey: "todoist",
+    webhooks: false,
+  },
+  stripe: {
+    label: "Stripe",
+    description: "Sync recent charges.",
+    icon: <CreditCard size={18} />,
+    tint: "var(--connector-stripe)",
+    help: <>Use a restricted-access secret key scoped to read-only charges, not your full secret key.</>,
+    fields: [{ key: "secret_key", label: "Secret key", placeholder: "sk_live_…", secret: true }],
+    sourceKey: "stripe",
+    webhooks: false,
+  },
 };
 
-export const CONNECTOR_ORDER: Connector["kind"][] = ["up_bank", "pocketai", "open_connector"];
+export const CONNECTOR_ORDER: Connector["kind"][] = [
+  "up_bank",
+  "pocketai",
+  "open_connector",
+  "github",
+  "slack",
+  "notion",
+  "linear",
+  "gmail",
+  "google_calendar",
+  "discord",
+  "spotify",
+  "todoist",
+  "stripe",
+];
 
 export function connectorStatus(c: Connector | undefined): "demo" | "connected" | "disconnected" {
   if (!c) return "disconnected";

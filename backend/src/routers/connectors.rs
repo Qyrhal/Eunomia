@@ -18,7 +18,10 @@ use chrono::{Datelike, Duration, Utc};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::connectors::clients::{OpenConnectorClient, PocketAIClient, UpBankClient};
+use crate::connectors::clients::{
+    DiscordClient, GitHubClient, GmailClient, GoogleCalendarClient, LinearClient, NotionClient, OpenConnectorClient,
+    PocketAIClient, SlackClient, SpotifyClient, StripeClient, TodoistClient, UpBankClient,
+};
 use crate::connectors::service::{self, Connector, CONNECTOR_KINDS};
 use crate::error::{AppError, AppResult};
 use crate::models_user::User;
@@ -54,6 +57,16 @@ enum AnyClient {
     UpBank(UpBankClient),
     PocketAI(PocketAIClient),
     OpenConnector(OpenConnectorClient),
+    GitHub(GitHubClient),
+    Slack(SlackClient),
+    Notion(NotionClient),
+    Linear(LinearClient),
+    Gmail(GmailClient),
+    GoogleCalendar(GoogleCalendarClient),
+    Discord(DiscordClient),
+    Spotify(SpotifyClient),
+    Todoist(TodoistClient),
+    Stripe(StripeClient),
 }
 
 impl AnyClient {
@@ -62,6 +75,16 @@ impl AnyClient {
             AnyClient::UpBank(c) => c.ping().await,
             AnyClient::PocketAI(c) => c.ping().await,
             AnyClient::OpenConnector(c) => c.ping().await,
+            AnyClient::GitHub(c) => c.ping().await,
+            AnyClient::Slack(c) => c.ping().await,
+            AnyClient::Notion(c) => c.ping().await,
+            AnyClient::Linear(c) => c.ping().await,
+            AnyClient::Gmail(c) => c.ping().await,
+            AnyClient::GoogleCalendar(c) => c.ping().await,
+            AnyClient::Discord(c) => c.ping().await,
+            AnyClient::Spotify(c) => c.ping().await,
+            AnyClient::Todoist(c) => c.ping().await,
+            AnyClient::Stripe(c) => c.ping().await,
         }
     }
 }
@@ -72,6 +95,16 @@ fn client_for(kind: &str, config: &Value, credentials: &Value) -> Option<AnyClie
         "up_bank" => Some(AnyClient::UpBank(UpBankClient::new(credentials))),
         "pocketai" => Some(AnyClient::PocketAI(PocketAIClient::new(credentials, base_url))),
         "open_connector" => Some(AnyClient::OpenConnector(OpenConnectorClient::new(credentials, base_url))),
+        "github" => Some(AnyClient::GitHub(GitHubClient::new(credentials))),
+        "slack" => Some(AnyClient::Slack(SlackClient::new(credentials))),
+        "notion" => Some(AnyClient::Notion(NotionClient::new(credentials))),
+        "linear" => Some(AnyClient::Linear(LinearClient::new(credentials))),
+        "gmail" => Some(AnyClient::Gmail(GmailClient::new(credentials))),
+        "google_calendar" => Some(AnyClient::GoogleCalendar(GoogleCalendarClient::new(credentials))),
+        "discord" => Some(AnyClient::Discord(DiscordClient::new(credentials, config))),
+        "spotify" => Some(AnyClient::Spotify(SpotifyClient::new(credentials))),
+        "todoist" => Some(AnyClient::Todoist(TodoistClient::new(credentials))),
+        "stripe" => Some(AnyClient::Stripe(StripeClient::new(credentials))),
         _ => None,
     }
 }
@@ -294,6 +327,16 @@ mod tests {
         assert!(matches!(client_for("up_bank", &config, &creds), Some(AnyClient::UpBank(_))));
         assert!(matches!(client_for("pocketai", &config, &creds), Some(AnyClient::PocketAI(_))));
         assert!(matches!(client_for("open_connector", &config, &creds), Some(AnyClient::OpenConnector(_))));
+        assert!(matches!(client_for("github", &config, &creds), Some(AnyClient::GitHub(_))));
+        assert!(matches!(client_for("slack", &config, &creds), Some(AnyClient::Slack(_))));
+        assert!(matches!(client_for("notion", &config, &creds), Some(AnyClient::Notion(_))));
+        assert!(matches!(client_for("linear", &config, &creds), Some(AnyClient::Linear(_))));
+        assert!(matches!(client_for("gmail", &config, &creds), Some(AnyClient::Gmail(_))));
+        assert!(matches!(client_for("google_calendar", &config, &creds), Some(AnyClient::GoogleCalendar(_))));
+        assert!(matches!(client_for("discord", &config, &creds), Some(AnyClient::Discord(_))));
+        assert!(matches!(client_for("spotify", &config, &creds), Some(AnyClient::Spotify(_))));
+        assert!(matches!(client_for("todoist", &config, &creds), Some(AnyClient::Todoist(_))));
+        assert!(matches!(client_for("stripe", &config, &creds), Some(AnyClient::Stripe(_))));
         assert!(client_for("demo", &config, &creds).is_none());
     }
 }

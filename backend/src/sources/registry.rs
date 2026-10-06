@@ -21,20 +21,40 @@ use crate::db::Db;
 use crate::error::{AppError, AppResult};
 use crate::sources::base::{owner_key_str, Source, SourceCtx};
 use crate::sources::demo::DemoSource;
+use crate::sources::discord::DiscordSource;
 use crate::sources::example::ExampleSource;
+use crate::sources::github::GitHubSource;
+use crate::sources::gmail::GmailSource;
+use crate::sources::google_calendar::GoogleCalendarSource;
 use crate::sources::heypocket::HeyPocketSource;
+use crate::sources::linear::LinearSource;
+use crate::sources::notion::NotionSource;
+use crate::sources::slack::SlackSource;
+use crate::sources::spotify::SpotifySource;
+use crate::sources::stripe::StripeSource;
+use crate::sources::todoist::TodoistSource;
 use crate::sources::up_bank::UpBankSource;
 
 /// Every known source. A fresh `Vec` of trait-object handles each call --
-/// cheap (four small zero-sized structs) and avoids needing a
-/// lazily-initialized global registry for what Python builds once at import
-/// time via `discover()`.
+/// cheap (small zero-sized structs) and avoids needing a lazily-initialized
+/// global registry for what Python builds once at import time via
+/// `discover()`.
 pub fn all() -> Vec<Arc<dyn Source>> {
     vec![
         Arc::new(DemoSource) as Arc<dyn Source>,
         Arc::new(ExampleSource) as Arc<dyn Source>,
         Arc::new(HeyPocketSource) as Arc<dyn Source>,
         Arc::new(UpBankSource) as Arc<dyn Source>,
+        Arc::new(GitHubSource) as Arc<dyn Source>,
+        Arc::new(SlackSource) as Arc<dyn Source>,
+        Arc::new(NotionSource) as Arc<dyn Source>,
+        Arc::new(LinearSource) as Arc<dyn Source>,
+        Arc::new(GmailSource) as Arc<dyn Source>,
+        Arc::new(GoogleCalendarSource) as Arc<dyn Source>,
+        Arc::new(DiscordSource) as Arc<dyn Source>,
+        Arc::new(SpotifySource) as Arc<dyn Source>,
+        Arc::new(TodoistSource) as Arc<dyn Source>,
+        Arc::new(StripeSource) as Arc<dyn Source>,
     ]
 }
 
@@ -278,13 +298,15 @@ mod tests {
     #[test]
     fn all_registers_every_ported_source_with_a_unique_key() {
         let keys: Vec<&str> = all().iter().map(|s| s.key()).collect();
-        assert_eq!(keys.len(), 4);
+        assert_eq!(keys.len(), 14);
         let unique: HashSet<&str> = keys.iter().copied().collect();
-        assert_eq!(unique.len(), 4);
-        assert!(keys.contains(&"demo"));
-        assert!(keys.contains(&"example"));
-        assert!(keys.contains(&"heypocket"));
-        assert!(keys.contains(&"up_bank"));
+        assert_eq!(unique.len(), 14);
+        for k in [
+            "demo", "example", "heypocket", "up_bank", "github", "slack", "notion", "linear", "gmail",
+            "google_calendar", "discord", "spotify", "todoist", "stripe",
+        ] {
+            assert!(keys.contains(&k), "missing {k}");
+        }
     }
 
     #[test]
