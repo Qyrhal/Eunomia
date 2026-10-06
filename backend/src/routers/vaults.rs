@@ -18,11 +18,14 @@ use crate::vaults::service;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/vaults", get(list_vaults).post(create_vault))
+        .route("/vaults/invitations", get(list_invitations))
         .route("/vaults/:vault_id", patch(rename_vault).delete(delete_vault))
         .route("/vaults/:vault_id/clone", post(clone_vault))
         .route("/vaults/:vault_id/members", get(list_members).post(invite_member))
         .route("/vaults/:vault_id/members/:email", axum::routing::delete(remove_member))
         .route("/vaults/:vault_id/leave", post(leave_vault))
+        .route("/vaults/:vault_id/invitations/accept", post(accept_invitation))
+        .route("/vaults/:vault_id/invitations/decline", post(decline_invitation))
 }
 
 fn default_kind() -> String {
@@ -159,6 +162,30 @@ async fn leave_vault(
     let rid = parse_vault_id(&vault_id)?;
     service::leave_vault(&state.db, &user.id, &rid).await?;
     Ok(Json(json!({ "left": true })))
+}
+
+async fn list_invitations(State(state): State<AppState>, user: User) -> AppResult<Json<Value>> {
+    let results = service::list_my_invitations(&state.db, &user.id).await?;
+    Ok(Json(json!({ "results": results })))
+}
+
+async fn accept_invitation(
+    State(state): State<AppState>,
+    user: User,
+    Path(vault_id): Path<String>,
+) -> AppResult<Json<service::VaultWithRole>> {
+    let rid = parse_vault_id(&vault_id)?;
+    Ok(Json(service::accept_invitation(&state.db, &user.id, &rid).await?))
+}
+
+async fn decline_invitation(
+    State(state): State<AppState>,
+    user: User,
+    Path(vault_id): Path<String>,
+) -> AppResult<Json<Value>> {
+    let rid = parse_vault_id(&vault_id)?;
+    service::decline_invitation(&state.db, &user.id, &rid).await?;
+    Ok(Json(json!({ "declined": true })))
 }
 
 #[cfg(test)]

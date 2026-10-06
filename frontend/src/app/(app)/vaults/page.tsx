@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ChevronDown, ChevronRight, Copy, LogOut, Plus, Trash2, UserPlus, Users } from "lucide-react";
-import { vaults as vaultsApi, type Vault, type VaultMember, type VaultRole } from "@/lib/api";
+import { Check, ChevronDown, ChevronRight, Copy, LogOut, Mail, Plus, Trash2, UserPlus, Users, X } from "lucide-react";
+import { vaults as vaultsApi, type Vault, type VaultInvitation, type VaultMember, type VaultRole } from "@/lib/api";
 
 function Badge({ children, tone = "dim" }: { children: React.ReactNode; tone?: "dim" | "accent" }) {
   return (
@@ -144,6 +144,94 @@ function MembersPanel({ vault, onChanged }: { vault: Vault; onChanged: () => voi
         </button>
       )}
     </div>
+  );
+}
+
+function InvitationsPanel({ onChanged }: { onChanged: () => void }) {
+  const [invitations, setInvitations] = useState<VaultInvitation[] | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = () =>
+    vaultsApi
+      .invitations()
+      .then((r) => setInvitations(r.results))
+      .catch(() => setInvitations([]));
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  async function accept(vaultId: string) {
+    setBusyId(vaultId);
+    setError(null);
+    try {
+      await vaultsApi.acceptInvitation(vaultId);
+      await load();
+      onChanged();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not accept this invitation.");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function decline(vaultId: string) {
+    setBusyId(vaultId);
+    setError(null);
+    try {
+      await vaultsApi.declineInvitation(vaultId);
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not decline this invitation.");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  if (!invitations || invitations.length === 0) return null;
+
+  return (
+    <section className="flex flex-col gap-3">
+      <div className="eyebrow flex items-center gap-1.5">
+        <Mail size={12} /> Invitations
+      </div>
+      {invitations.map((inv) => (
+        <div key={inv.vault_id} className="ledger flex items-center justify-between px-5 py-4">
+          <div className="flex items-center gap-2">
+            <span className="text-[14px] font-medium">{inv.vault_name}</span>
+            <Badge tone="accent">{inv.vault_kind}</Badge>
+            <Badge>{inv.role}</Badge>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => accept(inv.vault_id)}
+              disabled={busyId === inv.vault_id}
+              className="px-3 py-1.5 text-[12.5px] font-medium rounded-xl disabled:opacity-50 flex items-center gap-1.5"
+              style={{ background: "var(--felt)", color: "var(--canvas)" }}
+            >
+              <Check size={13} />
+              Join
+            </button>
+            <button
+              onClick={() => decline(inv.vault_id)}
+              disabled={busyId === inv.vault_id}
+              aria-label="Decline invitation"
+              className="px-3 py-1.5 text-[12.5px] rounded-xl disabled:opacity-50 flex items-center gap-1.5"
+              style={{ color: "var(--ink-faint)", border: "1px solid var(--border)" }}
+            >
+              <X size={13} />
+              Decline
+            </button>
+          </div>
+        </div>
+      ))}
+      {error && (
+        <p className="text-[12px]" style={{ color: "var(--critical)" }}>
+          {error}
+        </p>
+      )}
+    </section>
   );
 }
 
@@ -351,6 +439,8 @@ export default function VaultsPage() {
           private; invite someone to an org vault to share knowledge with them.
         </p>
       </div>
+
+      <InvitationsPanel onChanged={load} />
 
       <section className="flex flex-col gap-3">
         <div className="eyebrow flex items-center gap-1.5">

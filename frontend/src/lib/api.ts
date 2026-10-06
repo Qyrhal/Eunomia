@@ -325,6 +325,13 @@ export type VaultKind = "personal" | "org";
 
 export type Vault = { id: string; name: string; kind: VaultKind; created_at: string | null; role: VaultRole };
 export type VaultMember = { email: string; role: VaultRole };
+export type VaultInvitation = {
+  vault_id: string;
+  vault_name: string;
+  vault_kind: VaultKind;
+  role: VaultRole;
+  created_at: string | null;
+};
 
 export const vaults = {
   list: () => api.get<{ results: Vault[] }>("/api/vaults"),
@@ -340,6 +347,10 @@ export const vaults = {
   removeMember: (id: string, email: string) =>
     api.del<{ removed: boolean }>(`/api/vaults/${encodeURIComponent(id)}/members/${encodeURIComponent(email)}`),
   leave: (id: string) => api.post<{ left: boolean }>(`/api/vaults/${encodeURIComponent(id)}/leave`),
+  invitations: () => api.get<{ results: VaultInvitation[] }>("/api/vaults/invitations"),
+  acceptInvitation: (id: string) => api.post<Vault>(`/api/vaults/${encodeURIComponent(id)}/invitations/accept`),
+  declineInvitation: (id: string) =>
+    api.post<{ declined: boolean }>(`/api/vaults/${encodeURIComponent(id)}/invitations/decline`),
   clone: (id: string, name?: string, kind: VaultKind = "org") =>
     api.post<Vault & { entities_copied: number }>(`/api/vaults/${encodeURIComponent(id)}/clone`, { name, kind }),
 };

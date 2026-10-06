@@ -9,11 +9,16 @@ export default function RegisterPage() {
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
+    if (password !== confirmPassword) {
+      setError("Passwords don't match.");
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -55,6 +60,18 @@ export default function RegisterPage() {
             className="field px-3 py-2.5 text-[13.5px]"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
+          />
+        </label>
+
+        <label className="text-[13px] flex flex-col gap-1.5" style={{ color: "var(--ink-dim)" }}>
+          Confirm password
+          <input
+            type="password"
+            required
+            minLength={8}
+            className="field px-3 py-2.5 text-[13.5px]"
+            value={confirmPassword}
+            onChange={(e) => setConfirmPassword(e.target.value)}
           />
         </label>
 

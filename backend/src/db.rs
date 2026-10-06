@@ -53,6 +53,7 @@ pub const SCHEMA_STATEMENTS: &[&str] = &[
     "DEFINE FIELD IF NOT EXISTS vault ON vault_member TYPE record<vault>;",
     "DEFINE FIELD IF NOT EXISTS user ON vault_member TYPE record<user>;",
     "DEFINE FIELD IF NOT EXISTS role ON vault_member TYPE string DEFAULT \"member\" ASSERT $value IN [\"owner\",\"member\"];",
+    "DEFINE FIELD IF NOT EXISTS status ON vault_member TYPE string DEFAULT \"active\" ASSERT $value IN [\"pending\",\"active\"];",
     "DEFINE FIELD IF NOT EXISTS created_at ON vault_member TYPE datetime DEFAULT time::now();",
     "DEFINE INDEX IF NOT EXISTS vault_member_unique ON vault_member FIELDS vault, user UNIQUE;",
     "DEFINE INDEX IF NOT EXISTS vault_member_user_idx ON vault_member FIELDS user;",

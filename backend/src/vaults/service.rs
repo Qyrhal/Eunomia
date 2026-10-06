@@ -82,6 +82,15 @@ pub struct MemberOut {
 }
 
 #[derive(Debug, Serialize)]
+pub struct InvitationOut {
+    pub vault_id: String,
+    pub vault_name: String,
+    pub vault_kind: String,
+    pub role: String,
+    pub created_at: Option<Datetime>,
+}
+
+#[derive(Debug, Serialize)]
 pub struct CloneOut {
     pub id: String,
     pub name: String,
@@ -95,6 +104,8 @@ struct MembershipRow {
     id: RecordId,
     #[serde(default)]
     role: String,
+    #[serde(default)]
+    status: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -147,7 +158,20 @@ pub async fn create_vault(db: &Db, user_id: &RecordId, name: &str, kind: &str) -
     Ok(vault.into())
 }
 
+/// Active membership only -- a pending invite isn't membership yet.
 async fn membership(db: &Db, vault_id: &RecordId, user_id: &RecordId) -> AppResult<Option<MembershipRow>> {
+    let mut res = db
+        .query("SELECT * FROM vault_member WHERE vault = $vault AND user = $user AND status = \"active\" LIMIT 1")
+        .bind(("vault", vault_id.clone()))
+        .bind(("user", user_id.clone()))
+        .await?;
+    let rows: Vec<MembershipRow> = res.take(0)?;
+    Ok(rows.into_iter().next())
+}
+
+/// Any `vault_member` row regardless of status -- used only where a pending
+/// invite also needs to count (duplicate-invite checks, accept/decline).
+async fn membership_any_status(db: &Db, vault_id: &RecordId, user_id: &RecordId) -> AppResult<Option<MembershipRow>> {
     let mut res = db
         .query("SELECT * FROM vault_member WHERE vault = $vault AND user = $user LIMIT 1")
         .bind(("vault", vault_id.clone()))
@@ -165,7 +189,7 @@ pub async fn accessible_vault_ids(db: &Db, user_id: &RecordId) -> AppResult<Vec<
         vault: RecordId,
     }
     let mut res = db
-        .query("SELECT vault FROM vault_member WHERE user = $user")
+        .query("SELECT vault FROM vault_member WHERE user = $user AND status = \"active\"")
         .bind(("user", user_id.clone()))
         .await?;
     let rows: Vec<Row> = res.take(0)?;
@@ -180,7 +204,7 @@ pub async fn default_vault_id(db: &Db, user_id: &RecordId) -> AppResult<RecordId
         vault: RecordId,
     }
     let mut res = db
-        .query("SELECT vault FROM vault_member WHERE user = $user AND vault.kind = \"personal\" LIMIT 1")
+        .query("SELECT vault FROM vault_member WHERE user = $user AND status = \"active\" AND vault.kind = \"personal\" LIMIT 1")
         .bind(("user", user_id.clone()))
         .await?;
     let rows: Vec<Row> = res.take(0)?;
@@ -213,7 +237,7 @@ pub async fn list_my_vaults(db: &Db, user_id: &RecordId) -> AppResult<Vec<VaultW
         role: String,
     }
     let mut res = db
-        .query("SELECT vault.* AS vault, role FROM vault_member WHERE user = $user")
+        .query("SELECT vault.* AS vault, role FROM vault_member WHERE user = $user AND status = \"active\"")
         .bind(("user", user_id.clone()))
         .await?;
     let rows: Vec<Row> = res.take(0)?;
@@ -268,12 +292,12 @@ pub async fn invite_member(
     let rows: Vec<EmailLookupRow> = res.take(0)?;
     let invitee = rows.into_iter().next().ok_or_else(|| AppError::bad_request(format!("no user with email '{email}'")))?.id;
 
-    if membership(db, vault_id, &invitee).await?.is_some() {
-        return Err(AppError::bad_request(format!("{email} is already a member")));
+    if membership_any_status(db, vault_id, &invitee).await?.is_some() {
+        return Err(AppError::bad_request(format!("{email} is already a member or has a pending invite")));
     }
 
     let mut res = db
-        .query("CREATE vault_member SET vault = $vault, user = $user, role = $role RETURN AFTER")
+        .query("CREATE vault_member SET vault = $vault, user = $user, role = $role, status = \"pending\" RETURN AFTER")
         .bind(("vault", vault_id.clone()))
         .bind(("user", invitee))
         .bind(("role", role.to_string()))
@@ -292,11 +316,68 @@ pub async fn list_members(db: &Db, user_id: &RecordId, vault_id: &RecordId) -> A
         role: String,
     }
     let mut res = db
-        .query("SELECT user.email AS email, role FROM vault_member WHERE vault = $vault")
+        .query("SELECT user.email AS email, role FROM vault_member WHERE vault = $vault AND status = \"active\"")
         .bind(("vault", vault_id.clone()))
         .await?;
     let rows: Vec<Row> = res.take(0)?;
     Ok(rows.into_iter().map(|r| MemberOut { email: r.email, role: r.role }).collect())
+}
+
+/// Pending invitations for `user_id` across every vault -- what the vaults
+/// page's invitations panel renders to accept/decline.
+pub async fn list_my_invitations(db: &Db, user_id: &RecordId) -> AppResult<Vec<InvitationOut>> {
+    #[derive(Deserialize)]
+    struct Row {
+        vault: VaultFullRow,
+        role: String,
+        created_at: Option<Datetime>,
+    }
+    let mut res = db
+        .query("SELECT vault.* AS vault, role, created_at FROM vault_member WHERE user = $user AND status = \"pending\"")
+        .bind(("user", user_id.clone()))
+        .await?;
+    let rows: Vec<Row> = res.take(0)?;
+    Ok(rows
+        .into_iter()
+        .map(|r| InvitationOut {
+            vault_id: r.vault.id.to_string(),
+            vault_name: r.vault.name,
+            vault_kind: r.vault.kind,
+            role: r.role,
+            created_at: r.created_at,
+        })
+        .collect())
+}
+
+/// Accept a pending invitation into `vault_id`. Only the invitee can accept
+/// their own invite.
+pub async fn accept_invitation(db: &Db, user_id: &RecordId, vault_id: &RecordId) -> AppResult<VaultWithRole> {
+    let m = membership_any_status(db, vault_id, user_id)
+        .await?
+        .filter(|m| m.status == "pending")
+        .ok_or_else(|| AppError::bad_request("no pending invitation for this vault"))?;
+
+    db.query("UPDATE $id SET status = \"active\"").bind(("id", m.id)).await?;
+
+    let mut res = db
+        .query("SELECT * FROM $id")
+        .bind(("id", vault_id.clone()))
+        .await?;
+    let rows: Vec<VaultFullRow> = res.take(0)?;
+    let vault = rows.into_iter().next().ok_or_else(|| AppError::internal("vault lookup returned no row"))?;
+    let v: VaultOut = vault.into();
+    Ok(VaultWithRole { id: v.id, name: v.name, kind: v.kind, created_at: v.created_at, role: m.role })
+}
+
+/// Decline (delete) a pending invitation into `vault_id`.
+pub async fn decline_invitation(db: &Db, user_id: &RecordId, vault_id: &RecordId) -> AppResult<()> {
+    let m = membership_any_status(db, vault_id, user_id)
+        .await?
+        .filter(|m| m.status == "pending")
+        .ok_or_else(|| AppError::bad_request("no pending invitation for this vault"))?;
+
+    db.query("DELETE $id").bind(("id", m.id)).await?;
+    Ok(())
 }
 
 /// Owner-only. Refuses to remove the last owner, so a vault can't be left
