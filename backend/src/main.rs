@@ -14,7 +14,7 @@ async fn main() {
 
     let settings = Settings::load();
     let conn = db::connect(&settings).await.expect("failed to connect to SurrealDB");
-    db::ensure_schema(&conn).await.expect("failed to apply schema");
+    db::ensure_schema(&conn, &settings).await.expect("failed to apply schema");
 
     let state = AppState(Arc::new(AppStateInner { db: conn, settings: settings.clone() }));
 

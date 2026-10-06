@@ -216,9 +216,18 @@ pub async fn connect(settings: &Settings) -> surrealdb::Result<Db> {
     Ok(db)
 }
 
-pub async fn ensure_schema(db: &Db) -> surrealdb::Result<()> {
+pub async fn ensure_schema(db: &Db, settings: &Settings) -> surrealdb::Result<()> {
     for statement in SCHEMA_STATEMENTS {
         db.query(*statement).await?;
     }
+    // Re-defining a field is idempotent in SurrealDB, so this just swaps the
+    // DEFAULT baked into SCHEMA_STATEMENTS for the configured OPENAI_BASE_URL
+    // (self-hosted/OpenAI-compatible endpoints) without duplicating the field
+    // definition above.
+    db.query(format!(
+        "DEFINE FIELD IF NOT EXISTS openai_base_url ON app_settings TYPE string DEFAULT \"{}\";",
+        settings.openai_base_url.replace('"', "\\\"")
+    ))
+    .await?;
     Ok(())
 }
