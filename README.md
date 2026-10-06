@@ -13,7 +13,11 @@ all on one [SurrealDB](https://surrealdb.com/) schema, all exposed identically t
 [![Rust](https://img.shields.io/badge/backend-Rust%20%2F%20Axum-dea584)](backend)
 [![Next.js](https://img.shields.io/badge/frontend-Next.js%20%2F%20TypeScript-000000)](frontend)
 
-[Install](#run-it) · [What's in it](#whats-in-it) · [Docs](docs/deployment.md) · [Install page](https://midhunkumar05.github.io/eunomia/)
+```bash
+curl -fsSL https://midhunkumar05.github.io/eunomia/install.sh | bash
+```
+
+[Install](#install) · [What's in it](#whats-in-it) · [Docs](docs/deployment.md) · [Install page](https://midhunkumar05.github.io/eunomia/)
 
 </div>
 
