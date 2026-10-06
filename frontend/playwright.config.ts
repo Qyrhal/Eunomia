@@ -1,5 +1,9 @@
 import { defineConfig } from "@playwright/test";
 
+// E2E_BASE_URL points the suite at an already-running stack (e.g. the
+// docker-compose one) instead of starting `bun run dev`.
+const baseURL = process.env.E2E_BASE_URL || "http://localhost:3000";
+
 // Uses the system-installed Chrome (no browser download needed).
 // These tests exercise the real API, not a mock: the FastAPI backend
 // (and SurrealDB) must already be running on :8001 before `bun run test` --
@@ -13,13 +17,15 @@ export default defineConfig({
   retries: 0,
   reporter: "list",
   use: {
-    baseURL: "http://localhost:3000",
+    baseURL,
     channel: "chrome",
   },
-  webServer: {
-    command: "bun run dev",
-    url: "http://localhost:3000",
-    reuseExistingServer: true,
-    timeout: 30_000,
-  },
+  webServer: process.env.E2E_BASE_URL
+    ? undefined
+    : {
+        command: "bun run dev",
+        url: baseURL,
+        reuseExistingServer: true,
+        timeout: 30_000,
+      },
 });

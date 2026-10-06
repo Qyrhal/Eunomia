@@ -139,7 +139,7 @@ pub(super) async fn app_settings_row(db: &Db, owner: &RecordId) -> AppResult<App
 pub(super) async fn resolve_openai(db: &Db, settings: &Settings, owner: &RecordId) -> AppResult<(String, String)> {
     let row = app_settings_row(db, owner).await?;
     let base_url = if row.openai_base_url.is_empty() { DEFAULT_OPENAI_BASE_URL.to_string() } else { row.openai_base_url };
-    let decrypted = crate::connectors::crypto::decrypt(&settings.encryption_key, &row.openai_api_key_encrypted)?;
+    let decrypted = crate::connectors::crypto::decrypt_or_plaintext(&settings.encryption_key, &row.openai_api_key_encrypted);
     let key = if !decrypted.is_empty() { decrypted } else { settings.openai_api_key.clone().unwrap_or_default() };
     Ok((base_url, key))
 }

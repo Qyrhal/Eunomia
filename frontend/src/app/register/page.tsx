@@ -57,6 +57,7 @@ export default function RegisterPage() {
             type="password"
             required
             minLength={8}
+            maxLength={72}
             className="field px-3 py-2.5 text-[13.5px]"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
@@ -69,6 +70,7 @@ export default function RegisterPage() {
             type="password"
             required
             minLength={8}
+            maxLength={72}
             className="field px-3 py-2.5 text-[13.5px]"
             value={confirmPassword}
             onChange={(e) => setConfirmPassword(e.target.value)}

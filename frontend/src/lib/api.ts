@@ -1,5 +1,8 @@
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8001";
-export const API_BASE = API_URL;
+// Same-origin by default: next.config.ts proxies /api/* to the backend, so
+// the browser never needs to know the backend's host (works from any device
+// or hostname, no CORS). NEXT_PUBLIC_API_URL only overrides that.
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "";
+export const apiOrigin = () => API_URL || window.location.origin;
 
 // Session is an httpOnly JWT cookie set by /api/auth/{register,login} --
 // every request needs `credentials: "include"` to send/receive it.
@@ -391,7 +394,7 @@ export const chat = {
   // can't send a POST body, and this needs to parse a `ReadableStream`
   // chunk-by-chunk rather than wait for the whole response.
   send: async (threadId: string, message: string, onEvent: (event: ChatStreamEvent) => void): Promise<void> => {
-    const res = await fetch(`${API_BASE}/api/chat/threads/${encodeURIComponent(threadId)}`, {
+    const res = await fetch(`${API_URL}/api/chat/threads/${encodeURIComponent(threadId)}`, {
       method: "POST",
       credentials: "include",
       headers: { "Content-Type": "application/json" },

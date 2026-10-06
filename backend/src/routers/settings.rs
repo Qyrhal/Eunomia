@@ -2,11 +2,8 @@
 //! OpenAI(-compatible) base URL + optional API key. Ported from
 //! `app/routers/settings.py`.
 //!
-//! `connectors/service.py`'s Fernet-based credential encryption hasn't been
-//! ported to Rust yet (no cipher crate in this crate's dependencies), so the
-//! `openai_api_key` value is stored as-is in the `openai_api_key_encrypted`
-//! column rather than actually encrypted. The read side (`openai_api_key_set`)
-//! and all other behavior match the Python router exactly.
+//! `openai_api_key` is stored AES-GCM-encrypted (`connectors::crypto`) in
+//! `openai_api_key_encrypted`; it is never returned, only `openai_api_key_set`.
 
 use axum::{
     extract::State,
@@ -104,7 +101,7 @@ async fn get_app_settings(db: &Db, owner: &RecordId) -> AppResult<AppSettingsRow
 
 /// Partial update: each provided field replaces its current value outright
 /// (no deep merge), matching the Python router's semantics.
-async fn update_app_settings(db: &Db, owner: &RecordId, body: &SettingsUpdate) -> AppResult<AppSettingsRow> {
+async fn update_app_settings(db: &Db, owner: &RecordId, body: &SettingsUpdate, encryption_key: &str) -> AppResult<AppSettingsRow> {
     get_app_settings(db, owner).await?; // ensure the row exists
 
     let mut set_parts: Vec<&str> = Vec::new();
@@ -144,8 +141,7 @@ async fn update_app_settings(db: &Db, owner: &RecordId, body: &SettingsUpdate) -
         q = q.bind(("theme", v.clone()));
     }
     if let Some(v) = &body.openai_api_key {
-        // Deferred: should be Fernet-encrypted (see module docstring).
-        q = q.bind(("openai_api_key_encrypted", v.clone()));
+        q = q.bind(("openai_api_key_encrypted", crate::connectors::crypto::encrypt(encryption_key, v)));
     }
     if let Some(v) = &body.openai_base_url {
         q = q.bind(("openai_base_url", v.clone()));
@@ -162,7 +158,7 @@ async fn update_app_settings(db: &Db, owner: &RecordId, body: &SettingsUpdate) -
 }
 
 /// Resolve `(base_url, api_key)` for `owner`'s OpenAI-compatible backend.
-async fn resolve_openai(db: &Db, owner: &RecordId, env_api_key: &Option<String>) -> AppResult<(String, String)> {
+async fn resolve_openai(db: &Db, owner: &RecordId, env_api_key: &Option<String>, encryption_key: &str) -> AppResult<(String, String)> {
     let row = get_app_settings(db, owner).await?;
     let base_url = if row.openai_base_url.is_empty() {
         DEFAULT_OPENAI_BASE_URL.to_string()
@@ -170,7 +166,7 @@ async fn resolve_openai(db: &Db, owner: &RecordId, env_api_key: &Option<String>)
         row.openai_base_url
     };
     let key = if !row.openai_api_key_encrypted.is_empty() {
-        row.openai_api_key_encrypted
+        crate::connectors::crypto::decrypt_or_plaintext(encryption_key, &row.openai_api_key_encrypted)
     } else {
         env_api_key.clone().unwrap_or_default()
     };
@@ -187,7 +183,7 @@ async fn patch_settings(
     user: User,
     Json(body): Json<SettingsUpdate>,
 ) -> AppResult<Json<Value>> {
-    let row = update_app_settings(&state.db, &user.id, &body).await?;
+    let row = update_app_settings(&state.db, &user.id, &body, &state.settings.encryption_key).await?;
     Ok(Json(out(&row)))
 }
 
@@ -215,7 +211,7 @@ struct ModelEntry {
 /// Never errors out to the caller -- an unreachable base URL or auth
 /// failure comes back as `{"models": [], "error": "..."}`.
 async fn openai_models(State(state): State<AppState>, user: User) -> AppResult<Json<Value>> {
-    let (base_url, api_key) = resolve_openai(&state.db, &user.id, &state.settings.openai_api_key).await?;
+    let (base_url, api_key) = resolve_openai(&state.db, &user.id, &state.settings.openai_api_key, &state.settings.encryption_key).await?;
     let url = format!("{}/models", base_url.trim_end_matches('/'));
     let auth_key = if api_key.is_empty() { "not-needed" } else { api_key.as_str() };
 

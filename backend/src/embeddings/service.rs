@@ -124,24 +124,19 @@ struct AppSettingsOpenaiRow {
 }
 
 /// Resolve `(base_url, api_key)` for `owner`'s OpenAI-compatible backend.
-///
-/// Deferred: `connectors::service` (the Rust port of `connectors/service.py`)
-/// only covers connector CRUD so far -- it explicitly doesn't yet expose
-/// `get_app_settings`/`resolve_openai` (see that module's doc comment). Doing
-/// a direct `app_settings` read here, rather than depending on a function
-/// that doesn't exist yet, mirrors the same direct-read already done in
-/// `routers/settings.rs::resolve_openai` (also not encrypting the stored key,
-/// for the same reason noted there -- it's stored as-is today). Once
-/// `connectors::service` grows a real `resolve_openai`, both call sites
-/// should switch to it instead of duplicating this query.
-pub(crate) async fn resolve_openai_for_owner(db: &Db, owner: &RecordId, env_api_key: &Option<String>) -> AppResult<(String, String)> {
+pub(crate) async fn resolve_openai_for_owner(
+    db: &Db,
+    owner: &RecordId,
+    env_api_key: &Option<String>,
+    encryption_key: &str,
+) -> AppResult<(String, String)> {
     let rid = RecordId::from_table_key("app_settings", owner.key().clone());
     let row: Option<AppSettingsOpenaiRow> = db.select(rid).await?;
     let row = row.unwrap_or_default();
 
     let base_url = if row.openai_base_url.is_empty() { DEFAULT_OPENAI_BASE_URL.to_string() } else { row.openai_base_url };
     let key = if !row.openai_api_key_encrypted.is_empty() {
-        row.openai_api_key_encrypted
+        crate::connectors::crypto::decrypt_or_plaintext(encryption_key, &row.openai_api_key_encrypted)
     } else {
         env_api_key.clone().unwrap_or_default()
     };
@@ -183,7 +178,7 @@ pub async fn embed(db: &Db, settings: &Settings, texts: &[String], owner: Option
         let fresh_texts: Vec<String> = missing_idx.iter().map(|&i| texts[i].clone()).collect();
         let vecs = if backend == "openai" {
             let (base_url, api_key) = match owner {
-                Some(o) => resolve_openai_for_owner(db, o, &settings.openai_api_key).await?,
+                Some(o) => resolve_openai_for_owner(db, o, &settings.openai_api_key, &settings.encryption_key).await?,
                 None => (DEFAULT_OPENAI_BASE_URL.to_string(), settings.openai_api_key.clone().unwrap_or_default()),
             };
             embed_openai(&fresh_texts, &base_url, &api_key).await?

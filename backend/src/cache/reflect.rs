@@ -78,7 +78,7 @@ pub async fn reflect(
     let memories = render_memories(&items);
     let prompt = build_prompt(query, &memories);
 
-    let (base_url, api_key) = resolve_openai_for_owner(db, owner, &settings.openai_api_key).await?;
+    let (base_url, api_key) = resolve_openai_for_owner(db, owner, &settings.openai_api_key, &settings.encryption_key).await?;
     let auth_key = if api_key.is_empty() { "not-needed" } else { api_key.as_str() };
     let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
 

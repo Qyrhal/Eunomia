@@ -4,8 +4,8 @@ import { registerAndOnboard, uniqueEmail } from "./helpers";
 test.describe("Auth", () => {
   test("register -> onboarding -> dashboard", async ({ page }) => {
     await registerAndOnboard(page, uniqueEmail("auth"));
-    await expect(page).toHaveURL("http://localhost:3000/");
-    await expect(page.getByText("The register")).toBeVisible();
+    await expect(page).toHaveURL((url) => url.pathname === "/");
+    await expect(page.getByText("What's next", { exact: true })).toBeVisible();
   });
 
   test("an unauthenticated visitor to a protected page is redirected to login or register", async ({ page }) => {
@@ -24,6 +24,6 @@ test.describe("Auth", () => {
     await page.getByLabel("Password").fill("correct-horse-battery-staple");
     await page.getByRole("button", { name: "Sign in" }).click();
 
-    await expect(page).toHaveURL("http://localhost:3000/");
+    await expect(page).toHaveURL((url) => url.pathname === "/");
   });
 });

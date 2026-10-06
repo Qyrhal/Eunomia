@@ -1,74 +1,22 @@
 #!/usr/bin/env bash
-# Boots Eunomia: migrates the backend, then runs backend + frontend together.
+# Local dev without the compose stack: SurrealDB in Docker (bound to
+# localhost only), backend via `cargo run`, frontend via `bun run dev`.
+# The frontend proxies /api to the backend on :8001 (frontend/next.config.ts).
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
-BLUE='\033[38;5;33m'
-DIM='\033[2m'
-BOLD='\033[1m'
-GREEN='\033[38;5;35m'
-RESET='\033[0m'
-
-echo -e "${BLUE}${BOLD}"
-cat <<'EOF'
-  ______                           _
- |  ____|                         (_)
- | |__   _   _ _ __   ___  _ __ ___  _  __ _
- |  __| | | | | '_ \ / _ \| '_ ` _ \| |/ _` |
- | |____| |_| | | | | (_) | | | | | | | (_| |
- |______|\__,_|_| |_|\___/|_| |_| |_|_|\__,_|
-EOF
-echo -e "${RESET}${DIM}  your personal AI dashboard${RESET}\n"
-
-cd backend
-
-if [ ! -f .env ]; then
-  echo -e "${DIM}no backend/.env — generating one with a fresh ENCRYPTION_KEY${RESET}"
-  KEY=$(uv run python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
-  cat > .env <<EOF
-SECRET_KEY=dev-secret-$(date +%s)
-ENCRYPTION_KEY=${KEY}
-EOF
+DB=eunomia-dev-surrealdb
+if [ -z "$(docker ps -q -f name="^${DB}$")" ]; then
+  echo "==> starting SurrealDB ($DB, data in volume eunomia-dev-surreal)"
+  docker run -d --rm --name "$DB" --user root -p 127.0.0.1:8000:8000 -v eunomia-dev-surreal:/data \
+    surrealdb/surrealdb:v2.3 start --user root --pass root rocksdb:/data/eunomia.db >/dev/null
 fi
+until docker exec "$DB" /surreal isready --endpoint http://localhost:8000 >/dev/null 2>&1; do sleep 1; done
 
-echo -e "${BOLD}==>${RESET} syncing backend deps (uv)"
-uv sync --quiet
+[ -d frontend/node_modules ] || (cd frontend && bun install)
 
-echo -e "${BOLD}==>${RESET} making migrations"
-uv run manage.py makemigrations
-
-echo -e "${BOLD}==>${RESET} applying migrations"
-uv run manage.py migrate
-
-cd ../frontend
-if [ ! -d node_modules ]; then
-  echo -e "${BOLD}==>${RESET} installing frontend deps (bun)"
-  bun install
-fi
-if [ ! -f .env.local ]; then
-  echo "NEXT_PUBLIC_API_URL=http://localhost:8000" > .env.local
-fi
-
-cd ..
-
-cleanup() {
-  echo -e "\n${DIM}shutting down...${RESET}"
-  kill -- -$$ 2>/dev/null || true
-}
-trap cleanup EXIT INT TERM
-
-echo -e "${BOLD}==>${RESET} starting backend  ${DIM}http://localhost:8000${RESET}"
-(cd backend && uv run manage.py runserver 8000) &
-
-echo -e "${BOLD}==>${RESET} starting sync worker (APScheduler)"
-(cd backend && uv run manage.py run_worker) &
-
-echo -e "${BOLD}==>${RESET} starting MCP server ${DIM}http://localhost:8765/mcp${RESET}"
-(cd backend && uv run mcp_server.py --http) &
-
-echo -e "${BOLD}==>${RESET} starting frontend ${DIM}http://localhost:3000${RESET}"
+trap 'kill 0' EXIT INT TERM
+(cd backend && cargo run) &
 (cd frontend && bun run dev) &
-
-echo -e "\n${GREEN}${BOLD}Eunomia is running${RESET} — ${BOLD}http://localhost:3000${RESET}  ${DIM}(ctrl-c to stop)${RESET}\n"
-
+echo "==> Eunomia dev on http://localhost:3000 (ctrl-c to stop; '$DB' keeps running -- docker stop $DB)"
 wait

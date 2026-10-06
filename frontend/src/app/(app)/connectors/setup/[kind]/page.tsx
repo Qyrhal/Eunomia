@@ -3,7 +3,7 @@
 import { use, useEffect, useState } from "react";
 import Link from "next/link";
 import { ArrowLeft, ArrowRight } from "lucide-react";
-import { API_BASE, auth as authApi, connectors as connectorsApi, settings as settingsApi, type AppSettings, type Connector, type ConnectorKind } from "@/lib/api";
+import { apiOrigin, auth as authApi, connectors as connectorsApi, settings as settingsApi, type AppSettings, type Connector, type ConnectorKind } from "@/lib/api";
 import { CONNECTOR_META, connectorStatus } from "@/lib/connectorMeta";
 
 // Presets for the sync-interval select, in seconds.
@@ -71,7 +71,7 @@ function ConnectorSetup({ kind }: { kind: ConnectorKind }) {
     if (meta.webhooks)
       authApi.me().then((me) => {
         setOwnerId(me.id);
-        setWebhookUrl(`${API_BASE}/api/sources/${kind}/webhook/${me.id}`);
+        setWebhookUrl(`${apiOrigin()}/api/sources/${kind}/webhook/${me.id}`);
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [kind]);
@@ -202,7 +202,7 @@ function ConnectorSetup({ kind }: { kind: ConnectorKind }) {
             <label className="text-[12px] flex flex-col gap-1.5" style={{ color: "var(--ink-dim)" }}>
               Webhook URL — register this with the provider to push updates here instead of waiting for the next poll.
               Defaults to this app&apos;s address; edit the host if the provider needs a publicly reachable URL
-              (e.g. a tunnel) instead of {new URL(API_BASE).host}.
+              (e.g. a tunnel) instead of {new URL(apiOrigin()).host}.
               <input
                 type="text"
                 className="field px-3 py-2 text-[13px] font-mono"

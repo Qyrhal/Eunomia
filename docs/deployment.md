@@ -40,36 +40,21 @@ their local-dev defaults in production:
 | `ENCRYPTION_KEY` | a static fallback key | `openssl rand -base64 32` — the fallback is non-secret and ships in this repo |
 | `SURREAL_PASS` | `root` | a real password |
 | `OPENAI_API_KEY` | blank (settable per-user instead) | set it server-wide, or rely on each user setting their own in Settings |
-| `CORS_ALLOWED_ORIGINS` | `http://localhost:3000` | your real frontend origin(s), e.g. `https://eunomia.example.com` |
+| `CORS_ALLOWED_ORIGINS` | `http://localhost:3000` | only needed for browsers calling the backend port directly; the bundled frontend goes through its own `/api` proxy |
 | `FRONTEND_URL` | `http://localhost:3000` | same as above (this is what `CORS_ALLOWED_ORIGINS` defaults from in `docker-compose.yml`) |
-| `NEXT_PUBLIC_API_URL` | `http://localhost:8001` | `https://eunomia.example.com/api`'s origin — the public one browsers hit, not an internal docker-compose service name |
 
-## 3. `NEXT_PUBLIC_*` is a build-time bake, not a runtime read
+## 3. The browser only ever talks to the frontend
 
-`frontend/Dockerfile` declares `NEXT_PUBLIC_API_URL` as a build `ARG` that
-gets `ENV`-set before `bun run build` runs:
+The frontend calls same-origin `/api/*`, and `frontend/next.config.ts`
+rewrites that to `BACKEND_INTERNAL_URL` (`http://backend:8001` in the
+image, the compose service name). The browser never needs the backend's
+host, so one prebuilt image works whether you open it as `localhost`, a LAN
+IP, or a domain -- no rebuild, no CORS. Put your reverse proxy / TLS in
+front of the frontend port only.
 
-```dockerfile
-ARG NEXT_PUBLIC_API_URL=http://localhost:8001
-ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
-...
-RUN bun run build
-```
-
-Next.js inlines `NEXT_PUBLIC_*` values into the compiled JS at build time.
-Changing the value in `docker-compose.yml`'s `environment:` (or any runtime
-env) after the image is built does **nothing** — the old URL is already
-compiled into the bundle the browser downloaded. To point the frontend at a
-new API URL, rebuild the image with the new `args:`:
-
-```bash
-docker compose build frontend \
-  --build-arg NEXT_PUBLIC_API_URL=https://eunomia.example.com/api
-docker compose up -d frontend
-```
-
-(or set them under `frontend.build.args` in `docker-compose.yml` once and
-rebuild whenever they change).
+`NEXT_PUBLIC_API_URL` still exists as a build-time override for running the
+frontend somewhere it can't reach the backend over a private network; it is
+inlined at `bun run build`, so changing it requires rebuilding the image.
 
 ## Auto-update
 

@@ -178,19 +178,17 @@ clean slate; it deletes the volume (and any real data in it) outright.
 
 See [`docs/deployment.md`](docs/deployment.md) for reverse-proxy/TLS setup
 (Caddy example), which env vars need real (non-`localhost`, non-default)
-values in production, and why changing `NEXT_PUBLIC_API_URL` requires
-rebuilding the frontend image, not just restarting it.
+values in production, and how the frontend proxies `/api` to the backend
+so the browser only ever needs the frontend's address.
 
 ## Local dev (without Docker)
 
 ```bash
-cd backend
-cargo run   # needs a local SurrealDB (see docker-compose.yml)
-
-cd frontend
-bun install
-bun run dev
+./run.sh   # SurrealDB in Docker (localhost only) + `cargo run` + `bun run dev`
 ```
+
+Open http://localhost:3000 -- the dev server proxies `/api` to the backend on
+:8001, same as the production image.
 
 ## License
 

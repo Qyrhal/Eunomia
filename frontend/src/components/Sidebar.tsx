@@ -177,7 +177,7 @@ export default function Sidebar() {
             Eunomia
           </span>
           <span className="text-[11px]" style={{ color: "var(--ink-faint)" }}>
-            v1.0.2
+            {process.env.NEXT_PUBLIC_APP_VERSION ?? "dev"}
           </span>
         </div>
         {navBody}

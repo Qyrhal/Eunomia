@@ -6,16 +6,16 @@ test.describe("Connectors", () => {
     await registerAndOnboard(page, uniqueEmail("connectors"));
     await page.goto("/connectors");
 
-    await expect(page.getByText("Not connected").first()).toBeVisible();
+    const upBankCard = page.getByRole("link", { name: /Up Bank/ });
+    await expect(upBankCard.getByText("Not connected")).toBeVisible();
+    await upBankCard.click();
 
-    const upBankCard = page.locator(".ledger", { hasText: "Up Bank" });
-    await upBankCard.getByPlaceholder("up:yeah:…").fill("up:yeah:e2e-fake-token");
-    await upBankCard.getByRole("button", { name: /Save/ }).click();
+    await page.getByPlaceholder("up:yeah:…").fill("up:yeah:e2e-fake-token");
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Saved" })).toBeVisible();
 
-    await expect(upBankCard.getByText("Connected")).toBeVisible();
-
-    // Reflected after a reload too, not just optimistic local state.
-    await page.reload();
-    await expect(page.locator(".ledger", { hasText: "Up Bank" }).getByText("Connected")).toBeVisible();
+    // Reflected on the list after a fresh load, not just optimistic local state.
+    await page.goto("/connectors");
+    await expect(page.getByRole("link", { name: /Up Bank/ }).getByText("Connected", { exact: true })).toBeVisible();
   });
 });

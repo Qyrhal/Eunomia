@@ -12,8 +12,7 @@ services:
       - --pass
       - ${SURREAL_PASS:-root}
       - rocksdb:/data/eunomia.db
-    ports:
-      - "8000:8000"
+    # No host port: only the backend talks to the DB, over the compose network.
     volumes:
       - eunomia-surreal-data:/data
     healthcheck:
@@ -57,10 +56,7 @@ services:
 
   frontend:
     image: ghcr.io/qyrhal/eunomia-frontend:${EUNOMIA_IMAGE_TAG:-latest}
-    build:
-      context: ./frontend
-      args:
-        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8001}
+    build: ./frontend
     ports:
       - "${FRONTEND_PORT:-3000}:3000"
     depends_on:

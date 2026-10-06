@@ -1,265 +1,71 @@
-# Installing Eunomia (for the Hermes agent doing the install)
+# Installing Eunomia (for an agent doing the install)
 
-You're a Hermes agent, installing Eunomia onto the box you're running on, next
-to yourself. This doc is written for you to execute top to bottom. Where it
-says "ask the operator," stop and actually ask — don't guess.
+You're an agent installing Eunomia onto the box you're running on. Execute
+this top to bottom. Where it says "ask the operator," stop and ask.
 
-Eunomia and Hermes must end up on the **same host**, reachable over
-tailscale/netbird only. Never bind anything to a public interface.
+Keep it private: reachable over localhost or tailscale/netbird only. Never
+bind anything to a public interface.
 
-## Step 0 — pick Docker or k3s
+## Step 1 — install
 
-This box has both. Ask the operator which one to use. If they don't care,
-here's the difference in one line each:
-
-- **Docker Compose** — simpler, one `docker compose up`, easiest to debug and
-  tear down. Pick this unless you already run other workloads on k3s.
-- **k3s** — use this if Eunomia should live next to other things you already
-  manage as k8s workloads on this box.
-
-Then jump to [Docker path](#docker-path) or [k3s path](#k3s-path) below.
-Both end at [Step 3 — point Hermes at it](#step-3--point-hermes-at-it), which
-is the same either way.
-
-## Step 1 — get the repo
+Requires git and Docker with the Compose plugin.
 
 ```bash
-git clone https://github.com/Qyrhal/Eunomia.git
-cd Eunomia
+curl -fsSL https://midhunkumar05.github.io/eunomia/install.sh | bash -s -- --yes
 ```
 
-(Skip if it's already checked out — just `cd` into it.)
+This clones the latest release into `./eunomia`, writes `.env` with fresh
+secrets (JWT, encryption key, DB password), pulls the prebuilt images, and
+starts SurrealDB + backend + frontend. Useful flags:
 
-## Step 2 — generate secrets
+| Flag | Default |
+|---|---|
+| `--dir <path>` | `./eunomia` |
+| `--ref <tag>` | latest release |
+| `--frontend-port <port>` | `3000` |
+| `--backend-port <port>` | `8001` |
+| `--api-key <key>` | none — ask the operator; can be added later in Settings |
+| `--openai-base-url <url>` | `https://api.openai.com/v1` (any OpenAI-compatible endpoint) |
 
-Do this once regardless of path; both paths consume the same values.
+If a port is taken the installer stops before changing anything — ask the
+operator which port to use.
+
+Manual alternative (same result):
 
 ```bash
-JWT_SECRET=$(openssl rand -base64 32)
-ENCRYPTION_KEY=$(openssl rand -base64 32)
+git clone https://github.com/Qyrhal/Eunomia.git && cd Eunomia
+cp .env.example .env   # then set JWT_SECRET, ENCRYPTION_KEY, SURREAL_PASS (openssl rand -base64 32)
+docker compose pull && docker compose up -d
 ```
 
-If the operator has Up Bank / heypocket creds ready, ask for them now too.
-Not required to get Eunomia running — those connectors can be added later
-from the frontend.
-
----
-
-## Docker path
+## Step 2 — verify
 
 ```bash
-cat > .env <<EOF
-SECRET_KEY=${SECRET_KEY}
-ENCRYPTION_KEY=${ENCRYPTION_KEY}
-EUNOMIA_API_TOKEN=${EUNOMIA_API_TOKEN}
-FRONTEND_URL=http://localhost:3000
-NEXT_PUBLIC_API_URL=http://localhost:8000
-NEXT_PUBLIC_API_TOKEN=${EUNOMIA_API_TOKEN}
-EOF
-
-docker compose up -d --build
+curl -fsS http://localhost:8001/healthz
+docker compose ps        # from the install dir; all three services "Up"
 ```
 
-That brings up `backend` (:8000), `worker`, `mcp` (:8765), `frontend`
-(:3000). Verify:
+The UI is at `http://localhost:3000` (or `http://<host-ip>:3000` from other
+devices — the browser only talks to the frontend, which proxies `/api`).
+
+## Step 3 — get an API token for yourself
+
+Ask the operator to register at the UI and generate a token (Dashboard →
+"Connect an MCP client" → Generate a token). Use it as a bearer token
+against the REST API:
 
 ```bash
-curl -s http://localhost:8000/api/ -H "Authorization: Bearer ${EUNOMIA_API_TOKEN}"
-docker compose ps   # all four should be "running"/"healthy"
+curl -H "Authorization: Bearer $EUNOMIA_API_TOKEN" http://localhost:8001/api/auth/me
 ```
 
-**Rebind off 0.0.0.0** — Compose publishes on all interfaces by default. On a
-tailscale box, edit `docker-compose.yml` and prefix each `ports:` entry with
-your tailscale IP, e.g. `"100.x.y.z:8765:8765"`, then `docker compose up -d`
-again to apply.
-
-**Uninstall:** `docker compose down -v` (the `-v` also drops the sqlite
-volume — drop it only if the operator wants the data gone too).
-
-Now go to [Step 3](#step-3--point-hermes-at-it).
-
----
-
-## k3s path
-
-k3s uses containerd, not the Docker daemon — build with `docker build` as
-usual, then hand the image to k3s directly (no registry needed for a
-single-node box):
-
-```bash
-docker build -t eunomia-backend:local ./backend
-docker build -t eunomia-frontend:local \
-  --build-arg NEXT_PUBLIC_API_URL=http://eunomia-backend:8000 \
-  --build-arg NEXT_PUBLIC_API_TOKEN="${EUNOMIA_API_TOKEN}" \
-  ./frontend
-
-docker save eunomia-backend:local  | sudo k3s ctr images import -
-docker save eunomia-frontend:local | sudo k3s ctr images import -
-```
-
-Apply the manifest (namespace, secret, storage, the four workloads, and
-ClusterIP services — nothing here touches a public interface; reach it
-through `kubectl port-forward` over tailscale, or your existing tailscale
-Kubernetes operator if you run one):
-
-```bash
-kubectl apply -f - <<EOF
-apiVersion: v1
-kind: Namespace
-metadata: { name: eunomia }
----
-apiVersion: v1
-kind: Secret
-metadata: { name: eunomia-env, namespace: eunomia }
-stringData:
-  SECRET_KEY: "${SECRET_KEY}"
-  ENCRYPTION_KEY: "${ENCRYPTION_KEY}"
-  EUNOMIA_API_TOKEN: "${EUNOMIA_API_TOKEN}"
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata: { name: eunomia-data, namespace: eunomia }
-spec:
-  accessModes: [ReadWriteOnce]
-  resources: { requests: { storage: 2Gi } }
----
-apiVersion: apps/v1
-kind: Deployment
-metadata: { name: backend, namespace: eunomia }
-spec:
-  replicas: 1
-  selector: { matchLabels: { app: backend } }
-  template:
-    metadata: { labels: { app: backend } }
-    spec:
-      containers:
-      - name: backend
-        image: eunomia-backend:local
-        imagePullPolicy: Never
-        ports: [{ containerPort: 8000 }]
-        envFrom: [{ secretRef: { name: eunomia-env } }]
-        env: [{ name: SQLITE_PATH, value: /data/db.sqlite3 }]
-        volumeMounts: [{ name: data, mountPath: /data }]
-      volumes: [{ name: data, persistentVolumeClaim: { claimName: eunomia-data } }]
----
-apiVersion: apps/v1
-kind: Deployment
-metadata: { name: worker, namespace: eunomia }
-spec:
-  replicas: 1
-  selector: { matchLabels: { app: worker } }
-  template:
-    metadata: { labels: { app: worker } }
-    spec:
-      containers:
-      - name: worker
-        image: eunomia-backend:local
-        imagePullPolicy: Never
-        command: ["sh", "-c", "python manage.py migrate --noinput && python manage.py run_worker"]
-        envFrom: [{ secretRef: { name: eunomia-env } }]
-        env: [{ name: SQLITE_PATH, value: /data/db.sqlite3 }]
-        volumeMounts: [{ name: data, mountPath: /data }]
-      volumes: [{ name: data, persistentVolumeClaim: { claimName: eunomia-data } }]
----
-apiVersion: apps/v1
-kind: Deployment
-metadata: { name: mcp, namespace: eunomia }
-spec:
-  replicas: 1
-  selector: { matchLabels: { app: mcp } }
-  template:
-    metadata: { labels: { app: mcp } }
-    spec:
-      containers:
-      - name: mcp
-        image: eunomia-backend:local
-        imagePullPolicy: Never
-        command: ["python", "mcp_server.py", "--http", "--host", "0.0.0.0", "--port", "8765"]
-        ports: [{ containerPort: 8765 }]
-        envFrom: [{ secretRef: { name: eunomia-env } }]
-        env: [{ name: SQLITE_PATH, value: /data/db.sqlite3 }]
-        volumeMounts: [{ name: data, mountPath: /data }]
-      volumes: [{ name: data, persistentVolumeClaim: { claimName: eunomia-data } }]
----
-apiVersion: apps/v1
-kind: Deployment
-metadata: { name: frontend, namespace: eunomia }
-spec:
-  replicas: 1
-  selector: { matchLabels: { app: frontend } }
-  template:
-    metadata: { labels: { app: frontend } }
-    spec:
-      containers:
-      - name: frontend
-        image: eunomia-frontend:local
-        imagePullPolicy: Never
-        ports: [{ containerPort: 3000 }]
----
-apiVersion: v1
-kind: Service
-metadata: { name: eunomia-backend, namespace: eunomia }
-spec: { selector: { app: backend }, ports: [{ port: 8000, targetPort: 8000 }] }
----
-apiVersion: v1
-kind: Service
-metadata: { name: eunomia-mcp, namespace: eunomia }
-spec: { selector: { app: mcp }, ports: [{ port: 8765, targetPort: 8765 }] }
----
-apiVersion: v1
-kind: Service
-metadata: { name: eunomia-frontend, namespace: eunomia }
-spec: { selector: { app: frontend }, ports: [{ port: 3000, targetPort: 3000 }] }
-EOF
-```
-
-Verify:
-
-```bash
-kubectl -n eunomia get pods -w   # ctrl-c once all are Running
-kubectl -n eunomia port-forward svc/eunomia-mcp 8765:8765 &
-curl -s http://localhost:8765/mcp -H "Authorization: Bearer ${EUNOMIA_API_TOKEN}"
-```
-
-To actually reach it from Hermes over tailscale without a manual
-port-forward every time, either put `kubectl port-forward` in a systemd unit
-bound to the tailscale interface, or use whatever ingress/LoadBalancer setup
-already exists on this k3s box — that part is site-specific, ask the
-operator if one isn't already there.
-
-**Uninstall:** `kubectl delete namespace eunomia` (drops the PVC and its data
-too).
-
-Now go to [Step 3](#step-3--point-hermes-at-it).
-
----
-
-## Step 3 — point Hermes at it
-
-Add the MCP server to your own config, `~/.hermes/config.yaml`:
-
-```yaml
-mcp_servers:
-  eunomia:
-    url: http://127.0.0.1:8765/mcp        # or the k3s service address you exposed
-    headers: { Authorization: "Bearer <EUNOMIA_API_TOKEN from step 2>" }
-```
-
-Then reload: `/reload-mcp` (or the `reload.mcp` gateway RPC).
-
-If Eunomia should be able to notify you (task due, trigger fired), set these
-in Eunomia's Settings page (`http://localhost:3000` → Settings), pointing at
-your own gateway webhook:
-
-- `hermes_webhook_url` — `http://<this-host>:8644/webhooks/<route-name>`
-- `hermes_webhook_secret` — a shared secret you also put in your own
-  `config.yaml` under `platforms.webhook.extra.routes.<route-name>.secret`
-
-Full webhook route shape and the reasoning behind this design:
-`docs/research/hermes-integration.md`.
+Note: the Rust backend does not ship an MCP server yet, so there is no
+`/mcp` endpoint to register — use the REST API.
 
 ## Step 4 — hand back to the operator
 
-Tell them: what got installed (Docker or k3s), where the frontend is
-(`http://localhost:3000`), and that Up Bank/heypocket connectors are still
-empty until they paste creds in on the Connectors page.
+Tell them where the UI is, that connectors (Up Bank, PocketAI, …) are empty
+until they add credentials on the Connectors page, and that chat/extraction
+need an OpenAI key in Settings if one wasn't passed at install.
+
+Production (TLS, reverse proxy, which env vars need real values):
+[`docs/deployment.md`](docs/deployment.md).

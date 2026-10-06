@@ -286,8 +286,8 @@ pub async fn invite_member(
     require_owner(db, user_id, vault_id).await?;
 
     let mut res = db
-        .query("SELECT id FROM user WHERE email = $email LIMIT 1")
-        .bind(("email", email.to_string()))
+        .query("SELECT id FROM user WHERE string::lowercase(email) = $email LIMIT 1")
+        .bind(("email", crate::models_user::normalize_email(email)))
         .await?;
     let rows: Vec<EmailLookupRow> = res.take(0)?;
     let invitee = rows.into_iter().next().ok_or_else(|| AppError::bad_request(format!("no user with email '{email}'")))?.id;
@@ -386,8 +386,8 @@ pub async fn remove_member(db: &Db, user_id: &RecordId, vault_id: &RecordId, ema
     require_owner(db, user_id, vault_id).await?;
 
     let mut res = db
-        .query("SELECT id FROM user WHERE email = $email LIMIT 1")
-        .bind(("email", email.to_string()))
+        .query("SELECT id FROM user WHERE string::lowercase(email) = $email LIMIT 1")
+        .bind(("email", crate::models_user::normalize_email(email)))
         .await?;
     let rows: Vec<EmailLookupRow> = res.take(0)?;
     let target_id = rows.into_iter().next().ok_or_else(|| AppError::bad_request(format!("no user with email '{email}'")))?.id;

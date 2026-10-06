@@ -93,9 +93,23 @@ pub fn decrypt(key: &str, value: &str) -> AppResult<String> {
     String::from_utf8(plaintext).map_err(|e| AppError::internal(format!("decrypted value is not valid utf-8: {e}")))
 }
 
+/// Keys saved before the settings router started encrypting them are stored
+/// as plaintext; those don't decrypt, so pass them through unchanged.
+pub fn decrypt_or_plaintext(key: &str, value: &str) -> String {
+    decrypt(key, value).unwrap_or_else(|_| value.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn decrypt_or_plaintext_handles_both_stored_forms() {
+        let key = "k";
+        assert_eq!(decrypt_or_plaintext(key, &encrypt(key, "sk-real")), "sk-real");
+        assert_eq!(decrypt_or_plaintext(key, "sk-legacy-plaintext"), "sk-legacy-plaintext");
+        assert_eq!(decrypt_or_plaintext(key, ""), "");
+    }
 
     #[test]
     fn roundtrips_with_a_real_key() {
