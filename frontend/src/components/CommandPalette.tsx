@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { FileText, FolderGit2, LayoutDashboard, MessageSquare, Plug, Settings, Share2, User } from "lucide-react";
 import { sources, tools, type EntityKind, type EntitySummary, type SourceRow, type ToolHit } from "@/lib/api";
@@ -24,13 +24,6 @@ const SEARCH_LIMIT = 5;
 
 export default function CommandPalette() {
   const [open, setOpen] = useState(false);
-  const [query, setQuery] = useState("");
-  const [index, setIndex] = useState(0);
-  const [rows, setRows] = useState<SourceRow[]>([]);
-  const [entityHits, setEntityHits] = useState<EntitySummary[]>([]);
-  const [recordHits, setRecordHits] = useState<ToolHit[]>([]);
-  const inputRef = useRef<HTMLInputElement>(null);
-  const router = useRouter();
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
@@ -45,29 +38,31 @@ export default function CommandPalette() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
+  // Mounted only while open, so every open starts from fresh state.
+  return open ? <Palette onClose={() => setOpen(false)} /> : null;
+}
+
+function Palette({ onClose }: { onClose: () => void }) {
+  const [query, setQuery] = useState("");
+  const [index, setIndex] = useState(0);
+  const [rows, setRows] = useState<SourceRow[]>([]);
+  const [entityHits, setEntityHits] = useState<EntitySummary[]>([]);
+  const [recordHits, setRecordHits] = useState<ToolHit[]>([]);
+  const router = useRouter();
+
   useEffect(() => {
-    if (!open) return;
-    setQuery("");
-    setIndex(0);
-    setEntityHits([]);
-    setRecordHits([]);
-    setTimeout(() => inputRef.current?.focus(), 0);
     sources
       .list()
       .then(setRows)
       .catch(() => setRows([]));
-  }, [open]);
+  }, []);
 
   // Data search, debounced -- only fires once the nav/connector match is
   // worth supplementing, i.e. the query is long enough to be meaningful.
+  const q = query.trim();
+  const searching = q.length >= SEARCH_MIN_LENGTH;
   useEffect(() => {
-    if (!open) return;
-    const q = query.trim();
-    if (q.length < SEARCH_MIN_LENGTH) {
-      setEntityHits([]);
-      setRecordHits([]);
-      return;
-    }
+    if (!searching) return;
     const timer = setTimeout(() => {
       tools
         .call("entities_search", { query: q, limit: SEARCH_LIMIT })
@@ -79,9 +74,7 @@ export default function CommandPalette() {
         .catch(() => setRecordHits([]));
     }, SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(timer);
-  }, [open, query]);
-
-  if (!open) return null;
+  }, [q, searching]);
 
   const connectorItems: Item[] = rows
     .filter((r) => r.connected)
@@ -96,14 +89,14 @@ export default function CommandPalette() {
     item.label.toLowerCase().includes(query.toLowerCase())
   );
 
-  const entityItems: Item[] = entityHits.map((e) => ({
+  const entityItems: Item[] = (searching ? entityHits : []).map((e) => ({
     key: `entity:${e.id}`,
     label: e.name,
     sub: e.kind,
     icon: User,
     go: () => router.push(CODE_KINDS.has(e.kind) ? "/code" : "/entities"),
   }));
-  const recordItems: Item[] = recordHits.map((h) => ({
+  const recordItems: Item[] = (searching ? recordHits : []).map((h) => ({
     key: `record:${h.id}`,
     label: h.title || h.snippet,
     sub: h.source,
@@ -121,14 +114,14 @@ export default function CommandPalette() {
 
   function choose(item: Item) {
     item.go();
-    setOpen(false);
+    onClose();
   }
 
   return (
     <div
       className="fixed inset-0 z-50 flex items-start justify-center pt-[15vh]"
       style={{ background: "rgba(0,0,0,0.35)" }}
-      onClick={() => setOpen(false)}
+      onClick={onClose}
     >
       <div
         className="w-full max-w-md ledger overflow-hidden"
@@ -136,7 +129,7 @@ export default function CommandPalette() {
         onClick={(e) => e.stopPropagation()}
       >
         <input
-          ref={inputRef}
+          autoFocus
           value={query}
           onChange={(e) => {
             setQuery(e.target.value);

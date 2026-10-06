@@ -94,6 +94,8 @@ export default function EntityGraph({ kinds }: { kinds?: EntityKind[] } = {}) {
   const [nodes, setNodes] = useState<LaidOutNode[]>([]);
   const [view, setView] = useState({ zoom: 1, x: 0, y: 0 });
   const [dims, setDims] = useState({ w: DEFAULT_WIDTH, h: DEFAULT_HEIGHT });
+  const [panning, setPanning] = useState(false);
+  const [draggingId, setDraggingId] = useState<string | null>(null);
 
   const [showCreate, setShowCreate] = useState(false);
   const [createForm, setCreateForm] = useState({ kind: shownKinds[0], name: "", aliases: "" });
@@ -110,7 +112,6 @@ export default function EntityGraph({ kinds }: { kinds?: EntityKind[] } = {}) {
   const svgRef = useRef<SVGSVGElement | null>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const simRef = useRef<Simulation<LaidOutNode, undefined> | null>(null);
-  const linksRef = useRef<LaidOutLink[]>([]);
   const draggingRef = useRef<{ id: string; moved: boolean } | null>(null);
   const panRef = useRef<{ startX: number; startY: number; originX: number; originY: number } | null>(null);
 
@@ -131,6 +132,7 @@ export default function EntityGraph({ kinds }: { kinds?: EntityKind[] } = {}) {
     if (e.target !== e.currentTarget) return; // a node/link handled its own pointerdown
     (e.target as SVGSVGElement).setPointerCapture(e.pointerId);
     panRef.current = { startX: e.clientX, startY: e.clientY, originX: view.x, originY: view.y };
+    setPanning(true);
   }
 
   function onCanvasPointerMove(e: React.PointerEvent<SVGSVGElement>) {
@@ -145,6 +147,7 @@ export default function EntityGraph({ kinds }: { kinds?: EntityKind[] } = {}) {
 
   function onCanvasPointerUp() {
     panRef.current = null;
+    setPanning(false);
   }
 
   function toggleKind(kind: EntityKind) {
@@ -165,14 +168,9 @@ export default function EntityGraph({ kinds }: { kinds?: EntityKind[] } = {}) {
       .list()
       .then((r) => setMyVaults(r.results))
       .catch(() => setMyVaults([]));
-    // `kinds` is a prop the caller passes once per page (not expected to
-    // change on the fly); re-running on every re-render of a new array
-    // reference would refetch needlessly.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
-    setSelected(null);
     entities
       .graph(kinds ? { kinds, vaultId } : { vaultId })
       .then(setGraph)
@@ -208,7 +206,6 @@ export default function EntityGraph({ kinds }: { kinds?: EntityKind[] } = {}) {
         return source && target ? { source, target, label: e.label, owner_email: e.owner_email } : null;
       })
       .filter((l): l is LaidOutLink => l !== null);
-    linksRef.current = links;
 
     const sim = forceSimulation(simNodes)
       .force("link", forceLink(links).distance(90).strength(0.5))
@@ -250,6 +247,7 @@ export default function EntityGraph({ kinds }: { kinds?: EntityKind[] } = {}) {
     e.stopPropagation();
     e.currentTarget.setPointerCapture(e.pointerId);
     draggingRef.current = { id: n.id, moved: false };
+    setDraggingId(n.id);
     n.fx = n.x;
     n.fy = n.y;
     simRef.current?.alphaTarget(0.3).restart();
@@ -274,6 +272,7 @@ export default function EntityGraph({ kinds }: { kinds?: EntityKind[] } = {}) {
     n.fy = null;
     simRef.current?.alphaTarget(0);
     draggingRef.current = null;
+    setDraggingId(null);
     if (!drag.moved) selectNode(n.id);
   }
 
@@ -500,7 +499,10 @@ export default function EntityGraph({ kinds }: { kinds?: EntityKind[] } = {}) {
     <select
       className="field px-2.5 py-1.5 text-[12.5px]"
       value={vaultId ?? ""}
-      onChange={(e) => setVaultId(e.target.value || undefined)}
+      onChange={(e) => {
+        setVaultId(e.target.value || undefined);
+        setSelected(null);
+      }}
       aria-label="Vault"
     >
       {myVaults.map((v) => (
@@ -555,8 +557,14 @@ export default function EntityGraph({ kinds }: { kinds?: EntityKind[] } = {}) {
   }
 
   const visibleNodes = nodes.filter((n) => visibleKinds.has(n.kind));
-  const visibleIds = new Set(visibleNodes.map((n) => n.id));
-  const visibleLinks = linksRef.current.filter((l) => visibleIds.has(l.source.id) && visibleIds.has(l.target.id));
+  // Built from `nodes` (the simulation's own node objects), so link
+  // endpoints move with the nodes on every tick.
+  const nodeById = new Map(visibleNodes.map((n) => [n.id, n]));
+  const visibleLinks = (graph?.edges ?? []).flatMap((e) => {
+    const source = nodeById.get(e.source);
+    const target = nodeById.get(e.target);
+    return source && target ? [{ source, target }] : [];
+  });
 
   return (
     <div className="flex flex-col gap-3 flex-1 min-h-0">
@@ -576,7 +584,7 @@ export default function EntityGraph({ kinds }: { kinds?: EntityKind[] } = {}) {
             role="img"
             aria-label="Entity relationship graph"
             className="ledger"
-            style={{ touchAction: "none", userSelect: "none", WebkitUserSelect: "none", cursor: panRef.current ? "grabbing" : "default" }}
+            style={{ touchAction: "none", userSelect: "none", WebkitUserSelect: "none", cursor: panning ? "grabbing" : "default" }}
             onWheel={onCanvasWheel}
             onPointerDown={onCanvasPointerDown}
             onPointerMove={onCanvasPointerMove}
@@ -598,7 +606,7 @@ export default function EntityGraph({ kinds }: { kinds?: EntityKind[] } = {}) {
           {visibleNodes.map((n) => {
             const isHovered = hovered === n.id;
             const isSelected = selected?.id === n.id;
-            const isDragging = draggingRef.current?.id === n.id;
+            const isDragging = draggingId === n.id;
             const r = isHovered || isSelected || isDragging ? 16 : 14;
             return (
               <g

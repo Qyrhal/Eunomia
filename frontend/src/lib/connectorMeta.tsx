@@ -148,7 +148,7 @@ export const CONNECTOR_META: Record<Connector["kind"], ConnectorMeta> = {
     tint: "var(--connector-linear)",
     help: (
       <>
-        Generate an API key from Linear's Settings → API page.
+        Generate an API key from Linear&apos;s Settings → API page.
       </>
     ),
     fields: [{ key: "api_key", label: "API key", placeholder: "lin_api_…", secret: true }],
