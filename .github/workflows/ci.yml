@@ -15,16 +15,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # No SurrealDB service container needed: the test suite runs entirely
-      # against the `surrealdb` Python SDK's embedded `mem://` engine (see
-      # backend/tests/conftest.py) -- no `surreal` binary/Docker dependency.
-      - uses: astral-sh/setup-uv@v6
-        with:
-          enable-cache: true
-          cache-dependency-glob: backend/uv.lock
+      # No SurrealDB service container needed: the test suite is pure unit
+      # tests (no live DB) -- see backend/src/**/*.rs's `#[cfg(test)]` modules.
+      - uses: dtolnay/rust-toolchain@stable
 
-      - run: uv sync --frozen
-      - run: uv run pytest tests -q
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend
+
+      - run: cargo build --release
+      - run: cargo test --release
 
   frontend:
     runs-on: ubuntu-latest

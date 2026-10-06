@@ -35,14 +35,9 @@ cd Eunomia
 Do this once regardless of path; both paths consume the same values.
 
 ```bash
-SECRET_KEY=$(python3 -c "import secrets; print(secrets.token_urlsafe(50))")
-ENCRYPTION_KEY=$(python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
-EUNOMIA_API_TOKEN=$(python3 -c "import secrets; print(secrets.token_urlsafe(32))")
+JWT_SECRET=$(openssl rand -base64 32)
+ENCRYPTION_KEY=$(openssl rand -base64 32)
 ```
-
-`cryptography` may not be on the host Python — if that import fails, run it
-inside a throwaway container instead:
-`docker run --rm python:3.12-slim sh -c "pip install -q cryptography && python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\""`
 
 If the operator has Up Bank / heypocket creds ready, ask for them now too.
 Not required to get Eunomia running — those connectors can be added later
