@@ -17,6 +17,8 @@ async function createVaultAndInvite(owner: Page, vaultName: string, inviteeEmail
   await owner.getByText(vaultName, { exact: true }).click();
   await owner.getByPlaceholder("person@example.com").fill(inviteeEmail);
   await owner.getByRole("button", { name: "Invite" }).click();
+  // The field is cleared only once the invite request succeeds.
+  await expect(owner.getByPlaceholder("person@example.com")).toHaveValue("");
 }
 
 test.describe("Vault invitations", () => {

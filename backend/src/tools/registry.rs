@@ -63,6 +63,45 @@ pub fn is_read_only(name: &str) -> bool {
     READ_ONLY_TOOLS.contains(&name)
 }
 
+/// Tools that irreversibly remove data or access -- flagged to MCP clients
+/// (`destructiveHint`) so they can ask before running them.
+pub fn is_destructive(name: &str) -> bool {
+    matches!(name, "memory_delete" | "entity_delete" | "entity_merge" | "vault_delete" | "vault_remove_member" | "vault_leave")
+}
+
+/// What each tool does, for the model choosing between them (chat agent and
+/// MCP clients alike). Every registered tool must have one -- see tests.
+pub fn description(name: &str) -> &'static str {
+    match name {
+        "search" => "Search the user's synced source records (transactions, meetings, messages, ...) by keyword. Supports filtering by source, record type and time range. Returns record ids usable with `get` and `links`.",
+        "get" => "Fetch one synced source record by id, with its full content.",
+        "list" => "List synced source records, optionally filtered by type and field values, sorted and paginated. Use for browsing rather than searching.",
+        "links" => "List the records linked to a given record (e.g. a meeting's attendees, a transaction's merchant), optionally only one relation type.",
+        "recall" => "Retrieve the memories most relevant to a question from the user's memory graph, ranked by combining semantic, keyword, graph and recency signals within a token budget. Use this first when answering questions about people, organisations, places or past events.",
+        "reflect" => "Answer a question by synthesizing from recalled memories, with numbered citations. Answers only from what is already remembered; use `recall` to inspect the raw memories instead.",
+        "entities_search" => "Find entities (people, organisations, locations, repositories, files, symbols) by name. Returns entity ids for `entities_get`, `memory_write` and `code_relate`.",
+        "entities_get" => "Get one entity with its memories (facts and consolidated observations) and its relations to other entities.",
+        "entities_graph" => "Get the entity relationship graph (nodes and edges), optionally restricted to some entity kinds or a vault.",
+        "code_entity_upsert" => "Find-or-create a code entity -- a repository, file or symbol -- matched case-insensitively by name, with a short summary. `parent_id` links a file to its repository or a symbol to its file. Returns the entity id.",
+        "code_relate" => "Record a labelled relation between two entities, e.g. symbol `calls` symbol, file `imports` file.",
+        "memory_write" => "Remember a fact about a person, organisation, location or code entity (created if new). Type `world` for objective facts, `experience` for things that happened, `observation` for stable patterns.",
+        "consolidate_observations" => "Fold an entity's new raw facts into its consolidated observation (or do it for every entity with new facts when `subject_id` is omitted).",
+        "memory_delete" => "Delete one memory by id. Irreversible.",
+        "entity_delete" => "Delete an entity and its memories and relations. Irreversible.",
+        "entity_merge" => "Merge a duplicate entity (`loser_id`) into another of the same kind (`winner_id`): memories and relations move to the winner, the loser's name becomes an alias, and the loser is deleted.",
+        "vault_create" => "Create a vault (a shared scope for entities and memories); the caller becomes its owner.",
+        "vault_list" => "List the vaults the user belongs to, with their role in each. The personal vault is the default scope for every other tool.",
+        "vault_clone" => "Copy a vault's entities and memories into a new vault owned by the caller.",
+        "vault_invite" => "Invite a registered user by email to a vault (owner only). They must accept the invitation before getting access.",
+        "vault_members" => "List a vault's members and their roles.",
+        "vault_remove_member" => "Remove a member from a vault (owner only). Cannot remove the last owner.",
+        "vault_leave" => "Leave a vault. The last owner can't leave while others remain.",
+        "vault_rename" => "Rename a vault (owner only).",
+        "vault_delete" => "Delete a vault and all memberships (owner only). Irreversible.",
+        _ => "",
+    }
+}
+
 // args keys that look like secrets -- redacted rather than written to the
 // audit log's args_summary.
 const SECRET_KEY_HINTS: &[&str] = &["password", "token", "secret", "credential", "api_key", "apikey"];
@@ -1179,6 +1218,20 @@ mod tests {
     fn mutating_tool_names_are_not_read_only() {
         for name in ["vault_create", "vault_delete", "vault_invite", "vault_rename", "unknown_tool"] {
             assert!(!is_read_only(name), "{name} should not be read-only");
+        }
+    }
+
+    #[test]
+    fn every_registered_tool_has_a_description() {
+        for name in all_tools().keys() {
+            assert!(!description(name).is_empty(), "{name} needs a description in registry::description");
+        }
+    }
+
+    #[test]
+    fn destructive_tools_are_never_read_only() {
+        for name in all_tools().keys().filter(|n| is_destructive(n)) {
+            assert!(!is_read_only(name), "{name}");
         }
     }
 

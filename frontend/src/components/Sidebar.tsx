@@ -28,7 +28,11 @@ export default function Sidebar() {
   const router = useRouter();
   const [rows, setRows] = useState<SourceRow[] | null>(null);
   const [me, setMe] = useState<Me | null>(null);
-  const [drawerOpen, setDrawerOpen] = useState(false);
+  // The drawer is open only for the page it was opened on, so navigating
+  // closes it without an effect.
+  const [drawerPath, setDrawerPath] = useState<string | null>(null);
+  const drawerOpen = drawerPath === pathname;
+  const setDrawerOpen = (open: boolean) => setDrawerPath(open ? pathname : null);
 
   useEffect(() => {
     sources
@@ -40,12 +44,6 @@ export default function Sidebar() {
       .then(setMe)
       .catch(() => {});
   }, []);
-
-  // Close the mobile drawer on navigation, so a link tap doesn't leave it
-  // open over the next page.
-  useEffect(() => {
-    setDrawerOpen(false);
-  }, [pathname]);
 
   const connected = rows?.filter((r) => r.connected) ?? [];
 

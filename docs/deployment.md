@@ -18,6 +18,7 @@ nginx + certbot:
 # Caddyfile
 eunomia.example.com {
     reverse_proxy /api/* localhost:8001
+    reverse_proxy /mcp localhost:8001
     reverse_proxy /healthz localhost:8001
     reverse_proxy /* localhost:3000
 }

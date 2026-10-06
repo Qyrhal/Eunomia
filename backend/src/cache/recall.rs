@@ -350,7 +350,15 @@ pub async fn recall(
     let personal = vault == default_vault;
 
     let keyword_ids = if personal { cs::keyword_ids(db, owner, query, pool).await? } else { Vec::new() };
-    let semantic_ids = if personal { cs::semantic_ids(db, settings, owner, query, pool).await? } else { Vec::new() };
+    // No/invalid OpenAI key must not take down the other three arms.
+    let semantic_ids = if personal {
+        cs::semantic_ids(db, settings, owner, query, pool).await.unwrap_or_else(|e| {
+            tracing::warn!("recall: semantic arm skipped: {}", e.message);
+            Vec::new()
+        })
+    } else {
+        Vec::new()
+    };
     let graph_keys = graph_arm(db, owner, &vault, query, pool).await?;
     let temporal_keys = temporal_ids(db, owner, &vault, time_range, pool, personal).await?;
 

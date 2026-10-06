@@ -1,17 +1,25 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import { AlertTriangle, ArrowRight, Check, Copy, Plug } from "lucide-react";
 import { auth, entities, sources, type SourceRow } from "@/lib/api";
 import SyncStatusCard from "@/components/SyncStatusCard";
 import StatRing from "@/components/StatRing";
 
-const MCP_URL = process.env.NEXT_PUBLIC_MCP_URL || "http://localhost:8765/mcp";
+// Same origin as the app: the frontend proxies /mcp to the backend.
+const noSubscribe = () => () => {};
+function useMcpUrl(): string {
+  return useSyncExternalStore(noSubscribe, () => `${window.location.origin}/mcp`, () => "");
+}
 
-function mcpConfig(token: string) {
+function claudeCodeCommand(url: string, token: string) {
+  return `claude mcp add --transport http eunomia ${url} --header "Authorization: Bearer ${token}"`;
+}
+
+function mcpConfig(url: string, token: string) {
   return JSON.stringify(
-    { mcpServers: { eunomia: { url: MCP_URL, headers: { Authorization: `Bearer ${token}` } } } },
+    { mcpServers: { eunomia: { type: "http", url, headers: { Authorization: `Bearer ${token}` } } } },
     null,
     2
   );
@@ -37,6 +45,7 @@ function CopyField({ value, mono = true }: { value: string; mono?: boolean }) {
 }
 
 function McpCard() {
+  const mcpUrl = useMcpUrl();
   const [token, setToken] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -66,7 +75,7 @@ function McpCard() {
 
       <label className="text-[12px] flex flex-col gap-1.5" style={{ color: "var(--ink-dim)" }}>
         MCP URL
-        <CopyField value={MCP_URL} />
+        <CopyField value={mcpUrl} />
       </label>
 
       {!token ? (
@@ -85,10 +94,14 @@ function McpCard() {
             <CopyField value={token} />
           </label>
           <label className="text-[12px] flex flex-col gap-1.5" style={{ color: "var(--ink-dim)" }}>
-            Claude Desktop / Code config
+            Claude Code
+            <CopyField value={claudeCodeCommand(mcpUrl, token)} />
+          </label>
+          <label className="text-[12px] flex flex-col gap-1.5" style={{ color: "var(--ink-dim)" }}>
+            Other MCP clients (Streamable HTTP)
             <div className="field px-3 py-2">
               <pre className="text-[11.5px] font-mono whitespace-pre-wrap break-all" style={{ color: "var(--ink-dim)" }}>
-                {mcpConfig(token)}
+                {mcpConfig(mcpUrl, token)}
               </pre>
             </div>
           </label>

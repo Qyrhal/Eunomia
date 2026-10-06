@@ -120,13 +120,27 @@ scoped per-user or per-team.
 Inspired by [Hindsight](https://vectorize.io/) (vectorize.io) for the
 observation-consolidation model, and built on [SurrealDB](https://surrealdb.com/).
 
-## Calling tools from another client
+## Connecting an agent (MCP)
 
-1. Mint a personal API token: Settings → API tokens, or
-   `POST /api/auth/tokens` while logged in (shown once — store it).
-2. Call `GET /api/tools` for the list of registered tools, then
-   `POST /api/tools/:name` with `Authorization: Bearer <your-token>` and a
-   JSON body matching that tool's schema.
+Eunomia is an MCP server (Streamable HTTP) at `<your Eunomia URL>/mcp`,
+exposing the same 25 tools the built-in chat agent uses — `recall`,
+`reflect`, `memory_write`, `search`, the entity/code-graph and vault tools —
+with read-only/destructive hints. Every call is scoped to the token's owner
+and mutating calls are audit-logged.
+
+1. Dashboard → "Connect an MCP client" → Generate a token (shown once).
+2. Claude Code:
+
+   ```bash
+   claude mcp add --transport http eunomia http://localhost:3000/mcp \
+     --header "Authorization: Bearer <token>"
+   ```
+
+   Any other MCP client: `{"type": "http", "url": ".../mcp", "headers":
+   {"Authorization": "Bearer <token>"}}`.
+
+Plain REST works too: `GET /api/tools`, then `POST /api/tools/:name` with the
+same bearer token and a JSON body matching the tool's schema.
 
 ## Connectors
 
@@ -150,7 +164,8 @@ generic for any future source whose provider does.
 ```bash
 cd backend && cargo test --release
 cd frontend && bunx tsc --noEmit && bun run build
-cd frontend && bun run test           # Playwright, needs the stack running
+cd frontend && bun run test           # Playwright, starts `bun run dev`; needs backend + DB (./run.sh)
+E2E_BASE_URL=http://localhost:3000 bun run test   # or against an already-running stack
 ```
 
 Backend tests and a frontend typecheck+build run on every push/PR to `main`

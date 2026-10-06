@@ -51,6 +51,7 @@ async fn main() {
 
     let app = axum::Router::new()
         .route("/healthz", axum::routing::get(healthz))
+        .merge(routers::mcp::router())
         .nest("/api", api)
         .layer(cors)
         .with_state(state);

@@ -1,5 +1,11 @@
 use std::env;
 
+/// Release tag baked in at image build time (see backend/Dockerfile).
+pub const APP_VERSION: &str = match option_env!("APP_VERSION") {
+    Some(v) if !v.is_empty() => v,
+    _ => env!("CARGO_PKG_VERSION"),
+};
+
 #[derive(Clone, Debug)]
 pub struct Settings {
     pub jwt_secret: String,

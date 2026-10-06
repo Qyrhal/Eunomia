@@ -9,8 +9,6 @@ ENV BACKEND_INTERNAL_URL=http://backend:8001
 # Release tag, passed by .github/workflows/release.yml; shown in the sidebar.
 ARG APP_VERSION=dev
 ENV NEXT_PUBLIC_APP_VERSION=$APP_VERSION
-ARG NEXT_PUBLIC_MCP_URL=http://localhost:8765/mcp
-ENV NEXT_PUBLIC_MCP_URL=$NEXT_PUBLIC_MCP_URL
 RUN bun run build
 
 FROM oven/bun:1

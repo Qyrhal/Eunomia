@@ -376,11 +376,7 @@ fn openai_tools() -> Vec<Value> {
         .iter()
         .map(|(name, spec)| {
             let schema = if spec.schema.is_null() { json!({ "type": "object", "properties": {} }) } else { spec.schema.clone() };
-            let description = schema
-                .get("description")
-                .and_then(|d| d.as_str())
-                .map(str::to_string)
-                .unwrap_or_else(|| format!("Eunomia tool: {name}"));
+            let description = registry::description(name);
             json!({
                 "type": "function",
                 "function": { "name": name, "description": description, "parameters": schema },

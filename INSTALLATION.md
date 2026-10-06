@@ -46,20 +46,25 @@ docker compose ps        # from the install dir; all three services "Up"
 ```
 
 The UI is at `http://localhost:3000` (or `http://<host-ip>:3000` from other
-devices — the browser only talks to the frontend, which proxies `/api`).
+devices — the browser only talks to the frontend, which proxies `/api` and
+`/mcp`).
 
-## Step 3 — get an API token for yourself
+## Step 3 — connect yourself over MCP
 
 Ask the operator to register at the UI and generate a token (Dashboard →
-"Connect an MCP client" → Generate a token). Use it as a bearer token
-against the REST API:
+"Connect an MCP client" → Generate a token). Eunomia is an MCP server
+(Streamable HTTP) at `http://localhost:3000/mcp`; register it with that
+token as a bearer header, e.g. for Claude Code:
 
 ```bash
-curl -H "Authorization: Bearer $EUNOMIA_API_TOKEN" http://localhost:8001/api/auth/me
+claude mcp add --transport http eunomia http://localhost:3000/mcp \
+  --header "Authorization: Bearer $EUNOMIA_API_TOKEN"
 ```
 
-Note: the Rust backend does not ship an MCP server yet, so there is no
-`/mcp` endpoint to register — use the REST API.
+Check it with a `tools/list` — you should see 25 tools (`recall`,
+`memory_write`, `search`, vault and code-graph tools). `recall` works without
+an OpenAI key (keyword/graph/recency only); `reflect` and semantic search
+need one.
 
 ## Step 4 — hand back to the operator
 
