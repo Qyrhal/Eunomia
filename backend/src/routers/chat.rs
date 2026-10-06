@@ -1,0 +1,121 @@
+//! Chat REST surface: multiple named threads per user, each backed by
+//! `chat::service`'s streaming OpenAI function-calling loop over the shared
+//! tool registry. Sending a message returns a Server-Sent Events stream
+//! (see `chat::service::ChatEvent` for the event shapes) rather than a
+//! single JSON response, so the frontend can render the reply incrementally.
+//!
+//! Ported from `app/routers/chat.py`.
+
+use std::convert::Infallible;
+
+use axum::{
+    extract::{Path, State},
+    response::sse::{Event, KeepAlive, Sse},
+    routing::{delete, get},
+    Json, Router,
+};
+use futures::Stream;
+use serde::Deserialize;
+use serde_json::{json, Value};
+use surrealdb::RecordId;
+use tokio::sync::mpsc;
+use tokio_stream::wrappers::ReceiverStream;
+use tokio_stream::StreamExt as _;
+
+use crate::chat::service::{self, ChatEvent};
+use crate::error::{AppError, AppResult};
+use crate::models_user::User;
+use crate::state::AppState;
+
+/// Buffered events in flight between the agent-loop task and the SSE
+/// stream -- generous enough that a burst of text deltas never blocks the
+/// loop on a slow client.
+const EVENT_CHANNEL_CAPACITY: usize = 64;
+
+pub fn router() -> Router<AppState> {
+    Router::new()
+        .route("/chat/threads", get(list_threads).post(create_thread))
+        .route("/chat/threads/:thread_id", delete(delete_thread_route).post(send_message))
+        .route("/chat/threads/:thread_id/history", get(thread_history))
+}
+
+#[derive(Deserialize)]
+struct ChatRequest {
+    message: String,
+}
+
+#[derive(Deserialize, Default)]
+struct ThreadCreate {
+    #[serde(default)]
+    title: Option<String>,
+}
+
+/// Path params are plain strings; parse here, same convention as
+/// `routers/vaults.rs`'s `parse_vault_id`.
+fn parse_thread_id(thread_id: &str) -> AppResult<RecordId> {
+    thread_id.parse().map_err(|_| AppError::not_found("not found"))
+}
+
+async fn list_threads(State(state): State<AppState>, user: User) -> AppResult<Json<Vec<service::ThreadOut>>> {
+    Ok(Json(service::list_threads(&state.db, &user.id).await?))
+}
+
+async fn create_thread(
+    State(state): State<AppState>,
+    user: User,
+    Json(body): Json<ThreadCreate>,
+) -> AppResult<Json<service::ThreadOut>> {
+    Ok(Json(service::create_thread(&state.db, &user.id, body.title.as_deref()).await?))
+}
+
+async fn delete_thread_route(
+    State(state): State<AppState>,
+    user: User,
+    Path(thread_id): Path<String>,
+) -> AppResult<Json<Value>> {
+    let rid = parse_thread_id(&thread_id)?;
+    let ok = service::delete_thread(&state.db, &user.id, &rid).await?;
+    if !ok {
+        return Err(AppError::not_found("not found"));
+    }
+    Ok(Json(json!({ "ok": true })))
+}
+
+async fn thread_history(
+    State(state): State<AppState>,
+    user: User,
+    Path(thread_id): Path<String>,
+) -> AppResult<Json<Vec<service::MessageOut>>> {
+    let rid = parse_thread_id(&thread_id)?;
+    let hist = service::history(&state.db, &user.id, &rid).await?;
+    hist.map(Json).ok_or_else(|| AppError::not_found("not found"))
+}
+
+async fn send_message(
+    State(state): State<AppState>,
+    user: User,
+    Path(thread_id): Path<String>,
+    Json(body): Json<ChatRequest>,
+) -> AppResult<Sse<impl Stream<Item = Result<Event, Infallible>>>> {
+    let rid = parse_thread_id(&thread_id)?;
+    if service::get_thread(&state.db, &user.id, &rid).await?.is_none() {
+        return Err(AppError::not_found("not found"));
+    }
+    service::ensure_configured(&state.db, &state.settings, &user.id)
+        .await
+        .map_err(|e| AppError::bad_request(e.0))?;
+
+    let (tx, rx) = mpsc::channel::<ChatEvent>(EVENT_CHANNEL_CAPACITY);
+    let owner = user.id.clone();
+    let state_for_task = state.clone();
+    tokio::spawn(async move {
+        service::send_stream(state_for_task, owner, rid, body.message, tx).await;
+    });
+
+    let stream = ReceiverStream::new(rx).map(|event| {
+        let data = serde_json::to_string(&event).unwrap_or_else(|_| "{}".to_string());
+        Ok(Event::default().data(data))
+    });
+
+    Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
+}

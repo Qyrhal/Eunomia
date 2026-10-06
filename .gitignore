@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+.venv/
+*.db
+*.sqlite3
+.pytest_cache/
+.env
+.env.local
+vault/
+
+node_modules/
+.next/
+target/
+test-results/
+playwright-report/
+backups/
+update-status/
