@@ -54,7 +54,7 @@ server to **your** config with its own API token. Pass `--agent <name>` if
 you aren't detected. Then:
 
 1. Tell the operator the URL and the sign-in printed at the end.
-2. Reload your MCP servers (Claude Code: `/mcp`) and call `tools/list`.
+2. Ask the operator to restart you, or start a new session yourself, so the new MCP server loads. Then call `tools/list`.
    You should see `recall`, `memory_write`, `docs`, and the rest.
 3. Keep it private: localhost, a LAN, or a tailnet. Never expose it publicly
    without TLS ([deployment](deployment.md)).

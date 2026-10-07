@@ -374,7 +374,7 @@ main() {
   [ "$n" -gt 0 ] || { warn "no agents to connect"; return 0; }
   echo
   printf '  Eunomia MCP: %s\n' "$MCP_URL"
-  printf '  Restart each agent (or run /mcp) to pick it up. ChatGPT and Claude.ai need a public https URL: add it by hand under Connectors.\n'
+  printf '  Restart each agent to pick it up (Claude Code: exit and run claude --continue). ChatGPT and Claude.ai need a public https URL: add it by hand under Connectors.\n'
   return "$failed"
 }
 

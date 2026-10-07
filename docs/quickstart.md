@@ -25,7 +25,7 @@ chose (if you let it generate one, it's printed at the end and saved in
 
 ## 3. Use it from your agent
 
-Restart your agent (or run `/mcp` in Claude Code) and ask it something like:
+Restart your agent so it loads the new server (in Claude Code: exit, then `claude --continue`; `/mcp` alone doesn't pick up servers added mid-session), then ask it something like:
 
 > Remember that Ada prefers async updates over meetings.
 
