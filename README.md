@@ -17,7 +17,7 @@ all on one [SurrealDB](https://surrealdb.com/) schema, all exposed identically t
 curl -fsSL https://midhunkumar05.github.io/eunomia/install.sh | bash
 ```
 
-[Install](#install) · [What's in it](#whats-in-it) · [Docs](docs/deployment.md) · [Install page](https://midhunkumar05.github.io/eunomia/)
+[Install](#install) · [Quickstart](docs/quickstart.md) · [What's in it](#whats-in-it) · [Docs](docs/README.md) · [Install page](https://midhunkumar05.github.io/eunomia/)
 
 </div>
 
@@ -29,17 +29,12 @@ curl -fsSL https://midhunkumar05.github.io/eunomia/install.sh | bash
 curl -fsSL https://midhunkumar05.github.io/eunomia/install.sh | bash
 ```
 
-Clones the latest release, generates fresh secrets, and brings up SurrealDB +
-backend + frontend with Docker Compose. Or do it by hand:
-
-```bash
-git clone https://github.com/Qyrhal/Eunomia.git && cd Eunomia
-cp .env.example .env    # fill in ENCRYPTION_KEY, JWT_SECRET, OPENAI_API_KEY
-docker compose up --build
-```
-
-Then visit **http://localhost:3000** and register — the first account becomes
-the only account unless you add more.
+It asks a few questions (Enter accepts each default), then starts SurrealDB +
+backend + frontend, turns on one-click updates (Settings → Updates), creates
+your account, and connects your AI agents (Claude Code, Codex, Hermes, Gemini
+CLI, Cursor, Windsurf, OpenCode, VS Code, Claude Desktop) over MCP. Run by an agent, it connects that
+agent. No OpenAI key needed: the agent is the model. See the
+[Quickstart](docs/quickstart.md) and [Installation](docs/installation.md).
 
 ## How it fits together
 
@@ -123,24 +118,13 @@ observation-consolidation model, and built on [SurrealDB](https://surrealdb.com/
 ## Connecting an agent (MCP)
 
 Eunomia is an MCP server (Streamable HTTP) at `<your Eunomia URL>/mcp`,
-exposing the same 25 tools the built-in chat agent uses — `recall`,
-`reflect`, `memory_write`, `search`, the entity/code-graph and vault tools —
-with read-only/destructive hints. Every call is scoped to the token's owner
-and mutating calls are audit-logged.
-
-1. Dashboard → "Connect an MCP client" → Generate a token (shown once).
-2. Claude Code:
-
-   ```bash
-   claude mcp add --transport http eunomia http://localhost:3000/mcp \
-     --header "Authorization: Bearer <token>"
-   ```
-
-   Any other MCP client: `{"type": "http", "url": ".../mcp", "headers":
-   {"Authorization": "Bearer <token>"}}`.
-
-Plain REST works too: `GET /api/tools`, then `POST /api/tools/:name` with the
-same bearer token and a JSON body matching the tool's schema.
+exposing the same tools the built-in chat agent uses (`recall`, `reflect`,
+memory CRUD, the entity/code-graph and vault tools, `docs`), with
+read-only/destructive hints. Calls are scoped to the token's owner and
+mutating calls are audit-logged. The installer wires up your agents;
+afterwards use `./scripts/connect-agents.sh` (see
+[AI agents & MCP](docs/agents.md)). Plain REST works too: `POST
+/api/tools/:name` with the same bearer token.
 
 ## Connectors
 
@@ -162,13 +146,14 @@ generic for any future source whose provider does.
 ## Tests
 
 ```bash
-cd backend && cargo test --release
+cd backend && cargo test --release     # includes MCP protocol tests (no DB needed)
+bash scripts/tests/connect-agents.test.sh && bash scripts/tests/auto-update.test.sh
 cd frontend && bunx tsc --noEmit && bun run build
 cd frontend && bun run test           # Playwright, starts `bun run dev`; needs backend + DB (./run.sh)
 E2E_BASE_URL=http://localhost:3000 bun run test   # or against an already-running stack
 ```
 
-Backend tests and a frontend typecheck+build run on every push/PR to `main`
+Backend tests, the script tests and a frontend typecheck+build run on every push/PR to `main`
 via `.github/workflows/ci.yml`.
 
 ## Backups

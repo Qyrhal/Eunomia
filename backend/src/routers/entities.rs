@@ -32,7 +32,8 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/entities", get(list_entities).post(create_entity))
         .route("/entities/graph", get(entity_graph))
-        .route("/entities/memory/:memory_id", axum::routing::delete(delete_memory))
+        .route("/entities/cloud", get(vector_cloud))
+        .route("/entities/memory/:memory_id", axum::routing::patch(update_memory).delete(delete_memory))
         .route("/entities/:entity_id", get(get_entity).patch(update_entity).delete(delete_entity))
         .route("/entities/:entity_id/memory", post(add_memory))
         .route("/entities/:entity_id/relations", post(add_relation))
@@ -117,6 +118,30 @@ fn parse_kinds(raw_query: Option<&str>) -> Vec<String> {
 /// Path params are plain strings (like `app/routers/entities.py`'s
 /// `entity_id: str`); parse here, same convention as `routers/vaults.rs`'s
 /// `parse_vault_id`.
+#[derive(Debug, Default, Deserialize)]
+struct CloudQuery {
+    /// comma-separated vault ids; default: your personal vault
+    #[serde(default)]
+    vault_ids: Option<String>,
+}
+
+/// 3D PCA projection of the vectors in one or more vaults -- see `cache::cloud`.
+async fn vector_cloud(
+    State(state): State<AppState>,
+    user: User,
+    Query(q): Query<CloudQuery>,
+) -> AppResult<Json<crate::cache::cloud::Cloud>> {
+    let ids = q
+        .vault_ids
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(parse_record_id)
+        .collect::<AppResult<Vec<_>>>()?;
+    Ok(Json(crate::cache::cloud::cloud(&state.db, &state.settings, &user.id, &ids).await?))
+}
+
 fn parse_record_id(id: &str) -> AppResult<RecordId> {
     id.parse().map_err(|_| AppError::not_found("not found"))
 }
@@ -171,6 +196,25 @@ async fn create_entity(
     Ok(Json(
         service::upsert_entity(&state.db, &user.id, &body.kind, &body.name, body.aliases, vault_rid.as_ref()).await?,
     ))
+}
+
+#[derive(Debug, Deserialize)]
+struct MemoryUpdate {
+    #[serde(default)]
+    text: Option<String>,
+    #[serde(rename = "type", default)]
+    mem_type: Option<String>,
+}
+
+async fn update_memory(
+    State(state): State<AppState>,
+    user: User,
+    Path(memory_id): Path<String>,
+    Json(body): Json<MemoryUpdate>,
+) -> AppResult<Json<service::MemoryOut>> {
+    let rid = parse_record_id(&memory_id)?;
+    let memory = service::update_memory(&state.db, &user.id, &rid, body.text.as_deref(), body.mem_type.as_deref()).await?;
+    memory.map(Json).ok_or_else(|| AppError::not_found("not found"))
 }
 
 async fn delete_memory(

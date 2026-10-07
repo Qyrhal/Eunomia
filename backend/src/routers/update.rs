@@ -1,7 +1,7 @@
 //! Self-update check/trigger -- reads/writes files in
 //! `settings.update_status_dir` rather than running `git`/`docker` itself.
-//! Ported from `app/routers/update.py`; see that file's module docstring
-//! for why the privileged work happens on the host, not in this process.
+//! The privileged work (git, docker) happens in the separate `updater`
+//! service, never in this web-facing process.
 //!
 //! Not configured (the directory doesn't exist) is a normal, expected
 //! state, surfaced as `{"configured": false}` rather than an error.
@@ -23,6 +23,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/update/status", get(get_status))
         .route("/update/request", post(request_update))
+        .route("/update/check", post(check_now))
 }
 
 fn status_dir(state: &AppState) -> PathBuf {
@@ -59,15 +60,26 @@ async fn get_status(State(state): State<AppState>, _user: User) -> AppResult<Jso
     Ok(Json(merge_status(data)))
 }
 
-/// Drops the marker file `scripts/auto-update.sh` watches for -- applied on
-/// its next run, not instantly.
-async fn request_update(State(state): State<AppState>, _user: User) -> AppResult<Json<Value>> {
-    let dir = status_dir(&state);
+/// Drops a marker file for `scripts/auto-update.sh` (run every 20s by the
+/// `updater` service) -- acted on at its next run, not instantly.
+fn drop_marker(state: &AppState, name: &str) -> AppResult<Json<Value>> {
+    let dir = status_dir(state);
     if !dir.exists() {
         return Ok(Json(json!({ "configured": false })));
     }
-    std::fs::File::create(dir.join("requested")).map_err(|e| crate::error::AppError::internal(e.to_string()))?;
+    std::fs::File::create(dir.join(name)).map_err(|e| crate::error::AppError::internal(e.to_string()))?;
     Ok(Json(json!({ "configured": true, "requested": true })))
+}
+
+/// "Update now": apply the newest release.
+async fn request_update(State(state): State<AppState>, _user: User) -> AppResult<Json<Value>> {
+    drop_marker(&state, "requested")
+}
+
+/// "Check now": ask GitHub for the newest release without waiting for the
+/// 10-minute throttle.
+async fn check_now(State(state): State<AppState>, _user: User) -> AppResult<Json<Value>> {
+    drop_marker(&state, "check")
 }
 
 #[cfg(test)]
@@ -77,13 +89,13 @@ mod tests {
     #[test]
     fn merge_status_adds_configured_true_alongside_data() {
         let merged = merge_status(json!({
-            "local_sha": "abc123",
-            "remote_sha": "def456",
+            "current_version": "v1.0.0",
+            "latest_version": "v1.1.0",
             "update_available": true,
             "checked_at": "now"
         }));
         assert_eq!(merged["configured"], json!(true));
-        assert_eq!(merged["local_sha"], json!("abc123"));
+        assert_eq!(merged["current_version"], json!("v1.0.0"));
         assert_eq!(merged["update_available"], json!(true));
     }
 

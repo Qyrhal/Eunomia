@@ -1,0 +1,65 @@
+# Concepts
+
+## Vaults
+
+A vault is a scope for entities and memories. Everyone has a **personal
+vault** (the default for every tool). Org vaults are shared: invite people
+by email, and they accept from the Vaults page. Roles are `owner` and
+`member`.
+
+- **Clone** copies a vault into a new one you own.
+- **Merge** takes two vaults and creates a **new** vault from copies of
+  both. The originals are never changed. Entities with the same kind and name
+  are folded together: aliases are unioned, identical facts are kept once,
+  relations are de-duplicated, and two observations are joined. Use it from
+  the Vaults page or the `vault_merge` tool.
+
+## Entities and memories
+
+Entities are people, organisations, locations, repositories, files and
+symbols. Each one has **memories**:
+
+| Type | Meaning |
+|---|---|
+| `world` | an objective fact |
+| `experience` | something that happened |
+| `observation` | the entity's consolidated belief, one per entity, revised in place |
+
+Memories support full create, read, update and delete (`memory_write`,
+`entities_get`/`recall`, `memory_update`, `memory_delete`). Editing or adding
+a fact marks the entity's observation *stale* until it's consolidated again.
+Relations (`works_at`, `calls`, …) link entities, and an edge with the same
+label is stored only once.
+
+## Synced records
+
+Connectors (Up Bank, GitHub, Gmail, …) sync raw records into a cache. With
+a model key, records are embedded for semantic search. Use `search`/`get`
+for these, and `recall` to search records and memories together.
+
+## Recall
+
+`recall` runs five arms and fuses them (reciprocal rank fusion), then boosts
+results that several arms agree on and recent ones:
+
+1. **semantic**: embeddings over records (needs a model key)
+2. **keyword**: full-text over records
+3. **memory text**: full-text (BM25) over memories, so a fact is found by what it says
+4. **graph**: entities named in the question, then their memories and linked records
+5. **temporal**: an explicit `time_range`
+
+## The graph (3D)
+
+Entities → Graph shows the entity graph in 3D. Drag to orbit, scroll to
+zoom, and click a node to open it. The Code page shows the code graph the
+same way.
+
+## The vector cloud
+
+Entities → Cloud shows the *shape of what's stored*: every memory (and, for
+your personal vault, every synced record) as a point. The full vectors are
+projected to 3D with PCA, so the axes are the three directions of greatest
+spread (PC1–PC3), not entities. Pick several vaults to layer them as
+coloured clouds in the **same** space. A vault and its merge, or two teams'
+vaults, are directly comparable. Without a model key the space is lexical
+(points that share words sit together) rather than semantic.

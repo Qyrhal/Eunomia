@@ -46,6 +46,7 @@ pub struct ToolSpec {
 /// is a small explicit allowlist rather than a generic classifier, since the
 /// tool count is small and known (mirrors the Python module's docstring).
 pub const READ_ONLY_TOOLS: &[&str] = &[
+    "docs",
     "search",
     "get",
     "list",
@@ -73,6 +74,7 @@ pub fn is_destructive(name: &str) -> bool {
 /// MCP clients alike). Every registered tool must have one -- see tests.
 pub fn description(name: &str) -> &'static str {
     match name {
+        "docs" => "Read Eunomia's own documentation: how to install, connect agents, every tool, vaults/memories/recall concepts, deployment. No arguments lists the docs; `topic` returns one in full.",
         "search" => "Search the user's synced source records (transactions, meetings, messages, ...) by keyword. Supports filtering by source, record type and time range. Returns record ids usable with `get` and `links`.",
         "get" => "Fetch one synced source record by id, with its full content.",
         "list" => "List synced source records, optionally filtered by type and field values, sorted and paginated. Use for browsing rather than searching.",
@@ -86,15 +88,18 @@ pub fn description(name: &str) -> &'static str {
         "code_relate" => "Record a labelled relation between two entities, e.g. symbol `calls` symbol, file `imports` file.",
         "memory_write" => "Remember a fact about a person, organisation, location or code entity (created if new). Type `world` for objective facts, `experience` for things that happened, `observation` for stable patterns.",
         "consolidate_observations" => "Fold an entity's new raw facts into its consolidated observation (or do it for every entity with new facts when `subject_id` is omitted).",
+        "memory_update" => "Edit one memory by id: change its `text`, and/or switch a raw fact between `world` and `experience`. To revise an entity's consolidated belief, `memory_write` with type `observation` instead.",
+        "entity_update" => "Edit an entity's `name`, `aliases` (replaces the list) and/or `summary`.",
         "memory_delete" => "Delete one memory by id. Irreversible.",
         "entity_delete" => "Delete an entity and its memories and relations. Irreversible.",
         "entity_merge" => "Merge a duplicate entity (`loser_id`) into another of the same kind (`winner_id`): memories and relations move to the winner, the loser's name becomes an alias, and the loser is deleted.",
         "vault_create" => "Create a vault (a shared scope for entities and memories); the caller becomes its owner.",
         "vault_list" => "List the vaults the user belongs to, with their role in each. The personal vault is the default scope for every other tool.",
         "vault_clone" => "Copy a vault's entities and memories into a new vault owned by the caller.",
+        "vault_merge" => "Merge two vaults you belong to into a NEW vault: both are copied into it (the originals are never changed), and entities with the same kind and name are folded together -- aliases unioned, identical facts kept once, relations deduplicated.",
         "vault_invite" => "Invite a registered user by email to a vault (owner only). They must accept the invitation before getting access.",
         "vault_members" => "List a vault's members and their roles.",
-        "vault_remove_member" => "Remove a member from a vault (owner only). Cannot remove the last owner.",
+        "vault_remove_member" => "Remove a member from a vault, or withdraw a pending invitation (owner only). Cannot remove the last owner.",
         "vault_leave" => "Leave a vault. The last owner can't leave while others remain.",
         "vault_rename" => "Rename a vault (owner only).",
         "vault_delete" => "Delete a vault and all memberships (owner only). Irreversible.",
@@ -203,6 +208,38 @@ fn to_tool_value<T: serde::Serialize>(result: AppResult<T>) -> Value {
 /// tools (`sources::registry`) aren't wired in yet -- that module doesn't
 /// exist on the Rust side.
 fn register_all(registry: &mut HashMap<&'static str, ToolSpec>) {
+    #[derive(serde::Deserialize, Default)]
+    struct DocsArgs {
+        #[serde(default)]
+        topic: Option<String>,
+    }
+    register(
+        registry,
+        "docs",
+        json!({
+            "type": "object",
+            "properties": {
+                "topic": {"type": "string", "description": "quickstart, installation, agents, concepts or deployment; omit to list"},
+            },
+        }),
+        Arc::new(|_state, _owner, args| {
+            Box::pin(async move {
+                let a: DocsArgs = match serde_json::from_value(args) {
+                    Ok(a) => a,
+                    Err(e) => return Ok(bad_args(e)),
+                };
+                let list = || crate::docs::DOCS.iter().map(|d| json!({ "topic": d.slug, "title": d.title })).collect::<Vec<_>>();
+                Ok(match a.topic {
+                    None => json!({ "docs": list() }),
+                    Some(t) => match crate::docs::find(&t) {
+                        Some(d) => json!({ "topic": d.slug, "title": d.title, "markdown": d.body }),
+                        None => json!({ "error": format!("no doc called {t:?}"), "docs": list() }),
+                    },
+                })
+            })
+        }),
+    );
+
     use crate::cache::recall::MemoryType;
     use crate::cache::tools as cache_tools;
     use crate::entities::service::KINDS;
@@ -791,6 +828,87 @@ fn register_all(registry: &mut HashMap<&'static str, ToolSpec>) {
     );
 
     #[derive(serde::Deserialize)]
+    struct MemoryUpdateArgs {
+        memory_id: String,
+        #[serde(default)]
+        text: Option<String>,
+        #[serde(rename = "type", default)]
+        mem_type: Option<String>,
+    }
+
+    register(
+        registry,
+        "memory_update",
+        json!({
+            "type": "object",
+            "properties": {
+                "memory_id": {"type": "string"},
+                "text": {"type": "string"},
+                "type": {"type": "string", "enum": ["world", "experience"]},
+            },
+            "required": ["memory_id"],
+        }),
+        Arc::new(|state, owner, args| {
+            Box::pin(async move {
+                let a: MemoryUpdateArgs = match serde_json::from_value(args) {
+                    Ok(a) => a,
+                    Err(e) => return Ok(bad_args(e)),
+                };
+                let rid = match parse_rid("memory_id", &a.memory_id) {
+                    Ok(v) => v,
+                    Err(e) => return Ok(e),
+                };
+                let result =
+                    entities_tools::memory_update(&state.db, owner, &rid, a.text.as_deref(), a.mem_type.as_deref()).await;
+                Ok(to_tool_value(result.and_then(|m| m.ok_or_else(|| crate::error::AppError::not_found("memory not found")))))
+            })
+        }),
+    );
+
+    #[derive(serde::Deserialize)]
+    struct EntityUpdateArgs {
+        entity_id: String,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        aliases: Option<Vec<String>>,
+        #[serde(default)]
+        summary: Option<String>,
+    }
+
+    register(
+        registry,
+        "entity_update",
+        json!({
+            "type": "object",
+            "properties": {
+                "entity_id": {"type": "string"},
+                "name": {"type": "string"},
+                "aliases": {"type": "array", "items": {"type": "string"}},
+                "summary": {"type": "string"},
+            },
+            "required": ["entity_id"],
+        }),
+        Arc::new(|state, owner, args| {
+            Box::pin(async move {
+                let a: EntityUpdateArgs = match serde_json::from_value(args) {
+                    Ok(a) => a,
+                    Err(e) => return Ok(bad_args(e)),
+                };
+                let rid = match parse_rid("entity_id", &a.entity_id) {
+                    Ok(v) => v,
+                    Err(e) => return Ok(e),
+                };
+                let result = entities_tools::entity_update(
+                    &state.db, owner, &rid, a.name.as_deref(), a.aliases, a.summary.as_deref(),
+                )
+                .await;
+                Ok(to_tool_value(result.and_then(|e| e.ok_or_else(|| crate::error::AppError::not_found("entity not found")))))
+            })
+        }),
+    );
+
+    #[derive(serde::Deserialize)]
     struct MemoryIdArgs {
         memory_id: String,
     }
@@ -951,6 +1069,48 @@ fn register_all(registry: &mut HashMap<&'static str, ToolSpec>) {
                     Err(e) => return Ok(e),
                 };
                 Ok(vaults_tools::vault_clone(&state.db, owner, &vault_id, a.name.as_deref(), &a.kind).await)
+            })
+        }),
+    );
+
+    #[derive(serde::Deserialize)]
+    struct VaultMergeArgs {
+        vault_id_a: String,
+        vault_id_b: String,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default = "default_vault_kind")]
+        kind: String,
+    }
+
+    register(
+        registry,
+        "vault_merge",
+        json!({
+            "type": "object",
+            "properties": {
+                "vault_id_a": {"type": "string", "description": "first vault (you must be a member)"},
+                "vault_id_b": {"type": "string", "description": "second vault (you must be a member); folded into the first on duplicates"},
+                "name": {"type": "string", "description": "default: \"<A> + <B>\""},
+                "kind": {"type": "string", "enum": ["org", "personal"], "description": "default org"},
+            },
+            "required": ["vault_id_a", "vault_id_b"],
+        }),
+        Arc::new(|state, owner, args| {
+            Box::pin(async move {
+                let a: VaultMergeArgs = match serde_json::from_value(args) {
+                    Ok(a) => a,
+                    Err(e) => return Ok(bad_args(e)),
+                };
+                let va = match parse_rid("vault_id_a", &a.vault_id_a) {
+                    Ok(v) => v,
+                    Err(e) => return Ok(e),
+                };
+                let vb = match parse_rid("vault_id_b", &a.vault_id_b) {
+                    Ok(v) => v,
+                    Err(e) => return Ok(e),
+                };
+                Ok(vaults_tools::vault_merge(&state.db, owner, &va, &vb, a.name.as_deref(), &a.kind).await)
             })
         }),
     );
@@ -1196,6 +1356,7 @@ mod tests {
     #[test]
     fn read_only_tools_match_python_set_exactly() {
         let expected = [
+            "docs",
             "search",
             "get",
             "list",
@@ -1263,9 +1424,9 @@ mod tests {
     #[test]
     fn registry_has_every_python_tool_wired_up() {
         let expected = [
-            "search", "get", "list", "links", "recall", "reflect", "entities_search", "entities_get",
+            "docs", "search", "get", "list", "links", "recall", "reflect", "entities_search", "entities_get",
             "entities_graph", "code_entity_upsert", "code_relate", "memory_write", "consolidate_observations",
-            "memory_delete", "entity_delete", "entity_merge", "vault_create", "vault_list", "vault_clone",
+            "memory_update", "entity_update", "memory_delete", "entity_delete", "entity_merge", "vault_create", "vault_list", "vault_clone", "vault_merge",
             "vault_invite", "vault_members", "vault_remove_member", "vault_leave", "vault_rename", "vault_delete",
         ];
         let tools = all_tools();

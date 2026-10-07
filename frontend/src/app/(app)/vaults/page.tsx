@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Check, ChevronDown, ChevronRight, Copy, LogOut, Mail, Plus, Trash2, UserPlus, Users, X } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, Combine, Copy, LogOut, Mail, Plus, Trash2, UserPlus, Users, X } from "lucide-react";
 import { vaults as vaultsApi, type Vault, type VaultInvitation, type VaultMember, type VaultRole } from "@/lib/api";
 
 function Badge({ children, tone = "dim" }: { children: React.ReactNode; tone?: "dim" | "accent" }) {
@@ -411,6 +411,81 @@ function CreateVaultCard({ onCreated }: { onCreated: () => void }) {
   );
 }
 
+const vaultLabel = (v: Vault) => (v.kind === "personal" ? "Personal" : v.name);
+
+function MergeVaultsCard({ vaults, onMerged }: { vaults: Vault[]; onMerged: () => void }) {
+  const [a, setA] = useState(vaults[0]?.id ?? "");
+  const [b, setB] = useState(vaults[1]?.id ?? "");
+  const [name, setName] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function merge() {
+    setBusy(true);
+    setError(null);
+    setResult(null);
+    try {
+      const merged = await vaultsApi.merge(a, b, name.trim());
+      setResult(`Created “${merged.name}” with ${merged.entities} entities.`);
+      setName("");
+      onMerged();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not merge those vaults.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const select = (value: string, set: (v: string) => void, label: string) => (
+    <select className="field px-2.5 py-2 text-[13px] flex-1 min-w-0" value={value} onChange={(e) => set(e.target.value)} aria-label={label}>
+      {vaults.map((v) => (
+        <option key={v.id} value={v.id}>
+          {vaultLabel(v)}
+        </option>
+      ))}
+    </select>
+  );
+
+  return (
+    <section className="ledger p-5 flex flex-col gap-3">
+      <div>
+        <div className="eyebrow flex items-center gap-1.5">
+          <Combine size={12} /> Merge two vaults
+        </div>
+        <p className="text-[12.5px] mt-1" style={{ color: "var(--ink-faint)" }}>
+          Copies both into a new vault. The originals don&apos;t change. Matching entities (same kind and name) are
+          combined, and duplicate facts are kept once.
+        </p>
+      </div>
+      <div className="flex items-center gap-2 flex-wrap">
+        {select(a, setA, "First vault")}
+        <span style={{ color: "var(--ink-faint)" }}>+</span>
+        {select(b, setB, "Second vault")}
+      </div>
+      <div className="flex items-center gap-2">
+        <input
+          className="field flex-1 px-3 py-2 text-[13px]"
+          placeholder="New vault name (optional)"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+        />
+        <button
+          onClick={merge}
+          disabled={busy || !a || a === b}
+          className="px-4 py-2 text-[13px] font-medium rounded-xl disabled:opacity-50"
+          style={{ background: "var(--felt)", color: "var(--canvas)" }}
+        >
+          {busy ? "Merging…" : "Merge"}
+        </button>
+      </div>
+      {a === b && <p className="text-[12px]" style={{ color: "var(--ink-faint)" }}>Pick two different vaults.</p>}
+      {result && <p className="text-[12px]" style={{ color: "var(--good)" }}>{result}</p>}
+      {error && <p className="text-[12px]" style={{ color: "var(--critical)" }}>{error}</p>}
+    </section>
+  );
+}
+
 export default function VaultsPage() {
   const [vaults, setVaults] = useState<Vault[] | null>(null);
 
@@ -463,6 +538,8 @@ export default function VaultsPage() {
         ))}
         <CreateVaultCard onCreated={load} />
       </section>
+
+      {vaults.length > 1 && <MergeVaultsCard vaults={vaults} onMerged={load} />}
     </div>
   );
 }

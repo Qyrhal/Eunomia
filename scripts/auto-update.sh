@@ -1,74 +1,122 @@
 #!/usr/bin/env bash
-# Self-update check/apply, run on the HOST (never inside a container) via
-# cron or a systemd timer -- see docs/deployment.md's "Auto-update" section.
+# Self-update check/apply. Run every 20s by the `updater` compose service
+# (scripts/updater.sh), or by hand / cron on the host -- a lock keeps two
+# runners from overlapping. See docs/deployment.md's "Updates" section.
 #
-# Why host-side: the backend container has no git, no docker CLI, and no
-# access to the docker socket. Giving a web-facing container control of the
-# docker socket would mean any RCE in it compromises the whole host; running
-# this on the host instead keeps that privileged step at the same trust
-# level the operator already has (they're the one who runs `docker compose`
-# by hand today).
+# The web-facing backend never gets git or the docker socket: it only drops
+# marker files in update-status/ ("check" = check GitHub now, "requested" =
+# apply the newest release), and this script does the rest.
 #
-# Writes $REPO/update-status/status.json every run (polled by
-# GET /api/update/status), and applies an update -- `git pull --ff-only` +
-# rebuild -- only when $REPO/update-status/requested exists (written by
-# POST /api/update). Never auto-applies on its own; that was a deliberate
-# product choice, not a technical limitation.
+# Writes $REPO/update-status/status.json (polled by GET /api/update/status)
+# at most every CHECK_EVERY_MIN minutes, comparing the running release
+# (EUNOMIA_IMAGE_TAG in .env) with the newest v* tag on GitHub. Applies an
+# update -- check out that tag, pull its prebuilt images, restart -- only when
+# update-status/requested exists (written by POST /api/update/request, i.e.
+# someone clicked "Update now"). Never auto-applies on its own.
+#
+# Everything runs inside main() so bash has parsed the whole script before
+# `git checkout` replaces this file with the new release's copy.
 set -uo pipefail
+# cron/launchd start with a bare PATH; appended so an existing PATH still wins
+export PATH="$PATH:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin"
 
-REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-STATUS_DIR="$REPO/update-status"
-mkdir -p "$STATUS_DIR"
+CHECK_EVERY_MIN=10
 
-cd "$REPO"
-git fetch origin main --quiet
+main() {
+  local repo status_dir current latest
+  repo="${EUNOMIA_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+  status_dir="$repo/update-status"
+  mkdir -p "$status_dir"
+  cd "$repo" || exit 1
 
-LOCAL_SHA=$(git rev-parse HEAD)
-REMOTE_SHA=$(git rev-parse origin/main)
+  # One runner at a time (container + an old host cron job may both exist).
+  # A lock older than 30 minutes is from a crashed run.
+  find "$status_dir/.lock" -maxdepth 0 -mmin +30 -exec rmdir {} \; 2>/dev/null
+  mkdir "$status_dir/.lock" 2>/dev/null || exit 0
+  trap "rmdir '$status_dir/.lock' 2>/dev/null" EXIT
 
+  # Nothing requested and checked recently: skip the network round-trip.
+  if [ ! -f "$status_dir/requested" ] && [ ! -f "$status_dir/check" ] \
+    && [ -n "$(find "$status_dir/status.json" -mmin -$CHECK_EVERY_MIN 2>/dev/null)" ]; then
+    exit 0
+  fi
+  rm -f "$status_dir/check"
+
+  current="$(sed -n 's/^EUNOMIA_IMAGE_TAG=//p' .env 2>/dev/null | tail -1)"
+  [ -n "$current" ] || current="$(git describe --tags --exact-match 2>/dev/null || echo unknown)"
+
+  if ! latest="$(git ls-remote --tags --refs origin 'v*' 2>"$status_dir/.last-error" | sed 's#.*refs/tags/##' | sort -V | tail -1)" || [ -z "$latest" ]; then
+    write_status "$status_dir" "$current" "$current" false "could not reach GitHub to check for releases: $(cat "$status_dir/.last-error")"
+    exit 1
+  fi
+
+  if [ ! -f "$status_dir/requested" ] || [ "$current" = "$latest" ]; then
+    rm -f "$status_dir/requested"
+    write_status "$status_dir" "$current" "$latest" false ""
+    exit 0
+  fi
+
+  write_status "$status_dir" "$current" "$latest" true ""
+  rm -f "$status_dir/requested"
+
+  # Local edits to tracked files (e.g. docker-compose.yml) can't be swapped
+  # for the new release's copy safely -- report rather than clobber them.
+  if ! git diff --quiet || ! git diff --cached --quiet; then
+    write_status "$status_dir" "$current" "$latest" false "local changes in $repo -- commit or stash them, then click Update again"
+    exit 1
+  fi
+
+  if ! { git fetch --depth 1 origin tag "$latest" --quiet && git checkout --quiet "$latest"; } 2>"$status_dir/.last-error"; then
+    write_status "$status_dir" "$current" "$latest" false "$(cat "$status_dir/.last-error")"
+    exit 1
+  fi
+
+  if grep -q '^EUNOMIA_IMAGE_TAG=' .env; then
+    sed -i.bak "s#^EUNOMIA_IMAGE_TAG=.*#EUNOMIA_IMAGE_TAG=$latest#" .env && rm -f .env.bak
+  else
+    echo "EUNOMIA_IMAGE_TAG=$latest" >> .env
+  fi
+
+  # Everything except the updater itself (recreating it here would kill this
+  # run); it is refreshed last, after the status is written.
+  local services
+  services="$(docker compose config --services 2>/dev/null | grep -vx updater | tr '\n' ' ')"
+  if ! { docker compose pull backend frontend && docker compose up -d --remove-orphans $services; } >/dev/null 2>"$status_dir/.last-error"; then
+    write_status "$status_dir" "$latest" "$latest" false "restart failed: $(tail -5 "$status_dir/.last-error")"
+    exit 1
+  fi
+
+  rm -f "$status_dir/.last-error"
+  write_status "$status_dir" "$latest" "$latest" false ""
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) updated $current -> $latest" >> "$status_dir/history.log"
+  # Pick up a changed updater definition. Not from in here: recreating the
+  # container this runs in would kill the command halfway and leave no
+  # updater. A short-lived sibling container does it a few seconds later
+  # (a no-op when nothing changed). The repo is at the same path on the host.
+  if [ -f /.dockerenv ] && docker compose config --services 2>/dev/null | grep -qx updater; then
+    docker run -d --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$PWD:$PWD" -w "$PWD" docker:27-cli \
+      sh -c "sleep 5 && docker compose up -d updater" >/dev/null 2>&1
+  fi
+}
+
+# write_status <dir> <current> <latest> <applying> <error>
 write_status() {
-  local applying="$1" error="${2:-}"
-  cat > "$STATUS_DIR/status.json" <<EOF
+  local error=null
+  if [ -n "$5" ]; then
+    error="\"$(printf '%s' "$5" | tr '\n\r\t' '   ' | sed 's/\\/\\\\/g; s/"/\\"/g')\""
+  fi
+  cat > "$1/status.json.tmp" <<EOF
 {
-  "local_sha": "$LOCAL_SHA",
-  "remote_sha": "$REMOTE_SHA",
-  "update_available": $([ "$LOCAL_SHA" != "$REMOTE_SHA" ] && echo true || echo false),
+  "current_version": "$2",
+  "latest_version": "$3",
+  "update_available": $([ "$2" != "$3" ] && echo true || echo false),
   "checked_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-  "applying": $applying,
-  "error": $([ -n "$error" ] && printf '%s' "$error" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))' || echo null)
+  "applying": $4,
+  "error": $error
 }
 EOF
+  mv "$1/status.json.tmp" "$1/status.json"
 }
 
-if [ ! -f "$STATUS_DIR/requested" ]; then
-  write_status false
-  exit 0
-fi
-
-write_status true
-rm -f "$STATUS_DIR/requested"
-
-# A dirty working tree (local edits, not just a stale checkout) can't be
-# fast-forwarded safely -- fail loudly into status.json rather than let a
-# mid-pull error (or an operator's global `pull.rebase` config turning this
-# into a rebase, which also refuses on dirty trees) leave `applying: true`
-# stuck forever with no explanation.
-if ! git diff --quiet || ! git diff --cached --quiet; then
-  write_status false "working tree has local changes -- commit or stash them, then click Update again"
-  exit 1
-fi
-
-if ! git pull --ff-only --no-rebase origin main 2>"$STATUS_DIR/.last-error"; then
-  write_status false "$(cat "$STATUS_DIR/.last-error")"
-  exit 1
-fi
-
-if ! docker compose up -d --build backend frontend mcp 2>"$STATUS_DIR/.last-error"; then
-  write_status false "rebuild failed: $(cat "$STATUS_DIR/.last-error")"
-  exit 1
-fi
-
-rm -f "$STATUS_DIR/.last-error"
-LOCAL_SHA=$(git rev-parse HEAD)
-write_status false
-echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) updated to $LOCAL_SHA" >> "$STATUS_DIR/history.log"
+main "$@"
+exit

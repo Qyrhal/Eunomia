@@ -38,6 +38,13 @@ pub async fn vault_clone(db: &Db, owner: &RecordId, vault_id: &RecordId, name: O
     }
 }
 
+pub async fn vault_merge(db: &Db, owner: &RecordId, a: &RecordId, b: &RecordId, name: Option<&str>, kind: &str) -> Value {
+    match service::merge_vaults(db, owner, a, b, name, kind).await {
+        Ok(v) => serde_json::to_value(v).unwrap_or_else(|e| err("vault_merge", &e.to_string())),
+        Err(e) => err("vault_merge", &e.message),
+    }
+}
+
 pub async fn vault_invite(db: &Db, owner: &RecordId, vault_id: &RecordId, email: &str, role: &str) -> Value {
     match service::invite_member(db, owner, vault_id, email, role).await {
         Ok(v) => serde_json::to_value(v).unwrap_or_else(|e| err("vault_invite", &e.to_string())),

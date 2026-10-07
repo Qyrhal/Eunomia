@@ -1,11 +1,11 @@
-//! Recall pipeline: 4 arms in parallel (semantic, keyword, graph, temporal),
+//! Recall pipeline: 5 arms in parallel (semantic, keyword, graph, temporal, memory text),
 //! fused via Reciprocal Rank Fusion, then boosted by recency + "proof" (how
 //! many arms agreed on an item), then truncated to a token budget.
 //!
 //! Pipeline, matching the reference diagram:
 //!
 //! ```text
-//!     [semantic | keyword | graph | temporal]  (4 arms, run concurrently)
+//!     [semantic | keyword | graph | temporal | memory text]  (5 arms, run concurrently)
 //!                      |
 //!                 RRF fusion (k=60, reusing cache::search's rrf_scores)
 //!                      |
@@ -173,6 +173,28 @@ async fn graph_arm(db: &Db, owner: &RecordId, vault: &RecordId, query: &str, lim
     Ok(out)
 }
 
+/// Full-text arm over remembered facts (`memory.text`), BM25-ranked. This is
+/// what makes a fact an agent wrote with `memory_write` findable by what it
+/// says, not just by its subject's name -- no embeddings required. Works for
+/// any vault the caller can read.
+async fn memory_text_arm(db: &Db, vault: &RecordId, query: &str, limit: usize) -> AppResult<Vec<String>> {
+    #[derive(Deserialize)]
+    struct IdRow {
+        id: RecordId,
+    }
+    let mut res = db
+        .query(
+            "SELECT id, search::score(1) AS score FROM memory \
+             WHERE vault = $vault AND text @1@ $q ORDER BY score DESC LIMIT $limit",
+        )
+        .bind(("vault", vault.clone()))
+        .bind(("q", query.to_string()))
+        .bind(("limit", limit as i64))
+        .await?;
+    let rows: Vec<IdRow> = res.take(0)?;
+    Ok(rows.into_iter().map(|r| format!("memory:{}", r.id)).collect())
+}
+
 /// Explicit date-range filter only -- no NL date parsing in v1. Merges
 /// `cache_record` (`occurred_at`, caller's own data only -- see `recall`'s
 /// `include_cache_record`) and `memory` (`created_at`, vault-scoped) hits
@@ -306,7 +328,7 @@ async fn hydrate(db: &Db, owner: &RecordId, vault: &RecordId, key: &str) -> AppR
 /// small multipliers in spirit, not exact values -- the task leaves the
 /// exact formula up to the implementation.
 ///
-/// proof:   `1 + 0.05 * (arms_hit - 1)` -> 1.00 .. 1.15 for 1..4 arms
+/// proof:   `1 + 0.05 * (arms_hit - 1)` -> 1.00 .. 1.20 for 1..5 arms
 /// recency: 1.0 at age=0, linearly down to a 0.7 floor at 365+ days old;
 ///          1.0 (neutral) when there's no date to judge recency from.
 ///
@@ -350,8 +372,9 @@ pub async fn recall(
     let personal = vault == default_vault;
 
     let keyword_ids = if personal { cs::keyword_ids(db, owner, query, pool).await? } else { Vec::new() };
-    // No/invalid OpenAI key must not take down the other three arms.
-    let semantic_ids = if personal {
+    // No embeddings (no OpenAI key -- the MCP agent is the model) or a failing
+    // provider must not take down the other three arms.
+    let semantic_ids = if personal && crate::embeddings::service::available(db, settings, owner).await {
         cs::semantic_ids(db, settings, owner, query, pool).await.unwrap_or_else(|e| {
             tracing::warn!("recall: semantic arm skipped: {}", e.message);
             Vec::new()
@@ -365,7 +388,9 @@ pub async fn recall(
     let keyword_keys: Vec<String> = keyword_ids.iter().map(|i| format!("cache_record:{i}")).collect();
     let semantic_keys: Vec<String> = semantic_ids.iter().map(|i| format!("cache_record:{i}")).collect();
 
-    let arms = [semantic_keys, keyword_keys, graph_keys, temporal_keys];
+    let memory_keys = memory_text_arm(db, &vault, query, pool).await?;
+
+    let arms = [semantic_keys, keyword_keys, graph_keys, temporal_keys, memory_keys];
     let rrf = cs::rrf_scores(&arms);
     if rrf.is_empty() {
         return Ok(Vec::new());

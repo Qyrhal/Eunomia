@@ -46,3 +46,14 @@ jobs:
       # something runs Next at least once. Build first, then re-typecheck.
       - run: bun run build
       - run: bunx tsc --noEmit
+
+  scripts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # connect-agents.sh against a throwaway HOME and a mock API, with jq and
+      # again with the python3 fallback.
+      - run: bash scripts/tests/connect-agents.test.sh
+      - run: CONNECT_JSON=py bash scripts/tests/connect-agents.test.sh
+      - run: bash scripts/tests/auto-update.test.sh
+      - run: bash -n scripts/auto-update.sh scripts/connect-agents.sh

@@ -76,6 +76,74 @@ test.describe("MCP server", () => {
     expect(found.result.content[0].text).toContain("Ada Lovelace");
   });
 
+  test("memory CRUD and recall work through MCP, whether or not the server has an OpenAI key", async ({ request }) => {
+    const token = await newToken(request);
+    let n = 0;
+    const call = async (name: string, args: object) => {
+      const r = await (
+        await rpc(request, token, { jsonrpc: "2.0", id: ++n, method: "tools/call", params: { name, arguments: args } })
+      ).json();
+      const text = r.result.content[0].text;
+      return { isError: r.result.isError as boolean, data: JSON.parse(text) };
+    };
+
+    // create
+    const written = await call("memory_write", {
+      subject_name: "Grace Hopper",
+      subject_kind: "person",
+      text: "Invented the first compiler, the A-0 system.",
+    });
+    expect(written.isError).toBe(false);
+    const memoryId: string = written.data.memory.id;
+    const entityId: string = written.data.entity.id;
+
+    // read: found by what it says, not just by the entity's name
+    const recalled = await call("recall", { query: "compiler" });
+    expect(recalled.data.results.map((r: { text: string }) => r.text)).toContain("Invented the first compiler, the A-0 system.");
+
+    // reflect never needs a server-side model: it either answers or hands the memories to the agent
+    const reflected = await call("reflect", { query: "who invented the compiler?" });
+    expect(reflected.isError).toBe(false);
+    if (reflected.data.mode === "recall_only") {
+      expect(reflected.data.answer).toBeNull();
+      expect(reflected.data.memories.length).toBeGreaterThan(0);
+      expect(reflected.data.instructions).toContain("you answer");
+    } else {
+      expect(typeof reflected.data.answer).toBe("string");
+    }
+
+    // update: the old words stop matching, the new ones start
+    const updated = await call("memory_update", { memory_id: memoryId, text: "Popularised machine-independent programming languages.", type: "experience" });
+    expect(updated.isError).toBe(false);
+    expect(updated.data.version).toBe(2);
+    expect((await call("recall", { query: "compiler" })).data.results).toHaveLength(0);
+    expect((await call("recall", { query: "machine-independent" })).data.results).toHaveLength(1);
+    expect((await call("memory_update", { memory_id: memoryId, type: "observation" })).isError).toBe(true);
+
+    // an observation is revised in place, not duplicated
+    await call("memory_write", { subject_name: "Grace Hopper", subject_kind: "person", text: "Pioneer.", type: "observation" });
+    const revised = await call("memory_write", { subject_name: "Grace Hopper", subject_kind: "person", text: "Pioneer of compilers.", type: "observation" });
+    expect(revised.data.memory.version).toBe(2);
+
+    const renamed = await call("entity_update", { entity_id: entityId, aliases: ["Amazing Grace"], summary: "Rear admiral" });
+    expect(renamed.data.aliases).toEqual(["Amazing Grace"]);
+    const detail = await call("entities_get", { id: entityId });
+    expect(detail.data.memory).toHaveLength(2); // the fact + the one observation
+
+    // delete
+    expect((await call("memory_delete", { memory_id: memoryId })).data.deleted).toBe(true);
+    expect((await call("recall", { query: "machine-independent" })).data.results).toHaveLength(0);
+    expect((await call("entity_delete", { entity_id: entityId })).data.deleted).toBe(true);
+  });
+
+  test("initialize tells the agent it is the model", async ({ request }) => {
+    const token = await newToken(request);
+    const init = await (
+      await rpc(request, token, { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18" } })
+    ).json();
+    expect(init.result.instructions).toContain("You are the model");
+  });
+
   test("protocol errors and auth", async ({ request }) => {
     const token = await newToken(request);
 

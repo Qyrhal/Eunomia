@@ -1,0 +1,12 @@
+# Eunomia docs
+
+One set of docs, shown in three places: this folder, the **Docs** page in the
+app, and the `docs` MCP tool (so a connected agent can read them too).
+
+| Doc | What's in it |
+|---|---|
+| [Quickstart](quickstart.md) | Install, sign in, connect an agent — five minutes |
+| [Installation](installation.md) | Every installer flag, manual install, installing as an AI agent |
+| [AI agents & MCP](agents.md) | Connecting Claude Code, Codex, Hermes, …; the tools; running without an OpenAI key |
+| [Concepts](concepts.md) | Vaults, entities, memories, recall, merging, the 3D graph and vector cloud |
+| [Deployment](deployment.md) | TLS, production env vars, updates, backups |

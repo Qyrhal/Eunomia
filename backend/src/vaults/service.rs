@@ -392,9 +392,10 @@ pub async fn remove_member(db: &Db, user_id: &RecordId, vault_id: &RecordId, ema
     let rows: Vec<EmailLookupRow> = res.take(0)?;
     let target_id = rows.into_iter().next().ok_or_else(|| AppError::bad_request(format!("no user with email '{email}'")))?.id;
 
-    let target_membership = membership(db, vault_id, &target_id)
+    // any status: this also withdraws a pending invitation
+    let target_membership = membership_any_status(db, vault_id, &target_id)
         .await?
-        .ok_or_else(|| AppError::bad_request(format!("{email} is not a member")))?;
+        .ok_or_else(|| AppError::bad_request(format!("{email} is not a member or invitee")))?;
 
     if target_membership.role == "owner" {
         let mut res = db
@@ -445,6 +446,161 @@ struct RelationRow {
     label: String,
 }
 
+/// Looks an entity up in `vault` by case-insensitive name (merge matching).
+async fn find_by_name(db: &Db, kind: &str, vault: &RecordId, name: &str) -> AppResult<Option<EntityRow>> {
+    let mut res = db
+        .query(format!("SELECT * FROM {kind} WHERE vault = $vault AND string::lowercase(name) = $name LIMIT 1"))
+        .bind(("vault", vault.clone()))
+        .bind(("name", name.to_lowercase()))
+        .await?;
+    let rows: Vec<EntityRow> = res.take(0)?;
+    Ok(rows.into_iter().next())
+}
+
+/// Merge rule for one incoming memory against what `subject` already has:
+/// an identical fact is skipped, and a second observation is appended to the
+/// existing one (one observation per subject). Returns true if handled.
+async fn fold_into_existing_memory(db: &Db, subject: &RecordId, mem: &MemoryRow) -> AppResult<bool> {
+    #[derive(Deserialize)]
+    struct Existing {
+        id: RecordId,
+        #[serde(default)]
+        text: String,
+    }
+    if mem.mem_type == "observation" {
+        let mut res = db
+            .query(r#"SELECT id, text FROM memory WHERE subject = $s AND type = "observation" LIMIT 1"#)
+            .bind(("s", subject.clone()))
+            .await?;
+        let existing: Vec<Existing> = res.take(0)?;
+        let Some(existing) = existing.into_iter().next() else { return Ok(false) };
+        if existing.text != mem.text {
+            db.query("UPDATE $id SET text = $text, version = version + 1, status = \"stale\", updated_at = time::now()")
+                .bind(("id", existing.id))
+                .bind(("text", format!("{}\n\n{}", existing.text, mem.text)))
+                .await?;
+        }
+        return Ok(true);
+    }
+    let mut res = db
+        .query("SELECT id FROM memory WHERE subject = $s AND type = $type AND text = $text LIMIT 1")
+        .bind(("s", subject.clone()))
+        .bind(("type", mem.mem_type.clone()))
+        .bind(("text", mem.text.clone()))
+        .await?;
+    let same: Vec<VaultRow> = res.take(0)?;
+    Ok(!same.is_empty())
+}
+
+/// Copies every entity, memory and relation of `src` into `dest` (both
+/// already accessible to `user_id`); returns how many entities of `src` landed
+/// in `dest`. With `merge_duplicates`, entities that share a kind and
+/// (case-insensitive) name with one already in `dest` are folded into it
+/// instead of duplicated.
+async fn copy_into(db: &Db, user_id: &RecordId, src: &RecordId, dest: &RecordId, merge_duplicates: bool) -> AppResult<usize> {
+    let mut id_map: HashMap<RecordId, RecordId> = HashMap::new();
+    for entity_kind in ENTITY_KINDS {
+        let mut res = db
+            .query(format!("SELECT * FROM {entity_kind} WHERE vault = $vault"))
+            .bind(("vault", src.clone()))
+            .await?;
+        let rows: Vec<EntityRow> = res.take(0)?;
+        for row in rows {
+            if merge_duplicates {
+                if let Some(existing) = find_by_name(db, entity_kind, dest, &row.name).await? {
+                    let mut aliases = existing.aliases.clone();
+                    for alias in row.aliases.iter().cloned() {
+                        if !aliases.iter().any(|a| a.eq_ignore_ascii_case(&alias)) {
+                            aliases.push(alias);
+                        }
+                    }
+                    let summary = if existing.summary.is_empty() { row.summary.clone() } else { existing.summary.clone() };
+                    db.query("UPDATE $id SET aliases = $aliases, summary = $summary, updated_at = time::now()")
+                        .bind(("id", existing.id.clone()))
+                        .bind(("aliases", aliases))
+                        .bind(("summary", summary))
+                        .await?;
+                    id_map.insert(row.id, existing.id);
+                    continue;
+                }
+            }
+            let mut created = db
+                .query(format!(
+                    "CREATE {entity_kind} SET owner = $owner, vault = $vault, name = $name, \
+                     aliases = $aliases, summary = $summary RETURN AFTER"
+                ))
+                .bind(("owner", user_id.clone()))
+                .bind(("vault", dest.clone()))
+                .bind(("name", row.name))
+                .bind(("aliases", row.aliases))
+                .bind(("summary", row.summary))
+                .await?;
+            let created_rows: Vec<VaultRow> = created.take(0)?;
+            let created_row =
+                created_rows.into_iter().next().ok_or_else(|| AppError::internal("entity insert returned no row"))?;
+            id_map.insert(row.id, created_row.id);
+        }
+    }
+
+    for (old_id, new_id) in id_map.clone() {
+        let mut res = db
+            .query("SELECT * FROM memory WHERE subject = $id")
+            .bind(("id", old_id))
+            .await?;
+        let memories: Vec<MemoryRow> = res.take(0)?;
+        for mem in memories {
+            if merge_duplicates && fold_into_existing_memory(db, &new_id, &mem).await? {
+                continue;
+            }
+            db.query(
+                "CREATE memory SET owner = $owner, vault = $vault, subject = $subject, text = $text, \
+                 type = $type, source = $source RETURN AFTER",
+            )
+            .bind(("owner", user_id.clone()))
+            .bind(("vault", dest.clone()))
+            .bind(("subject", new_id.clone()))
+            .bind(("text", mem.text))
+            .bind(("type", mem.mem_type))
+            .bind(("source", mem.source))
+            .await?;
+        }
+    }
+
+    let mut seen_edges: HashSet<(RecordId, RecordId, String)> = HashSet::new();
+    for (old_id, new_id) in id_map.clone() {
+        let mut res = db.query("SELECT * FROM relates_to WHERE in = $id").bind(("id", old_id.clone())).await?;
+        let edges: Vec<RelationRow> = res.take(0)?;
+        for edge in edges {
+            let Some(other_new) = id_map.get(&edge.other) else { continue };
+            let key = (old_id.clone(), edge.other.clone(), edge.label.clone());
+            if seen_edges.contains(&key) {
+                continue;
+            }
+            seen_edges.insert(key);
+            if merge_duplicates {
+                let mut res = db
+                    .query("SELECT id FROM relates_to WHERE in = $in AND out = $out AND label = $label LIMIT 1")
+                    .bind(("in", new_id.clone()))
+                    .bind(("out", other_new.clone()))
+                    .bind(("label", edge.label.clone()))
+                    .await?;
+                let found: Vec<VaultRow> = res.take(0)?;
+                if !found.is_empty() {
+                    continue;
+                }
+            }
+            db.query("RELATE $in->relates_to->$out SET label = $label, owner = $owner")
+                .bind(("in", new_id.clone()))
+                .bind(("out", other_new.clone()))
+                .bind(("label", edge.label))
+                .bind(("owner", user_id.clone()))
+                .await?;
+        }
+    }
+
+    Ok(id_map.len())
+}
+
 /// Deep-copy `vault_id` (read access required, not necessarily owner) into a
 /// brand-new vault the caller owns -- every entity, memory, and relation is
 /// duplicated, not referenced, so editing the clone never touches the
@@ -473,79 +629,73 @@ pub async fn clone_vault(
     let clone = create_vault(db, user_id, &clone_name, kind).await?;
     let clone_rid: RecordId = clone.id.parse().map_err(|_| AppError::internal("clone vault id did not round-trip"))?;
 
-    let mut id_map: HashMap<RecordId, RecordId> = HashMap::new();
-    for entity_kind in ENTITY_KINDS {
-        let mut res = db
-            .query(format!("SELECT * FROM {entity_kind} WHERE vault = $vault"))
-            .bind(("vault", vault_id.clone()))
-            .await?;
-        let rows: Vec<EntityRow> = res.take(0)?;
-        for row in rows {
-            let mut created = db
-                .query(format!(
-                    "CREATE {entity_kind} SET owner = $owner, vault = $vault, name = $name, \
-                     aliases = $aliases, summary = $summary RETURN AFTER"
-                ))
-                .bind(("owner", user_id.clone()))
-                .bind(("vault", clone_rid.clone()))
-                .bind(("name", row.name))
-                .bind(("aliases", row.aliases))
-                .bind(("summary", row.summary))
-                .await?;
-            let created_rows: Vec<VaultRow> = created.take(0)?;
-            let created_row =
-                created_rows.into_iter().next().ok_or_else(|| AppError::internal("entity insert returned no row"))?;
-            id_map.insert(row.id, created_row.id);
-        }
-    }
-
-    for (old_id, new_id) in id_map.clone() {
-        let mut res = db
-            .query("SELECT * FROM memory WHERE subject = $id")
-            .bind(("id", old_id))
-            .await?;
-        let memories: Vec<MemoryRow> = res.take(0)?;
-        for mem in memories {
-            db.query(
-                "CREATE memory SET owner = $owner, vault = $vault, subject = $subject, text = $text, \
-                 type = $type, source = $source RETURN AFTER",
-            )
-            .bind(("owner", user_id.clone()))
-            .bind(("vault", clone_rid.clone()))
-            .bind(("subject", new_id.clone()))
-            .bind(("text", mem.text))
-            .bind(("type", mem.mem_type))
-            .bind(("source", mem.source))
-            .await?;
-        }
-    }
-
-    let mut seen_edges: HashSet<(RecordId, RecordId, String)> = HashSet::new();
-    for (old_id, new_id) in id_map.clone() {
-        let mut res = db.query("SELECT * FROM relates_to WHERE in = $id").bind(("id", old_id.clone())).await?;
-        let edges: Vec<RelationRow> = res.take(0)?;
-        for edge in edges {
-            let Some(other_new) = id_map.get(&edge.other) else { continue };
-            let key = (old_id.clone(), edge.other.clone(), edge.label.clone());
-            if seen_edges.contains(&key) {
-                continue;
-            }
-            seen_edges.insert(key);
-            db.query("RELATE $in->relates_to->$out SET label = $label, owner = $owner")
-                .bind(("in", new_id.clone()))
-                .bind(("out", other_new.clone()))
-                .bind(("label", edge.label))
-                .bind(("owner", user_id.clone()))
-                .await?;
-        }
-    }
+    let copied = copy_into(db, user_id, vault_id, &clone_rid, false).await?;
 
     Ok(CloneOut {
         id: clone.id,
         name: clone.name,
         kind: clone.kind,
         created_at: clone.created_at,
-        entities_copied: id_map.len(),
+        entities_copied: copied,
+    })
+}
+
+#[derive(Debug, Serialize)]
+pub struct MergeOut {
+    pub id: String,
+    pub name: String,
+    pub kind: String,
+    pub created_at: Option<Datetime>,
+    /// Entities in the merged vault (duplicates across the two sources count once).
+    pub entities: usize,
+    pub merged_from: [String; 2],
+}
+
+/// Merge two vaults into a NEW one: both are copied (never moved -- the
+/// sources stay exactly as they were) into a fresh vault the caller owns, the
+/// second folding into the first wherever an entity of the same kind and name
+/// exists in both (aliases unioned, identical facts kept once, relations
+/// deduplicated, a second observation appended to the first).
+pub async fn merge_vaults(
+    db: &Db,
+    user_id: &RecordId,
+    a: &RecordId,
+    b: &RecordId,
+    name: Option<&str>,
+    kind: &str,
+) -> AppResult<MergeOut> {
+    if a == b {
+        return Err(AppError::bad_request("pick two different vaults to merge"));
+    }
+    require_membership(db, user_id, a).await?;
+    require_membership(db, user_id, b).await?;
+    let (va, vb): (Option<VaultFullRow>, Option<VaultFullRow>) = (db.select(a.clone()).await?, db.select(b.clone()).await?);
+    let va = va.ok_or_else(|| AppError::bad_request(format!("vault not found: {a}")))?;
+    let vb = vb.ok_or_else(|| AppError::bad_request(format!("vault not found: {b}")))?;
+
+    let merged_name = name.map(str::to_string).unwrap_or_else(|| format!("{} + {}", va.name, vb.name));
+    let merged = create_vault(db, user_id, &merged_name, kind).await?;
+    let dest: RecordId = merged.id.parse().map_err(|_| AppError::internal("merged vault id did not round-trip"))?;
+
+    copy_into(db, user_id, a, &dest, true).await?;
+    copy_into(db, user_id, b, &dest, true).await?;
+
+    let mut entities = 0;
+    for entity_kind in ENTITY_KINDS {
+        let mut res = db
+            .query(format!("SELECT count() FROM {entity_kind} WHERE vault = $vault GROUP ALL"))
+            .bind(("vault", dest.clone()))
+            .await?;
+        let rows: Vec<CountRow> = res.take(0)?;
+        entities += rows.first().map(|r| r.count).unwrap_or(0) as usize;
+    }
+    Ok(MergeOut {
+        id: merged.id,
+        name: merged.name,
+        kind: merged.kind,
+        created_at: merged.created_at,
+        entities,
+        merged_from: [a.to_string(), b.to_string()],
     })
 }
 

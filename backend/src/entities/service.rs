@@ -403,6 +403,29 @@ pub async fn add_memory(
         ));
     }
 
+    // One observation per subject (consolidation reads LIMIT 1): writing another
+    // one -- e.g. an MCP agent doing the consolidating -- revises it in place.
+    if mem_type == "observation" {
+        let mut res = db
+            .query(r#"SELECT * FROM memory WHERE subject = $subject AND type = "observation" LIMIT 1"#)
+            .bind(("subject", subject_id.clone()))
+            .await?;
+        let existing: Vec<MemoryRow> = res.take(0)?;
+        if let Some(existing) = existing.into_iter().next() {
+            let mut res = db
+                .query(
+                    "UPDATE $id SET text = $text, version = version + 1, status = \"fresh\", \
+                     updated_at = time::now() RETURN AFTER",
+                )
+                .bind(("id", existing.id))
+                .bind(("text", text.to_string()))
+                .await?;
+            let rows: Vec<MemoryRow> = res.take(0)?;
+            let row = rows.into_iter().next().ok_or_else(|| AppError::internal("observation update returned no row"))?;
+            return Ok(memory_out(&row, None));
+        }
+    }
+
     let source = source_record_id.map(|r| cache_record_rid(owner, r));
     let q = db
         .query(
@@ -532,6 +555,72 @@ pub async fn delete_memory(db: &Db, owner: &RecordId, memory_id: &RecordId) -> A
     }
     db.query("DELETE $id").bind(("id", memory_id.clone())).await?;
     Ok(true)
+}
+
+/// Memory types a raw fact can be switched between by [`update_memory`];
+/// `observation` is the consolidated belief and keeps its type.
+const RAW_MEMORY_TYPES: &[&str] = &["world", "experience"];
+
+/// Validates an edit request: something to change, and a legal type change
+/// for a memory that is currently `current_type`.
+fn check_memory_edit(current_type: &str, text: Option<&str>, new_type: Option<&str>) -> AppResult<()> {
+    if text.is_none() && new_type.is_none() {
+        return Err(AppError::bad_request("nothing to update: pass `text` and/or `type`"));
+    }
+    if text.is_some_and(|t| t.trim().is_empty()) {
+        return Err(AppError::bad_request("memory text can't be empty"));
+    }
+    if let Some(t) = new_type {
+        if current_type == "observation" || !RAW_MEMORY_TYPES.contains(&t) {
+            return Err(AppError::bad_request(
+                "`type` can only switch a fact between world and experience; observations keep theirs",
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Edit one memory's text and/or type (world <-> experience), vault-scoped,
+/// not-found-is-None like `get_entity`. Bumps `version`. Editing a raw fact
+/// marks its subject's observation stale, same as writing a new one.
+pub async fn update_memory(
+    db: &Db,
+    owner: &RecordId,
+    memory_id: &RecordId,
+    text: Option<&str>,
+    new_type: Option<&str>,
+) -> AppResult<Option<MemoryOut>> {
+    let row: Option<MemoryRow> = db.select(memory_id.clone()).await?;
+    let Some(row) = row else { return Ok(None) };
+    if !accessible(db, owner, &row.vault).await? {
+        return Ok(None);
+    }
+    check_memory_edit(&row.mem_type, text, new_type)?;
+
+    let mut set = vec!["version = version + 1", "updated_at = time::now()"];
+    if text.is_some() {
+        set.push("text = $text");
+    }
+    if new_type.is_some() {
+        set.push("type = $type");
+    }
+    let mut q = db.query(format!("UPDATE $id SET {} RETURN AFTER", set.join(", "))).bind(("id", memory_id.clone()));
+    if let Some(t) = text {
+        q = q.bind(("text", t.to_string()));
+    }
+    if let Some(t) = new_type {
+        q = q.bind(("type", t.to_string()));
+    }
+    let mut res = q.await?;
+    let rows: Vec<MemoryRow> = res.take(0)?;
+    let updated = rows.into_iter().next().ok_or_else(|| AppError::internal("memory update returned no row"))?;
+
+    if updated.mem_type != "observation" {
+        db.query(r#"UPDATE memory SET status = "stale" WHERE subject = $subject AND type = "observation""#)
+            .bind(("subject", updated.subject.clone()))
+            .await?;
+    }
+    Ok(Some(memory_out(&updated, None)))
 }
 
 /// Edit an entity's own fields -- name/aliases/summary -- vault-scoped, same
@@ -910,6 +999,24 @@ pub async fn upsert_code_entity(
 
 #[cfg(test)]
 mod tests {
+    use super::check_memory_edit;
+
+    #[test]
+    fn memory_edit_needs_something_to_change() {
+        assert!(check_memory_edit("world", None, None).is_err());
+        assert!(check_memory_edit("world", Some("new"), None).is_ok());
+        assert!(check_memory_edit("world", None, Some("experience")).is_ok());
+    }
+
+    #[test]
+    fn memory_edit_rejects_blank_text_and_observation_type_changes() {
+        assert!(check_memory_edit("world", Some("  "), None).is_err());
+        assert!(check_memory_edit("world", None, Some("observation")).is_err());
+        assert!(check_memory_edit("world", None, Some("bogus")).is_err());
+        assert!(check_memory_edit("observation", None, Some("world")).is_err());
+        assert!(check_memory_edit("observation", Some("revised belief"), None).is_ok());
+    }
+
     use super::*;
 
     #[test]

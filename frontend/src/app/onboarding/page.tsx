@@ -12,6 +12,7 @@ export default function OnboardingPage() {
   const [me, setMe] = useState<Me | null>(null);
   const [appSettings, setAppSettings] = useState<AppSettings | null>(null);
   const [step, setStep] = useState(0);
+  const [baseUrlInput, setBaseUrlInput] = useState("");
   const [apiKeyInput, setApiKeyInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -27,7 +28,13 @@ export default function OnboardingPage() {
         setMe(m);
       })
       .catch(() => router.replace("/login"));
-    settings.get().then(setAppSettings).catch(() => {});
+    settings
+      .get()
+      .then((s) => {
+        setAppSettings(s);
+        setBaseUrlInput(s.openai_base_url);
+      })
+      .catch(() => {});
   }, [router]);
 
   // The 2nd step is pointless if an OpenAI key is already configured
@@ -44,7 +51,11 @@ export default function OnboardingPage() {
     setBusy(true);
     setError(null);
     try {
-      if (apiKeyInput) await settings.update({ openai_api_key: apiKeyInput });
+      const url = baseUrlInput.trim();
+      const changes: Record<string, string> = {};
+      if (url && url !== appSettings?.openai_base_url) changes.openai_base_url = url;
+      if (apiKeyInput) changes.openai_api_key = apiKeyInput;
+      if (Object.keys(changes).length) await settings.update(changes);
       await finish();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not save key.");
@@ -109,11 +120,21 @@ export default function OnboardingPage() {
         {step === 1 && !skipOpenAiStep && (
           <div className="flex flex-col gap-4">
             <p className="text-[13px]" style={{ color: "var(--ink-dim)" }}>
-              Eunomia uses OpenAI for embeddings and entity-memory extraction. Paste a key now, or skip
-              and add it later from Settings.
+              Optional. A connected AI agent (Claude, Codex, …) can recall and write memory using its own
+              model. Adding an OpenAI-compatible endpoint lets Eunomia do embeddings and answer synthesis
+              itself, which saves your agent&apos;s tokens. Skip it and add it later from Settings if you like.
             </p>
             <label className="text-[12px] flex flex-col gap-1.5" style={{ color: "var(--ink-dim)" }}>
-              OpenAI API key
+              Base URL
+              <input
+                className="field px-3 py-2 text-[13px] font-mono"
+                placeholder="https://api.openai.com/v1"
+                value={baseUrlInput}
+                onChange={(e) => setBaseUrlInput(e.target.value)}
+              />
+            </label>
+            <label className="text-[12px] flex flex-col gap-1.5" style={{ color: "var(--ink-dim)" }}>
+              API key
               <input
                 type="password"
                 className="field px-3 py-2 text-[13px] font-mono"

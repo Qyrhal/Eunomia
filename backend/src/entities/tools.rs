@@ -104,6 +104,27 @@ pub async fn memory_write(
     service::write_memory(db, owner, subject_name, subject_kind, text, source_record_id, mem_type, vault_id).await
 }
 
+pub async fn memory_update(
+    db: &Db,
+    owner: &RecordId,
+    memory_id: &RecordId,
+    text: Option<&str>,
+    new_type: Option<&str>,
+) -> AppResult<Option<service::MemoryOut>> {
+    service::update_memory(db, owner, memory_id, text, new_type).await
+}
+
+pub async fn entity_update(
+    db: &Db,
+    owner: &RecordId,
+    entity_id: &RecordId,
+    name: Option<&str>,
+    aliases: Option<Vec<String>>,
+    summary: Option<&str>,
+) -> AppResult<Option<service::EntityOut>> {
+    service::update_entity(db, owner, entity_id, name, aliases, summary).await
+}
+
 pub async fn memory_delete(db: &Db, owner: &RecordId, memory_id: &RecordId) -> AppResult<bool> {
     service::delete_memory(db, owner, memory_id).await
 }
@@ -126,7 +147,12 @@ pub struct ConsolidateOut {
     pub consolidated: Vec<String>,
     pub skipped: Vec<String>,
     pub errors: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
 }
+
+const NO_MODEL_NOTE: &str = "Eunomia has no model configured, so nothing was consolidated. Do it yourself: read the \
+entity with `entities_get`, then record the updated belief with `memory_write` (type `observation`).";
 
 /// Consolidate one entity's raw facts into its observation (`subject_id`
 /// given), or every entity for `owner` that has new unconsolidated raw facts
@@ -137,6 +163,9 @@ pub async fn consolidate_observations(
     owner: &RecordId,
     subject_id: Option<&RecordId>,
 ) -> AppResult<ConsolidateOut> {
+    if !crate::embeddings::service::chat_available(db, settings, owner).await {
+        return Ok(ConsolidateOut { note: Some(NO_MODEL_NOTE.to_string()), ..Default::default() });
+    }
     let mission = consolidate::observations_mission(db, owner).await?;
 
     if let Some(sid) = subject_id {

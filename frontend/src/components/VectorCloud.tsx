@@ -1,0 +1,122 @@
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+import Scene3D from "./Scene3D";
+import { cloud, vaults as vaultsApi, type Cloud, type Vault } from "@/lib/api";
+
+// One colour per layered vault, in pick order.
+const LAYER_COLORS = ["var(--felt)", "var(--series-1)", "var(--series-3)", "var(--series-4)", "var(--series-2)", "var(--kind-location)"];
+const AXES: [string, string, string] = ["PC1", "PC2", "PC3"];
+
+export default function VectorCloud() {
+  const [vaults, setVaults] = useState<Vault[]>([]);
+  const [picked, setPicked] = useState<string[]>([]);
+  const [data, setData] = useState<Cloud | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  useEffect(() => {
+    vaultsApi
+      .list()
+      .then((r) => {
+        setVaults(r.results);
+        const personal = r.results.find((v) => v.kind === "personal") ?? r.results[0];
+        if (personal) setPicked([personal.id]);
+      })
+      .catch(() => setError("Could not load your vaults."));
+  }, []);
+
+  useEffect(() => {
+    if (picked.length === 0) return;
+    let stale = false; // a slower, older response must not overwrite a newer pick
+    cloud(picked)
+      .then((c) => {
+        if (stale) return;
+        setData(c);
+        setError(null);
+      })
+      .catch((e) => !stale && setError(e instanceof Error ? e.message : "Could not load the vector cloud."));
+    return () => {
+      stale = true;
+    };
+  }, [picked]);
+
+  const colorOf = (vaultId: string) => LAYER_COLORS[Math.max(0, picked.indexOf(vaultId)) % LAYER_COLORS.length];
+  const points = useMemo(
+    () => (picked.length ? data?.points ?? [] : []).map((p) => ({ ...p, color: colorOf(p.vault) })),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [data]
+  );
+  const selected = points.find((p) => p.id === selectedId);
+  const nameOf = (id: string) => {
+    const v = vaults.find((x) => x.id === id);
+    return v ? (v.kind === "personal" ? "Personal" : v.name) : id;
+  };
+
+  function toggle(id: string) {
+    setSelectedId(null);
+    setPicked((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  }
+
+  return (
+    <div className="flex flex-col gap-3 flex-1 min-h-0">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <div className="flex gap-2 flex-wrap items-center" role="group" aria-label="Vault layers">
+          {vaults.map((v) => {
+            const on = picked.includes(v.id);
+            const count = on ? points.filter((p) => p.vault === v.id).length : null;
+            return (
+              <button key={v.id} type="button" className="pill" aria-pressed={on} onClick={() => toggle(v.id)}>
+                <span className="w-2 h-2 rounded-full shrink-0" style={{ background: on ? colorOf(v.id) : "var(--border-strong)" }} aria-hidden />
+                {nameOf(v.id)}
+                {count !== null && <span style={{ color: "var(--ink-faint)" }}>{count}</span>}
+              </button>
+            );
+          })}
+        </div>
+        {data && picked.length > 0 && (
+          <span
+            className="text-[11.5px]"
+            style={{ color: "var(--ink-faint)" }}
+            title={
+              data.space === "semantic"
+                ? "Model embeddings: nearby points mean similar meaning."
+                : "No model key: points are placed by shared words. Add a key in Settings for a semantic space."
+            }
+          >
+            {data.space === "semantic" ? "Semantic space" : "Lexical space"} · PCA to 3D
+          </span>
+        )}
+      </div>
+      <span className="text-[11px] -mt-2" style={{ color: "var(--ink-faint)" }}>
+        Each point is a memory or synced record. Pick vaults to layer them in one shared space · drag to orbit · click a
+        point to read it
+      </span>
+
+      <div className="flex flex-col md:flex-row gap-4 flex-1 min-h-0">
+        <div className="ledger relative flex-1 min-h-0" style={{ minHeight: 420 }}>
+          {error ? (
+            <div className="p-6 text-[12.5px]" style={{ color: "var(--critical)" }}>{error}</div>
+          ) : picked.length === 0 ? (
+            <div className="p-10 text-center text-[13px]" style={{ color: "var(--ink-faint)" }}>Pick at least one vault.</div>
+          ) : data && points.length === 0 ? (
+            <div className="p-10 text-center text-[13px]" style={{ color: "var(--ink-faint)" }}>
+              Nothing stored in these vaults yet.
+            </div>
+          ) : (
+            <Scene3D points={points} axes={AXES} selectedId={selectedId} onSelect={setSelectedId} ariaLabel="Vector cloud" />
+          )}
+        </div>
+        {selected && (
+          <div className="ledger p-5 w-full md:w-72 shrink-0 flex flex-col gap-2">
+            <div className="flex items-center gap-2 text-[11.5px]" style={{ color: "var(--ink-faint)" }}>
+              <span className="w-2 h-2 rounded-full" style={{ background: selected.color }} aria-hidden />
+              {nameOf(selected.vault)} · {selected.kind}
+            </div>
+            <p className="text-[13px]" style={{ color: "var(--ink)" }}>{selected.label}</p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}

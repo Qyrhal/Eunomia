@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { Check, Copy, Download, Plug, RefreshCw, Trash2 } from "lucide-react";
 import {
@@ -175,83 +175,163 @@ function SessionsSection() {
   );
 }
 
+const INSTALL_CMD = "curl -fsSL https://midhunkumar05.github.io/eunomia/install.sh | bash";
+
+// idle -> waiting (marker dropped, updater picks it up within ~20s) -> applying
+// -> restarting (API briefly unreachable) -> reload once the new version answers.
+type Phase = "idle" | "waiting" | "applying" | "restarting";
+
 function UpdateSection() {
   const [status, setStatus] = useState<UpdateStatus | null>(null);
-  const [requested, setRequested] = useState(false);
+  const [phase, setPhase] = useState<Phase>("idle");
+  const [target, setTarget] = useState<string | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [stale, setStale] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const requestedAt = useRef(0);
 
-  const load = () =>
-    updateApi
-      .status()
-      .then(setStatus)
-      .catch((e) => setError(e instanceof Error ? e.message : "Could not check for updates."));
+  const busy = phase !== "idle";
+
+  const load = useCallback(
+    () =>
+      updateApi
+        .status()
+        .then((s) => {
+          setStatus(s);
+          setError(null);
+          if (!s.configured) return;
+          setStale(Date.now() - new Date(s.checked_at).getTime() > 30 * 60 * 1000);
+          setChecking((c) => c && Date.now() - new Date(s.checked_at).getTime() > 5000);
+          const fresh = new Date(s.checked_at).getTime() > requestedAt.current; // ignore an error from an older attempt
+          setPhase((p) =>
+            p === "idle" ? p : s.applying ? "applying" : s.error && fresh ? "idle" : p === "waiting" ? p : "restarting"
+          );
+        })
+        .catch(() => setPhase((p) => (p === "idle" ? p : "restarting"))),
+    []
+  );
 
   useEffect(() => {
     load();
-    // poll while an update is in flight, so "applying" / the new sha show up
-    // without a manual refresh
-    const id = setInterval(load, 15000);
+    const id = setInterval(load, busy || checking ? 3000 : 15000);
     return () => clearInterval(id);
-  }, []);
+  }, [load, busy, checking]);
+
+  // the new release is serving: reload so the browser runs the new frontend too
+  const done = Boolean(target && status?.configured && status.current_version === target && !status.applying);
+  useEffect(() => {
+    if (!done) return;
+    const t = setTimeout(() => window.location.reload(), 1500);
+    return () => clearTimeout(t);
+  }, [done]);
 
   async function requestUpdate() {
-    if (!window.confirm("This restarts the backend, frontend, and MCP services within about a minute. Continue?")) return;
+    if (!status?.configured) return;
     setError(null);
     try {
-      const res = await updateApi.request();
-      if (res.configured) setRequested(true);
-      await load();
+      requestedAt.current = Date.now();
+      await updateApi.request();
+      setTarget(status.latest_version);
+      setPhase("waiting");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not request an update.");
     }
   }
 
+  async function checkNow() {
+    setChecking(true);
+    await updateApi.check().catch(() => setChecking(false));
+  }
+
   if (!status || !status.configured) {
     return (
-      <section className="ledger p-6 flex flex-col gap-2">
+      <section className="ledger p-6 flex flex-col gap-3">
         <div className="eyebrow">Updates</div>
         <p className="text-[12.5px]" style={{ color: "var(--ink-faint)" }}>
-          Not set up on this instance — see docs/deployment.md&apos;s &ldquo;Auto-update&rdquo; section to enable
-          checking for and applying updates from GitHub.
+          Waiting for the updater. It ships with Eunomia as the <code className="font-mono">updater</code> service and
+          reports in within a minute of starting. If this message stays, this install predates it: run the installer
+          once more from the folder that contains your install. It updates in place and keeps your data and settings.
         </p>
+        <CopyField value={INSTALL_CMD} />
       </section>
     );
   }
 
+  const notes = `https://github.com/Qyrhal/Eunomia/releases/tag/${encodeURIComponent(status.latest_version)}`;
+  const line = done
+    ? `Updated to ${target} — reloading…`
+    : phase === "waiting"
+      ? "Update requested — starting in a few seconds…"
+      : phase === "applying"
+        ? `Installing ${target ?? status.latest_version}…`
+        : phase === "restarting"
+          ? "Restarting Eunomia…"
+          : status.update_available
+            ? `${status.latest_version} is available`
+            : "You're on the latest release";
+
   return (
     <section className="ledger p-6 flex flex-col gap-4">
-      <div>
-        <div className="eyebrow">Updates</div>
-        <p className="text-[12.5px]" style={{ color: "var(--ink-faint)" }}>
-          Checked {relativeTime(status.checked_at)}.
-        </p>
-      </div>
-
-      <div className="field flex items-center justify-between px-3 py-2">
+      <div className="flex items-start justify-between gap-3">
         <div>
-          <div className="text-[13px] font-mono">{status.local_sha.slice(0, 7)}</div>
-          <div className="text-[11px]" style={{ color: "var(--ink-faint)" }}>
-            {status.applying
-              ? "Applying update…"
-              : status.update_available
-                ? `behind ${status.remote_sha.slice(0, 7)} on main`
-                : "up to date"}
+          <div className="eyebrow">Updates</div>
+          <p className="text-[12.5px]" style={{ color: "var(--ink-faint)" }}>
+            Checked {relativeTime(status.checked_at)}. Updating takes about a minute; your data stays put.
+          </p>
+        </div>
+        <button
+          onClick={checkNow}
+          disabled={checking || busy}
+          className="pill disabled:opacity-50 shrink-0"
+          aria-label="Check for updates"
+        >
+          <RefreshCw size={12} className={checking ? "animate-spin" : ""} />
+          {checking ? "Checking…" : "Check now"}
+        </button>
+      </div>
+      {stale && !busy && (
+        <p className="text-[12px]" style={{ color: "var(--warning)" }}>
+          The updater hasn&apos;t reported for a while. Check that the <code className="font-mono">updater</code> container
+          is running (<code className="font-mono">docker compose ps</code>).
+        </p>
+      )}
+
+      <div className="field flex items-center justify-between gap-3 px-3 py-2.5">
+        <div className="min-w-0">
+          <div className="text-[13px] font-mono">{status.current_version}</div>
+          <div className="text-[11.5px]" style={{ color: busy || done ? "var(--ink)" : "var(--ink-faint)" }} role="status">
+            {line}
           </div>
         </div>
-        {status.update_available && !status.applying && (
-          <button
-            onClick={requestUpdate}
-            disabled={requested}
-            className="px-3 py-1.5 text-[12.5px] font-medium rounded-lg disabled:opacity-50 flex items-center gap-1.5"
-            style={{ background: "var(--felt)", color: "var(--canvas)" }}
-          >
-            <RefreshCw size={13} />
-            {requested ? "Requested" : "Update now"}
-          </button>
+        {status.update_available && !busy && !done && (
+          <div className="flex items-center gap-3 shrink-0">
+            <a href={notes} target="_blank" rel="noopener noreferrer" className="text-[12px] underline" style={{ color: "var(--ink-dim)" }}>
+              What&apos;s new
+            </a>
+            <button
+              onClick={requestUpdate}
+              className="px-3 py-1.5 text-[12.5px] font-medium rounded-lg flex items-center gap-1.5"
+              style={{ background: "var(--felt)", color: "var(--canvas)" }}
+            >
+              <Download size={13} />
+              Update now
+            </button>
+          </div>
         )}
       </div>
+      {(busy || done) && (
+        <div className="h-1 rounded-full overflow-hidden" style={{ background: "var(--surface-raised)" }} aria-hidden>
+          <div
+            className="h-full transition-all duration-700"
+            style={{
+              background: "var(--felt)",
+              width: done ? "100%" : phase === "restarting" ? "80%" : phase === "applying" ? "50%" : "15%",
+            }}
+          />
+        </div>
+      )}
 
-      {status.error && (
+      {status.error && !busy && (
         <p className="text-[12px]" style={{ color: "var(--critical)" }}>
           Last update attempt failed: {status.error}
         </p>
@@ -276,7 +356,10 @@ const TABS = [
 type TabId = (typeof TABS)[number]["id"];
 
 export default function SettingsPage() {
-  const [tab, setTab] = useState<TabId>("general");
+  // ?tab=updates (the sidebar's "Update available" link) opens that tab
+  const [tab, setTab] = useState<TabId>(() =>
+    typeof window !== "undefined" && new URLSearchParams(window.location.search).get("tab") === "updates" ? "updates" : "general"
+  );
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [apiKeyInput, setApiKeyInput] = useState("");
   const [baseUrlInput, setBaseUrlInput] = useState("");
@@ -373,9 +456,11 @@ export default function SettingsPage() {
           </Link>
 
           <section className="ledger p-6 flex flex-col gap-4">
-            <div className="eyebrow">OpenAI</div>
+            <div className="eyebrow">OpenAI · optional</div>
             <p className="text-[12.5px]" style={{ color: "var(--ink-faint)" }}>
-              Used for embeddings and entity-memory extraction. Point this at any OpenAI-compatible
+              Not required: an AI agent connected over MCP (Claude, Codex, …) can recall and write memory
+              using its own model. Adding one is recommended to save tokens — Eunomia then does embeddings
+              and answer synthesis itself, and powers the in-app chat. Point this at any OpenAI-compatible
               endpoint — a local model server or proxy included — not just api.openai.com.
             </p>
 

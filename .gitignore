@@ -15,3 +15,4 @@ test-results/
 playwright-report/
 backups/
 update-status/
+.eunomia-credentials

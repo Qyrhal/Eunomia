@@ -14,7 +14,7 @@ async function createVaultAndInvite(owner: Page, vaultName: string, inviteeEmail
   await owner.getByPlaceholder("Vault name (e.g. Acme Team)").fill(vaultName);
   await owner.getByRole("button", { name: "Create", exact: true }).click();
 
-  await owner.getByText(vaultName, { exact: true }).click();
+  await owner.getByRole("button", { name: new RegExp(`^${vaultName}`) }).click();
   await owner.getByPlaceholder("person@example.com").fill(inviteeEmail);
   await owner.getByRole("button", { name: "Invite" }).click();
   // The field is cleared only once the invite request succeeds.
@@ -37,10 +37,10 @@ test.describe("Vault invitations", () => {
     await invite.getByRole("button", { name: "Join" }).click();
 
     await expect(invitee.page.getByRole("button", { name: "Join" })).toHaveCount(0);
-    await expect(invitee.page.getByText(vaultName, { exact: true })).toBeVisible();
+    await expect(invitee.page.getByRole("button", { name: new RegExp(`^${vaultName}`) })).toBeVisible();
 
     await owner.page.reload();
-    await owner.page.getByText(vaultName, { exact: true }).click();
+    await owner.page.getByRole("button", { name: new RegExp(`^${vaultName}`) }).click();
     await expect(owner.page.getByText(invitee.email)).toBeVisible();
   });
 

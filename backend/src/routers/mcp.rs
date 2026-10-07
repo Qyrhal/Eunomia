@@ -27,8 +27,9 @@ const DEFAULT_VERSION: &str = "2025-06-18";
 
 const INSTRUCTIONS: &str = "Eunomia is the user's personal memory: entities (people, organisations, \
 locations, code) with remembered facts, plus records synced from their connected sources. \
-Use `recall` (or `reflect` for a cited answer) before answering questions about the user's world, \
-`search`/`get` for raw synced records, and `memory_write` to remember new facts. \
+Use `recall` before answering questions about the user's world, `search`/`get` for raw synced records, \
+and `memory_write` to remember new facts. You are the model: if the server has no OpenAI key, `reflect` \
+returns the recalled memories for you to answer from (cite them by index) instead of a synthesized answer. \
 Everything is scoped to the user's personal vault unless a `vault_id` is given.";
 
 pub fn router() -> Router<AppState> {
@@ -120,7 +121,11 @@ async fn handle_message(state: &AppState, user: &User, message: &Value) -> Optio
     let params = message.get("params").cloned().unwrap_or(Value::Null);
 
     Some(match method {
-        "initialize" => result_response(id, initialize_result(&params)),
+        "initialize" => {
+            // the user's memory skill rides along, so edits in the UI reach every client on connect
+            let skill = crate::routers::settings::memory_skill(&state.db, &user.id).await.unwrap_or_default();
+            result_response(id, initialize_result(&params, &skill))
+        }
         "ping" => result_response(id, json!({})),
         "tools/list" => result_response(id, json!({ "tools": tool_list() })),
         "tools/call" => call_tool(state, user, id, &params).await,
@@ -134,12 +139,14 @@ fn negotiate_version(requested: Option<&str>) -> &'static str {
         .unwrap_or(DEFAULT_VERSION)
 }
 
-fn initialize_result(params: &Value) -> Value {
+fn initialize_result(params: &Value, skill: &str) -> Value {
+    let body = crate::docs::skill_body(skill);
+    let instructions = if body.is_empty() { INSTRUCTIONS.to_string() } else { format!("{INSTRUCTIONS}\n\n{body}") };
     json!({
         "protocolVersion": negotiate_version(params.get("protocolVersion").and_then(Value::as_str)),
         "capabilities": { "tools": { "listChanged": false } },
         "serverInfo": { "name": "eunomia", "title": "Eunomia", "version": crate::config::APP_VERSION },
-        "instructions": INSTRUCTIONS,
+        "instructions": instructions,
     })
 }
 
@@ -246,9 +253,105 @@ mod tests {
 
     #[test]
     fn initialize_advertises_tools_and_echoes_version() {
-        let r = initialize_result(&json!({ "protocolVersion": "2025-03-26" }));
+        let r = initialize_result(&json!({ "protocolVersion": "2025-03-26" }), crate::docs::DEFAULT_SKILL);
+        assert!(r["instructions"].as_str().unwrap().contains("# Eunomia memory"));
+        assert!(!r["instructions"].as_str().unwrap().contains("name: eunomia-memory"));
         assert_eq!(r["protocolVersion"], "2025-03-26");
         assert!(r["capabilities"]["tools"].is_object());
         assert_eq!(r["serverInfo"]["name"], "eunomia");
+    }
+
+    // -- protocol-level tests: no database needed, `Surreal::init()` is an
+    // unconnected handle, and none of these paths query it. --------------
+
+    fn test_state() -> AppState {
+        use crate::config::Settings;
+        use crate::state::AppStateInner;
+        let settings = Settings {
+            jwt_secret: "t".into(),
+            surreal_url: String::new(),
+            surreal_user: String::new(),
+            surreal_pass: String::new(),
+            surreal_ns: String::new(),
+            surreal_db: String::new(),
+            openai_api_key: None,
+            openai_base_url: "https://api.openai.com/v1".into(),
+            encryption_key: "k".into(),
+            embeddings_backend: "stub".into(),
+            cors_allowed_origins: "http://localhost:3000".into(),
+            log_level: "INFO".into(),
+            update_status_dir: String::new(),
+        };
+        AppState(std::sync::Arc::new(AppStateInner { db: crate::db::Db::init(), settings }))
+    }
+
+    fn user() -> User {
+        User { id: "user:abc".parse().unwrap(), email: "a@example.com".into() }
+    }
+
+    async fn rpc(message: Value) -> Option<Value> {
+        handle_message(&test_state(), &user(), &message).await
+    }
+
+    #[tokio::test]
+    async fn initialize_tells_the_agent_it_is_the_model() {
+        let r = rpc(json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {} })).await.unwrap();
+        let instructions = r["result"]["instructions"].as_str().unwrap();
+        assert!(instructions.contains("You are the model"));
+        assert!(instructions.contains("`recall`"));
+        assert_eq!(r["id"], 1);
+    }
+
+    #[tokio::test]
+    async fn ping_tools_list_and_notifications() {
+        assert_eq!(rpc(json!({ "jsonrpc": "2.0", "id": 7, "method": "ping" })).await.unwrap()["result"], json!({}));
+        assert!(rpc(json!({ "jsonrpc": "2.0", "method": "notifications/initialized" })).await.is_none());
+        assert!(rpc(json!({ "jsonrpc": "2.0", "id": 1, "result": {} })).await.is_none());
+
+        let list = rpc(json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" })).await.unwrap();
+        let names: Vec<&str> = list["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
+        for expected in ["recall", "reflect", "search", "memory_write", "entities_search", "vault_list"] {
+            assert!(names.contains(&expected), "tools/list is missing {expected}");
+        }
+    }
+
+    #[tokio::test]
+    async fn protocol_errors_use_the_right_codes() {
+        let code = |r: Option<Value>| r.unwrap()["error"]["code"].as_i64().unwrap();
+        assert_eq!(code(rpc(json!({ "jsonrpc": "2.0", "id": 1, "method": "resources/list" })).await), -32601);
+        assert_eq!(code(rpc(json!({ "jsonrpc": "2.0", "id": 1 })).await), -32600);
+        assert_eq!(code(rpc(json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {} })).await), -32602);
+        let unknown = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": { "name": "nope" } });
+        assert_eq!(code(rpc(unknown).await), -32602);
+    }
+
+    async fn post(headers: &[(&str, &str)], method: axum::http::Method, body: &str) -> StatusCode {
+        use tower::ServiceExt;
+        let mut req = axum::http::Request::builder().method(method).uri("/mcp");
+        for (k, v) in headers {
+            req = req.header(*k, *v);
+        }
+        let app = router().with_state(test_state());
+        app.oneshot(req.body(axum::body::Body::from(body.to_string())).unwrap()).await.unwrap().status()
+    }
+
+    #[tokio::test]
+    async fn http_layer_rejects_unauthenticated_and_malformed_requests() {
+        use axum::http::Method;
+        let rpc_body = r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#;
+        // no token / a token that can't be verified -> 401, never tool output
+        assert_eq!(post(&[], Method::POST, rpc_body).await, StatusCode::UNAUTHORIZED);
+        assert_eq!(post(&[("authorization", "Bearer nope")], Method::POST, rpc_body).await, StatusCode::UNAUTHORIZED);
+        // the session cookie is not an accepted credential on /mcp
+        assert_eq!(post(&[("cookie", "eunomia_session=x")], Method::POST, rpc_body).await, StatusCode::UNAUTHORIZED);
+        // stateless server: no GET stream, no DELETE session
+        assert_eq!(post(&[], Method::GET, "").await, StatusCode::METHOD_NOT_ALLOWED);
+        assert_eq!(post(&[], Method::DELETE, "").await, StatusCode::METHOD_NOT_ALLOWED);
+        // DNS-rebinding guard and protocol-version check come before auth
+        assert_eq!(
+            post(&[("origin", "https://evil.example"), ("host", "localhost:8001")], Method::POST, rpc_body).await,
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(post(&[("mcp-protocol-version", "1999-01-01")], Method::POST, rpc_body).await, StatusCode::BAD_REQUEST);
     }
 }

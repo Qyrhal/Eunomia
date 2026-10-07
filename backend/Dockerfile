@@ -3,6 +3,9 @@ FROM rust:1-bookworm AS builder
 WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
+# docs/ (repo root) is compiled in via include_str! -- passed as the `docs`
+# build context by docker-compose.yml and the release workflow.
+COPY --from=docs . /docs
 ARG APP_VERSION
 ENV APP_VERSION=$APP_VERSION
 RUN cargo build --release

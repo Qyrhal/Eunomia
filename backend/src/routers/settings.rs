@@ -43,6 +43,8 @@ struct AppSettingsRow {
     openai_base_url: String,
     #[serde(default)]
     observations_mission: String,
+    #[serde(default)]
+    memory_skill: String,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -53,6 +55,8 @@ struct SettingsUpdate {
     openai_api_key: Option<String>,
     openai_base_url: Option<String>,
     observations_mission: Option<String>,
+    /// "" resets to the built-in skill
+    memory_skill: Option<String>,
 }
 
 fn app_settings_id(owner: &RecordId) -> RecordId {
@@ -67,10 +71,18 @@ fn out(row: &AppSettingsRow) -> Value {
         "openai_api_key_set": !row.openai_api_key_encrypted.is_empty(),
         "openai_base_url": row.openai_base_url,
         "observations_mission": row.observations_mission,
+        "memory_skill": crate::docs::effective_skill(&row.memory_skill),
+        "memory_skill_custom": !row.memory_skill.trim().is_empty(),
     })
 }
 
 /// The `app_settings:<owner_id>` row, creating it with defaults if missing.
+/// The skill text for `owner` (theirs, or the built-in default).
+pub async fn memory_skill(db: &Db, owner: &RecordId) -> AppResult<String> {
+    let row = get_app_settings(db, owner).await?;
+    Ok(crate::docs::effective_skill(&row.memory_skill).to_string())
+}
+
 async fn get_app_settings(db: &Db, owner: &RecordId) -> AppResult<AppSettingsRow> {
     let rid = app_settings_id(owner);
     let row: Option<AppSettingsRow> = db.select(rid.clone()).await?;
@@ -123,6 +135,9 @@ async fn update_app_settings(db: &Db, owner: &RecordId, body: &SettingsUpdate, e
     if body.observations_mission.is_some() {
         set_parts.push("observations_mission = $observations_mission");
     }
+    if body.memory_skill.is_some() {
+        set_parts.push("memory_skill = $memory_skill");
+    }
 
     if set_parts.is_empty() {
         return get_app_settings(db, owner).await;
@@ -148,6 +163,11 @@ async fn update_app_settings(db: &Db, owner: &RecordId, body: &SettingsUpdate, e
     }
     if let Some(v) = &body.observations_mission {
         q = q.bind(("observations_mission", v.clone()));
+    }
+    if let Some(v) = &body.memory_skill {
+        // saving the built-in text unchanged keeps following future defaults
+        let v = if v.trim() == crate::docs::DEFAULT_SKILL.trim() { String::new() } else { v.clone() };
+        q = q.bind(("memory_skill", v));
     }
 
     let mut res = q.await?;
@@ -245,9 +265,10 @@ mod tests {
             embedding_model: "text-embedding-3-small".to_string(),
             sync_intervals: json!({ "heypocket": 86400 }),
             theme: json!({}),
-            openai_api_key_encrypted: if key_set { "secret".to_string() } else { String::new() },
+            openai_api_key_encrypted: if key_set { "sk-very-secret-123".to_string() } else { String::new() },
             openai_base_url: DEFAULT_OPENAI_BASE_URL.to_string(),
             observations_mission: DEFAULT_OBSERVATIONS_MISSION.to_string(),
+            memory_skill: String::new(),
         }
     }
 
@@ -268,6 +289,6 @@ mod tests {
     fn out_never_leaks_the_raw_secret() {
         let v = out(&row(true));
         let dumped = v.to_string();
-        assert!(!dumped.contains("secret"));
+        assert!(!dumped.contains("sk-very-secret-123"));
     }
 }

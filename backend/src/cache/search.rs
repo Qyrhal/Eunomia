@@ -362,10 +362,16 @@ pub async fn search(
     params: &SearchParams,
 ) -> AppResult<Vec<CacheRecord>> {
     let pool = (params.limit * 4).max(40);
+    // Without embeddings (no OpenAI key) every mode degrades to keyword search.
+    let semantic_ok = crate::embeddings::service::available(db, settings, owner).await;
     let ids = match params.mode.as_str() {
         "keyword" => keyword_ids(db, owner, q, pool).await?,
-        "semantic" => semantic_ids(db, settings, owner, q, pool).await?,
-        _ => rrf(&[keyword_ids(db, owner, q, pool).await?, semantic_ids(db, settings, owner, q, pool).await?]),
+        "semantic" if semantic_ok => semantic_ids(db, settings, owner, q, pool).await?,
+        "semantic" => keyword_ids(db, owner, q, pool).await?,
+        _ if semantic_ok => {
+            rrf(&[keyword_ids(db, owner, q, pool).await?, semantic_ids(db, settings, owner, q, pool).await?])
+        }
+        _ => keyword_ids(db, owner, q, pool).await?,
     };
 
     if ids.is_empty() {

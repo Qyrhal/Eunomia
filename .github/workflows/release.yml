@@ -17,6 +17,7 @@ jobs:
         include:
           - name: backend
             context: ./backend
+            build-contexts: docs=./docs
           - name: frontend
             context: ./frontend
     steps:
@@ -33,6 +34,7 @@ jobs:
           context: ${{ matrix.context }}
           push: true
           build-args: APP_VERSION=${{ github.ref_name }}
+          build-contexts: ${{ matrix.build-contexts }}
           tags: |
             ghcr.io/qyrhal/eunomia-${{ matrix.name }}:latest
             ghcr.io/qyrhal/eunomia-${{ matrix.name }}:${{ github.ref_name }}

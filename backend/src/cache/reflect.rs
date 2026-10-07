@@ -15,7 +15,7 @@ use crate::cache::recall::{self, RecallItem};
 use crate::config::Settings;
 use crate::db::Db;
 use crate::error::{AppError, AppResult};
-use crate::embeddings::service::resolve_openai_for_owner;
+use crate::embeddings::service::{endpoint_configured, resolve_openai_for_owner};
 
 fn build_prompt(query: &str, memories: &str) -> String {
     format!(
@@ -62,6 +62,32 @@ struct ReflectModel {
     cited: Vec<i64>,
 }
 
+/// No server-side model: hand the recalled memories to the caller (the MCP
+/// agent is the model) with the same answer-from-memories-only contract the
+/// server-side prompt enforces.
+fn recall_only(query: &str, items: &[RecallItem], note: Option<&str>) -> Value {
+    let memories: Vec<Value> = items
+        .iter()
+        .enumerate()
+        .map(|(i, item)| {
+            let mut v = serde_json::to_value(item).unwrap_or(Value::Null);
+            if let Value::Object(obj) = &mut v {
+                obj.insert("index".to_string(), json!(i + 1));
+            }
+            v
+        })
+        .collect();
+    json!({
+        "answer": Value::Null,
+        "mode": "recall_only",
+        "note": note,
+        "instructions": "Eunomia has no model configured, so you answer. Use ONLY the numbered memories below, \
+cite them by index like [1], and say so plainly if they don't contain enough to answer.",
+        "question": query,
+        "memories": memories,
+    })
+}
+
 pub async fn reflect(
     db: &Db,
     settings: &Settings,
@@ -75,11 +101,23 @@ pub async fn reflect(
         return Ok(json!({ "answer": "No relevant memories found.", "citations": [] }));
     }
 
-    let memories = render_memories(&items);
-    let prompt = build_prompt(query, &memories);
-
     let (base_url, api_key) = resolve_openai_for_owner(db, owner, &settings.openai_api_key, &settings.encryption_key).await?;
-    let auth_key = if api_key.is_empty() { "not-needed" } else { api_key.as_str() };
+    if settings.embeddings_backend != "openai" || !endpoint_configured(&base_url, &api_key) {
+        return Ok(recall_only(query, &items, None));
+    }
+
+    match synthesize(query, &items, &base_url, &api_key).await {
+        Ok(v) => Ok(v),
+        Err(e) => {
+            tracing::warn!("reflect: model call failed, returning recalled memories: {}", e.message);
+            Ok(recall_only(query, &items, Some(&format!("server model call failed: {}", e.message))))
+        }
+    }
+}
+
+async fn synthesize(query: &str, items: &[RecallItem], base_url: &str, api_key: &str) -> AppResult<Value> {
+    let prompt = build_prompt(query, &render_memories(items));
+    let auth_key = if api_key.is_empty() { "not-needed" } else { api_key };
     let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
 
     let client = reqwest::Client::new();
@@ -113,8 +151,7 @@ pub async fn reflect(
     let data: ReflectModel =
         serde_json::from_str(&content).map_err(|e| AppError::internal(format!("model did not return valid JSON: {e}")))?;
 
-    let cited_indices = filter_cited_indices(&data.cited, items.len());
-    let citations: Vec<Value> = cited_indices
+    let citations: Vec<Value> = filter_cited_indices(&data.cited, items.len())
         .into_iter()
         .map(|i| {
             let mut v = serde_json::to_value(&items[i - 1]).unwrap_or(Value::Null);
@@ -162,6 +199,16 @@ mod tests {
     fn filter_cited_indices_drops_out_of_range_and_keeps_valid() {
         let cited = vec![0, 1, 2, 3, -5];
         assert_eq!(filter_cited_indices(&cited, 2), vec![1, 2]);
+    }
+
+    #[test]
+    fn recall_only_numbers_memories_and_tells_the_caller_to_answer() {
+        let r = recall_only("who is ada?", &[item("a"), item("b")], None);
+        assert_eq!(r["mode"], "recall_only");
+        assert!(r["answer"].is_null());
+        assert_eq!(r["memories"][0]["index"], 1);
+        assert_eq!(r["memories"][1]["text"], "b");
+        assert!(r["instructions"].as_str().unwrap().contains("you answer"));
     }
 
     #[test]

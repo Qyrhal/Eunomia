@@ -22,38 +22,49 @@ async function seedTwoRelatedPeople(page: Page) {
 }
 
 test.describe("Entity graph", () => {
-  test("draws relations that follow dragged nodes, selects on click, clears selection on vault switch", async ({ page }) => {
+  test("renders in 3D, selects a node, clears selection on vault switch", async ({ page }) => {
     await registerAndOnboard(page, uniqueEmail("graph"));
     await seedTwoRelatedPeople(page);
     await tool(page, "vault_create", { name: "Other vault" });
 
     await page.goto("/entities");
-    const svg = page.getByRole("img", { name: "Entity relationship graph" });
-    const link = svg.locator("line");
-    await expect(link).toHaveCount(1);
+    const graph = page.getByRole("img", { name: "Entity relationship graph" });
+    await expect(graph.locator("canvas")).toBeVisible();
+    // labels are drawn over the WebGL canvas for small graphs
+    await expect(graph.locator(".scene3d-label", { hasText: "Ada Lovelace" })).toBeAttached();
 
-    const adaNode = svg.locator("g").filter({ has: page.locator("title", { hasText: /^Ada Lovelace/ }) }).last();
-    await expect(adaNode).toBeVisible();
-
-    // Dragging a node moves the end of its link with it.
-    await page.waitForTimeout(1500); // let the force layout settle
-    const before = [await link.getAttribute("x1"), await link.getAttribute("x2")];
-    const box = (await adaNode.boundingBox())!;
-    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-    await page.mouse.down();
-    await page.mouse.move(box.x + box.width / 2 + 120, box.y + box.height / 2 + 90, { steps: 8 });
-    await page.mouse.up();
-    await expect
-      .poll(async () => [await link.getAttribute("x1"), await link.getAttribute("x2")])
-      .not.toEqual(before);
-
-    // A click (no drag) selects the node.
-    await adaNode.click();
+    // every node is reachable without a mouse, and selecting opens the panel
+    await page.getByRole("button", { name: "Ada Lovelace" }).press("Enter");
     await expect(page.getByRole("button", { name: "Edit" })).toBeVisible();
 
     // Switching vault drops the selection from the old vault.
     await page.getByLabel("Vault").selectOption({ label: "Other vault" });
     await expect(page.getByRole("button", { name: "Edit" })).toHaveCount(0);
+  });
+
+  test("vector cloud layers vaults in one 3D space, including a merge of them", async ({ page }) => {
+    await registerAndOnboard(page, uniqueEmail("cloud"));
+    await seedTwoRelatedPeople(page);
+    const team = await tool(page, "vault_create", { name: "Team" });
+    await tool(page, "memory_write", { subject_name: "Grace Hopper", subject_kind: "person", text: "Built the first compiler.", vault_id: team.id });
+    const personal = (await tool(page, "vault_list", {})).results.find((v: { kind: string }) => v.kind === "personal");
+    const merged = await tool(page, "vault_merge", { vault_id_a: personal.id, vault_id_b: team.id, name: "Everything" });
+    expect(merged.entities).toBe(3);
+
+    await page.goto("/entities");
+    await page.getByRole("tab", { name: "Vector cloud" }).click();
+    const cloud = page.getByRole("img", { name: "Vector cloud" });
+    await expect(cloud.locator("canvas")).toBeVisible();
+    await expect(cloud.getByText("PC1")).toBeAttached();
+
+    const layers = page.getByRole("group", { name: "Vault layers" });
+    await layers.getByRole("button", { name: /Team/ }).click();
+    await layers.getByRole("button", { name: /Everything/ }).click();
+    await expect(layers.getByRole("button", { name: /Everything/ })).toContainText("3"); // one point per memory
+    await expect(layers.getByRole("button", { name: /^Team/ })).toContainText("1");
+
+    await page.getByRole("button", { name: "Built the first compiler." }).first().press("Enter");
+    await expect(page.getByText(/· world$/).first()).toBeVisible();
   });
 });
 

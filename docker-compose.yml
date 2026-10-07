@@ -23,7 +23,10 @@ services:
 
   backend:
     image: ghcr.io/qyrhal/eunomia-backend:${EUNOMIA_IMAGE_TAG:-latest}
-    build: ./backend
+    build:
+      context: ./backend
+      additional_contexts:
+        docs: ./docs
     restart: always
     ports:
       - "${BACKEND_PORT:-8001}:8001"
@@ -41,8 +44,7 @@ services:
       - CORS_ALLOWED_ORIGINS=${FRONTEND_URL:-http://localhost:3000}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
     # Read/write access to ONE small status directory -- not the repo, not
-    # the docker socket. `scripts/auto-update.sh` (host-side, via cron) owns
-    # the actual git pull/rebuild; see app/routers/update.py's docstring.
+    # the docker socket. The `updater` service below does the actual update.
     volumes:
       - ./update-status:/update-status
     depends_on:
@@ -62,6 +64,17 @@ services:
     depends_on:
       backend:
         condition: service_healthy
+
+  # Applies updates when you click "Update now" in Settings (see
+  # scripts/updater.sh). Not web-facing: no ports, its only input is the
+  # marker file the backend writes into ./update-status.
+  updater:
+    image: docker:27-cli
+    restart: unless-stopped
+    entrypoint: ["sh", "-c", "cp /eunomia/scripts/updater.sh /tmp/updater.sh && exec sh /tmp/updater.sh"]
+    volumes:
+      - .:/eunomia
+      - /var/run/docker.sock:/var/run/docker.sock
 
 volumes:
   eunomia-surreal-data:

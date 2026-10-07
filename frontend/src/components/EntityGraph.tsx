@@ -1,16 +1,9 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import {
-  forceCenter,
-  forceCollide,
-  forceLink,
-  forceManyBody,
-  forceSimulation,
-  type Simulation,
-  type SimulationNodeDatum,
-} from "d3-force";
-import { Maximize2, Minus, Pencil, Plus, RotateCcw, Trash2, X } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { forceCenter, forceLink, forceManyBody, forceSimulation } from "d3-force-3d";
+import { Pencil, Plus, Trash2, X } from "lucide-react";
+import Scene3D from "./Scene3D";
 import { Blobatar } from "@blobatar/react";
 import {
   auth,
@@ -21,13 +14,6 @@ import {
   type EntityKind,
   type Vault,
 } from "@/lib/api";
-
-const DEFAULT_WIDTH = 640;
-const DEFAULT_HEIGHT = 420;
-const DRAG_THRESHOLD = 4; // px of movement before a pointerdown counts as a drag, not a click
-const ZOOM_MIN = 0.5;
-const ZOOM_MAX = 2.5;
-const ZOOM_STEP = 0.2;
 
 const KIND_COLOR: Record<EntityKind, string> = {
   person: "var(--kind-person)",
@@ -49,29 +35,21 @@ const KIND_LABEL: Record<EntityKind, string> = {
 
 const ALL_KINDS: EntityKind[] = ["person", "organisation", "location", "repository", "file", "symbol"];
 
-type LaidOutNode = SimulationNodeDatum & { id: string; kind: EntityKind; name: string; owner_email: string | null };
-type LaidOutLink = { source: LaidOutNode; target: LaidOutNode; label: string; owner_email: string | null };
+const KIND_SIZE: Record<EntityKind, number> = { person: 1, organisation: 1.15, location: 1, repository: 1.4, file: 0.85, symbol: 0.7 };
 
-const FIT_PADDING = 50;
-
-// zoom/pan that centers and fits `nodeList`'s bounding box into a `w`x`h`
-// viewport -- shared by the auto-fit-on-load effect and the manual "Fit"
-// button, so they can't drift out of sync with each other.
-function computeFit(nodeList: { x?: number; y?: number }[], w: number, h: number): { zoom: number; x: number; y: number } {
-  const pts = nodeList.filter((n): n is { x: number; y: number } => typeof n.x === "number" && typeof n.y === "number");
-  if (pts.length === 0) return { zoom: 1, x: 0, y: 0 };
-  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-  for (const n of pts) {
-    minX = Math.min(minX, n.x);
-    maxX = Math.max(maxX, n.x);
-    minY = Math.min(minY, n.y);
-    maxY = Math.max(maxY, n.y);
-  }
-  const bw = Math.max(maxX - minX, 1);
-  const bh = Math.max(maxY - minY, 1);
-  const zoomFit = Math.min((w - 2 * FIT_PADDING) / bw, (h - 2 * FIT_PADDING) / bh);
-  const zoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, zoomFit));
-  return { zoom, x: w / 2 - (minX + maxX) / 2, y: h / 2 - (minY + maxY) / 2 };
+// Static 3D force layout, run to completion once per graph (KISS: orbit the
+// result rather than simulate live).
+function layout3d(graph: EntityGraphData): Map<string, { x: number; y: number; z: number }> {
+  const nodes = graph.nodes.map((n) => ({ id: n.id }));
+  const ids = new Set(nodes.map((n) => n.id));
+  const links = graph.edges.filter((e) => ids.has(e.source) && ids.has(e.target)).map((e) => ({ source: e.source, target: e.target }));
+  forceSimulation(nodes, 3)
+    .force("link", forceLink<{ id: string }>(links).id((n) => n.id).distance(40))
+    .force("charge", forceManyBody().strength(-60))
+    .force("center", forceCenter())
+    .stop()
+    .tick(300);
+  return new Map(nodes.map((n: { id: string; x?: number; y?: number; z?: number }) => [n.id, { x: n.x ?? 0, y: n.y ?? 0, z: n.z ?? 0 }]));
 }
 
 // "you"/email for whoever wrote a row -- `null` means it predates attribution
@@ -89,14 +67,7 @@ export default function EntityGraph({ kinds }: { kinds?: EntityKind[] } = {}) {
   const [myVaults, setMyVaults] = useState<Vault[]>([]);
   const [vaultId, setVaultId] = useState<string | undefined>(undefined);
   const [selected, setSelected] = useState<EntityDetail | null>(null);
-  const [hovered, setHovered] = useState<string | null>(null);
   const [visibleKinds, setVisibleKinds] = useState<Set<EntityKind>>(new Set(shownKinds));
-  const [nodes, setNodes] = useState<LaidOutNode[]>([]);
-  const [view, setView] = useState({ zoom: 1, x: 0, y: 0 });
-  const [dims, setDims] = useState({ w: DEFAULT_WIDTH, h: DEFAULT_HEIGHT });
-  const [panning, setPanning] = useState(false);
-  const [draggingId, setDraggingId] = useState<string | null>(null);
-
   const [showCreate, setShowCreate] = useState(false);
   const [createForm, setCreateForm] = useState({ kind: shownKinds[0], name: "", aliases: "" });
   const [createError, setCreateError] = useState<string | null>(null);
@@ -108,47 +79,6 @@ export default function EntityGraph({ kinds }: { kinds?: EntityKind[] } = {}) {
   const [relForm, setRelForm] = useState({ to: "", label: "" });
   const [actionError, setActionError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-
-  const svgRef = useRef<SVGSVGElement | null>(null);
-  const wrapRef = useRef<HTMLDivElement | null>(null);
-  const simRef = useRef<Simulation<LaidOutNode, undefined> | null>(null);
-  const draggingRef = useRef<{ id: string; moved: boolean } | null>(null);
-  const panRef = useRef<{ startX: number; startY: number; originX: number; originY: number } | null>(null);
-
-  function zoomBy(factor: number) {
-    setView((v) => ({ ...v, zoom: Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, v.zoom * factor)) }));
-  }
-
-  function resetView() {
-    setView({ zoom: 1, x: 0, y: 0 });
-  }
-
-  function onCanvasWheel(e: React.WheelEvent) {
-    e.preventDefault();
-    zoomBy(e.deltaY < 0 ? 1.1 : 0.9);
-  }
-
-  function onCanvasPointerDown(e: React.PointerEvent<SVGSVGElement>) {
-    if (e.target !== e.currentTarget) return; // a node/link handled its own pointerdown
-    (e.target as SVGSVGElement).setPointerCapture(e.pointerId);
-    panRef.current = { startX: e.clientX, startY: e.clientY, originX: view.x, originY: view.y };
-    setPanning(true);
-  }
-
-  function onCanvasPointerMove(e: React.PointerEvent<SVGSVGElement>) {
-    const pan = panRef.current;
-    if (!pan) return;
-    setView((v) => ({
-      ...v,
-      x: pan.originX + (e.clientX - pan.startX) / v.zoom,
-      y: pan.originY + (e.clientY - pan.startY) / v.zoom,
-    }));
-  }
-
-  function onCanvasPointerUp() {
-    panRef.current = null;
-    setPanning(false);
-  }
 
   function toggleKind(kind: EntityKind) {
     setVisibleKinds((prev) => {
@@ -178,103 +108,7 @@ export default function EntityGraph({ kinds }: { kinds?: EntityKind[] } = {}) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [vaultId]);
 
-  // Fill whatever height the page gives the canvas, tracked live so the
-  // simulation's center force and the viewBox stay in sync on resize.
-  useEffect(() => {
-    const el = wrapRef.current;
-    if (!el) return;
-    const ro = new ResizeObserver((entries) => {
-      const box = entries[0]?.contentRect;
-      if (!box || box.width < 10 || box.height < 10) return;
-      setDims({ w: Math.round(box.width), h: Math.round(box.height) });
-    });
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
-
-  // Live force simulation: runs continuously (not a one-shot layout) so
-  // dragging a node and releasing it lets physics settle it back in.
-  useEffect(() => {
-    if (!graph) return;
-
-    const simNodes: LaidOutNode[] = graph.nodes.map((n) => ({ ...n }));
-    const byId = new Map(simNodes.map((n) => [n.id, n]));
-    const links: LaidOutLink[] = graph.edges
-      .map((e) => {
-        const source = byId.get(e.source);
-        const target = byId.get(e.target);
-        return source && target ? { source, target, label: e.label, owner_email: e.owner_email } : null;
-      })
-      .filter((l): l is LaidOutLink => l !== null);
-
-    const sim = forceSimulation(simNodes)
-      .force("link", forceLink(links).distance(90).strength(0.5))
-      .force("charge", forceManyBody().strength(-160))
-      .force("center", forceCenter(dims.w / 2, dims.h / 2))
-      .force("collide", forceCollide(26))
-      .on("tick", () => setNodes([...sim.nodes()]))
-      // auto-fit once the layout settles, so a reload/vault-switch never
-      // leaves nodes scattered outside the viewport
-      .on("end", () => setView(computeFit(sim.nodes(), dims.w, dims.h)));
-
-    simRef.current = sim;
-    return () => {
-      sim.stop();
-      simRef.current = null;
-    };
-    // dims intentionally excluded: resizing re-centers via the effect below
-    // rather than rebuilding the whole simulation (which would reset drag state).
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [graph]);
-
-  // Recenter (without rebuilding) when the canvas size changes.
-  useEffect(() => {
-    simRef.current?.force("center", forceCenter(dims.w / 2, dims.h / 2)).alpha(0.3).restart();
-  }, [dims.w, dims.h]);
-
-  function svgPoint(e: React.PointerEvent): { x: number; y: number } {
-    const svg = svgRef.current;
-    const ctm = svg?.getScreenCTM();
-    if (!svg || !ctm) return { x: 0, y: 0 };
-    const pt = svg.createSVGPoint();
-    pt.x = e.clientX;
-    pt.y = e.clientY;
-    const p = pt.matrixTransform(ctm.inverse());
-    return { x: p.x, y: p.y };
-  }
-
-  function onNodePointerDown(e: React.PointerEvent, n: LaidOutNode) {
-    e.stopPropagation();
-    e.currentTarget.setPointerCapture(e.pointerId);
-    draggingRef.current = { id: n.id, moved: false };
-    setDraggingId(n.id);
-    n.fx = n.x;
-    n.fy = n.y;
-    simRef.current?.alphaTarget(0.3).restart();
-  }
-
-  function onNodePointerMove(e: React.PointerEvent, n: LaidOutNode) {
-    const drag = draggingRef.current;
-    if (!drag || drag.id !== n.id) return;
-    const { x, y } = svgPoint(e);
-    if (!drag.moved && (Math.abs(x - (n.fx ?? x)) > DRAG_THRESHOLD || Math.abs(y - (n.fy ?? y)) > DRAG_THRESHOLD)) {
-      drag.moved = true;
-    }
-    n.fx = x;
-    n.fy = y;
-    setNodes((prev) => [...prev]);
-  }
-
-  function onNodePointerUp(e: React.PointerEvent, n: LaidOutNode) {
-    const drag = draggingRef.current;
-    if (!drag || drag.id !== n.id) return;
-    n.fx = null;
-    n.fy = null;
-    simRef.current?.alphaTarget(0);
-    draggingRef.current = null;
-    setDraggingId(null);
-    if (!drag.moved) selectNode(n.id);
-  }
+  const positions = useMemo(() => (graph ? layout3d(graph) : new Map()), [graph]);
 
   async function selectNode(id: string) {
     setEditing(false);
@@ -556,188 +390,40 @@ export default function EntityGraph({ kinds }: { kinds?: EntityKind[] } = {}) {
     );
   }
 
-  const visibleNodes = nodes.filter((n) => visibleKinds.has(n.kind));
-  // Built from `nodes` (the simulation's own node objects), so link
-  // endpoints move with the nodes on every tick.
-  const nodeById = new Map(visibleNodes.map((n) => [n.id, n]));
-  const visibleLinks = (graph?.edges ?? []).flatMap((e) => {
-    const source = nodeById.get(e.source);
-    const target = nodeById.get(e.target);
-    return source && target ? [{ source, target }] : [];
-  });
+  const points = graph.nodes
+    .filter((n) => visibleKinds.has(n.kind))
+    .map((n) => ({
+      id: n.id,
+      ...(positions.get(n.id) ?? { x: 0, y: 0, z: 0 }),
+      color: KIND_COLOR[n.kind],
+      size: KIND_SIZE[n.kind],
+      label: n.name,
+    }));
 
   return (
     <div className="flex flex-col gap-3 flex-1 min-h-0">
       {toolbar}
       {createModal}
       <span className="text-[11px] -mt-2" style={{ color: "var(--ink-faint)" }}>
-        Drag to rearrange
+        Drag to orbit · scroll to zoom · click a node to open it
       </span>
 
       <div className="flex flex-col md:flex-row gap-4 flex-1 min-h-0">
-        <div ref={wrapRef} className="relative flex-1 min-h-0" style={{ minHeight: 420 }}>
-          <svg
-            ref={svgRef}
-            viewBox={`0 0 ${dims.w} ${dims.h}`}
-            width="100%"
-            height="100%"
-            role="img"
-            aria-label="Entity relationship graph"
-            className="ledger"
-            style={{ touchAction: "none", userSelect: "none", WebkitUserSelect: "none", cursor: panning ? "grabbing" : "default" }}
-            onWheel={onCanvasWheel}
-            onPointerDown={onCanvasPointerDown}
-            onPointerMove={onCanvasPointerMove}
-            onPointerUp={onCanvasPointerUp}
-            onPointerCancel={onCanvasPointerUp}
-          >
-          <g transform={`translate(${dims.w / 2},${dims.h / 2}) scale(${view.zoom}) translate(${-dims.w / 2 + view.x},${-dims.h / 2 + view.y})`}>
-          {visibleLinks.map((l, i) => (
-            <line
-              key={i}
-              x1={l.source.x}
-              y1={l.source.y}
-              x2={l.target.x}
-              y2={l.target.y}
-              stroke="var(--border-strong)"
-              strokeWidth={1}
-            />
-          ))}
-          {visibleNodes.map((n) => {
-            const isHovered = hovered === n.id;
-            const isSelected = selected?.id === n.id;
-            const isDragging = draggingId === n.id;
-            const r = isHovered || isSelected || isDragging ? 16 : 14;
-            return (
-              <g
-                key={n.id}
-                transform={`translate(${n.x},${n.y})`}
-                style={{ cursor: isDragging ? "grabbing" : "grab", touchAction: "none" }}
-                onPointerDown={(e) => onNodePointerDown(e, n)}
-                onPointerMove={(e) => onNodePointerMove(e, n)}
-                onPointerUp={(e) => onNodePointerUp(e, n)}
-                onPointerCancel={(e) => onNodePointerUp(e, n)}
-                onMouseEnter={() => setHovered(n.id)}
-                onMouseLeave={() => setHovered((h) => (h === n.id ? null : h))}
-              >
-                <title>{`${n.name} — added by ${attribution(n.owner_email, myEmail)}`}</title>
-                {n.kind === "person" ? (
-                  <>
-                    {(isHovered || isDragging) && (
-                      <circle
-                        r={r + 1}
-                        fill="none"
-                        stroke="var(--felt)"
-                        strokeWidth={2}
-                      />
-                    )}
-                    <foreignObject x={-r} y={-r} width={r * 2} height={r * 2} style={{ overflow: "visible" }}>
-                      <Blobatar name={n.name || n.id} animate="hover" size={r * 2} />
-                    </foreignObject>
-                  </>
-                ) : n.kind === "organisation" ? (
-                  <rect
-                    x={-r * 0.82}
-                    y={-r * 0.82}
-                    width={r * 1.64}
-                    height={r * 1.64}
-                    rx={4}
-                    fill={KIND_COLOR[n.kind]}
-                    stroke={isHovered || isDragging ? "var(--felt)" : "none"}
-                    strokeWidth={isHovered || isDragging ? 2 : 0}
-                    opacity={isSelected || isHovered || isDragging ? 1 : 0.85}
-                  />
-                ) : n.kind === "location" ? (
-                  <path
-                    d={`M0,${-r * 1.15} C${r * 0.75},${-r * 1.15} ${r * 0.95},${-r * 0.2} 0,${r * 1.05}
-                        C${-r * 0.95},${-r * 0.2} ${-r * 0.75},${-r * 1.15} 0,${-r * 1.15} Z`}
-                    fill={KIND_COLOR[n.kind]}
-                    stroke={isHovered || isDragging ? "var(--felt)" : "none"}
-                    strokeWidth={isHovered || isDragging ? 2 : 0}
-                    opacity={isSelected || isHovered || isDragging ? 1 : 0.85}
-                  />
-                ) : n.kind === "repository" ? (
-                  // a larger rounded square -- the "container" of a file/symbol tree.
-                  <rect
-                    x={-r * 0.95}
-                    y={-r * 0.95}
-                    width={r * 1.9}
-                    height={r * 1.9}
-                    rx={6}
-                    fill={KIND_COLOR[n.kind]}
-                    stroke={isHovered || isDragging ? "var(--felt)" : "none"}
-                    strokeWidth={isHovered || isDragging ? 2 : 0}
-                    opacity={isSelected || isHovered || isDragging ? 1 : 0.85}
-                  />
-                ) : n.kind === "file" ? (
-                  // a small plain square -- one level down from a repository.
-                  <rect
-                    x={-r * 0.6}
-                    y={-r * 0.6}
-                    width={r * 1.2}
-                    height={r * 1.2}
-                    rx={1.5}
-                    fill={KIND_COLOR[n.kind]}
-                    stroke={isHovered || isDragging ? "var(--felt)" : "none"}
-                    strokeWidth={isHovered || isDragging ? 2 : 0}
-                    opacity={isSelected || isHovered || isDragging ? 1 : 0.85}
-                  />
-                ) : (
-                  // symbol -- a small diamond, one level down from a file.
-                  <rect
-                    x={-r * 0.62}
-                    y={-r * 0.62}
-                    width={r * 1.24}
-                    height={r * 1.24}
-                    fill={KIND_COLOR[n.kind]}
-                    stroke={isHovered || isDragging ? "var(--felt)" : "none"}
-                    strokeWidth={isHovered || isDragging ? 2 : 0}
-                    opacity={isSelected || isHovered || isDragging ? 1 : 0.85}
-                    transform="rotate(45)"
-                  />
-                )}
-                <text
-                  x={0}
-                  y={24}
-                  textAnchor="middle"
-                  fontSize={10.5}
-                  fontFamily="var(--font-mono), ui-monospace, monospace"
-                  fill={isHovered || isDragging ? "var(--felt)" : "var(--ink-dim)"}
-                >
-                  {n.name.length > 16 ? `${n.name.slice(0, 15)}…` : n.name}
-                </text>
-              </g>
-            );
-          })}
-          </g>
-          </svg>
-
-          <div className="absolute bottom-3 right-3 flex gap-1">
-            <button type="button" className="pill" aria-label="Zoom in" onClick={() => zoomBy(1 + ZOOM_STEP)}>
-              <Plus size={13} />
-            </button>
-            <button type="button" className="pill" aria-label="Zoom out" onClick={() => zoomBy(1 - ZOOM_STEP)}>
-              <Minus size={13} />
-            </button>
-            <button
-              type="button"
-              className="pill"
-              aria-label="Fit to view"
-              title="Fit to view"
-              onClick={() => setView(computeFit(visibleNodes, dims.w, dims.h))}
-            >
-              <Maximize2 size={13} />
-            </button>
-            <button type="button" className="pill" aria-label="Reset view" onClick={resetView}>
-              <RotateCcw size={13} />
-            </button>
-          </div>
+        <div className="ledger relative flex-1 min-h-0" style={{ minHeight: 420 }}>
+          <Scene3D
+            points={points}
+            links={graph.edges}
+            labels
+            selectedId={selected?.id}
+            onSelect={selectNode}
+            ariaLabel="Entity relationship graph"
+          />
         </div>
 
         {selected && (
           <div
             className="ledger p-5 w-full md:w-72 shrink-0 flex flex-col gap-4"
-            style={{ maxHeight: dims.h, overflowY: "auto" }}
+            style={{ maxHeight: 640, overflowY: "auto" }}
           >
             <div className="flex items-start justify-between gap-2">
               <div className="flex items-center gap-3 min-w-0">

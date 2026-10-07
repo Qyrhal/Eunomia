@@ -57,34 +57,31 @@ front of the frontend port only.
 frontend somewhere it can't reach the backend over a private network; it is
 inlined at `bun run build`, so changing it requires rebuilding the image.
 
-## Auto-update
+## Updates
 
-Settings → Updates shows whether `main` on GitHub has moved past what's
-deployed, and an "Update now" button. It's opt-in and off by default (no
-cron job, no effect) because the actual `git pull` + rebuild runs on the
-**host**, not in a container: this backend never gets a docker socket or a
-git credential, since a web-facing process (webhooks, agent tool calls)
-holding either would turn any RCE in it into a host compromise.
+Settings → Updates shows the running release and, when a newer one is
+published, **Update now**. A sidebar badge appears when an update is waiting.
+**Check now** asks GitHub immediately instead of waiting for the 10-minute
+check. After you click, the page shows progress, Eunomia restarts on the new
+release's prebuilt images (a few seconds of downtime, no build), and the page
+reloads itself. Data lives in the `eunomia-surreal-data` volume and isn't
+touched.
 
-To enable it, run `scripts/auto-update.sh` on the host periodically --
-cron:
+How: the stack includes a small `updater` service (`scripts/updater.sh`) that
+runs `scripts/auto-update.sh` every 20 seconds. It works the same on every
+install and OS, with nothing to schedule on the host. The web-facing backend
+never gets git or the docker socket: it only drops a marker file in
+`update-status/`. The updater has the socket but no ports, and its only input
+is that marker. The worst a compromised backend can do is ask for the newest
+release tag. The script checks out the tag, pins `EUNOMIA_IMAGE_TAG` in `.env`,
+pulls and restarts, and appends to `update-status/history.log`. It refuses
+(and says so in Settings) if tracked files like `docker-compose.yml` have
+local edits. A lock in `update-status/` keeps an old host cron job and the
+container from ever running at once.
 
-```cron
-* * * * * cd /path/to/eunomia && ./scripts/auto-update.sh >> update.log 2>&1
-```
-
-or a systemd timer hitting the same script every minute. It writes
-`update-status/status.json` (polled by the UI) every run, and only
-`git pull --ff-only` + `docker compose up -d --build backend frontend`
-when `update-status/requested` exists -- i.e. only after someone clicks
-"Update now" in the UI, never on its own. `surrealdb` is deliberately never
-rebuilt by it (no application code to update there) and the script never
-touches itself.
-
-Expect up to ~1 minute of latency between clicking "Update now" and the
-restart landing, and a few seconds of downtime on `backend`/`frontend`
-while they rebuild -- plan for a quiet window, same as any manual
-`docker compose up -d --build`.
+Installs from before the updater existed: run the installer once more from
+the folder that contains your install. It updates in place and keeps your
+data.
 
 ## Backups
 

@@ -108,6 +108,12 @@ function McpCard() {
         </>
       )}
 
+      <p className="text-[12px]" style={{ color: "var(--ink-faint)" }}>
+        Connect every agent on this machine at once (Claude Code, Codex, Hermes, Cursor, …):{" "}
+        <code className="font-mono">./scripts/connect-agents.sh --email you@… --password …</code> from the install folder.{" "}
+        <Link href="/docs" className="underline">Read the docs</Link>
+      </p>
+
       {error && (
         <p className="text-[12.5px]" style={{ color: "var(--critical)" }}>
           {error}

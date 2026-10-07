@@ -19,6 +19,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/vaults", get(list_vaults).post(create_vault))
         .route("/vaults/invitations", get(list_invitations))
+        .route("/vaults/merge", post(merge_vaults))
         .route("/vaults/:vault_id", patch(rename_vault).delete(delete_vault))
         .route("/vaults/:vault_id/clone", post(clone_vault))
         .route("/vaults/:vault_id/members", get(list_members).post(invite_member))
@@ -102,6 +103,28 @@ async fn clone_vault(
     }
     let rid = parse_vault_id(&vault_id)?;
     Ok(Json(service::clone_vault(&state.db, &user.id, &rid, body.name.as_deref(), &body.kind).await?))
+}
+
+#[derive(Deserialize)]
+struct VaultMerge {
+    vault_ids: [String; 2],
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default = "default_kind")]
+    kind: String,
+}
+
+async fn merge_vaults(
+    State(state): State<AppState>,
+    user: User,
+    Json(body): Json<VaultMerge>,
+) -> AppResult<Json<service::MergeOut>> {
+    if !valid_vault_kind(&body.kind) {
+        return Err(AppError::bad_request("kind must be 'org' or 'personal'"));
+    }
+    let a = parse_vault_id(&body.vault_ids[0])?;
+    let b = parse_vault_id(&body.vault_ids[1])?;
+    Ok(Json(service::merge_vaults(&state.db, &user.id, &a, &b, body.name.as_deref(), &body.kind).await?))
 }
 
 async fn rename_vault(

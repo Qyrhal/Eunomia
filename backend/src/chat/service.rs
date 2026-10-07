@@ -128,7 +128,7 @@ async fn resolve_openai(db: &Db, settings: &Settings, owner: &RecordId) -> AppRe
 /// non-default `base_url` (which may not need a key), or a real key for the
 /// default api.openai.com endpoint (which always needs one).
 fn openai_configured(base_url: &str, api_key: &str) -> bool {
-    !api_key.is_empty() || base_url != DEFAULT_OPENAI_BASE_URL
+    crate::embeddings::service::endpoint_configured(base_url, api_key)
 }
 
 /// Raises `ChatNotConfigured` if there's no usable OpenAI base_url/key for

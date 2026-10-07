@@ -3,9 +3,9 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { FolderGit2, LayoutDashboard, LogOut, Menu, MessageSquare, Plug, Settings, Share2, Vault, X } from "lucide-react";
+import { BookOpen, Brain, FolderGit2, LayoutDashboard, LogOut, Menu, MessageSquare, Plug, Settings, Share2, Vault, X } from "lucide-react";
 import EunomiaMark from "./EunomiaMark";
-import { auth, sources, type Me, type SourceRow } from "@/lib/api";
+import { auth, sources, update, type Me, type SourceRow } from "@/lib/api";
 
 const STATIC_NAV = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
@@ -13,7 +13,9 @@ const STATIC_NAV = [
   { href: "/entities", label: "Entities", icon: Share2 },
   { href: "/code", label: "Code", icon: FolderGit2 },
   { href: "/vaults", label: "Vaults", icon: Vault },
+  { href: "/skill", label: "Memory skill", icon: Brain },
   { href: "/connectors", label: "Connectors", icon: Plug },
+  { href: "/docs", label: "Docs", icon: BookOpen },
   { href: "/settings", label: "Settings", icon: Settings },
 ];
 
@@ -28,6 +30,7 @@ export default function Sidebar() {
   const router = useRouter();
   const [rows, setRows] = useState<SourceRow[] | null>(null);
   const [me, setMe] = useState<Me | null>(null);
+  const [newVersion, setNewVersion] = useState<string | null>(null);
   // The drawer is open only for the page it was opened on, so navigating
   // closes it without an effect.
   const [drawerPath, setDrawerPath] = useState<string | null>(null);
@@ -42,6 +45,10 @@ export default function Sidebar() {
     auth
       .me()
       .then(setMe)
+      .catch(() => {});
+    update
+      .status()
+      .then((s) => setNewVersion(s.configured && s.update_available ? s.latest_version : null))
       .catch(() => {});
   }, []);
 
@@ -76,6 +83,16 @@ export default function Sidebar() {
             </Link>
           );
         })}
+        {newVersion && (
+          <Link
+            href="/settings?tab=updates"
+            className="mt-1 flex items-center gap-2.5 px-3 py-2 text-[12.5px] rounded-lg"
+            style={{ color: "var(--felt)", border: "1px solid var(--border)" }}
+          >
+            <span className="w-1.5 h-1.5 rounded-full" style={{ background: "var(--felt)" }} aria-hidden />
+            Update available · {newVersion}
+          </Link>
+        )}
       </div>
 
       <div className="flex-1 min-h-0 flex flex-col gap-1.5 px-3">

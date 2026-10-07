@@ -143,6 +143,33 @@ pub(crate) async fn resolve_openai_for_owner(
     Ok((base_url, key))
 }
 
+/// True if there's enough to make a real OpenAI-compatible call: a
+/// non-default `base_url` (a self-hosted server may not need a key), or a
+/// key for the default api.openai.com endpoint (which always needs one).
+pub fn endpoint_configured(base_url: &str, api_key: &str) -> bool {
+    !api_key.is_empty() || base_url != DEFAULT_OPENAI_BASE_URL
+}
+
+/// Whether embeddings can run for `owner` right now. Without them the
+/// semantic arm of search/recall is skipped and the connected MCP agent is
+/// the model: keyword + graph + temporal retrieval still work, and the agent
+/// does any synthesis itself.
+pub async fn available(db: &Db, settings: &Settings, owner: &RecordId) -> bool {
+    if settings.embeddings_backend != "openai" {
+        return true; // "stub": hermetic tests
+    }
+    match resolve_openai_for_owner(db, owner, &settings.openai_api_key, &settings.encryption_key).await {
+        Ok((base_url, key)) => endpoint_configured(&base_url, &key),
+        Err(_) => false,
+    }
+}
+
+/// Whether the server can run its own chat completions for `owner`
+/// (reflect / observation consolidation); if not, the MCP agent does it.
+pub async fn chat_available(db: &Db, settings: &Settings, owner: &RecordId) -> bool {
+    settings.embeddings_backend == "openai" && available(db, settings, owner).await
+}
+
 #[derive(Debug, Deserialize)]
 struct EmbedCacheRow {
     text_hmac: String,
@@ -203,6 +230,13 @@ pub async fn embed(db: &Db, settings: &Settings, texts: &[String], owner: Option
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn endpoint_needs_a_key_only_for_the_default_openai_url() {
+        assert!(!endpoint_configured(DEFAULT_OPENAI_BASE_URL, ""));
+        assert!(endpoint_configured(DEFAULT_OPENAI_BASE_URL, "sk-abc"));
+        assert!(endpoint_configured("http://localhost:11434/v1", ""));
+    }
 
     #[test]
     fn dim_is_1536() {

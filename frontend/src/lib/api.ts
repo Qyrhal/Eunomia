@@ -89,9 +89,12 @@ export type AppSettings = {
   openai_api_key_set: boolean;
   openai_base_url: string;
   observations_mission: string;
+  memory_skill: string;
+  memory_skill_custom: boolean;
 };
 
 export type SettingsUpdate = Partial<{
+  memory_skill: string;
   embedding_model: string;
   sync_intervals: Record<string, number>;
   theme: AppSettings["theme"];
@@ -117,8 +120,8 @@ export type UpdateStatus =
   | { configured: false }
   | {
       configured: true;
-      local_sha: string;
-      remote_sha: string;
+      current_version: string;
+      latest_version: string;
       update_available: boolean;
       checked_at: string;
       applying: boolean;
@@ -128,6 +131,7 @@ export type UpdateStatus =
 export const update = {
   status: () => api.get<UpdateStatus>("/api/update/status"),
   request: () => api.post<{ configured: boolean; requested?: boolean }>("/api/update/request"),
+  check: () => api.post<{ configured: boolean; requested?: boolean }>("/api/update/check"),
 };
 
 // ---------------------------------------------------------------------------
@@ -356,6 +360,24 @@ export const vaults = {
     api.post<{ declined: boolean }>(`/api/vaults/${encodeURIComponent(id)}/invitations/decline`),
   clone: (id: string, name?: string, kind: VaultKind = "org") =>
     api.post<Vault & { entities_copied: number }>(`/api/vaults/${encodeURIComponent(id)}/clone`, { name, kind }),
+  // Copies both into a NEW vault; the originals are untouched.
+  merge: (a: string, b: string, name?: string) =>
+    api.post<Vault & { entities: number }>("/api/vaults/merge", { vault_ids: [a, b], name: name || undefined }),
+};
+
+// ---------------------------------------------------------------------------
+// vector cloud + docs
+// ---------------------------------------------------------------------------
+
+export type CloudPoint = { id: string; vault: string; kind: string; label: string; x: number; y: number; z: number };
+export type Cloud = { space: "semantic" | "lexical"; points: CloudPoint[] };
+export const cloud = (vaultIds: string[]) =>
+  api.get<Cloud>(`/api/entities/cloud?vault_ids=${vaultIds.map(encodeURIComponent).join(",")}`);
+
+// Served by the `docs` tool -- the same docs/ folder agents read over MCP.
+export const docs = {
+  list: () => api.post<{ docs: { topic: string; title: string }[] }>("/api/tools/docs", {}),
+  get: (topic: string) => api.post<{ topic: string; title: string; markdown: string }>("/api/tools/docs", { topic }),
 };
 
 // ---------------------------------------------------------------------------

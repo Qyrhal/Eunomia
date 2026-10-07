@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { ArrowUp, Plus, Trash2 } from "lucide-react";
+import Markdown from "@/components/Markdown";
 import { chat, type ChatMessage, type ChatThread } from "@/lib/api";
 
 function Bubble({ message }: { message: ChatMessage }) {
@@ -16,7 +17,7 @@ function Bubble({ message }: { message: ChatMessage }) {
   }
   return (
     <div
-      className="max-w-[75%] px-4 py-2.5 rounded-xl text-[13.5px] whitespace-pre-wrap"
+      className={`max-w-[75%] px-4 py-2.5 rounded-xl text-[13.5px] ${isUser ? "whitespace-pre-wrap" : ""}`}
       style={{
         alignSelf: isUser ? "flex-end" : "flex-start",
         background: isUser ? "var(--surface-raised)" : "var(--surface)",
@@ -24,7 +25,7 @@ function Bubble({ message }: { message: ChatMessage }) {
         color: "var(--ink)",
       }}
     >
-      {message.content}
+      {isUser ? message.content : <Markdown text={message.content} />}
       {message.tool_calls && message.tool_calls.length > 0 && (
         <div className="mt-1.5 text-[11px]" style={{ color: "var(--ink-faint)" }}>
           used: {message.tool_calls.map((tc) => tc.function.name).join(", ")}
@@ -220,7 +221,7 @@ export default function ChatPage() {
             {messages?.map((m, i) => <Bubble key={i} message={m} />)}
             {sending && (
               <div
-                className="max-w-[75%] px-4 py-2.5 rounded-xl text-[13.5px] whitespace-pre-wrap"
+                className="max-w-[75%] px-4 py-2.5 rounded-xl text-[13.5px]"
                 style={{ background: "var(--surface)", border: "1px solid var(--border)", color: streamingText ? "var(--ink)" : "var(--ink-faint)" }}
               >
                 {activeTool && (
@@ -228,7 +229,7 @@ export default function ChatPage() {
                     Using {activeTool}…
                   </div>
                 )}
-                {streamingText || (activeTool ? "" : "Thinking…")}
+                {streamingText ? <Markdown text={streamingText} /> : activeTool ? "" : "Thinking…"}
               </div>
             )}
             <div ref={bottomRef} />
