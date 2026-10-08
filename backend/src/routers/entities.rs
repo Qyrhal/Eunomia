@@ -156,7 +156,7 @@ async fn vector_cloud(
 }
 
 fn parse_record_id(id: &str) -> AppResult<RecordId> {
-    crate::rid::parse(&id).map_err(|_| AppError::not_found("not found"))
+    crate::rid::parse(id).map_err(|_| AppError::not_found("not found"))
 }
 
 fn known_kind_or_400(kind: &str) -> AppResult<()> {

@@ -204,7 +204,6 @@ impl IntoResponse for AppError {
 impl From<surrealdb::Error> for AppError {
     fn from(err: surrealdb::Error) -> Self {
         let raw = err.to_string();
-        if std::env::var("DBG_ERR").is_ok() { eprintln!("DBGERR {raw} :: {err:?}\n{}", std::backtrace::Backtrace::force_capture()); }
         let lower = raw.to_lowercase();
         let (code, message) = match &err {
             _ if crate::tx::is_conflict(&err) => (ErrorCode::DbConflict, "The write conflicted with another; retry it."),

@@ -182,7 +182,7 @@ fn bad_id(field: &str, value: &str) -> Value {
 /// ...}` value (not an `Err`) on failure -- same "never raise on bad agent
 /// input" contract every tool in the Python registry follows via `@safe`.
 fn parse_rid(field: &str, value: &str) -> Result<RecordId, Value> {
-    crate::rid::parse(&value).map_err(|_| bad_id(field, value))
+    crate::rid::parse(value).map_err(|_| bad_id(field, value))
 }
 
 fn parse_opt_rid(field: &str, value: &Option<String>) -> Result<Option<RecordId>, Value> {

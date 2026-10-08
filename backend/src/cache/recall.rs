@@ -66,7 +66,7 @@ const PROOF_STEP: f64 = 0.05;
 /// type directly, only on the inner core type it wraps, so go through
 /// `into_inner()`.
 fn to_chrono(dt: surrealdb::types::Datetime) -> DateTime<Utc> {
-    dt.into_inner().into()
+    dt.into_inner()
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -254,7 +254,7 @@ async fn temporal_ids(
     let rows: Vec<MemRow> = res.take(0)?;
     dated.extend(rows.into_iter().map(|r| (r.created_at, format!("memory:{}", r.id.to_string()))));
 
-    dated.sort_by(|a, b| b.0.cmp(&a.0));
+    dated.sort_by_key(|d| std::cmp::Reverse(d.0));
     Ok(dated.into_iter().take(limit).map(|(_, k)| k).collect())
 }
 
@@ -288,7 +288,7 @@ async fn hydrate(db: &Db, owner: &RecordId, vault: &RecordId, key: &str) -> AppR
     }
 
     if kind == "memory" {
-        let Ok(rid) = crate::rid::parse(&rest) else {
+        let Ok(rid) = crate::rid::parse(rest) else {
             return Ok(None);
         };
 

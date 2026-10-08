@@ -222,7 +222,7 @@ pub async fn upsert(db: &Db, owner: &RecordId, env: &Envelope) -> AppResult<(Cac
         .bind(("external_id", env.external_id.clone()))
         .bind(("title", env.title.clone()))
         .bind(("body_text", env.body_text.clone()))
-        .bind(("occurred_at", env.occurred_at.clone()))
+        .bind(("occurred_at", env.occurred_at))
         .bind(("url", env.url.clone()))
         .bind(("payload", env.payload.clone()))
         .bind(("content_hash", h))
@@ -467,10 +467,10 @@ pub async fn search(
         query = query.bind(("types", types.clone()));
     }
     if let Some(since) = &params.since {
-        query = query.bind(("since", since.clone()));
+        query = query.bind(("since", *since));
     }
     if let Some(until) = &params.until {
-        query = query.bind(("until", until.clone()));
+        query = query.bind(("until", *until));
     }
 
     let rows: Vec<Row> = query.await?.take(0)?;

@@ -77,13 +77,7 @@ impl<'a> IntoFuture for Q<'a> {
         Box::pin(
             async move {
                 let started = Instant::now();
-                let mut res = self.inner.await;
-                if std::env::var("STRICT_STORE").is_ok() {
-                    if let Ok(r) = &mut res {
-                        let errs = r.take_errors();
-                        if !errs.is_empty() { eprintln!("STRICTSTORE {}: {:?}", self.name, errs); }
-                    }
-                }
+                let res = self.inner.await;
                 let span = tracing::Span::current();
                 span.record("duration_ms", started.elapsed().as_millis() as u64);
                 span.record("ok", res.is_ok());

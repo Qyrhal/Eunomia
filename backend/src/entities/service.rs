@@ -170,12 +170,12 @@ fn memory_out(row: &MemoryRow, owner_email: Option<String>) -> MemoryOut {
         subject: row.subject.to_string(),
         text: row.text.clone(),
         source: row.source.as_ref().map(|s| s.to_string()),
-        created_at: row.created_at.clone(),
+        created_at: row.created_at,
         mem_type: row.mem_type.clone(),
         proof_count: row.proof_count,
         status: row.status.clone(),
         source_memories: row.source_memories.as_ref().map(|v| v.iter().map(|r| r.to_string()).collect()),
-        updated_at: row.updated_at.clone(),
+        updated_at: row.updated_at,
         version: row.version,
         owner_email,
     }
@@ -227,7 +227,7 @@ fn relation_out(row: &RelationRow, direction: Option<&str>, owner_email: Option<
         label: row.label.clone(),
         source: row.source.as_ref().map(|s| s.to_string()),
         owner: row.owner.as_ref().map(|o| o.to_string()),
-        created_at: row.created_at.clone(),
+        created_at: row.created_at,
         direction: direction.map(str::to_string),
         owner_email,
     }

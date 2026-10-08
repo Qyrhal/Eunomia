@@ -207,7 +207,7 @@ pub async fn consolidate_subject(
     let mut all_source_ids: Vec<String> = already_consolidated.into_iter().collect();
     all_source_ids.extend(fresh.iter().map(|(id, _)| id.clone()));
     let source_memories: Vec<RecordId> =
-        all_source_ids.iter().map(|s| crate::rid::parse(&s)).collect::<Result<Vec<_>, _>>().map_err(|_| AppError::internal("source memory id did not round-trip"))?;
+        all_source_ids.iter().map(|s| crate::rid::parse(s)).collect::<Result<Vec<_>, _>>().map_err(|_| AppError::internal("source memory id did not round-trip"))?;
 
     // The LLM call above is too slow to hold a transaction open, so the write
     // is optimistic: it only lands if the observation is still the one we read

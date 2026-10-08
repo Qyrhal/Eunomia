@@ -53,7 +53,7 @@ struct ThreadCreate {
 /// Path params are plain strings; parse here, same convention as
 /// `routers/vaults.rs`'s `parse_vault_id`.
 fn parse_thread_id(thread_id: &str) -> AppResult<RecordId> {
-    crate::rid::parse(&thread_id).map_err(|_| AppError::coded(ErrorCode::ChatThreadNotFound, "not found"))
+    crate::rid::parse(thread_id).map_err(|_| AppError::coded(ErrorCode::ChatThreadNotFound, "not found"))
 }
 
 #[utoipa::path(

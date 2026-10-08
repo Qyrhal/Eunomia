@@ -30,6 +30,7 @@ impl RecordIdExt for RecordId {
 }
 
 /// Parse `table:key`. The key is always a string key (every id this app mints is one).
+#[allow(clippy::result_unit_err)] // every caller maps the failure to its own not-found error
 pub fn parse(s: &str) -> Result<RecordId, ()> {
     RecordId::parse_simple(s).map_err(|_| ())
 }

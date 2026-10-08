@@ -73,7 +73,7 @@ fn valid_vault_kind(kind: &str) -> bool {
 /// str`); parse here, same convention as `routers/auth.rs`'s token/session
 /// id parsing.
 fn parse_vault_id(vault_id: &str) -> AppResult<RecordId> {
-    crate::rid::parse(&vault_id).map_err(|_| AppError::coded(ErrorCode::VaultNotFound, "Vault not found."))
+    crate::rid::parse(vault_id).map_err(|_| AppError::coded(ErrorCode::VaultNotFound, "Vault not found."))
 }
 
 // ponytail: untyped response, give it a struct (see docs/architecture/foundation-plan.md 3.9)
