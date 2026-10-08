@@ -384,14 +384,24 @@ async fn exchange_code(state: &AppState, f: &TokenForm) -> Result<Response, OAut
         .await
         .map_err(|e| OAuthError::new(StatusCode::UNAUTHORIZED, "invalid_client", e))?;
 
-    // Taking the code deletes it, so a second redemption finds nothing.
-    let mut res = q::OAUTH_CODE_TAKE.on(&state.db).bind(("code_hash", hash_token(code))).await.map_err(OAuthError::server)?;
-    let row: CodeRow = res
-        .take::<Vec<CodeRow>>(0)
-        .map_err(OAuthError::server)?
-        .into_iter()
-        .next()
-        .ok_or_else(|| OAuthError::grant("unknown or already used authorization code"))?;
+    // Taking the code marks it redeemed, so a second redemption finds nothing here.
+    let code_hash = hash_token(code);
+    let mut res = q::OAUTH_CODE_TAKE.on(&state.db).bind(("code_hash", code_hash.clone())).await.map_err(OAuthError::server)?;
+    let Some(row) = res.take::<Vec<CodeRow>>(0).map_err(OAuthError::server)?.into_iter().next() else {
+        // RFC 6749 4.1.2: a replayed code means the first redeemer may be an attacker, so revoke what it produced.
+        #[derive(Deserialize)]
+        struct Marker {
+            owner: RecordId,
+            grant_id: Option<RecordId>,
+        }
+        let mut res = q::OAUTH_CODE_REDEEMED.on(&state.db).bind(("code_hash", code_hash)).await.map_err(OAuthError::server)?;
+        if let Some(m) = res.take::<Vec<Marker>>(0).map_err(OAuthError::server)?.into_iter().next()
+            && let Some(grant) = m.grant_id
+        {
+            revoke_family(&state.db, &grant, &m.owner).await?;
+        }
+        return Err(OAuthError::grant("unknown or already used authorization code"));
+    };
 
     if row.expires_at.0 < chrono::Utc::now() {
         return Err(OAuthError::grant("authorization code expired"));
@@ -421,6 +431,7 @@ async fn exchange_code(state: &AppState, f: &TokenForm) -> Result<Response, OAut
         .await
         .map_err(OAuthError::server)?;
     let grant: IdRow = res.take::<Vec<IdRow>>(0).map_err(OAuthError::server)?.into_iter().next().ok_or_else(|| OAuthError::server("grant not created"))?;
+    q::OAUTH_CODE_LINK_GRANT.on(&state.db).bind(("code_hash", code_hash)).bind(("grant_id", grant.id.clone())).await.map_err(OAuthError::server)?;
     let tokens = issue_tokens(state, &grant.id).await.map_err(OAuthError::server)?;
     Ok(token_response(tokens, &row.scope))
 }
