@@ -76,6 +76,7 @@ main() {
   fi
 
   set_env EUNOMIA_IMAGE_TAG "$latest"
+  ensure_encryption_key "$status_dir"
 
   # Everything except the updater itself (recreating it here would kill this
   # run); it is refreshed last, after the status is written.
@@ -107,6 +108,19 @@ main() {
 
 # set_env <KEY> <value>: replace or append KEY=value in .env. Callers pass
 # validated values only (no '#', '&' or newlines).
+# Since v1.3 the backend refuses to start without an ENCRYPTION_KEY of at
+# least 16 characters (it used to fall back to a known all-zero key). An
+# install that never set one would crash-loop after this update, so give it
+# one first. Credentials saved under the old fallback must be re-entered;
+# the app says so for each one.
+ensure_encryption_key() {
+  local key
+  key="$(sed -n 's/^ENCRYPTION_KEY=//p' .env 2>/dev/null | tail -1)"
+  [ "${#key}" -ge 16 ] && return 0
+  set_env ENCRYPTION_KEY "$(head -c 32 /dev/urandom | base64 | tr -d '\n')"
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) generated ENCRYPTION_KEY (none was set; re-enter saved connector credentials and API keys)" >> "$1/history.log"
+}
+
 set_env() {
   if grep -q "^$1=" .env 2>/dev/null; then
     sed -i.bak "s#^$1=.*#$1=$2#" .env && rm -f .env.bak

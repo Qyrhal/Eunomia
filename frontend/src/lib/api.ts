@@ -178,7 +178,6 @@ export async function downloadExport(): Promise<void> {
 export type ConnectorKind =
   | "up_bank"
   | "pocketai"
-  | "open_connector"
   | "github"
   | "slack"
   | "notion"

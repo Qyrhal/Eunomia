@@ -13,6 +13,11 @@ async fn main() {
     tracing_subscriber::fmt::init();
 
     let settings = Settings::load();
+    // No fallback key: credentials encrypted under a public one aren't protected.
+    if let Err(e) = eunomia_backend::connectors::crypto::validate_key(&settings.encryption_key) {
+        eprintln!("error: {e}");
+        std::process::exit(1);
+    }
     let conn = db::connect(&settings).await.expect("failed to connect to SurrealDB");
     db::ensure_schema(&conn, &settings).await.expect("failed to apply schema");
 

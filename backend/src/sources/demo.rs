@@ -1,6 +1,8 @@
-//! Demo source -- pushes synthetic Up Bank + heypocket data through the
-//! ingest pipeline so the cache and tools all work with no live accounts and
-//! no external API calls. Ported from `sources/demo/source.py`.
+//! Demo source -- pushes synthetic, clearly `demo`-sourced Up Bank +
+//! heypocket data through the ingest pipeline so the record tools can be
+//! exercised with no live accounts (the e2e suite seeds with
+//! `POST /api/sources/demo/sync`). It is not a connector: it is never listed
+//! in the UI or scheduled (see `registry::get`).
 //!
 //! Deviation from Python (beyond the one already called out in the Python
 //! docstring -- synthetic records generated inline rather than read back from
@@ -17,7 +19,7 @@ use rand::{Rng, SeedableRng};
 use serde_json::{json, Value};
 
 use crate::error::AppResult;
-use crate::sources::base::{Source, SourceCtx, SyncResult};
+use crate::sources::base::{Conn, Source, SyncResult};
 
 const ACCOUNTS: [&str; 2] = ["Spending", "Saver"];
 
@@ -155,7 +157,11 @@ impl Source for DemoSource {
         &["up.transaction", "up.account", "heypocket.recording"]
     }
 
-    async fn sync(&self, _ctx: &SourceCtx<'_>, _mode: &str, _cursor: Option<String>) -> AppResult<SyncResult> {
+    async fn check(&self, _conn: &Conn) -> AppResult<()> {
+        Ok(())
+    }
+
+    async fn fetch(&self, _conn: &Conn, _cursor: Option<String>) -> AppResult<SyncResult> {
         let mut rng = StdRng::seed_from_u64(42);
         let now = Utc::now();
 

@@ -57,6 +57,12 @@ check "never recreates the updater from inside itself" bash -c "! grep -q 'up -d
 check "status now up to date" test "$(field current_version)" = v1.1.0 -a "$(field update_available)" = false
 check "marker file consumed" test ! -e "$S/requested"
 check "history recorded" grep -q 'updated v1.0.0 -> v1.1.0' "$S/history.log"
+# the fixture .env has no ENCRYPTION_KEY: the update must add one (the backend
+# now refuses to start without a key of 16+ characters)
+key1="$(sed -n 's/^ENCRYPTION_KEY=//p' "$TMP/repo/.env")"
+check "missing ENCRYPTION_KEY generated before restart" test "${#key1}" -ge 32
+check "key generation logged" grep -q 'generated ENCRYPTION_KEY' "$S/history.log"
+check "exactly one ENCRYPTION_KEY line" test "$(grep -c '^ENCRYPTION_KEY=' "$TMP/repo/.env")" = 1
 
 # 3. a request with nothing newer is a no-op
 : > "$TMP/docker.log"; touch "$S/requested"; update
@@ -73,6 +79,8 @@ check "HTTPS on: caddy restarted with the stack" grep -q 'up -d --remove-orphans
 check "HTTPS on: Caddyfile reloaded" grep -q 'exec -T caddy caddy reload --config /etc/caddy/Caddyfile' "$TMP/docker.log"
 check "HTTPS on: updater still not restarted by itself" bash -c "! grep -q 'up -d --remove-orphans.*updater' '$TMP/docker.log'"
 printf 'surrealdb\nbackend\nfrontend\nupdater\n' > "$TMP/services"
+check "an existing valid key is never replaced" test "$(sed -n 's/^ENCRYPTION_KEY=//p' "$TMP/repo/.env")" = "$key1"
+check "key generated only once" test "$(grep -c 'generated ENCRYPTION_KEY' "$S/history.log")" = 1
 
 # 4. local edits to tracked files are reported, not clobbered
 (cd "$TMP/src" && echo three > compose.yml && git_ commit -qam v1.2 && git tag v1.2.0)

@@ -1,18 +1,12 @@
-//! Sync scheduler. Ported from `sources/scheduler.py`.
-//!
-//! Python drives these jobs from an APScheduler `AsyncIOScheduler` wired into
-//! the FastAPI app's lifespan; each job is also directly callable, which is
-//! what its tests and the on-demand `/sources/{key}/sync` endpoint use. This
-//! port keeps that same shape -- [`sync_source`] and [`poll_all`] are plain
-//! async functions callable on demand -- and replaces APScheduler with
-//! `tokio::time::interval` tasks spawned by [`spawn`], per the task's "keep it
-//! simple" instruction: one task per (owner, source) plus one `poll_all`
-//! sweep, no generic scheduler library.
-//!
-//! `backfill_embeddings` is stubbed: it depends on `cache.search.set_embedding`
-//! and `embeddings.service.embed`, neither of which is ported to Rust yet
-//! (see `sources::registry::ingest`'s doc comment for the same gap).
+//! Sync scheduler. One background loop wakes every minute and syncs every
+//! enabled source whose interval (Settings -> sync intervals, default 15
+//! minutes, heypocket 24 hours) has elapsed since its last run -- or, after
+//! failures, whose backoff has. A connector saved after startup is picked up
+//! on the next tick, and its first sync runs right away. [`sync_source`] is
+//! also what the on-demand `POST /sources/{key}/sync` endpoint calls.
 
+use std::collections::HashSet;
+use std::sync::{LazyLock, Mutex};
 use std::time::Duration as StdDuration;
 
 use chrono::Utc;
@@ -20,6 +14,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use surrealdb::RecordId;
 
+use crate::config::Settings;
 use crate::db::Db;
 use crate::error::AppResult;
 use crate::sources::base::{datetime_to_chrono, owner_key_str};
@@ -27,6 +22,9 @@ use crate::sources::registry;
 use crate::state::AppState;
 
 const BACKOFF: [u64; 5] = [900, 1800, 3600, 7200, 21600];
+const TICK_SECS: u64 = 60;
+/// How long a sync lease outlives a crashed run (SurrealQL duration).
+const LEASE: &str = "30m";
 
 /// Seconds to wait before retrying after `failures` consecutive failures.
 pub fn backoff_seconds(failures: i64) -> u64 {
@@ -48,7 +46,7 @@ async fn all_user_ids(db: &Db) -> AppResult<Vec<RecordId>> {
     Ok(rows.into_iter().map(|r| r.id).collect())
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 struct SyncStatusRow {
     #[serde(default)]
     cursor: String,
@@ -72,129 +70,165 @@ async fn get_sync_status(db: &Db, owner: &RecordId, key: &str) -> AppResult<Sync
         .bind(("owner", owner.clone()))
         .await?;
     let rows: Vec<SyncStatusRow> = res.take(0)?;
-    Ok(rows.into_iter().next().unwrap_or(SyncStatusRow { cursor: String::new(), last_run: None, consecutive_failures: 0 }))
+    Ok(rows.into_iter().next().unwrap_or_default())
 }
 
-/// Runs one source sync for `owner`, records health, applies backoff on
-/// failure. Never returns an `Err` to the caller -- any failure (bad
-/// credentials, a network error, an unknown source key) is recorded on the
-/// `sync_status` row and reported back as `{"source": key, "error": ...}`,
-/// matching Python's blanket `except Exception` here.
-pub async fn sync_source(db: &Db, encryption_key: &str, owner: &RecordId, key: &str, mode: &str) -> Value {
+/// `(owner, source)` syncs running in this process. Checked before the
+/// database lease: it is exact within one process (manual + scheduled runs),
+/// while the lease covers other replicas.
+static RUNNING: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(Default::default);
+
+struct RunningGuard(String);
+
+impl RunningGuard {
+    fn claim(owner: &RecordId, key: &str) -> Option<Self> {
+        let id = format!("{}:{key}", owner_key_str(owner));
+        RUNNING.lock().unwrap_or_else(|e| e.into_inner()).insert(id.clone()).then(|| RunningGuard(id))
+    }
+}
+
+impl Drop for RunningGuard {
+    fn drop(&mut self) {
+        RUNNING.lock().unwrap_or_else(|e| e.into_inner()).remove(&self.0);
+    }
+}
+
+fn lease_id(owner: &RecordId, key: &str) -> RecordId {
+    RecordId::from_table_key("sync_lease", format!("{}:{}", owner_key_str(owner), key))
+}
+
+/// Atomically claims the `(owner, source)` sync lease: `CREATE` fails when
+/// the record already exists, so of two concurrent runs -- scheduled and
+/// manual, or two backend replicas -- exactly one gets it. A lease left by a
+/// crashed run expires after `LEASE`.
+async fn claim_lease(db: &Db, owner: &RecordId, key: &str) -> AppResult<bool> {
+    let id = lease_id(owner, key);
+    db.query("DELETE $id WHERE until < time::now()").bind(("id", id.clone())).await?.check()?;
+    match db.query(format!("CREATE $id SET until = time::now() + {LEASE}")).bind(("id", id)).await?.check() {
+        Ok(_) => Ok(true),
+        Err(e) if e.to_string().contains("already exists") => Ok(false),
+        Err(e) => Err(e.into()),
+    }
+}
+
+async fn release_lease(db: &Db, owner: &RecordId, key: &str) {
+    if let Err(e) = db.query("DELETE $id").bind(("id", lease_id(owner, key))).await {
+        tracing::warn!(source = %key, error = %e, "could not release sync lease (it expires on its own)");
+    }
+}
+
+/// Runs one source sync for `owner` and records its health on the
+/// `sync_status` row. Never returns an `Err`: any failure (missing or bad
+/// credentials, a provider error, records that failed to save, the
+/// checkpoint write itself) is stored as `last_error` -- shown on the
+/// Connectors and dashboard pages -- and returned as `{"source", "error"}`.
+/// The cursor only advances when every record was stored, so a failed
+/// record is fetched again next time (the replay is idempotent). If another
+/// run for the same source holds the lease, returns
+/// `{"status": "already_running"}` without calling the provider.
+pub async fn sync_source(db: &Db, settings: &Settings, owner: &RecordId, key: &str) -> Value {
+    let Some(_running) = RunningGuard::claim(owner, key) else {
+        return json!({"source": key, "status": "already_running"});
+    };
+    match claim_lease(db, owner, key).await {
+        Ok(true) => {}
+        Ok(false) => return json!({"source": key, "status": "already_running"}),
+        Err(e) => return json!({"source": key, "error": e.message}),
+    }
+    let out = sync_locked(db, settings, owner, key).await;
+    release_lease(db, owner, key).await;
+    out
+}
+
+async fn sync_locked(db: &Db, settings: &Settings, owner: &RecordId, key: &str) -> Value {
     let st = match get_sync_status(db, owner, key).await {
         Ok(st) => st,
         Err(e) => return json!({"source": key, "error": e.message}),
     };
-    let now = Utc::now();
+    let now = surrealdb::Datetime::from(Utc::now());
     let cursor = if st.cursor.is_empty() { None } else { Some(st.cursor.clone()) };
 
-    match registry::run_sync(db, encryption_key, owner, key, mode, cursor).await {
+    let error = match registry::run_sync(db, settings, owner, key, cursor).await {
+        Ok((report, _)) if report.failed > 0 => format!(
+            "{} of {} records failed to save; will retry: {}",
+            report.failed,
+            report.failed + report.written + report.skipped,
+            report.errors.first().map(String::as_str).unwrap_or("")
+        ),
         Ok((report, next_cursor)) => {
-            let report_value = report.as_value();
-            let _ = db
-                .query(
+            let report_value = report.as_dict();
+            let saved = async {
+                db.query(
                     "UPDATE $id SET last_run = $now, cursor = $cursor, last_ok = $now, \
                      last_error = '', consecutive_failures = 0, last_report = $report",
                 )
                 .bind(("id", sync_status_id(owner, key)))
-                .bind(("now", surrealdb::Datetime::from(now)))
-                .bind(("cursor", next_cursor.unwrap_or_default()))
+                .bind(("now", now.clone()))
+                .bind(("cursor", next_cursor.unwrap_or(st.cursor.clone())))
                 .bind(("report", report_value.clone()))
-                .await;
-            report_value
+                .await?
+                .check()
+            }
+            .await;
+            match saved {
+                Ok(_) => return report_value,
+                Err(e) => format!("records saved, but the sync checkpoint could not be: {e}"),
+            }
         }
-        Err(e) => {
-            let error = e.message.clone();
-            let failures = st.consecutive_failures + 1;
-            let _ = db
-                .query("UPDATE $id SET last_run = $now, consecutive_failures = $failures, last_error = $error")
-                .bind(("id", sync_status_id(owner, key)))
-                .bind(("now", surrealdb::Datetime::from(now)))
-                .bind(("failures", failures))
-                .bind(("error", error.clone()))
-                .await;
-            json!({"source": key, "error": error})
-        }
+        Err(e) => e.message,
+    };
+
+    tracing::warn!(source = %key, owner = %owner, error = %error, "sync failed");
+    if let Err(e) = db
+        .query("UPDATE $id SET last_run = $now, consecutive_failures = $failures, last_error = $error")
+        .bind(("id", sync_status_id(owner, key)))
+        .bind(("now", now))
+        .bind(("failures", st.consecutive_failures + 1))
+        .bind(("error", error.clone()))
+        .await
+        .and_then(|r| r.check())
+    {
+        tracing::warn!(source = %key, error = %e, "could not record sync failure");
     }
+    json!({"source": key, "error": error})
 }
 
-/// Polls every enabled source, for every user, whose backoff window has
-/// elapsed.
-pub async fn poll_all(db: &Db, encryption_key: &str) -> AppResult<Vec<Value>> {
+/// Whether a source last run `since_last` seconds ago (None = never) is due.
+fn is_due(since_last: Option<i64>, interval: u64, failures: i64) -> bool {
+    let wait = if failures > 0 { interval.max(backoff_seconds(failures - 1)) } else { interval };
+    since_last.map(|s| s >= wait as i64).unwrap_or(true)
+}
+
+/// Syncs every enabled source, for every user, that is due.
+pub async fn poll_all(db: &Db, settings: &Settings) -> AppResult<Vec<Value>> {
     let mut out = Vec::new();
     let now = Utc::now();
     for owner in all_user_ids(db).await? {
+        let intervals = sync_intervals_for(db, &owner).await.unwrap_or_default();
         for src in registry::enabled(db, &owner).await? {
-            let rid = sync_status_id(&owner, src.key());
-            let row: Option<SyncStatusRow> = db.select(rid).await?;
-            if let Some(row) = &row {
-                if row.consecutive_failures > 0 {
-                    if let Some(last_run) = row.last_run.as_ref().and_then(datetime_to_chrono) {
-                        let wait = backoff_seconds(row.consecutive_failures);
-                        if (now - last_run).num_seconds() < wait as i64 {
-                            continue;
-                        }
-                    }
-                }
+            let row: Option<SyncStatusRow> = db.select(sync_status_id(&owner, src.key())).await?;
+            let row = row.unwrap_or_default();
+            let since_last = row.last_run.as_ref().and_then(datetime_to_chrono).map(|t| (now - t).num_seconds());
+            if is_due(since_last, interval_for(&intervals, src.key()), row.consecutive_failures) {
+                out.push(sync_source(db, settings, &owner, src.key()).await);
             }
-            out.push(sync_source(db, encryption_key, &owner, src.key(), "poll").await);
         }
     }
     Ok(out)
 }
 
-/// Deferred: re-embeds cache records missing an embedding. Depends on
-/// `cache.search.set_embedding` + `embeddings.service.embed`, neither ported
-/// to Rust yet. Kept as a callable stub (rather than omitted) so the public
-/// surface this module exposes still matches Python's, and so wiring it up
-/// later is a one-function change.
-pub async fn backfill_embeddings(_db: &Db, _limit: i64) -> AppResult<i64> {
-    Ok(0)
-}
-
-/// Spawns the periodic sync tasks: one `tokio::time::interval` loop per
-/// `(owner, enabled source)` pair (mirroring Python's `sched.add_job(..., id=
-/// f"sync:{owner.id}:{src.key}")`), plus one `poll_all` sweep every 5 minutes.
-/// Read-light by design per the task brief -- this is not a generic
-/// scheduler, just enough to keep sources syncing. Returns the spawned
-/// task handles so the caller (wired up separately, outside this module) can
-/// hold or abort them.
+/// Spawns the scheduler loop. Returns its handle so the caller can hold or
+/// abort it.
 pub async fn spawn(state: AppState) -> Vec<tokio::task::JoinHandle<()>> {
-    let mut handles = Vec::new();
-
-    let owners = all_user_ids(&state.db).await.unwrap_or_default();
-    for owner in owners {
-        let sync_intervals = sync_intervals_for(&state.db, &owner).await.unwrap_or_default();
-        let enabled_sources = registry::enabled(&state.db, &owner).await.unwrap_or_default();
-        for src in enabled_sources {
-            let interval_secs = interval_for(&sync_intervals, src.key());
-            let state = state.clone();
-            let owner = owner.clone();
-            let key = src.key().to_string();
-            handles.push(tokio::spawn(async move {
-                let mut ticker = tokio::time::interval(StdDuration::from_secs(interval_secs));
-                ticker.tick().await; // first tick is immediate; skip it to mirror an "interval" trigger's first run
-                loop {
-                    ticker.tick().await;
-                    let _ = sync_source(&state.db, &state.settings.encryption_key, &owner, &key, "poll").await;
-                }
-            }));
-        }
-    }
-
-    {
-        let state = state.clone();
-        handles.push(tokio::spawn(async move {
-            let mut ticker = tokio::time::interval(StdDuration::from_secs(300));
+    vec![tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(StdDuration::from_secs(TICK_SECS));
+        loop {
             ticker.tick().await;
-            loop {
-                ticker.tick().await;
-                let _ = poll_all(&state.db, &state.settings.encryption_key).await;
+            if let Err(e) = poll_all(&state.db, &state.settings).await {
+                tracing::warn!(error = %e.message, "sync sweep failed");
             }
-        }));
-    }
-
-    handles
+        }
+    })]
 }
 
 async fn sync_intervals_for(db: &Db, owner: &RecordId) -> AppResult<Value> {
@@ -208,9 +242,8 @@ async fn sync_intervals_for(db: &Db, owner: &RecordId) -> AppResult<Value> {
     Ok(rows.into_iter().next().map(|r| r.sync_intervals).unwrap_or(json!({})))
 }
 
-/// `sync_intervals.get(key, default)`, where the default is heypocket's
-/// 24h plan-mandated minimum (Python: `sync_intervals.setdefault("heypocket",
-/// 86400)`) and everything else's fallback is 15 minutes.
+/// The user's interval for `key`, else heypocket's 24h plan-mandated minimum
+/// or the 15-minute default.
 fn interval_for(sync_intervals: &Value, key: &str) -> u64 {
     if let Some(v) = sync_intervals.get(key).and_then(|v| v.as_u64()) {
         return v.max(1);
@@ -231,7 +264,7 @@ mod tests {
         assert_eq!(backoff_seconds(0), 900);
         assert_eq!(backoff_seconds(1), 1800);
         assert_eq!(backoff_seconds(4), 21600);
-        assert_eq!(backoff_seconds(100), 21600); // clamps to the last tier
+        assert_eq!(backoff_seconds(100), 21600);
     }
 
     #[test]
@@ -248,12 +281,17 @@ mod tests {
         let intervals = json!({"up_bank": 120, "heypocket": 3600});
         assert_eq!(interval_for(&intervals, "up_bank"), 120);
         assert_eq!(interval_for(&intervals, "heypocket"), 3600);
+        assert_eq!(interval_for(&json!({}), "heypocket"), 86400);
+        assert_eq!(interval_for(&json!({}), "github"), 900);
     }
 
     #[test]
-    fn interval_for_defaults_heypocket_to_24h_and_others_to_15m() {
-        let intervals = json!({});
-        assert_eq!(interval_for(&intervals, "heypocket"), 86400);
-        assert_eq!(interval_for(&intervals, "up_bank"), 900);
+    fn is_due_honours_interval_and_backoff() {
+        assert!(is_due(None, 900, 0), "never synced -> sync now");
+        assert!(!is_due(Some(60), 900, 0));
+        assert!(is_due(Some(900), 900, 0));
+        // after 2 failures wait at least 30 minutes, even with a short interval
+        assert!(!is_due(Some(1000), 300, 2));
+        assert!(is_due(Some(1800), 300, 2));
     }
 }

@@ -12,8 +12,11 @@
 //! `routers::connectors`'s dual-router pattern (`router()` + a second
 //! function the caller mounts separately).
 
+use std::time::Duration;
+
 use axum::{
     extract::{Path, State},
+    http::StatusCode,
     routing::{get, post},
     Json, Router,
 };
@@ -26,6 +29,11 @@ use crate::models_user::User;
 use crate::sources::registry;
 use crate::sources::scheduler::sync_source;
 use crate::state::AppState;
+
+/// Provider deliveries are a few KiB; anything bigger is rejected unread.
+const MAX_WEBHOOK_BYTES: usize = 1 << 20;
+/// A slow or stalled upload is cut off rather than holding a connection.
+const WEBHOOK_READ_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -138,7 +146,7 @@ async fn sync_now(State(state): State<AppState>, user: User, Path(key): Path<Str
     if registry::get(&key).is_none() {
         return Err(AppError::not_found(format!("no source {key:?}")));
     }
-    let report = sync_source(&state.db, &state.settings.encryption_key, &user.id, &key, "poll").await;
+    let report = sync_source(&state.db, &state.settings, &user.id, &key).await;
     Ok(Json(report))
 }
 
@@ -153,13 +161,16 @@ async fn source_webhook(
 
     let owner: RecordId = owner_id.parse().map_err(|_| AppError::not_found("unknown owner"))?;
 
+    // Bounded before any database or signature work: this route is public.
     let (parts, body) = request.into_parts();
-    let body_bytes = axum::body::to_bytes(body, usize::MAX)
-        .await
-        .map_err(|e| AppError::bad_request(e.to_string()))?;
+    let body_bytes = match tokio::time::timeout(WEBHOOK_READ_TIMEOUT, axum::body::to_bytes(body, MAX_WEBHOOK_BYTES)).await {
+        Err(_) => return Err(AppError::new(StatusCode::REQUEST_TIMEOUT, "webhook body not received in time")),
+        Ok(Err(_)) => return Err(AppError::new(StatusCode::PAYLOAD_TOO_LARGE, "webhook body over 1 MiB")),
+        Ok(Ok(bytes)) => bytes,
+    };
 
-    let ctx = registry::ctx(&state.db, &state.settings.encryption_key, &owner);
-    let raw_records = src.webhook(&ctx, &parts.headers, &body_bytes).await?;
+    let conn = registry::conn_for(&state.db, &state.settings.encryption_key, &owner, src.as_ref()).await?;
+    let raw_records = src.webhook(&conn, &parts.headers, &body_bytes).await?;
 
     let Some(raw_records) = raw_records.filter(|r| !r.is_empty()) else {
         // Covers both "signature didn't verify" and "nothing worth
@@ -170,10 +181,14 @@ async fn source_webhook(
         return Ok(Json(json!({"status": "ignored"})));
     };
 
-    let report = registry::ingest(&state.db, &owner, &key, &raw_records, src.as_ref()).await;
-    tracing::info!(source = %key, owner = %owner, report = ?report.as_value(), "webhook: processed");
+    let report = registry::ingest(&state.db, &state.settings, &owner, &raw_records, src.as_ref()).await?;
+    tracing::info!(source = %key, owner = %owner, report = ?report.as_dict(), "webhook: processed");
+    if report.failed > 0 {
+        // Not stored: a 5xx makes the provider redeliver.
+        return Err(AppError::new(StatusCode::SERVICE_UNAVAILABLE, format!("{} records failed to save; retry", report.failed)));
+    }
 
-    let mut out = report.as_value();
+    let mut out = report.as_dict();
     out.as_object_mut().unwrap().insert("status".to_string(), json!("ok"));
     Ok(Json(out))
 }
@@ -181,6 +196,34 @@ async fn source_webhook(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::body::Body;
+    use tower::ServiceExt;
+
+    /// A state whose database is never connected: these requests must be
+    /// rejected before anything touches it.
+    fn offline_state() -> AppState {
+        let db = surrealdb::Surreal::<surrealdb::engine::remote::ws::Client>::init();
+        AppState(std::sync::Arc::new(crate::state::AppStateInner { db, settings: crate::config::Settings::load() }))
+    }
+
+    fn webhook(body: Body) -> axum::http::Request<Body> {
+        axum::http::Request::post("/sources/up_bank/webhook/user:abc").body(body).unwrap()
+    }
+
+    #[tokio::test]
+    async fn an_oversized_webhook_is_rejected_unread() {
+        let app = webhook_router().with_state(offline_state());
+        let resp = app.oneshot(webhook(Body::from(vec![b'x'; MAX_WEBHOOK_BYTES + 1]))).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_stalled_webhook_upload_times_out() {
+        let app = webhook_router().with_state(offline_state());
+        let stalled = Body::from_stream(futures::stream::pending::<Result<Vec<u8>, std::io::Error>>());
+        let resp = app.oneshot(webhook(stalled)).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::REQUEST_TIMEOUT);
+    }
 
     #[test]
     fn status_out_defaults_for_a_missing_row() {

@@ -18,13 +18,11 @@ use chrono::{Datelike, Duration, Utc};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::connectors::clients::{
-    DiscordClient, GitHubClient, GmailClient, GoogleCalendarClient, LinearClient, NotionClient, OpenConnectorClient,
-    PocketAIClient, SlackClient, SpotifyClient, StripeClient, TodoistClient, UpBankClient,
-};
+use crate::connectors::clients::{PocketAIClient, UpBankClient};
 use crate::connectors::service::{self, Connector, CONNECTOR_KINDS};
 use crate::error::{AppError, AppResult};
 use crate::models_user::User;
+use crate::sources::registry;
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
@@ -51,62 +49,6 @@ fn connector_out(row: &Connector) -> Value {
         "credentials_set": !row.credentials_encrypted.is_empty(),
         "updated_at": row.updated_at,
     })
-}
-
-enum AnyClient {
-    UpBank(UpBankClient),
-    PocketAI(PocketAIClient),
-    OpenConnector(OpenConnectorClient),
-    GitHub(GitHubClient),
-    Slack(SlackClient),
-    Notion(NotionClient),
-    Linear(LinearClient),
-    Gmail(GmailClient),
-    GoogleCalendar(GoogleCalendarClient),
-    Discord(DiscordClient),
-    Spotify(SpotifyClient),
-    Todoist(TodoistClient),
-    Stripe(StripeClient),
-}
-
-impl AnyClient {
-    async fn ping(&self) -> AppResult<bool> {
-        match self {
-            AnyClient::UpBank(c) => c.ping().await,
-            AnyClient::PocketAI(c) => c.ping().await,
-            AnyClient::OpenConnector(c) => c.ping().await,
-            AnyClient::GitHub(c) => c.ping().await,
-            AnyClient::Slack(c) => c.ping().await,
-            AnyClient::Notion(c) => c.ping().await,
-            AnyClient::Linear(c) => c.ping().await,
-            AnyClient::Gmail(c) => c.ping().await,
-            AnyClient::GoogleCalendar(c) => c.ping().await,
-            AnyClient::Discord(c) => c.ping().await,
-            AnyClient::Spotify(c) => c.ping().await,
-            AnyClient::Todoist(c) => c.ping().await,
-            AnyClient::Stripe(c) => c.ping().await,
-        }
-    }
-}
-
-fn client_for(kind: &str, config: &Value, credentials: &Value) -> Option<AnyClient> {
-    let base_url = config.get("base_url").and_then(|v| v.as_str());
-    match kind {
-        "up_bank" => Some(AnyClient::UpBank(UpBankClient::new(credentials))),
-        "pocketai" => Some(AnyClient::PocketAI(PocketAIClient::new(credentials, base_url))),
-        "open_connector" => Some(AnyClient::OpenConnector(OpenConnectorClient::new(credentials, base_url))),
-        "github" => Some(AnyClient::GitHub(GitHubClient::new(credentials))),
-        "slack" => Some(AnyClient::Slack(SlackClient::new(credentials))),
-        "notion" => Some(AnyClient::Notion(NotionClient::new(credentials))),
-        "linear" => Some(AnyClient::Linear(LinearClient::new(credentials))),
-        "gmail" => Some(AnyClient::Gmail(GmailClient::new(credentials))),
-        "google_calendar" => Some(AnyClient::GoogleCalendar(GoogleCalendarClient::new(credentials))),
-        "discord" => Some(AnyClient::Discord(DiscordClient::new(credentials, config))),
-        "spotify" => Some(AnyClient::Spotify(SpotifyClient::new(credentials))),
-        "todoist" => Some(AnyClient::Todoist(TodoistClient::new(credentials))),
-        "stripe" => Some(AnyClient::Stripe(StripeClient::new(credentials))),
-        _ => None,
-    }
 }
 
 fn require_known_kind(kind: &str) -> AppResult<()> {
@@ -166,7 +108,7 @@ async fn up_bank_finance_summary(
         return Err(AppError::bad_request("Up Bank is not connected"));
     }
     let since = Utc::now() - Duration::days(q.days);
-    let summary = UpBankClient::new(&creds).finance_summary(&since.to_rfc3339()).await?;
+    let summary = UpBankClient::new(&creds, &row.config)?.finance_summary(&since.to_rfc3339()).await?;
     Ok(Json(summary))
 }
 
@@ -177,8 +119,7 @@ async fn pocketai_client_or_400(state: &AppState, user: &User) -> AppResult<Pock
     if !row.enabled || !has_key {
         return Err(AppError::bad_request("PocketAI is not connected"));
     }
-    let base_url = row.config.get("base_url").and_then(|v| v.as_str());
-    Ok(PocketAIClient::new(&creds, base_url))
+    PocketAIClient::new(&creds, &row.config)
 }
 
 async fn pocketai_summary(
@@ -244,13 +185,14 @@ async fn put_one(
     Ok(Json(connector_out(&row)))
 }
 
+/// Runs the connector's source `check` -- one real authenticated call to the
+/// provider -- and reports the provider's error verbatim when it fails.
 async fn test_one(State(state): State<AppState>, user: User, Path(kind): Path<String>) -> AppResult<Json<Value>> {
     require_known_kind(&kind)?;
-    let row = service::get_or_create_connector(&state.db, &user.id, &kind).await?;
-    let creds = service::credentials_for(&state.db, &state.settings.encryption_key, &user.id, &kind).await?;
-    let client = client_for(&kind, &row.config, &creds).expect("kind already validated against CONNECTOR_KINDS");
-    match client.ping().await {
-        Ok(ok) => Ok(Json(json!({ "ok": ok }))),
+    let src = registry::for_provider(&kind).ok_or_else(|| AppError::not_found("unknown connector"))?;
+    let conn = registry::conn_for(&state.db, &state.settings.encryption_key, &user.id, src.as_ref()).await?;
+    match src.check(&conn).await {
+        Ok(()) => Ok(Json(json!({ "ok": true }))),
         Err(err) => Ok(Json(json!({ "ok": false, "error": err.message }))),
     }
 }
@@ -271,8 +213,10 @@ async fn snapshot(State(state): State<AppState>, user: User) -> AppResult<Json<V
     let has_token =
         up_bank_creds.get("personal_access_token").and_then(|v| v.as_str()).map(|s| !s.is_empty()).unwrap_or(false);
     if up_bank.enabled && has_token {
-        if let Ok(summary) = UpBankClient::new(&up_bank_creds).week_summary(&week_start.to_rfc3339()).await {
-            result["up_bank"] = summary;
+        if let Ok(client) = UpBankClient::new(&up_bank_creds, &up_bank.config) {
+            if let Ok(summary) = client.week_summary(&week_start.to_rfc3339()).await {
+                result["up_bank"] = summary;
+            }
         }
     }
 
@@ -282,10 +226,10 @@ async fn snapshot(State(state): State<AppState>, user: User) -> AppResult<Json<V
     let has_key = pocketai_creds.get("api_key").and_then(|v| v.as_str()).map(|s| !s.is_empty()).unwrap_or(false);
     if pocketai.enabled && has_key {
         let since = (now - Duration::days(7)).date_naive().to_string();
-        let base_url = pocketai.config.get("base_url").and_then(|v| v.as_str());
-        let client = PocketAIClient::new(&pocketai_creds, base_url);
-        if let Ok(summary) = client.summary(&since).await {
-            result["pocketai"] = json!({ "recordings_count": summary["recordings_count"] });
+        if let Ok(client) = PocketAIClient::new(&pocketai_creds, &pocketai.config) {
+            if let Ok(summary) = client.summary(&since).await {
+                result["pocketai"] = json!({ "recordings_count": summary["recordings_count"] });
+            }
         }
     }
 
@@ -321,22 +265,10 @@ mod tests {
     }
 
     #[test]
-    fn client_for_builds_a_client_for_every_known_kind() {
-        let creds = json!({});
-        let config = json!({});
-        assert!(matches!(client_for("up_bank", &config, &creds), Some(AnyClient::UpBank(_))));
-        assert!(matches!(client_for("pocketai", &config, &creds), Some(AnyClient::PocketAI(_))));
-        assert!(matches!(client_for("open_connector", &config, &creds), Some(AnyClient::OpenConnector(_))));
-        assert!(matches!(client_for("github", &config, &creds), Some(AnyClient::GitHub(_))));
-        assert!(matches!(client_for("slack", &config, &creds), Some(AnyClient::Slack(_))));
-        assert!(matches!(client_for("notion", &config, &creds), Some(AnyClient::Notion(_))));
-        assert!(matches!(client_for("linear", &config, &creds), Some(AnyClient::Linear(_))));
-        assert!(matches!(client_for("gmail", &config, &creds), Some(AnyClient::Gmail(_))));
-        assert!(matches!(client_for("google_calendar", &config, &creds), Some(AnyClient::GoogleCalendar(_))));
-        assert!(matches!(client_for("discord", &config, &creds), Some(AnyClient::Discord(_))));
-        assert!(matches!(client_for("spotify", &config, &creds), Some(AnyClient::Spotify(_))));
-        assert!(matches!(client_for("todoist", &config, &creds), Some(AnyClient::Todoist(_))));
-        assert!(matches!(client_for("stripe", &config, &creds), Some(AnyClient::Stripe(_))));
-        assert!(client_for("demo", &config, &creds).is_none());
+    fn every_known_kind_has_a_source_to_test_with() {
+        for kind in CONNECTOR_KINDS {
+            assert!(registry::for_provider(kind).is_some(), "{kind}");
+        }
+        assert!(require_known_kind("open_connector").is_err());
     }
 }

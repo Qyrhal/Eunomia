@@ -34,7 +34,9 @@ use crate::config::Settings;
 use crate::db::Db;
 use crate::error::{AppError, AppResult};
 
-use super::extract::{app_settings_row, resolve_openai};
+use crate::embeddings::provider;
+
+use super::extract::app_settings_row;
 
 pub const DEFAULT_MISSION: &str = "Observations are stable facts about people and relationships: preferences, skills, roles, \
 recurring patterns, and how they change over time. Ignore ephemeral or one-off details.";
@@ -113,8 +115,7 @@ async fn call_llm(
     current_belief: Option<&str>,
     facts: &[String],
 ) -> AppResult<String> {
-    let (base_url, api_key) = resolve_openai(db, settings, owner).await?;
-    let key = if api_key.is_empty() { "not-needed".to_string() } else { api_key };
+    let p = provider::resolve(db, settings, owner).await?;
 
     let body = json!({
         "model": "gpt-4o-mini",
@@ -122,9 +123,9 @@ async fn call_llm(
         "messages": [{"role": "user", "content": build_prompt(mission, current_belief, facts)}],
     });
 
-    let resp = reqwest::Client::new()
-        .post(format!("{}/chat/completions", base_url.trim_end_matches('/')))
-        .bearer_auth(key)
+    let resp = provider::client()
+        .post(p.url("chat/completions"))
+        .bearer_auth(p.bearer())
         .json(&body)
         .timeout(Duration::from_secs(30))
         .send()
