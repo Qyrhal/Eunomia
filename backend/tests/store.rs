@@ -1,6 +1,6 @@
 //! The store seam's two gates: every named statement parses and runs against
 //! a freshly migrated database, and no code outside `src/store/` builds
-//! queries (files still being moved are listed in store_gate_allow.txt).
+//! queries.
 
 mod common;
 
@@ -161,7 +161,6 @@ fn store_names_are_unique() {
 /// handle.
 #[test]
 fn raw_database_access_stays_in_its_modules() {
-    let allow: BTreeSet<String> = include_str!("store_gate_allow.txt").lines().map(str::trim).filter(|l| !l.is_empty()).map(String::from).collect();
     let use_stmt = Regex::new(r"(?i)\bUSE\s+(NS|DB|DATABASE|NAMESPACE)\b").unwrap();
     // (what, text that gives it away, where it may appear)
     let rules: [(&str, &[&str], &[&str]); 5] = [
@@ -176,7 +175,7 @@ fn raw_database_access_stays_in_its_modules() {
         let text = std::fs::read_to_string(&entry).unwrap();
         let code: String = text.lines().filter(|l| !l.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n");
         for (what, needles, homes) in rules {
-            let at_home = homes.iter().any(|h| entry.starts_with(h)) || (what.starts_with("a query") && allow.contains(&entry));
+            let at_home = homes.iter().any(|h| entry.starts_with(h));
             if !at_home && needles.iter().any(|n| code.contains(n)) {
                 offenders.push(format!("{entry}: {what}"));
             }

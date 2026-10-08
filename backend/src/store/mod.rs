@@ -28,6 +28,10 @@ pub mod jobs;
 pub mod tenant;
 pub mod vaults;
 
+/// Proof of being inside `store/`: its field is private to this module and its children, so only
+/// they can build one, and `ControlDb::raw` / `OrgDb::raw` take it.
+pub(crate) struct RawKey(());
+
 /// Marker: the statement runs in an org's database (`Stmt::on` takes an `&OrgDb`).
 pub struct Tenant;
 /// Marker: the statement runs in the control database (`Stmt::on` takes a `&ControlDb`).
@@ -58,13 +62,13 @@ impl<S> Stmt<S> {
 
 impl Stmt<Tenant> {
     pub fn on<'a>(&self, db: &'a OrgDb) -> Q<'a> {
-        Q::new(db.raw(), Scope::Org(db.org()), self.name, self.sql)
+        Q::new(db.raw(RawKey(())), Scope::Org(db.org()), self.name, self.sql)
     }
 }
 
 impl Stmt<Control> {
     pub fn on<'a>(&self, db: &'a ControlDb) -> Q<'a> {
-        Q::new(db.raw(), Scope::Control, self.name, self.sql)
+        Q::new(db.raw(RawKey(())), Scope::Control, self.name, self.sql)
     }
 }
 
@@ -72,12 +76,12 @@ impl Stmt<Control> {
 /// an optional clause). Still named, so they still trace.
 // ponytail: not covered by every_query_executes; keep these rare.
 pub fn dynamic<'a>(db: &'a OrgDb, name: &'static str, sql: impl AsRef<str>) -> Q<'a> {
-    Q::new(db.raw(), Scope::Org(db.org()), name, sql.as_ref())
+    Q::new(db.raw(RawKey(())), Scope::Org(db.org()), name, sql.as_ref())
 }
 
 /// [`dynamic`] for the control database.
 pub fn dynamic_control<'a>(db: &'a ControlDb, name: &'static str, sql: impl AsRef<str>) -> Q<'a> {
-    Q::new(db.raw(), Scope::Control, name, sql.as_ref())
+    Q::new(db.raw(RawKey(())), Scope::Control, name, sql.as_ref())
 }
 
 /// A statement on a root session (provisioning) or the migration runner: either table set, no

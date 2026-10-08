@@ -52,11 +52,19 @@ fn round_to(x: f64, places: i32) -> f64 {
     (x * factor).round() / factor
 }
 
+/// `url` with `query` appended as percent-encoded pairs (an unparseable url is passed through; the request then fails).
+fn with_query(url: &str, query: &[(&str, String)]) -> String {
+    let Ok(mut u) = url::Url::parse(url) else { return url.to_string() };
+    if !query.is_empty() {
+        u.query_pairs_mut().extend_pairs(query.iter().map(|(k, v)| (*k, v.as_str())));
+    }
+    u.into()
+}
+
 async fn get_status(url: &str, headers: HeaderMap, query: &[(&str, String)], timeout_secs: u64) -> AppResult<bool> {
     let resp = reqwest::Client::new()
-        .get(url)
+        .get(with_query(url, query))
         .headers(headers)
-        .query(query)
         .timeout(Duration::from_secs(timeout_secs))
         .send()
         .await
@@ -66,9 +74,8 @@ async fn get_status(url: &str, headers: HeaderMap, query: &[(&str, String)], tim
 
 async fn get_json(url: &str, headers: HeaderMap, query: &[(&str, String)], timeout_secs: u64) -> AppResult<Value> {
     let resp = reqwest::Client::new()
-        .get(url)
+        .get(with_query(url, query))
         .headers(headers)
-        .query(query)
         .timeout(Duration::from_secs(timeout_secs))
         .send()
         .await

@@ -121,7 +121,8 @@ pub struct OrgDb {
 }
 
 impl ControlDb {
-    pub(crate) fn raw(&self) -> &Db {
+    /// The raw client. The `RawKey` token can only be made inside `store/`, so nothing else compiles a call.
+    pub(crate) fn raw(&self, _: crate::store::RawKey) -> &Db {
         &self.raw
     }
 
@@ -132,7 +133,7 @@ impl ControlDb {
 }
 
 impl OrgDb {
-    pub(crate) fn raw(&self) -> &Db {
+    pub(crate) fn raw(&self, _: crate::store::RawKey) -> &Db {
         &self.raw
     }
 
