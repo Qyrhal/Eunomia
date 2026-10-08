@@ -2,6 +2,7 @@ import {
   Calendar,
   CheckSquare,
   CreditCard,
+  Database,
   GitBranch,
   Landmark,
   Mail,
@@ -25,7 +26,7 @@ export type ConnectorMeta = {
   tint: string;
   help?: React.ReactNode;
   fields: FieldDef[];
-  /** `sources.list()` key this connector's data lives under, once connected — null if it has no dedicated workspace. */
+  /** `sources.list()` key this connector's data lives under, once connected, or null if it has no dedicated workspace. */
   sourceKey: string | null;
   /** This connector's provider supports push webhooks -- shows the per-user webhook URL to register with it. */
   webhooks: boolean;
@@ -35,12 +36,12 @@ export const CONNECTOR_META: Record<Connector["kind"], ConnectorMeta> = {
   up_bank: {
     label: "Up Bank",
     description: "Track transactions and balances from your Up Bank account.",
-    icon: <Landmark size={18} />,
+    icon: <Landmark size={18} strokeWidth={1.75} />,
     tint: "var(--connector-up-bank)",
     help: (
       <>
         Generate a token at{" "}
-        <a href="https://api.up.com.au" target="_blank" rel="noreferrer" className="underline" style={{ color: "var(--ink)" }}>
+        <a href="https://api.up.com.au" target="_blank" rel="noreferrer" className="underline" style={{ color: "var(--accent-text)" }}>
           api.up.com.au
         </a>
         .
@@ -56,7 +57,7 @@ export const CONNECTOR_META: Record<Connector["kind"], ConnectorMeta> = {
   pocketai: {
     label: "PocketAI",
     description: "Sync meeting recordings and transcripts from HeyPocket.",
-    icon: <Mic size={18} />,
+    icon: <Mic size={18} strokeWidth={1.75} />,
     tint: "var(--connector-pocketai)",
     fields: [
       { key: "base_url", label: "Base URL", placeholder: "https://public.heypocketai.com/api/v1", secret: false },
@@ -68,15 +69,15 @@ export const CONNECTOR_META: Record<Connector["kind"], ConnectorMeta> = {
   open_connector: {
     label: "Open Connector",
     description: "Bridge to a self-hosted gateway for any app it brokers.",
-    icon: <Plug2 size={18} />,
+    icon: <Plug2 size={18} strokeWidth={1.75} />,
     tint: "var(--connector-open-connector)",
     help: (
       <>
         Points at a self-hosted{" "}
-        <a href="https://github.com/oomol-lab/open-connector" target="_blank" rel="noreferrer" className="underline" style={{ color: "var(--ink)" }}>
+        <a href="https://github.com/oomol-lab/open-connector" target="_blank" rel="noreferrer" className="underline" style={{ color: "var(--accent-text)" }}>
           Open Connector
         </a>{" "}
-        gateway — its own runtime token, not an app-specific credential. Exposes any app it brokers as
+        gateway. It uses its own runtime token, not an app-specific credential. Exposes any app it brokers as
         the <code className="font-mono">open_connector_call</code> tool.
       </>
     ),
@@ -90,12 +91,12 @@ export const CONNECTOR_META: Record<Connector["kind"], ConnectorMeta> = {
   github: {
     label: "GitHub",
     description: "Pull in notifications across every repo your token can see.",
-    icon: <GitBranch size={18} />,
+    icon: <GitBranch size={18} strokeWidth={1.75} />,
     tint: "var(--connector-github)",
     help: (
       <>
         Generate a{" "}
-        <a href="https://github.com/settings/tokens" target="_blank" rel="noreferrer" className="underline" style={{ color: "var(--ink)" }}>
+        <a href="https://github.com/settings/tokens" target="_blank" rel="noreferrer" className="underline" style={{ color: "var(--accent-text)" }}>
           personal access token
         </a>{" "}
         with the <code className="font-mono">notifications</code> scope.
@@ -108,12 +109,12 @@ export const CONNECTOR_META: Record<Connector["kind"], ConnectorMeta> = {
   slack: {
     label: "Slack",
     description: "Sync channels your bot has joined.",
-    icon: <MessagesSquare size={18} />,
+    icon: <MessagesSquare size={18} strokeWidth={1.75} />,
     tint: "var(--connector-slack)",
     help: (
       <>
         Install a{" "}
-        <a href="https://api.slack.com/apps" target="_blank" rel="noreferrer" className="underline" style={{ color: "var(--ink)" }}>
+        <a href="https://api.slack.com/apps" target="_blank" rel="noreferrer" className="underline" style={{ color: "var(--accent-text)" }}>
           Slack app
         </a>{" "}
         with a bot token (<code className="font-mono">xoxb-…</code>).
@@ -126,12 +127,12 @@ export const CONNECTOR_META: Record<Connector["kind"], ConnectorMeta> = {
   notion: {
     label: "Notion",
     description: "Sync pages and databases shared with your integration.",
-    icon: <Notebook size={18} />,
+    icon: <Notebook size={18} strokeWidth={1.75} />,
     tint: "var(--connector-notion)",
     help: (
       <>
         Create an{" "}
-        <a href="https://www.notion.so/my-integrations" target="_blank" rel="noreferrer" className="underline" style={{ color: "var(--ink)" }}>
+        <a href="https://www.notion.so/my-integrations" target="_blank" rel="noreferrer" className="underline" style={{ color: "var(--accent-text)" }}>
           internal integration
         </a>{" "}
         and share the pages you want synced with it.
@@ -144,11 +145,11 @@ export const CONNECTOR_META: Record<Connector["kind"], ConnectorMeta> = {
   linear: {
     label: "Linear",
     description: "Sync issues assigned to you.",
-    icon: <Workflow size={18} />,
+    icon: <Workflow size={18} strokeWidth={1.75} />,
     tint: "var(--connector-linear)",
     help: (
       <>
-        Generate an API key from Linear&apos;s Settings → API page.
+        Generate an API key from Linear&apos;s Settings, API page.
       </>
     ),
     fields: [{ key: "api_key", label: "API key", placeholder: "lin_api_…", secret: true }],
@@ -158,7 +159,7 @@ export const CONNECTOR_META: Record<Connector["kind"], ConnectorMeta> = {
   gmail: {
     label: "Gmail",
     description: "Sync recent messages.",
-    icon: <Mail size={18} />,
+    icon: <Mail size={18} strokeWidth={1.75} />,
     tint: "var(--connector-gmail)",
     help: <>Paste a live OAuth access token with the Gmail readonly scope (no refresh is performed here).</>,
     fields: [{ key: "access_token", label: "OAuth access token", placeholder: "ya29.…", secret: true }],
@@ -168,7 +169,7 @@ export const CONNECTOR_META: Record<Connector["kind"], ConnectorMeta> = {
   google_calendar: {
     label: "Google Calendar",
     description: "Sync upcoming and recent events on your primary calendar.",
-    icon: <Calendar size={18} />,
+    icon: <Calendar size={18} strokeWidth={1.75} />,
     tint: "var(--connector-google-calendar)",
     help: <>Paste a live OAuth access token with the Calendar readonly scope (no refresh is performed here).</>,
     fields: [{ key: "access_token", label: "OAuth access token", placeholder: "ya29.…", secret: true }],
@@ -178,12 +179,12 @@ export const CONNECTOR_META: Record<Connector["kind"], ConnectorMeta> = {
   discord: {
     label: "Discord",
     description: "Sync recent messages from one channel your bot can read.",
-    icon: <MessageCircle size={18} />,
+    icon: <MessageCircle size={18} strokeWidth={1.75} />,
     tint: "var(--connector-discord)",
     help: (
       <>
         Create a bot in the{" "}
-        <a href="https://discord.com/developers/applications" target="_blank" rel="noreferrer" className="underline" style={{ color: "var(--ink)" }}>
+        <a href="https://discord.com/developers/applications" target="_blank" rel="noreferrer" className="underline" style={{ color: "var(--accent-text)" }}>
           Discord Developer Portal
         </a>
         , invite it to your server, then paste its bot token and the channel ID to watch.
@@ -199,7 +200,7 @@ export const CONNECTOR_META: Record<Connector["kind"], ConnectorMeta> = {
   spotify: {
     label: "Spotify",
     description: "Sync your recently played tracks.",
-    icon: <Music size={18} />,
+    icon: <Music size={18} strokeWidth={1.75} />,
     tint: "var(--connector-spotify)",
     help: <>Paste a live OAuth access token with the recently-played scope (no refresh is performed here).</>,
     fields: [{ key: "access_token", label: "OAuth access token", placeholder: "BQ…", secret: true }],
@@ -209,9 +210,9 @@ export const CONNECTOR_META: Record<Connector["kind"], ConnectorMeta> = {
   todoist: {
     label: "Todoist",
     description: "Sync your active tasks.",
-    icon: <CheckSquare size={18} />,
+    icon: <CheckSquare size={18} strokeWidth={1.75} />,
     tint: "var(--connector-todoist)",
-    help: <>Find your API token under Todoist Settings → Integrations → Developer.</>,
+    help: <>Find your API token under Todoist Settings, Integrations, Developer.</>,
     fields: [{ key: "api_token", label: "API token", placeholder: "…", secret: true }],
     sourceKey: "todoist",
     webhooks: false,
@@ -219,7 +220,7 @@ export const CONNECTOR_META: Record<Connector["kind"], ConnectorMeta> = {
   stripe: {
     label: "Stripe",
     description: "Sync recent charges.",
-    icon: <CreditCard size={18} />,
+    icon: <CreditCard size={18} strokeWidth={1.75} />,
     tint: "var(--connector-stripe)",
     help: <>Use a restricted-access secret key scoped to read-only charges, not your full secret key.</>,
     fields: [{ key: "secret_key", label: "Secret key", placeholder: "sk_live_…", secret: true }],
@@ -249,4 +250,44 @@ export function connectorStatus(c: Connector | undefined): "demo" | "connected" 
   if (c.config?.demo) return "demo";
   if (c.enabled && c.credentials_set) return "connected";
   return "disconnected";
+}
+
+/** Connector kind whose data lives under a `sources.list()` key, if any. */
+export function kindForSource(sourceKey: string): Connector["kind"] | undefined {
+  return CONNECTOR_ORDER.find((k) => CONNECTOR_META[k].sourceKey === sourceKey);
+}
+
+/** Short relative age for a sync timestamp: "4m ago", "never". */
+export function relativeTime(iso: string | null | undefined): string {
+  if (!iso) return "never";
+  const mins = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.round(hours / 24)}d ago`;
+}
+
+/** Connector identity: a small icon tile in the connector's own tint, never the accent. */
+export function ConnectorTile({ kind, size = 28 }: { kind: Connector["kind"] | null; size?: number }) {
+  const meta = kind ? CONNECTOR_META[kind] : null;
+  const tint = meta?.tint ?? "var(--ink-faint)";
+  return (
+    <span
+      aria-hidden
+      className="inline-flex items-center justify-center shrink-0"
+      style={{
+        width: size,
+        height: size,
+        borderRadius: size >= 40 ? 10 : 7,
+        color: tint,
+        background: `color-mix(in oklab, ${tint} 16%, var(--surface))`,
+        boxShadow: `inset 0 0 0 1px color-mix(in oklab, ${tint} 32%, transparent)`,
+      }}
+    >
+      <span className="inline-flex" style={{ transform: `scale(${Math.max(0.75, size / 34)})` }}>
+        {meta?.icon ?? <Database size={18} strokeWidth={1.75} />}
+      </span>
+    </span>
+  );
 }

@@ -1,10 +1,11 @@
 "use client";
 
-import { use, useCallback, useEffect, useState } from "react";
+import { Fragment, use, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { ArrowRight, ChevronDown, ChevronRight, Search } from "lucide-react";
+import { ChevronRight, ExternalLink, RefreshCw, Search, Settings2, X } from "lucide-react";
 import { sources, tools, type SourceRow, type ToolHit, type ToolRecord } from "@/lib/api";
-import SyncStatusCard from "@/components/SyncStatusCard";
+import AuthorTag from "@/components/AuthorTag";
+import { ConnectorTile, kindForSource, relativeTime } from "@/lib/connectorMeta";
 
 const DATE_KEY = /(_at|date|time)$/i;
 const MONEY_KEY = /(amount|balance|price|cost|total|spent|fee)/i;
@@ -18,8 +19,14 @@ function formatKey(key: string): string {
     .replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+function formatDate(iso: string | null | undefined): string {
+  if (!iso) return "No date";
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+}
+
 function formatPrimitive(key: string, value: unknown): string {
-  if (value === null || value === undefined || value === "") return "—";
+  if (value === null || value === undefined || value === "") return "None";
   if (typeof value === "boolean") return value ? "Yes" : "No";
   if (typeof value === "number") {
     if (MONEY_KEY.test(key)) return `$${value.toFixed(2)}`;
@@ -37,27 +44,25 @@ function formatPrimitive(key: string, value: unknown): string {
 }
 
 /** Renders one payload value, formatted by simple heuristics on its key/type
- * (dates, currency-looking numbers) -- never a raw JSON dump. */
+ * (dates, currency-looking numbers), never a raw JSON dump at the top level. */
 function PayloadValue({ k, v }: { k: string; v: unknown }) {
   if (typeof v === "string" && /^https?:\/\//i.test(v)) {
     return (
-      <a href={v} target="_blank" rel="noreferrer" className="underline break-all" style={{ color: "var(--ink)" }}>
+      <a href={v} target="_blank" rel="noreferrer" className="underline break-all" style={{ color: "var(--accent-text)" }}>
         {v}
       </a>
     );
   }
   if (Array.isArray(v)) {
-    if (v.length === 0) return <span style={{ color: "var(--ink-faint)" }}>—</span>;
-    if (v.every((item) => item === null || typeof item !== "object")) {
-      return <span>{v.map((item) => formatPrimitive(k, item)).join(", ")}</span>;
-    }
+    if (v.length === 0) return <span style={{ color: "var(--ink-faint)" }}>None</span>;
+    if (v.every((item) => item === null || typeof item !== "object")) return <span>{v.map((item) => formatPrimitive(k, item)).join(", ")}</span>;
     return <span style={{ color: "var(--ink-dim)" }}>{v.length} items</span>;
   }
   if (v && typeof v === "object") {
     const entries = Object.entries(v as Record<string, unknown>);
-    if (entries.length === 0) return <span style={{ color: "var(--ink-faint)" }}>—</span>;
+    if (entries.length === 0) return <span style={{ color: "var(--ink-faint)" }}>None</span>;
     return (
-      <div className="flex flex-col gap-1 mt-1 pl-3" style={{ borderLeft: "1px solid var(--border)" }}>
+      <div className="flex flex-col gap-1 pl-3" style={{ borderLeft: "1px solid var(--border)" }}>
         {entries.map(([nk, nv]) => (
           <div key={nk} className="flex items-baseline gap-2 text-[12px]">
             <span className="shrink-0" style={{ color: "var(--ink-faint)" }}>
@@ -74,75 +79,121 @@ function PayloadValue({ k, v }: { k: string; v: unknown }) {
 
 function RecordRow({ hit }: { hit: ToolHit }) {
   const [open, setOpen] = useState(false);
-  const [detail, setDetail] = useState<ToolRecord | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [detail, setDetail] = useState<ToolRecord | null | "error">(null);
 
   async function toggle() {
-    if (!open && !detail) {
-      setLoading(true);
+    if (!open && (detail === null || detail === "error")) {
+      setDetail(null);
       const res = await tools.get(hit.id).catch(() => null);
-      setLoading(false);
-      if (res && !("error" in res)) setDetail(res);
+      setDetail(res && !("error" in res) ? res : "error");
     }
     setOpen((o) => !o);
   }
 
+  const payload = detail && detail !== "error" ? Object.entries(detail.payload || {}) : [];
+
   return (
-    <li>
-      <button onClick={toggle} className="w-full flex items-center gap-3 px-4 py-3 text-left">
-        {open ? <ChevronDown size={14} color="var(--ink-faint)" /> : <ChevronRight size={14} color="var(--ink-faint)" />}
-        <div className="flex-1 min-w-0">
-          <div className="text-[13.5px] font-medium truncate">{hit.title || "Untitled"}</div>
-          <div className="text-[11.5px] font-mono mt-0.5" style={{ color: "var(--ink-faint)" }}>
-            {hit.occurred_at ? new Date(hit.occurred_at).toLocaleString() : "no date"}
-          </div>
-        </div>
-        <span className="pill shrink-0">{hit.type}</span>
-      </button>
+    <Fragment>
+      <tr>
+        <td className="max-w-0 w-full">
+          <button
+            type="button"
+            onClick={toggle}
+            aria-expanded={open}
+            className="flex items-center gap-2 w-full min-w-0 text-left h-10 active:scale-[0.99] transition-transform duration-[120ms] ease-[var(--ease-out)]"
+          >
+            <ChevronRight
+              size={14}
+              strokeWidth={1.75}
+              color="var(--ink-faint)"
+              className="shrink-0"
+              style={{ transform: open ? "rotate(90deg)" : undefined }}
+              aria-hidden
+            />
+            <span className="truncate font-medium">{hit.title || "Untitled"}</span>
+          </button>
+        </td>
+        <td className="hidden sm:table-cell whitespace-nowrap">
+          <span className="font-mono text-[12px]" style={{ color: "var(--ink-dim)" }}>
+            {hit.type}
+          </span>
+        </td>
+        <td className="whitespace-nowrap text-right font-mono text-[12px]" style={{ color: "var(--ink-dim)" }} title={hit.occurred_at ?? undefined}>
+          {hit.occurred_at ? relativeTime(hit.occurred_at) : "No date"}
+        </td>
+      </tr>
       {open && (
-        <div className="px-4 pb-4 pl-10">
-          {loading && (
-            <p className="text-[12px]" style={{ color: "var(--ink-faint)" }}>
-              Loading…
-            </p>
-          )}
-          {!loading && detail && (
-            <div className="flex flex-col gap-2">
-              {Object.entries(detail.payload || {}).map(([k, v]) => (
-                <div key={k} className="flex items-start gap-3 text-[12.5px]">
-                  <span className="w-32 shrink-0" style={{ color: "var(--ink-faint)" }}>
-                    {formatKey(k)}
-                  </span>
-                  <div className="flex-1 min-w-0" style={{ color: "var(--ink)" }}>
-                    <PayloadValue k={k} v={v} />
-                  </div>
+        <tr>
+          <td colSpan={3} className="!h-auto" style={{ background: "var(--surface-raised)" }}>
+            <div className="py-3 pl-6 flex flex-col gap-2 text-[12.5px]">
+              {detail === null && (
+                <div className="flex flex-col gap-2" aria-label="Loading record">
+                  <span className="skeleton h-3 w-64" />
+                  <span className="skeleton h-3 w-48" />
                 </div>
-              ))}
-              {Object.keys(detail.payload || {}).length === 0 && (
-                <p className="text-[12px]" style={{ color: "var(--ink-faint)" }}>
-                  No payload fields.
-                </p>
+              )}
+              {detail === "error" && (
+                <p style={{ color: "var(--critical)" }}>Could not load this record. Collapse and expand the row to retry.</p>
+              )}
+              {detail && detail !== "error" && (
+                <>
+                  <div className="flex items-start gap-3">
+                    <span className="label w-32 shrink-0 pt-px">Occurred</span>
+                    <span className="font-mono">{formatDate(hit.occurred_at)}</span>
+                  </div>
+                  {payload.map(([k, v]) => (
+                    <div key={k} className="flex items-start gap-3">
+                      <span className="label w-32 shrink-0 pt-px">{formatKey(k)}</span>
+                      <div className="flex-1 min-w-0">
+                        <PayloadValue k={k} v={v} />
+                      </div>
+                    </div>
+                  ))}
+                  {payload.length === 0 && <p style={{ color: "var(--ink-faint)" }}>This record has no payload fields.</p>}
+                  {hit.url && (
+                    <a href={hit.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 self-start" style={{ color: "var(--accent-text)" }}>
+                      Open in source <ExternalLink size={12} strokeWidth={1.75} aria-hidden />
+                    </a>
+                  )}
+                </>
               )}
             </div>
-          )}
-          {!loading && !detail && (
-            <p className="text-[12px]" style={{ color: "var(--critical)" }}>
-              Could not load this record.
-            </p>
-          )}
-        </div>
+          </td>
+        </tr>
       )}
-    </li>
+    </Fragment>
   );
+}
+
+function Breadcrumb({ label }: { label: string }) {
+  return (
+    <nav aria-label="Breadcrumb" className="flex items-center gap-1.5 text-[12.5px]" style={{ color: "var(--ink-faint)" }}>
+      <Link href="/connectors" className="hover:underline" style={{ color: "var(--ink-dim)" }}>
+        Connectors
+      </Link>
+      <ChevronRight size={12} strokeWidth={1.75} aria-hidden />
+      <span aria-current="page">{label}</span>
+    </nav>
+  );
+}
+
+function health(row: SourceRow): { tone: string; text: string } {
+  const { consecutive_failures: fails, last_ok } = row.sync_status;
+  if (fails > 0) return { tone: fails > 2 ? "var(--critical)" : "var(--warning)", text: `${fails} failed sync${fails === 1 ? "" : "s"} in a row` };
+  if (!last_ok) return { tone: "var(--ink-faint)", text: "Waiting for first sync" };
+  return { tone: "var(--good)", text: "Healthy" };
 }
 
 export default function ConnectorWorkspacePage({ params }: { params: Promise<{ kind: string }> }) {
   const { kind } = use(params);
+  const connectorKind = kindForSource(kind);
   const [row, setRow] = useState<SourceRow | null | undefined>(undefined);
   const [query, setQuery] = useState("");
+  const [activeQuery, setActiveQuery] = useState("");
   const [results, setResults] = useState<ToolHit[] | null>(null);
   const [searching, setSearching] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [syncError, setSyncError] = useState<string | null>(null);
 
   const loadRow = useCallback(
     () =>
@@ -156,7 +207,10 @@ export default function ConnectorWorkspacePage({ params }: { params: Promise<{ k
   const loadRecords = useCallback(() => {
     tools
       .list({ filters: { source: kind }, sort: "-occurred_at", limit: 50 })
-      .then((res) => setResults("results" in res ? res.results : []))
+      .then((res) => {
+        setActiveQuery("");
+        setResults("results" in res ? res.results : []);
+      })
       .catch(() => setResults([]));
   }, [kind]);
 
@@ -174,95 +228,226 @@ export default function ConnectorWorkspacePage({ params }: { params: Promise<{ k
     setSearching(true);
     const res = await tools.search({ query, sources: [kind], limit: 50 }).catch(() => null);
     setSearching(false);
+    setActiveQuery(query.trim());
     setResults(res && "results" in res ? res.results : []);
+  }
+
+  function clearSearch() {
+    setQuery("");
+    loadRecords();
   }
 
   async function sync() {
     setSyncing(true);
+    setSyncError(null);
     try {
       await sources.sync(kind);
       await loadRow();
+      if (!activeQuery) loadRecords();
+    } catch (e) {
+      setSyncError((e as Error).message);
     } finally {
       setSyncing(false);
     }
   }
 
-  if (row === undefined) return null;
+  if (row === undefined) {
+    return (
+      <div className="max-w-5xl flex flex-col gap-6" aria-busy>
+        <span className="skeleton h-3 w-40" />
+        <div className="flex items-center gap-3">
+          <span className="skeleton w-10 h-10" />
+          <span className="skeleton h-5 w-40" />
+        </div>
+        <span className="skeleton h-20 w-full" />
+        <span className="skeleton h-64 w-full" />
+      </div>
+    );
+  }
 
   if (row === null) {
     return (
-      <div className="max-w-2xl">
-        <div className="eyebrow mb-2">Connector</div>
-        <h1 className="font-display text-3xl mb-6">Unknown source</h1>
-        <div className="ledger p-10 text-center">
-          <p className="text-[13.5px] mb-5" style={{ color: "var(--ink-dim)" }}>
-            There&apos;s no source called &ldquo;{kind}&rdquo;.
-          </p>
-          <Link href="/connectors" className="field px-4 py-2 text-[13px] inline-flex items-center gap-1.5" style={{ color: "var(--ink)" }}>
-            Back to connectors <ArrowRight size={13} />
+      <div className="max-w-5xl flex flex-col gap-6">
+        <Breadcrumb label={kind} />
+        <h1 className="page-title">Unknown source</h1>
+        <div className="ledger px-5 py-4 flex items-center justify-between gap-4 flex-wrap text-[13px]">
+          <span style={{ color: "var(--ink-dim)" }}>There is no source called &ldquo;{kind}&rdquo;. It may have been renamed or removed.</span>
+          <Link href="/connectors" className="btn btn-sm">
+            Back to connectors
           </Link>
         </div>
       </div>
     );
   }
 
-  if (!row.connected) {
+  const hasRecords = row.record_count > 0;
+  const settingsHref = connectorKind ? `/connectors/setup/${connectorKind}` : null;
+
+  if (!row.connected && !hasRecords) {
     return (
-      <div className="max-w-2xl">
-        <div className="eyebrow mb-2">Connector</div>
-        <h1 className="font-display text-3xl mb-6">{row.label}</h1>
-        <div className="ledger p-10 text-center">
-          <p className="text-[13.5px] mb-5" style={{ color: "var(--ink-dim)" }}>
-            {row.label} isn&apos;t connected yet — nothing to show here.
-          </p>
-          <Link href="/connectors" className="px-4 py-2 text-[13px] font-medium rounded-xl inline-block" style={{ background: "var(--felt)", color: "var(--canvas)" }}>
-            Connect {row.label}
-          </Link>
+      <div className="max-w-5xl flex flex-col gap-6">
+        <Breadcrumb label={row.label} />
+        <div className="flex items-center gap-3">
+          <ConnectorTile kind={connectorKind ?? null} size={40} />
+          <h1 className="page-title">{row.label}</h1>
+        </div>
+        <div className="ledger px-5 py-4 flex items-center justify-between gap-4 flex-wrap text-[13px]">
+          <span style={{ color: "var(--ink-dim)" }}>{row.label} is not connected, so it has no records yet.</span>
+          {settingsHref ? (
+            <Link href={settingsHref} className="btn btn-primary btn-sm">
+              Connect {row.label}
+            </Link>
+          ) : (
+            <Link href="/connectors" className="btn btn-sm">
+              Back to connectors
+            </Link>
+          )}
         </div>
       </div>
     );
   }
+
+  const h = health(row);
 
   return (
-    <div className="flex flex-col gap-7 max-w-4xl">
-      <div>
-        <div className="eyebrow mb-2">Connector</div>
-        <h1 className="font-display text-3xl">{row.label}</h1>
-      </div>
-
-      <SyncStatusCard source={row} onSync={sync} syncing={syncing} />
-
-      <form onSubmit={runSearch} className="flex items-center gap-2">
-        <div className="field flex-1 flex items-center gap-2 px-3 py-2">
-          <Search size={14} color="var(--ink-faint)" />
-          <input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder={`Search ${row.label}…`}
-            className="flex-1 text-[13.5px] bg-transparent outline-none"
-            style={{ color: "var(--ink)" }}
-          />
+    <div className="max-w-5xl flex flex-col gap-8">
+      <header className="flex flex-col gap-3">
+        <Breadcrumb label={row.label} />
+        <div className="flex items-center gap-3 flex-wrap">
+          <ConnectorTile kind={connectorKind ?? null} size={40} />
+          <div className="flex flex-col gap-0.5 min-w-0 flex-1">
+            <h1 className="page-title">{row.label}</h1>
+            <span className="text-[12.5px] flex items-center gap-1.5" style={{ color: "var(--ink-dim)" }}>
+              <span className="dot" style={{ background: h.tone }} aria-hidden />
+              {row.connected ? "Connected" : "Seeded data, no live connection"}
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            {settingsHref && (
+              <Link href={settingsHref} className="btn">
+                <Settings2 size={14} strokeWidth={1.75} aria-hidden /> Settings
+              </Link>
+            )}
+            <button type="button" onClick={sync} disabled={syncing} className="btn btn-primary" aria-live="polite">
+              <RefreshCw size={14} strokeWidth={1.75} className={syncing ? "animate-spin" : undefined} aria-hidden />
+              {syncing ? "Syncing…" : "Sync now"}
+            </button>
+          </div>
         </div>
-        <button type="submit" className="px-4 py-2.5 text-[13px] font-medium rounded-xl" style={{ background: "var(--felt)", color: "var(--canvas)" }}>
-          {searching ? "Searching…" : "Search"}
-        </button>
-      </form>
+      </header>
 
-      <ul className="ledger overflow-hidden hairline-rows">
-        {results === null && (
-          <li className="px-4 py-6 text-center text-[12.5px]" style={{ color: "var(--ink-faint)" }}>
-            Loading…
-          </li>
-        )}
-        {results?.map((hit) => (
-          <RecordRow key={hit.id} hit={hit} />
+      <dl className="ledger grid grid-cols-2 md:grid-cols-4">
+        {[
+          { label: "Health", value: <span style={{ color: h.tone === "var(--good)" ? "var(--ink)" : h.tone }}>{h.text}</span> },
+          { label: "Records", value: <span className="font-mono">{row.record_count.toLocaleString()}</span> },
+          {
+            label: "Last sync",
+            value: (
+              <span className="font-mono" title={row.sync_status.last_ok ? formatDate(row.sync_status.last_ok) : undefined}>
+                {relativeTime(row.sync_status.last_ok)}
+              </span>
+            ),
+          },
+          { label: "Writes as", value: <AuthorTag name={row.key} title={`Records from this connector carry the source key ${row.key}`} /> },
+        ].map((s, i) => (
+          <div
+            key={s.label}
+            className="px-4 py-3 flex flex-col gap-1.5 min-w-0 text-[13px]"
+            style={{ borderLeft: i % 2 ? "var(--hair) solid var(--border)" : undefined, borderTop: i > 1 ? "var(--hair) solid var(--border)" : undefined }}
+          >
+            <dt className="label">{s.label}</dt>
+            <dd className="min-w-0 truncate">{s.value}</dd>
+          </div>
         ))}
-        {results !== null && results.length === 0 && (
-          <li className="px-4 py-6 text-center text-[12.5px]" style={{ color: "var(--ink-faint)" }}>
-            No records.
-          </li>
-        )}
-      </ul>
+      </dl>
+
+      {(syncError || row.sync_status.last_error) && (
+        <div className="rounded-[10px] px-4 py-3 text-[13px] flex flex-col gap-1" style={{ background: "var(--critical-soft)", color: "var(--critical)" }} role="alert">
+          <span className="font-medium">{syncError ? "Sync could not start." : "The last sync failed."}</span>
+          <span className="font-mono text-[12px] break-words">{syncError ?? row.sync_status.last_error}</span>
+          <span style={{ color: "var(--ink-dim)" }}>
+            {settingsHref ? "Check the credentials in Settings, then sync again." : "Try syncing again in a moment."}
+          </span>
+        </div>
+      )}
+
+      <section className="flex flex-col gap-3" aria-labelledby="records-heading">
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <h2 id="records-heading" className="section-title">
+            Records{" "}
+            <span className="font-mono font-normal" style={{ color: "var(--ink-faint)" }}>
+              {results && (activeQuery ? `${results.length} matching` : results.length > 0 ? `latest ${results.length} of ${row.record_count.toLocaleString()}` : "")}
+            </span>
+          </h2>
+          <form onSubmit={runSearch} className="field flex items-center gap-2 h-8 px-2.5 w-full sm:w-72" role="search">
+            <Search size={14} strokeWidth={1.75} color="var(--ink-faint)" aria-hidden />
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => e.key === "Escape" && query && clearSearch()}
+              placeholder={`Search ${row.label}…`}
+              aria-label={`Search ${row.label} records`}
+              className="flex-1 min-w-0 text-[13px] bg-transparent outline-none"
+            />
+            {searching ? (
+              <span className="label">Searching…</span>
+            ) : (
+              query && (
+                <button type="button" aria-label="Clear search" className="btn btn-ghost btn-sm -mr-1.5 w-6 px-0" onClick={clearSearch}>
+                  <X size={13} strokeWidth={1.75} />
+                </button>
+              )
+            )}
+          </form>
+        </div>
+
+        <div className="ledger overflow-hidden">
+          <table className="data-table table-fixed">
+            <thead>
+              <tr>
+                <th>Title</th>
+                <th className="hidden sm:table-cell w-44">Type</th>
+                <th className="w-24 text-right">Occurred</th>
+              </tr>
+            </thead>
+            <tbody>
+              {results === null &&
+                Array.from({ length: 6 }, (_, i) => (
+                  <tr key={i} aria-hidden>
+                    <td>
+                      <span className="skeleton block h-3 w-56" />
+                    </td>
+                    <td className="hidden sm:table-cell">
+                      <span className="skeleton block h-3 w-24" />
+                    </td>
+                    <td>
+                      <span className="skeleton block h-3 w-12 ml-auto" />
+                    </td>
+                  </tr>
+                ))}
+              {results?.map((hit) => <RecordRow key={hit.id} hit={hit} />)}
+              {results !== null && results.length === 0 && (
+                <tr>
+                  <td colSpan={3} className="!h-auto">
+                    <div className="py-4 flex items-center gap-3 flex-wrap text-[13px]" style={{ color: "var(--ink-dim)" }}>
+                      {activeQuery ? (
+                        <>
+                          No records match &ldquo;{activeQuery}&rdquo;.
+                          <button type="button" className="btn btn-sm" onClick={clearSearch}>
+                            Clear search
+                          </button>
+                        </>
+                      ) : (
+                        <>No records yet. Run a sync to pull the latest from {row.label}.</>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
     </div>
   );
 }
