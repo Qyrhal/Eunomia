@@ -531,7 +531,7 @@ async fn run_send(
     let tools = openai_tools();
     let mut tool_calls_made: Vec<String> = Vec::new();
 
-    let client = reqwest::Client::new();
+    let client = crate::llm_net::client(&base_url).await.map_err(|e| (e.code, e.message))?;
     let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
 
     for _ in 0..MAX_TOOL_ITERATIONS {

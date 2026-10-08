@@ -74,7 +74,7 @@ struct EmbeddingsResponse {
 /// batch's response by `index` (the API doesn't guarantee response order
 /// matches request order).
 async fn embed_openai(texts: &[String], base_url: &str, api_key: &str) -> AppResult<Vec<Vec<f32>>> {
-    let client = reqwest::Client::new();
+    let client = crate::llm_net::client(base_url).await?;
     let url = format!("{}/embeddings", base_url.trim_end_matches('/'));
     let auth_key = if api_key.is_empty() { "not-needed" } else { api_key };
 

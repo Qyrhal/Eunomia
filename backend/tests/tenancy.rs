@@ -283,3 +283,39 @@ async fn twenty_concurrent_cold_for_org_calls_sign_in_once() {
     assert_eq!(app.state.pool.signins() - before, 1, "one sign-in for twenty cold calls");
     assert_eq!(app.state.pool.open_handles(), 1);
 }
+
+/// The move inserts users after the control migrations ran, so their backfills must be applied to the
+/// moved rows: sign-in by `email_lc`, a case-insensitive duplicate signup, and one owner with member slots.
+#[tokio::test]
+async fn moved_users_can_sign_in_in_any_case_and_memberships_carry_slots() {
+    let (state, old) = state_with_legacy().await;
+    let hash = bcrypt::hash("pw-12345678", 4).unwrap();
+    old.query(
+        "CREATE user:b SET email = 'Bob@Example.COM', password_hash = $h, created_at = time::now() + 1s;
+         CREATE user:c SET email = 'carol@x.io', password_hash = $h, created_at = time::now() + 2s;
+         CREATE user:d SET email = 'dave@x.io', password_hash = $h, created_at = time::now() + 3s;",
+    )
+    .bind(("h", hash))
+    .await
+    .unwrap()
+    .check()
+    .unwrap();
+    run_move(&state).await;
+
+    for email in ["Bob@Example.COM", "bob@example.com", "BOB@EXAMPLE.COM", "carol@x.io", "Carol@X.io", "DAVE@x.io"] {
+        let u = eunomia_backend::models_user::authenticate(&state.control, email, "pw-12345678").await.unwrap();
+        assert!(u.is_some(), "{email} cannot sign in after the move");
+    }
+    let dup = eunomia_backend::models_user::register_user_with(&state, "bOb@example.com", "pw-12345678", false).await;
+    assert!(dup.is_err(), "a different-case signup of a moved email must be refused");
+    assert_eq!(count(state.control.test_raw(), "user").await, 4);
+
+    let owners = count(state.control.test_raw(), "membership WHERE role = 'owner'").await;
+    assert_eq!(owners, 1);
+    let slots = count(state.control.test_raw(), "membership WHERE slot != NONE").await;
+    assert_eq!(slots, 4, "every moved membership has a slot");
+    // the owner slot is taken: a further owner cannot be added
+    let again = state.control.test_raw().query("CREATE membership SET user = user:zz, org = $o, role = 'owner', slot = string::concat(<string>$o, '/owner')")
+        .bind(("o", only_org(&state).await.record())).await.unwrap().check();
+    assert!(again.is_err());
+}

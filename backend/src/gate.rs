@@ -142,6 +142,10 @@ fn client_ip(req: &Request, trusted: &[crate::ratelimit::Cidr]) -> String {
 #[derive(Debug, Clone, Copy)]
 pub struct ForwardedHttps(pub bool);
 
+/// The client address the gate resolved, set on auth-attempt requests for handlers that key their own throttles on it.
+#[derive(Debug, Clone)]
+pub struct ClientIp(pub String);
+
 /// `/oauth/token` refresh grants are keyed by client and address, apart from the strict `auth:` bucket.
 /// Returns the request (body put back) and the bucket key for a refresh grant, if it is one.
 async fn refresh_bucket(req: Request, ip: &str) -> (Request, Option<String>) {
@@ -197,6 +201,7 @@ pub async fn gate(State(g): State<Gate>, mut req: Request, next: Next) -> Respon
             let ip = client_ip(&req, &g.trusted());
             let (r, refresh) = refresh_bucket(req, &ip).await;
             req = r;
+            req.extensions_mut().insert(ClientIp(ip.clone()));
             let (key, per_min) = match refresh {
                 Some(k) => (k, g.limits.refresh_per_min),
                 None => (format!("auth:{ip}"), g.limits.auth_per_min),

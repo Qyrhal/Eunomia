@@ -52,6 +52,8 @@ pub const ALL: &[&ControlStmt] = &[
     &ORG_MEMBERS,
     &EMAIL_IN_ORG,
     &MEMBERSHIP_ADD,
+    &USER_EMAIL_LC_BACKFILL,
+    &USER_IDS_OLDEST_FIRST,
     &MEMBERSHIP_DELETE_USER,
 ];
 
@@ -275,6 +277,20 @@ pub const MEMBERSHIP_ADD: ControlStmt = ControlStmt::new(
             RETURN AFTER;
         COMMIT TRANSACTION;"#,
 );
+
+/// The self-host move inserts legacy `user` rows after the control migrations ran, so they arrive with
+/// `email_lc = NONE`. Same rule as control migration 0004 (lowercased, trimmed, oldest wins, a later
+/// duplicate keeps an unreachable placeholder), but only for rows still NONE, so re-running is harmless.
+pub const USER_EMAIL_LC_BACKFILL: ControlStmt = ControlStmt::new(
+    "control.user_email_lc_backfill",
+    r#"FOR $u IN (SELECT id, email FROM user WHERE email_lc = NONE ORDER BY created_at, id) {
+        LET $lc = string::lowercase(string::trim($u.email));
+        UPDATE $u.id SET email_lc = IF array::len((SELECT VALUE id FROM user WHERE email_lc = $lc)) = 0 { $lc } ELSE { string::concat('duplicate:', <string>$u.id) };
+    };"#,
+);
+
+/// The self-host move: every user, oldest first (the first becomes the owner).
+pub const USER_IDS_OLDEST_FIRST: ControlStmt = ControlStmt::new("control.user_ids_oldest_first", "SELECT VALUE id FROM user ORDER BY created_at, id");
 
 /// Signup cleanup: every membership of a user whose signup failed.
 pub const MEMBERSHIP_DELETE_USER: ControlStmt = ControlStmt::new("control.membership_delete_user", "DELETE membership WHERE user = $user");
