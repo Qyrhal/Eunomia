@@ -45,3 +45,11 @@ Google has no personal access tokens, and a self-hosted server has no public red
 - **Slack `not_in_channel` or nothing synced** — `/invite` the app to the channels.
 - **Discord messages with no text** — enable Message Content Intent for the bot.
 - **Google `invalid_grant`** — the refresh token expired or was revoked (an app still in "Testing" expires it after 7 days); mint a new one.
+
+## Self-hosted providers (e.g. GitHub Enterprise)
+
+Connectors talk to each provider's public API. To point one at a different
+host (a GitHub Enterprise server, or a mock in tests), the server operator
+sets `EUNOMIA_ALLOW_CONNECTOR_BASE_URL=1` on the backend, and the connector's
+config can then carry a `base_url`. It's off by default because on a shared
+server it would let any user make the backend call internal addresses.

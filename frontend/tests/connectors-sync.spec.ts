@@ -4,7 +4,8 @@ import { test, expect } from "@playwright/test";
 import { registerAndOnboard, uniqueEmail } from "./helpers";
 
 // The whole connector flow against a stand-in for GitHub's REST API (the
-// backend reaches it through the connector's `config.base_url`): enter a
+// backend reaches it through the connector's `config.base_url`, which the
+// backend only honours with EUNOMIA_ALLOW_CONNECTOR_BASE_URL=1 -- CI sets it): enter a
 // token in the UI -> Test connection -> Sync now -> the issue is findable
 // with the `search` tool -> a revoked token shows the provider's error.
 function mockGitHub(): Promise<{ base: string; close: () => void }> {

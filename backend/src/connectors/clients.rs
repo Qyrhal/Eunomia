@@ -69,6 +69,15 @@ fn retry_after(headers: &HeaderMap) -> Option<u64> {
     headers.get(RETRY_AFTER)?.to_str().ok()?.trim().parse::<f64>().ok().map(|s| s.ceil() as u64)
 }
 
+/// A per-user `config.base_url` would let any user of a shared server point
+/// the backend at internal addresses (the database, cloud metadata) and read
+/// the replies through sync errors. So it's off unless the operator opts in
+/// with `EUNOMIA_ALLOW_CONNECTOR_BASE_URL=1` (tests, mock providers, or a
+/// self-hosted provider such as GitHub Enterprise).
+pub fn base_url_override_allowed() -> bool {
+    cfg!(test) || std::env::var("EUNOMIA_ALLOW_CONNECTOR_BASE_URL").is_ok_and(|v| v == "1")
+}
+
 /// One provider's REST API. Every request goes through [`Api::send`], which
 /// retries a short 429 once and turns any non-2xx into an error naming the
 /// host and status -- what lands in `sync_status.last_error`.
@@ -80,9 +89,15 @@ pub struct Api {
 }
 
 impl Api {
-    /// `config.base_url` when set, else `default_base`.
+    /// `default_base`, or `config.base_url` when overrides are allowed (see
+    /// [`base_url_override_allowed`]).
     pub fn new(config: &Value, default_base: &str, mut headers: HeaderMap) -> Self {
-        let base = config.get("base_url").and_then(|v| v.as_str()).map(str::trim).filter(|s| !s.is_empty()).unwrap_or(default_base);
+        let base = config
+            .get("base_url")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty() && base_url_override_allowed())
+            .unwrap_or(default_base);
         // GitHub rejects requests without a User-Agent; harmless elsewhere.
         headers.insert(USER_AGENT, HeaderValue::from_static("eunomia"));
         Self { base: base.trim_end_matches('/').to_string(), headers, http: reqwest::Client::new() }
