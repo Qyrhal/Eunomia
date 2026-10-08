@@ -21,7 +21,7 @@ COPY --from=builder /app/target/release/eunomia-backend /usr/local/bin/eunomia-b
 
 # Not root. The only path it writes is /update-status (a bind mount that scripts/updater.sh keeps
 # world-writable); everything else it needs is read-only.
-RUN useradd --system --uid 10001 --no-create-home eunomia
+RUN groupadd --system --gid 10001 eunomia && useradd --system --uid 10001 --gid 10001 --no-create-home eunomia
 USER eunomia
 
 EXPOSE 8001

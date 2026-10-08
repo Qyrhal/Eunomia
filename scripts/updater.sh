@@ -22,14 +22,16 @@ if [ "$host" != /eunomia ] && [ ! -e "$host" ]; then
   mkdir -p "$(dirname "$host")" && ln -s /eunomia "$host"
 fi
 owner="$(stat -c %u:%g /eunomia)"
-# The backend runs as a non-root user and drops marker files here, so the directory must be writable by it.
-mkdir -p /eunomia/update-status && chmod 777 /eunomia/update-status
+# The backend runs as uid/gid 10001 (backend/Dockerfile) and drops marker files here: the host
+# owner keeps the directory, the backend's group may write to it, nobody else can.
+status_perms() { chown -R "${owner%%:*}:10001" /eunomia/update-status 2>/dev/null; chmod 2775 /eunomia/update-status 2>/dev/null; }
+mkdir -p /eunomia/update-status && status_perms
 
 while :; do
   (cd "$host" && bash scripts/auto-update.sh) >> /eunomia/update-status/update.log 2>&1
   # root in here; keep the checkout owned by whoever owns it on the host
-  chown -R "$owner" /eunomia/.git /eunomia/.env /eunomia/update-status 2>/dev/null
-  chmod 777 /eunomia/update-status 2>/dev/null
+  chown -R "$owner" /eunomia/.git /eunomia/.env 2>/dev/null
+  status_perms
   git -C /eunomia ls-files -z | (cd /eunomia && xargs -0 chown -h "$owner" 2>/dev/null)
   tail -n 500 /eunomia/update-status/update.log > /tmp/log && cat /tmp/log > /eunomia/update-status/update.log
   sleep 20
