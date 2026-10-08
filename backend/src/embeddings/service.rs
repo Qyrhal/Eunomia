@@ -26,6 +26,7 @@ use surrealdb::RecordId;
 
 use crate::config::Settings;
 use crate::db::Db;
+use crate::store;
 use crate::error::{AppError, AppResult};
 
 pub const DIM: usize = 1536;
@@ -193,8 +194,8 @@ pub async fn embed(db: &Db, settings: &Settings, texts: &[String], owner: Option
     let keys: Vec<String> =
         texts.iter().map(|t| hmac_hex(&settings.encryption_key, &format!("{backend}:{model}:{t}"))).collect();
 
-    let mut res = db
-        .query("SELECT text_hmac, vector FROM embed_cache WHERE text_hmac IN $keys")
+    let mut res = store::cache::EMBED_CACHE_GET
+        .on(db)
         .bind(("keys", keys.clone()))
         .await?;
     let rows: Vec<EmbedCacheRow> = res.take(0)?;
@@ -215,7 +216,8 @@ pub async fn embed(db: &Db, settings: &Settings, texts: &[String], owner: Option
 
         for (i, v) in missing_idx.into_iter().zip(vecs) {
             let k = keys[i].clone();
-            db.query("UPSERT $id SET text_hmac = $hmac, vector = $vector")
+            store::cache::EMBED_CACHE_PUT
+                .on(db)
                 .bind(("id", RecordId::from_table_key("embed_cache", k.clone())))
                 .bind(("hmac", k.clone()))
                 .bind(("vector", v.clone()))

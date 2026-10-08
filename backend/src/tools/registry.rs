@@ -25,6 +25,7 @@ use surrealdb::RecordId;
 use tracing::{field::Empty, Instrument};
 
 use crate::db::Db;
+use crate::store;
 use crate::error::{AppError, AppResult, ErrorCode};
 use crate::state::AppState;
 
@@ -134,11 +135,8 @@ fn summarize_args(args: &Value) -> String {
 }
 
 async fn record_audit(db: &Db, owner: &RecordId, tool_name: &str, args: &Value, outcome: &str) {
-    let _ = db
-        .query(
-            "CREATE audit_log SET owner = $owner, tool_name = $tool_name, \
-             args_summary = $args_summary, outcome = $outcome",
-        )
+    let _ = store::cache::RECORD_AUDIT
+        .on(db)
         .bind(("owner", owner.clone()))
         .bind(("tool_name", tool_name.to_string()))
         .bind(("args_summary", summarize_args(args)))
@@ -1299,15 +1297,15 @@ pub async fn list_audit(db: &Db, owner: &RecordId, limit: i64, offset: i64) -> A
         count: i64,
     }
 
-    let mut res = db
-        .query("SELECT * FROM audit_log WHERE owner = $owner ORDER BY created_at DESC LIMIT $limit START $offset")
+    let mut res = store::cache::AUDIT_PAGE
+        .on(db)
         .bind(("owner", owner.clone()))
         .bind(("limit", limit))
         .bind(("offset", offset))
         .await?;
     let rows: Vec<AuditRow> = res.take(0)?;
 
-    let mut tres = db.query("SELECT count() FROM audit_log WHERE owner = $owner GROUP ALL").bind(("owner", owner.clone())).await?;
+    let mut tres = store::cache::AUDIT_COUNT.on(db).bind(("owner", owner.clone())).await?;
     let total_rows: Vec<CountRow> = tres.take(0)?;
     let total = total_rows.first().map(|r| r.count).unwrap_or(0);
 

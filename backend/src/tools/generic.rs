@@ -21,6 +21,7 @@ use serde_json::{json, Value};
 use surrealdb::{Datetime, RecordId, RecordIdKey};
 
 use crate::db::Db;
+use crate::store;
 use crate::error::AppResult;
 
 const SNIPPET_LEN: usize = 200;
@@ -207,8 +208,8 @@ pub async fn search(
     }
 
     let sql = format!("SELECT * FROM cache_record WHERE {}", conditions.join(" AND "));
-    let mut query = db
-        .query(sql)
+    // dynamic: 16 combinations of the four optional filters.
+    let mut query = store::dynamic(db, "cache.generic_search", sql)
         .bind(("ids", scoped_ids))
         .bind(("owner", owner.clone()));
     if let Some(sources) = sources
@@ -309,7 +310,8 @@ pub async fn list(
         conditions.join(" AND ")
     );
 
-    let mut q = db.query(sql).bind(("owner", owner.clone())).bind(("limit", limit)).bind(("offset", offset));
+    // dynamic: caller-chosen filter fields and sort column.
+    let mut q = store::dynamic(db, "cache.generic_list", sql).bind(("owner", owner.clone())).bind(("limit", limit)).bind(("offset", offset));
     if let Some(type_) = type_ {
         q = q.bind(("type", type_.to_string()));
     }
@@ -321,7 +323,7 @@ pub async fn list(
     let recs: Vec<CacheRecord> = rows.into_iter().map(row_to_record).collect();
 
     let count_sql = format!("SELECT count() FROM cache_record WHERE {} GROUP ALL", conditions.join(" AND "));
-    let mut cq = db.query(count_sql).bind(("owner", owner.clone()));
+    let mut cq = store::dynamic(db, "cache.generic_count", count_sql).bind(("owner", owner.clone()));
     if let Some(type_) = type_ {
         cq = cq.bind(("type", type_.to_string()));
     }
@@ -357,12 +359,8 @@ pub async fn links(db: &Db, owner: &RecordId, id: &str, rel: Option<&str>) -> Ap
     let rid = scoped_rid(owner, id);
     let mut out = Vec::new();
 
-    let fwd_sql = if rel.is_some() {
-        "SELECT rel, out FROM linked_to WHERE in = $id AND rel = $rel"
-    } else {
-        "SELECT rel, out FROM linked_to WHERE in = $id"
-    };
-    let mut fq = db.query(fwd_sql).bind(("id", rid.clone()));
+    let fwd_stmt = if rel.is_some() { &store::cache::LINKS_OUT_REL } else { &store::cache::LINKS_OUT };
+    let mut fq = fwd_stmt.on(db).bind(("id", rid.clone()));
     if let Some(rel) = rel {
         fq = fq.bind(("rel", rel.to_string()));
     }
@@ -372,12 +370,8 @@ pub async fn links(db: &Db, owner: &RecordId, id: &str, rel: Option<&str>) -> Ap
         out.push(json!({ "rel": row.rel, "direction": "out", "target_id": literal(row.out.key()) }));
     }
 
-    let back_sql = if rel.is_some() {
-        "SELECT rel, in FROM linked_to WHERE out = $id AND rel = $rel"
-    } else {
-        "SELECT rel, in FROM linked_to WHERE out = $id"
-    };
-    let mut bq = db.query(back_sql).bind(("id", rid));
+    let back_stmt = if rel.is_some() { &store::cache::LINKS_IN_REL } else { &store::cache::LINKS_IN };
+    let mut bq = back_stmt.on(db).bind(("id", rid));
     if let Some(rel) = rel {
         bq = bq.bind(("rel", rel.to_string()));
     }

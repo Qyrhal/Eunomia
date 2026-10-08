@@ -45,14 +45,13 @@ use surrealdb::RecordId;
 use crate::cache::search as cs;
 use crate::config::Settings;
 use crate::db::Db;
+use crate::store;
 use crate::error::AppResult;
 use crate::vaults::service as vaults_service;
 
 /// Entity tables the graph arm searches -- mirrors `entities/service.py`'s
 /// `KINDS` tuple (see module docstring on why this isn't delegated to a
 /// Rust `entities::service` yet).
-const ENTITY_KINDS: &[&str] = &["person", "organisation", "location", "repository", "file", "symbol"];
-
 // recency boost floor/ceiling; see `boost` below.
 const RECENCY_FLOOR: f64 = 0.7;
 const RECENCY_WINDOW_DAYS: f64 = 365.0;
@@ -117,8 +116,8 @@ async fn graph_arm(db: &Db, owner: &RecordId, vault: &RecordId, query: &str, lim
     let q_lower = query.to_lowercase();
 
     let mut matches: Vec<(usize, RecordId)> = Vec::new();
-    for kind in ENTITY_KINDS {
-        let mut res = db.query(format!("SELECT id, name, aliases FROM {kind} WHERE vault = $vault")).bind(("vault", vault.clone())).await?;
+    for stmt in store::cache::ENTITY_NAMES {
+        let mut res = stmt.on(db).bind(("vault", vault.clone())).await?;
         let rows: Vec<EntityRow> = res.take(0)?;
         for row in rows {
             let best = std::iter::once(row.name.as_str())
@@ -142,8 +141,8 @@ async fn graph_arm(db: &Db, owner: &RecordId, vault: &RecordId, query: &str, lim
 
     let mut keys: Vec<String> = Vec::new();
     for (_, entity_id) in &matches {
-        let mut res = db
-            .query("SELECT * FROM memory WHERE subject = $id ORDER BY created_at DESC")
+        let mut res = store::cache::MEMORIES_BY_SUBJECT
+            .on(db)
             .bind(("id", entity_id.clone()))
             .await?;
         let mem_rows: Vec<MemRow> = res.take(0)?;
@@ -187,11 +186,8 @@ async fn memory_text_arm(db: &Db, vault: &RecordId, query: &str, limit: usize) -
     // one BM25 match per term: `@@` with a whole question needs every word to match
     let mut per_term = Vec::new();
     for term in cs::search_terms(query) {
-        let mut res = db
-            .query(
-                "SELECT id, search::score(1) AS score FROM memory \
-                 WHERE vault = $vault AND text @1@ $t ORDER BY score DESC LIMIT $limit",
-            )
+        let mut res = store::cache::MEMORY_BM25
+            .on(db)
             .bind(("vault", vault.clone()))
             .bind(("t", term))
             .bind(("limit", limit as i64))
@@ -233,11 +229,8 @@ async fn temporal_ids(
     let mut dated: Vec<(surrealdb::Datetime, String)> = Vec::new();
 
     if include_cache_record {
-        let mut res = db
-            .query(
-                "SELECT id, occurred_at FROM cache_record WHERE owner = $owner AND deleted = false \
-                 AND occurred_at >= <datetime>$since AND occurred_at <= <datetime>$until",
-            )
+        let mut res = store::cache::CACHE_RECORDS_IN_RANGE
+            .on(db)
             .bind(("owner", owner.clone()))
             .bind(("since", since.to_string()))
             .bind(("until", until.to_string()))
@@ -246,11 +239,8 @@ async fn temporal_ids(
         dated.extend(rows.into_iter().map(|r| (r.occurred_at, format!("cache_record:{}", cs::literal(&r.id)))));
     }
 
-    let mut res = db
-        .query(
-            "SELECT id, created_at FROM memory WHERE vault = $vault \
-             AND created_at >= <datetime>$since AND created_at <= <datetime>$until",
-        )
+    let mut res = store::cache::MEMORIES_IN_RANGE
+        .on(db)
         .bind(("vault", vault.clone()))
         .bind(("since", since.to_string()))
         .bind(("until", until.to_string()))
