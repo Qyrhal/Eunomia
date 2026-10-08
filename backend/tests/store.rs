@@ -120,3 +120,39 @@ async fn real_commit_conflict_is_detected() {
     eprintln!("conflict error: {err:?}");
     assert!(eunomia_backend::tx::is_conflict(&err), "not recognised: {err:?}");
 }
+
+/// Semantic recall is scoped to one owner and ranked by cosine similarity, whether the HNSW walk
+/// fills the page or comes up short and the exact scan answers.
+#[tokio::test]
+async fn nearest_ids_is_owner_scoped_and_falls_back_to_an_exact_scan() {
+    use eunomia_backend::cache::search::nearest_ids;
+    let state = common::bare_state().await;
+    let db = &state.db;
+    let unit = |i: usize| {
+        let mut v = vec![0.0f32; 1536];
+        v[i] = 1.0;
+        v
+    };
+    db.query("CREATE user:a SET email = 'a@x', password_hash = 'x'; CREATE user:b SET email = 'b@x', password_hash = 'x';")
+        .await
+        .unwrap()
+        .check()
+        .unwrap();
+    // Owner b has many records close to the query; owner a has two, one of them deleted.
+    for (owner, key, axis, deleted) in [("b", "b1", 0, false), ("b", "b2", 0, false), ("b", "b3", 0, false), ("a", "a1", 1, false), ("a", "a2", 0, true), ("a", "a3", 2, false)] {
+        db.query("CREATE $k SET owner = $o, source = 's', type = 't', external_id = $x, content_hash = 'h', ingested_at = time::now(), updated_at = time::now(), deleted = $d, embedding = $e")
+            .bind(("k", surrealdb::types::RecordId::new("cache_record", format!("{owner}:{key}"))))
+            .bind(("o", surrealdb::types::RecordId::new("user", owner)))
+            .bind(("x", key))
+            .bind(("d", deleted))
+            .bind(("e", unit(axis)))
+            .await
+            .unwrap()
+            .check()
+            .unwrap();
+    }
+    let a = eunomia_backend::rid::parse("user:a").unwrap();
+    // Asking for more than owner a has: HNSW is short, the exact scan returns exactly a's live rows, best first.
+    let ids = nearest_ids(db, &a, unit(1), 10).await.unwrap();
+    assert_eq!(ids, ["a1", "a3"]);
+}

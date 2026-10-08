@@ -50,10 +50,27 @@ pub fn test_settings() -> Settings {
     }
 }
 
+/// Connect like production. `TEST_HARDENED=1` (mem:// only) runs the embedded engine with
+/// everything denied except the `--allow-funcs` list in docker-compose.yml, so the whole suite
+/// proves the list is complete.
+pub async fn connect(settings: &Settings) -> eunomia_backend::db::Db {
+    let mut config = surrealdb::opt::Config::new();
+    if std::env::var("TEST_HARDENED").is_ok() {
+        let compose = include_str!("../../../docker-compose.yml");
+        let list = compose.split("--allow-funcs=").nth(1).expect("--allow-funcs in docker-compose.yml").split_whitespace().next().unwrap();
+        let mut caps = surrealdb::opt::capabilities::Capabilities::none();
+        for f in list.trim_end_matches(['"', '\'']).split(',') {
+            caps = caps.with_function_allowed(f).expect("function target");
+        }
+        config = config.capabilities(caps);
+    }
+    eunomia_backend::db::connect_with(settings, config).await.expect("db")
+}
+
 /// Fresh DB + schema + app state, no users yet.
 pub async fn bare_state() -> AppState {
     let settings = test_settings();
-    let db = eunomia_backend::db::connect(&settings).await.expect("mem db");
+    let db = connect(&settings).await;
     eunomia_backend::migrate::migrate(&db, &settings).await.expect("schema");
     AppState(Arc::new(AppStateInner { db, settings }))
 }

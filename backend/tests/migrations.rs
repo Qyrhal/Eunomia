@@ -1,4 +1,4 @@
-//! Versioned schema runner: fresh apply, upgrade from the legacy replay, dedupe, idempotence, tamper.
+//! Versioned schema runner: fresh apply, upgrade from a 2.x export, dedupe, idempotence, tamper.
 mod common;
 
 use common::test_settings;
@@ -6,11 +6,8 @@ use eunomia_backend::db::{self, Db};
 use eunomia_backend::migrate;
 use serde_json::Value;
 
-/// Every statement the pre-ledger `ensure_schema` replayed on boot (198, incl. the 6 unique indexes).
-const LEGACY_SCHEMA: &str = include_str!("legacy_schema.txt");
-
 async fn fresh() -> Db {
-    db::connect(&test_settings()).await.expect("mem db")
+    common::connect(&test_settings()).await
 }
 
 async fn info(db: &Db) -> Value {
@@ -44,30 +41,6 @@ async fn fresh_schema_matches_snapshot() {
     let db = fresh().await;
     migrate::migrate(&db, &test_settings()).await.unwrap();
     insta::assert_json_snapshot!(info(&db).await);
-}
-
-#[tokio::test]
-async fn upgraded_equals_fresh() {
-    let settings = test_settings();
-    let legacy = fresh().await;
-    legacy.query(LEGACY_SCHEMA).await.unwrap().check().unwrap();
-    legacy
-        .query(
-            "CREATE user:u SET email = 'a@b.c', password_hash = 'x';
-             CREATE vault:v SET name = 'v';
-             CREATE person:a SET owner = user:u, vault = vault:v, name = 'Ann';
-             CREATE memory:m SET owner = user:u, vault = vault:v, subject = person:a, text = 'hi';",
-        )
-        .await
-        .unwrap()
-        .check()
-        .unwrap();
-    migrate::migrate(&legacy, &settings).await.unwrap();
-    assert_eq!(count(&legacy, "memory").await, 1);
-
-    let new = fresh().await;
-    migrate::migrate(&new, &settings).await.unwrap();
-    assert_eq!(info(&legacy).await, info(&new).await);
 }
 
 #[tokio::test]
@@ -152,4 +125,103 @@ async fn existing_tokens_and_sessions_survive_0003() {
     assert_eq!(scopes.unwrap(), ["memory:read", "memory:write", "vaults:admin", "connectors"]);
     assert_eq!(count(&db, "api_token WHERE expires_at = NONE AND vault = NONE").await, 1, "non-expiring, unrestricted");
     assert_eq!(count(&db, "session WHERE expires_at > time::now()").await, 1, "existing sessions get an expiry");
+}
+
+// ---- SurrealDB 2.x to 3.x upgrade -------------------------------------------------------------
+//
+// An upgraded install is `surreal v2 export --v3` of the 2.x database, imported into a fresh 3.x
+// one. The fixture below has that shape: the schema 2.x had after migrations 1 to 7, the
+// `_migration` ledger rows 2.x recorded (0001 and 0005 carry their old 2.x checksums), the
+// converter's index output, and seed rows. Regenerate it with
+//   cargo test --test migrations -- --ignored regenerate_v2_fixture
+// NOTE: it is produced by the embedded 3.x engine's own export from a database built to look like
+// the converted state; the index lines are our reading of what the converter emits, not a capture
+// of a real 2.7 export. See docs/surrealdb-3-upgrade.md for the real export commands.
+
+const V2_FIXTURE: &str = include_str!("fixtures/v2_export_converted.surql");
+const LEGACY_SUMS: [(u32, &str); 2] = [
+    (1, "31199597d8ffdb899e26dd741ec3886f6af03467f65710f4c7a1db2bfc3ce5a5"),
+    (5, "7227cfd0e1a0f672f6938c4bada0b9d7c720e42ff06ff7d8d93bfd11f231acd2"),
+];
+
+fn unit_vector(i: usize) -> Vec<f32> {
+    let mut v = vec![0.0f32; 1536];
+    v[i] = 1.0;
+    v
+}
+
+#[tokio::test]
+#[ignore = "writes tests/fixtures/v2_export_converted.surql"]
+async fn regenerate_v2_fixture() {
+    let db = fresh().await;
+    // Everything 2.x had applied: all migrations except the 3.x index one (the highest version).
+    let last_2x = migrate::MIGRATIONS.iter().map(|m| m.0).filter(|v| *v < 8).max().unwrap();
+    migrate::apply_up_to(&db, last_2x).await.unwrap();
+    for (v, sum) in LEGACY_SUMS {
+        db.query("UPDATE _migration SET checksum = $c WHERE version = $v").bind(("c", sum)).bind(("v", v)).await.unwrap().check().unwrap();
+    }
+    db.query(
+        "DEFINE INDEX cache_record_embedding_idx ON cache_record FIELDS embedding HNSW DIMENSION 1536 DIST COSINE TYPE F32;
+         DEFINE INDEX cache_record_fts_idx ON cache_record FIELDS title FULLTEXT ANALYZER cache_text_analyzer BM25 HIGHLIGHTS;
+         DEFINE INDEX memory_text_fts_idx ON memory FIELDS text FULLTEXT ANALYZER cache_text_analyzer BM25;
+         CREATE user:u SET email = 'a@b.c', password_hash = 'x';
+         CREATE vault:v SET name = 'Personal', kind = 'personal';
+         CREATE vault_member:vm SET vault = vault:v, user = user:u, role = 'owner';
+         CREATE person:ann SET owner = user:u, vault = vault:v, name = 'Ann';
+         CREATE organisation:acme SET owner = user:u, vault = vault:v, name = 'Acme';
+         RELATE person:ann->relates_to->organisation:acme SET label = 'works_at';
+         CREATE memory:m1 SET owner = user:u, vault = vault:v, subject = person:ann, text = 'Ann likes green tea';
+         CREATE memory:m2 SET owner = user:u, vault = vault:v, subject = person:ann, text = 'Ann works remotely';",
+    )
+    .bind(("e1", unit_vector(0)))
+    .await
+    .unwrap()
+    .check()
+    .unwrap();
+    for (i, (id, title, body)) in [("r1", "Woolworths groceries", "weekly shop"), ("r2", "Netflix subscription", "monthly streaming")].iter().enumerate() {
+        db.query("CREATE $rid SET owner = user:u, source = 'demo', type = 'note', external_id = $id, title = $t, body_text = $b, content_hash = 'h', ingested_at = time::now(), updated_at = time::now(), embedding = $e")
+            .bind(("rid", surrealdb::types::RecordId::new("cache_record", *id)))
+            .bind(("id", *id))
+            .bind(("t", *title))
+            .bind(("b", *body))
+            .bind(("e", unit_vector(i)))
+            .await
+            .unwrap()
+            .check()
+            .unwrap();
+    }
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/v2_export_converted.surql");
+    db.export(path).await.unwrap();
+}
+
+#[tokio::test]
+async fn v2_export_upgrades_to_the_fresh_schema() {
+    let settings = test_settings();
+    let db = fresh().await;
+    db.query(V2_FIXTURE).await.unwrap().check().unwrap(); // what `surreal import` does
+    assert_eq!(count(&db, "_migration").await, 7, "arrives carrying the 2.x ledger");
+
+    // Old checksums for 0001 and 0005 are accepted; the 3.x index migration then applies.
+    migrate::migrate(&db, &settings).await.unwrap();
+    assert_eq!(count(&db, "_migration").await, migrate::MIGRATIONS.len());
+    assert_eq!(count(&db, "memory").await, 2);
+    assert_eq!(count(&db, "cache_record").await, 2);
+    assert_eq!(count(&db, "relates_to").await, 1);
+
+    // Same schema, indexes included, as a database that never ran 2.x.
+    let new = fresh().await;
+    migrate::migrate(&new, &settings).await.unwrap();
+    assert_eq!(info(&db).await, info(&new).await);
+
+    // The re-defined indexes answer queries over the imported rows.
+    let owner = eunomia_backend::rid::parse("user:u").unwrap();
+    let ids = eunomia_backend::cache::search::nearest_ids(&db, &owner, unit_vector(1), 5).await.unwrap();
+    assert_eq!(ids.first().map(String::as_str), Some("r2"));
+    let top1 = eunomia_backend::cache::search::nearest_ids(&db, &owner, unit_vector(1), 1).await.unwrap();
+    assert_eq!(top1, ["r2"], "HNSW path, no fallback needed");
+    let hits: Vec<surrealdb::types::RecordId> =
+        db.query("SELECT VALUE id FROM cache_record WHERE title @1@ 'netflix'").await.unwrap().take(0).unwrap();
+    assert_eq!(hits.len(), 1);
+    let mems: Vec<surrealdb::types::RecordId> = db.query("SELECT VALUE id FROM memory WHERE text @1@ 'tea'").await.unwrap().take(0).unwrap();
+    assert_eq!(mems.len(), 1);
 }

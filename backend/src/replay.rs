@@ -2,13 +2,14 @@
 //! seeded with the caller's own data, so an agent can reproduce a failure and turn it into a test
 //! (docs/debugging.md). The real database is only read.
 
+use surrealdb::types::SurrealValue;
 use std::sync::Arc;
 
 use axum::body::Body;
 use axum::http::{header, Request};
 use http_body_util::BodyExt;
 use serde_json::{json, Value};
-use surrealdb::RecordId;
+use surrealdb::types::RecordId;
 use tower::ServiceExt;
 
 use crate::capsules::{self, Capsule};
@@ -58,11 +59,11 @@ pub async fn replay(src: &Db, settings: &Settings, trace_id: &str) -> AppResult<
 
 /// Copies the capsule user's personal-vault data into `scratch` under a fresh user with the same email and the same record ids.
 async fn seed(src: &Db, scratch: &Db, user_id: &str) -> AppResult<User> {
-    #[derive(serde::Deserialize)]
+    #[derive(serde::Deserialize, SurrealValue)]
     struct Email {
         email: String,
     }
-    let id: RecordId = user_id.parse().map_err(|_| AppError::bad_request("The capsule has a malformed user id."))?;
+    let id: RecordId = crate::rid::parse(user_id).map_err(|_| AppError::bad_request("The capsule has a malformed user id."))?;
     let mut res = store::entities::EMAILS_FOR.on(src).bind(("ids", vec![id.clone()])).await?;
     let email = res.take::<Vec<Email>>(0)?.into_iter().next().ok_or_else(|| AppError::not_found("The capsule's user no longer exists."))?.email;
 
@@ -74,7 +75,7 @@ async fn seed(src: &Db, scratch: &Db, user_id: &str) -> AppResult<User> {
 }
 
 fn rid(v: &Value) -> AppResult<RecordId> {
-    v.as_str().and_then(|s| s.parse().ok()).ok_or_else(|| AppError::internal(format!("export holds a bad record id: {v}")))
+    v.as_str().and_then(|s| crate::rid::parse(s).ok()).ok_or_else(|| AppError::internal(format!("export holds a bad record id: {v}")))
 }
 
 /// Loads an export document into `user`'s personal vault, keeping record ids.

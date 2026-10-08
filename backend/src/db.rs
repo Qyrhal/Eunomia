@@ -10,7 +10,13 @@ use crate::config::Settings;
 pub type Db = Surreal<Any>;
 
 pub async fn connect(settings: &Settings) -> surrealdb::Result<Db> {
-    let db: Db = surrealdb::engine::any::connect(settings.surreal_url.as_str()).await?;
+    connect_with(settings, surrealdb::opt::Config::new()).await
+}
+
+/// `connect` with engine options (tests use it to run the embedded engine under the same
+/// capability restrictions the compose server gets).
+pub async fn connect_with(settings: &Settings, config: surrealdb::opt::Config) -> surrealdb::Result<Db> {
+    let db: Db = surrealdb::engine::any::connect((settings.surreal_url.as_str(), config)).await?;
     // The embedded in-memory engine (tests) has no auth to sign in to.
     if !settings.surreal_url.starts_with("mem://") {
         db.signin(Root { username: settings.surreal_user.clone(), password: settings.surreal_pass.clone() })

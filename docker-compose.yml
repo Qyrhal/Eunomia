@@ -1,8 +1,10 @@
 services:
   surrealdb:
-    # Pinned to 2.x: SurrealDB 3.x dropped the MTREE index syntax this
-    # schema uses (DEFINE INDEX ... MTREE DIMENSION ... DIST COSINE TYPE F32).
-    image: surrealdb/surrealdb:v2.7.0
+    # Exact patch pin; upgrade deliberately. Hardened: every
+    # capability is denied except the function families the backend's SQL uses
+    # (docs/architecture/surreal-functions.md), guests are refused, and a runaway query or
+    # transaction is cut off. tests run the suite under the same --allow-funcs list.
+    image: surrealdb/surrealdb:v3.3.1
     user: root
     entrypoint:
       - /surreal
@@ -11,6 +13,11 @@ services:
       - ${SURREAL_USER:-root}
       - --pass
       - ${SURREAL_PASS:-root}
+      - --deny-all
+      - --allow-funcs=time,string,search,count,array,vector,math
+      - --deny-guests
+      - --query-timeout=60s
+      - --transaction-timeout=60s
       - rocksdb:/data/eunomia.db
     # No host port: only the backend talks to the DB, over the compose network.
     volumes:

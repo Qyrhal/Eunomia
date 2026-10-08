@@ -349,7 +349,7 @@ pub(crate) async fn semantic_ids(
 /// owner and the owner filter is not part of the ANN walk, so a small owner among big ones can get
 /// fewer than `limit` rows back; then an exact cosine scan over just this owner's records is the
 /// answer (it is ground truth, and cheap exactly when the owner is small).
-pub(crate) async fn nearest_ids(db: &Db, owner: &RecordId, vec: Vec<f32>, limit: usize) -> AppResult<Vec<String>> {
+pub async fn nearest_ids(db: &Db, owner: &RecordId, vec: Vec<f32>, limit: usize) -> AppResult<Vec<String>> {
     #[derive(Deserialize, SurrealValue)]
     struct IdRow {
         id: RecordId,

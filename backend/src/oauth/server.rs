@@ -391,7 +391,7 @@ async fn exchange_code(state: &AppState, f: &TokenForm) -> Result<Response, OAut
     let mut res = q::OAUTH_CODE_TAKE.on(&state.db).bind(("code_hash", code_hash.clone())).await.map_err(OAuthError::server)?;
     let Some(row) = res.take::<Vec<CodeRow>>(0).map_err(OAuthError::server)?.into_iter().next() else {
         // RFC 6749 4.1.2: a replayed code means the first redeemer may be an attacker, so revoke what it produced.
-        #[derive(Deserialize)]
+        #[derive(Deserialize, SurrealValue)]
         struct Marker {
             owner: RecordId,
             grant_id: Option<RecordId>,

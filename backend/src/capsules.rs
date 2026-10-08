@@ -5,6 +5,7 @@
 //! answers 5xx. Secrets never reach the table: [`redact`] masks secret-looking keys and
 //! [`scrub`] masks bearer tokens and long token-like strings in any text.
 
+use surrealdb::types::SurrealValue;
 use axum::{
     body::Body,
     extract::{MatchedPath, Request, State},
@@ -13,7 +14,8 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use surrealdb::RecordId;
+use surrealdb::types::RecordId;
+use crate::rid::RecordIdExt;
 
 use crate::auth::Authn;
 use crate::db::Db;
@@ -148,7 +150,7 @@ pub async fn record(db: &Db, f: Failure) {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, SurrealValue)]
 struct Row {
     trace_id: String,
     kind: String,
@@ -195,7 +197,7 @@ pub async fn prune_default(db: &Db) -> AppResult<()> {
 
 /// The instance's first user, who owns the `prune_capsules` job rows.
 pub async fn first_user(db: &Db) -> AppResult<Option<RecordId>> {
-    #[derive(Deserialize)]
+    #[derive(Deserialize, SurrealValue)]
     struct R {
         id: RecordId,
     }

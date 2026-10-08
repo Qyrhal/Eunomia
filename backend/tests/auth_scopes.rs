@@ -313,8 +313,8 @@ async fn login_cookie(app: &TestApp) -> String {
 }
 
 async fn session_expiry_secs_from_now(app: &TestApp) -> i64 {
-    let mut res = app.state.db.query("SELECT VALUE duration::secs(expires_at - time::now()) FROM session").await.unwrap();
-    res.take::<Vec<i64>>(0).unwrap()[0]
+    let mut res = app.state.db.query("SELECT VALUE expires_at FROM session").await.unwrap();
+    (res.take::<Vec<Datetime>>(0).unwrap()[0].into_inner() - chrono::Utc::now()).num_seconds()
 }
 
 #[tokio::test]

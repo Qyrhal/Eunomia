@@ -6,6 +6,7 @@ mod common;
 use common::{http, TestApp, PASSWORD};
 use eunomia_backend::capsules::{self, Failure};
 use eunomia_backend::error::ErrorCode;
+use eunomia_backend::rid::RecordIdExt;
 use eunomia_backend::models_user;
 use eunomia_backend::replay;
 use eunomia_backend::telemetry::with_trace_id;

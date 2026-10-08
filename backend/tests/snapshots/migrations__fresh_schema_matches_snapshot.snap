@@ -94,11 +94,30 @@ expression: info(&db).await
         "delete": false,
         "select": true,
         "update": false
-      }
+      },
+      "indexes": [
+        {
+          "cols": [
+            "trace_id"
+          ],
+          "index": "",
+          "name": "audit_event_trace_idx",
+          "table": "audit_event"
+        },
+        {
+          "cols": [
+            "user",
+            "created_at"
+          ],
+          "index": "",
+          "name": "audit_event_user_idx",
+          "table": "audit_event"
+        }
+      ]
     },
     {
       "drop": false,
-      "full": true,
+      "schemafull": true,
       "kind": {
         "kind": "NORMAL"
       },
@@ -306,11 +325,21 @@ expression: info(&db).await
         "delete": false,
         "select": false,
         "update": false
-      }
+      },
+      "indexes": [
+        {
+          "cols": [
+            "created_at"
+          ],
+          "index": "",
+          "name": "failure_capsule_created_idx",
+          "table": "failure_capsule"
+        }
+      ]
     },
     {
       "drop": false,
-      "full": true,
+      "schemafull": true,
       "kind": {
         "kind": "NORMAL"
       },
@@ -354,11 +383,39 @@ expression: info(&db).await
         "delete": false,
         "select": false,
         "update": false
-      }
+      },
+      "indexes": [
+        {
+          "cols": [
+            "idempotency_key"
+          ],
+          "index": "UNIQUE",
+          "name": "job_idempotency_unique",
+          "table": "job"
+        },
+        {
+          "cols": [
+            "status",
+            "locked_until"
+          ],
+          "index": "",
+          "name": "job_lease_idx",
+          "table": "job"
+        },
+        {
+          "cols": [
+            "status",
+            "run_at"
+          ],
+          "index": "",
+          "name": "job_ready_idx",
+          "table": "job"
+        }
+      ]
     },
     {
       "drop": false,
-      "full": true,
+      "schemafull": true,
       "kind": {
         "kind": "NORMAL"
       },
@@ -368,11 +425,12 @@ expression: info(&db).await
         "delete": false,
         "select": false,
         "update": false
-      }
+      },
+      "indexes": []
     },
     {
       "drop": false,
-      "full": true,
+      "schemafull": true,
       "kind": {
         "enforced": false,
         "in": [
@@ -469,6 +527,15 @@ expression: info(&db).await
         },
         {
           "cols": [
+            "type",
+            "status"
+          ],
+          "index": "",
+          "name": "memory_type_status_idx",
+          "table": "memory"
+        },
+        {
+          "cols": [
             "vault"
           ],
           "index": "",
@@ -489,11 +556,21 @@ expression: info(&db).await
         "delete": false,
         "select": false,
         "update": false
-      }
+      },
+      "indexes": [
+        {
+          "cols": [
+            "client_id"
+          ],
+          "index": "UNIQUE",
+          "name": "oauth_client_id_unique",
+          "table": "oauth_client"
+        }
+      ]
     },
     {
       "drop": false,
-      "full": true,
+      "schemafull": true,
       "kind": {
         "kind": "NORMAL"
       },
@@ -503,11 +580,21 @@ expression: info(&db).await
         "delete": false,
         "select": false,
         "update": false
-      }
+      },
+      "indexes": [
+        {
+          "cols": [
+            "code_hash"
+          ],
+          "index": "UNIQUE",
+          "name": "oauth_code_hash_unique",
+          "table": "oauth_code"
+        }
+      ]
     },
     {
       "drop": false,
-      "full": true,
+      "schemafull": true,
       "kind": {
         "kind": "NORMAL"
       },
@@ -517,11 +604,21 @@ expression: info(&db).await
         "delete": false,
         "select": false,
         "update": false
-      }
+      },
+      "indexes": [
+        {
+          "cols": [
+            "owner"
+          ],
+          "index": "",
+          "name": "oauth_grant_owner_idx",
+          "table": "oauth_grant"
+        }
+      ]
     },
     {
       "drop": false,
-      "full": true,
+      "schemafull": true,
       "kind": {
         "kind": "NORMAL"
       },
@@ -531,11 +628,29 @@ expression: info(&db).await
         "delete": false,
         "select": false,
         "update": false
-      }
+      },
+      "indexes": [
+        {
+          "cols": [
+            "family"
+          ],
+          "index": "",
+          "name": "oauth_token_family_idx",
+          "table": "oauth_token"
+        },
+        {
+          "cols": [
+            "token_hash"
+          ],
+          "index": "UNIQUE",
+          "name": "oauth_token_hash_unique",
+          "table": "oauth_token"
+        }
+      ]
     },
     {
       "drop": false,
-      "full": true,
+      "schemafull": true,
       "kind": {
         "kind": "NORMAL"
       },
