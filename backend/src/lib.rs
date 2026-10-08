@@ -13,6 +13,7 @@ pub mod openapi;
 pub mod routers;
 pub mod sources;
 pub mod state;
+pub mod store;
 pub mod telemetry;
 pub mod tools;
 pub mod tx;
