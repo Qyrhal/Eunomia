@@ -80,6 +80,11 @@ async fn failed_token_exchanges_are_throttled_per_client() {
     assert!(retry);
     assert_eq!(body["code"], "rate.limited");
     assert_eq!(post("another-client").await.0, StatusCode::BAD_REQUEST);
+    // a CIMD client id is a public URL shared by every user of that app: a stranger's failures
+    // must not lock it for everyone (the per-address bucket covers abuse instead)
+    for i in 0..31 {
+        assert_eq!(post("https://app.example/client.json").await.0, StatusCode::BAD_REQUEST, "cimd attempt {i}");
+    }
 }
 
 #[tokio::test]
