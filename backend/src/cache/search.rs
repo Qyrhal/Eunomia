@@ -468,6 +468,11 @@ impl ListParams {
     }
 }
 
+/// Field names are spliced into SQL text, so only plain identifiers pass.
+fn is_ident(name: &str) -> bool {
+    !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
 fn apply_filters(conditions: &mut Vec<String>, params: &HashMap<String, Value>, bound: &mut HashMap<String, Value>) {
     for (key, val) in params {
         // `__`-suffixed lookups (e.g. `occurred_at__gte`) aren't given
@@ -475,6 +480,9 @@ fn apply_filters(conditions: &mut Vec<String>, params: &HashMap<String, Value>, 
         // only strips the suffix for the field name and always compares
         // with `=`.
         let field_name = key.split("__").next().unwrap_or(key);
+        if !is_ident(field_name) {
+            continue;
+        }
         let param_name = format!("filter_{field_name}");
         conditions.push(format!("{field_name} = ${param_name}"));
         bound.insert(param_name, val.clone());
@@ -491,6 +499,7 @@ pub async fn list_records(db: &Db, owner: &RecordId, params: &ListParams) -> App
     apply_filters(&mut conditions, &params.filters, &mut bound);
 
     let field_name = params.sort.trim_start_matches('-');
+    let field_name = if is_ident(field_name) { field_name } else { "occurred_at" };
     let direction = if params.sort.starts_with('-') { "DESC" } else { "ASC" };
     let sql = format!(
         "SELECT * FROM cache_record WHERE {} ORDER BY {field_name} {direction} LIMIT $limit START $offset",
@@ -664,6 +673,15 @@ mod tests {
         // x appears at rank0 twice; y appears at rank0 once + rank1 once --
         // x's score must be strictly higher.
         assert_eq!(order[0], "x");
+    }
+
+    #[test]
+    fn apply_filters_drops_non_identifier_fields() {
+        let mut conditions = Vec::new();
+        let mut bound = HashMap::new();
+        let filters = HashMap::from([("x = 1 OR true; DELETE user; --".to_string(), json!(1))]);
+        apply_filters(&mut conditions, &filters, &mut bound);
+        assert!(conditions.is_empty() && bound.is_empty());
     }
 
     #[test]
