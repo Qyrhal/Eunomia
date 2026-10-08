@@ -301,14 +301,15 @@ function VaultInspector({
                   <>
                     <RoleChip role={m.role} />
                     {isOwner && !isMe && (
-                      <button
-                        onClick={() => setRemoving(m.email)}
-                        aria-label="Remove member"
-                        title={`Remove ${m.email}`}
-                        className="btn btn-ghost btn-sm btn-icon shrink-0"
-                      >
-                        <Trash2 {...ICON} />
-                      </button>
+                      <Tooltip label={`Remove ${m.email}`}>
+                        <button
+                          onClick={() => setRemoving(m.email)}
+                          aria-label="Remove member"
+                          className="btn btn-ghost btn-sm btn-icon shrink-0"
+                        >
+                          <Trash2 {...ICON} />
+                        </button>
+                      </Tooltip>
                     )}
                   </>
                 )}
@@ -469,7 +470,6 @@ function VaultInspector({
                 setCloning(true);
               }}
               className="btn btn-sm"
-              title="Clone into a new vault"
             >
               {cloned ? <DrawnCheck /> : <Copy {...ICON} />}
               Clone vault
