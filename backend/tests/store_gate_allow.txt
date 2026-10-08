@@ -22,4 +22,3 @@ src/sources/scheduler.rs
 src/sources/up_bank.rs
 src/tools/generic.rs
 src/tools/registry.rs
-src/vaults/service.rs
