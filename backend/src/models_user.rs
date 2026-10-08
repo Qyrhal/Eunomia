@@ -29,6 +29,35 @@ struct UserRow {
     password_hash: String,
 }
 
+/// bcrypt at cost 12 takes a few hundred ms of CPU: it runs on the blocking pool, and at most a few
+/// run at once so a burst of logins cannot starve the rest of the server.
+static HASH_SLOTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
+
+async fn blocking_hash<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> AppResult<T> {
+    let _slot = HASH_SLOTS.acquire().await.map_err(|e| AppError::internal(e.to_string()))?;
+    tokio::task::spawn_blocking(work).await.map_err(|e| AppError::internal(e.to_string()))
+}
+
+async fn hash_password(password: &str) -> AppResult<String> {
+    let password = password.to_string();
+    blocking_hash(move || bcrypt::hash(password, bcrypt::DEFAULT_COST)).await?.map_err(|e| AppError::internal(e.to_string()))
+}
+
+/// `false` for a wrong password and for a hash that cannot be checked. `None` checks against a
+/// dummy hash (unknown email): the same work as a wrong password, so timing does not reveal accounts.
+async fn verify_password(password: &str, hash: Option<&str>) -> bool {
+    let (password, hash) = (password.to_string(), hash.map(String::from));
+    blocking_hash(move || bcrypt::verify(password, hash.as_deref().unwrap_or_else(|| dummy_hash())).unwrap_or(false) && hash.is_some())
+        .await
+        .unwrap_or(false)
+}
+
+/// A valid bcrypt hash nobody has the password for, checked when the email is unknown.
+fn dummy_hash() -> &'static str {
+    static HASH: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    HASH.get_or_init(|| bcrypt::hash("no-such-account", bcrypt::DEFAULT_COST).unwrap_or_default())
+}
+
 pub fn hash_token(token: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(token.as_bytes());
@@ -151,8 +180,7 @@ pub async fn register_user_with(state: &AppState, email: &str, password: &str, p
         return Err(AppError::coded(crate::error::ErrorCode::AuthEmailTaken, "A user with that email already exists."));
     }
 
-    let password_hash = bcrypt::hash(password, bcrypt::DEFAULT_COST)
-        .map_err(|e| AppError::internal(e.to_string()))?;
+    let password_hash = hash_password(password).await?;
 
     let mut res = store::control::AUTH_USER_CREATE
         .on(db)
@@ -163,7 +191,7 @@ pub async fn register_user_with(state: &AppState, email: &str, password: &str, p
         .map_err(|e| {
             // the unique email index is the real guard; the SELECT above is only the friendly path
             if e.to_string().contains("already contains") {
-                AppError::new(axum::http::StatusCode::CONFLICT, "A user with that email already exists.")
+                AppError::coded(ErrorCode::AuthEmailTaken, "A user with that email already exists.")
             } else {
                 e.into()
             }
@@ -195,10 +223,13 @@ pub async fn authenticate(db: &ControlDb, email: &str, password: &str) -> AppRes
         .bind(("email", normalize_email(email)))
         .await?;
     let rows: Vec<UserRow> = res.take(0)?;
-    let Some(row) = rows.into_iter().next() else { return Ok(None) };
+    let Some(row) = rows.into_iter().next() else {
+        // same work as a wrong password, so response time does not say whether the account exists
+        verify_password(password, None).await;
+        return Ok(None);
+    };
 
-    let ok = bcrypt::verify(password, &row.password_hash).unwrap_or(false);
-    if !ok {
+    if !verify_password(password, Some(&row.password_hash)).await {
         return Ok(None);
     }
     Ok(Some(load_user(db, row.id, row.email).await?))
@@ -397,6 +428,22 @@ mod tests {
         assert!(validate_credentials("a@b.co", &"x".repeat(73)).is_err());
         // 8 multibyte chars is >= 8 characters even though it's 24 bytes.
         assert!(validate_credentials("a@b.co", "ééééééééé").is_ok());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn bcrypt_does_not_block_the_async_runtime() {
+        let hash = hash_password("correct-horse").await.unwrap();
+        let start = std::time::Instant::now();
+        let (ok, ticked_after) = tokio::join!(verify_password("correct-horse", Some(&hash)), async {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            start.elapsed()
+        });
+        assert!(ok);
+        // a verify run inline would hold the only thread for its whole duration before the timer fired
+        assert!(ticked_after < std::time::Duration::from_millis(100), "{ticked_after:?}");
+        // an unknown account does the same work and is still a no
+        assert!(!verify_password("correct-horse", None).await);
+        assert!(!verify_password("wrong", Some(&hash)).await);
     }
 
     #[test]
