@@ -387,6 +387,7 @@ async fn exchange_code(state: &AppState, f: &TokenForm) -> Result<Response, OAut
         .map_err(|e| OAuthError::new(StatusCode::UNAUTHORIZED, "invalid_client", e))?;
 
     // Taking the code marks it redeemed, so a second redemption finds nothing here.
+    let _ = q::OAUTH_CLIENT_TOUCH.on(&state.control).bind(("client_id", client.client_id.clone())).await;
     let code_hash = hash_token(code);
     let mut res = q::OAUTH_CODE_TAKE.on(&state.control).bind(("code_hash", code_hash.clone())).await.map_err(OAuthError::server)?;
     let Some(row) = res.take::<Vec<CodeRow>>(0).map_err(OAuthError::server)?.into_iter().next() else {
@@ -434,7 +435,7 @@ async fn exchange_code(state: &AppState, f: &TokenForm) -> Result<Response, OAut
         .map_err(OAuthError::server)?;
     let grant: IdRow = res.take::<Vec<IdRow>>(0).map_err(OAuthError::server)?.into_iter().next().ok_or_else(|| OAuthError::server("grant not created"))?;
     q::OAUTH_CODE_LINK_GRANT.on(&state.control).bind(("code_hash", code_hash)).bind(("grant_id", grant.id.clone())).await.map_err(OAuthError::server)?;
-    let tokens = issue_tokens(state, &grant.id).await.map_err(OAuthError::server)?;
+    let tokens = issue_tokens(state, &grant.id, None).await.map_err(OAuthError::server)?;
     Ok(token_response(tokens, &row.scope))
 }
 
@@ -460,18 +461,22 @@ async fn refresh(state: &AppState, f: &TokenForm) -> Result<Response, OAuthError
         return Err(OAuthError::grant("refresh token expired"));
     }
     check_resource(state, &f.resource)?;
-    let scope = row.scope.clone().unwrap_or_default();
-    if let Some(req) = f.scope.as_deref()
-        && req.split_whitespace().any(|s| !scope.iter().any(|g| g == s))
-    {
+    let _ = q::OAUTH_CLIENT_TOUCH.on(&state.control).bind(("client_id", client_id.to_string())).await;
+    let mut scope = row.scope.clone().unwrap_or_default();
+    // RFC 6749 section 6: the requested scope may be a subset of the granted one, and then that is what is issued.
+    let requested: Vec<String> = f.scope.as_deref().unwrap_or_default().split_whitespace().map(String::from).collect();
+    if requested.iter().any(|s| !scope.iter().any(|g| g == s)) {
         return Err(OAuthError::bad("invalid_scope", "requested scope exceeds the original grant"));
+    }
+    if !requested.is_empty() {
+        scope = requested;
     }
     let mut res = q::OAUTH_TOKEN_SPEND.on(&state.control).bind(("id", row.id)).await.map_err(OAuthError::server)?;
     if res.take::<Vec<Gone>>(0).map_err(OAuthError::server)?.is_empty() {
         revoke_family(&state.control, &row.family, &owner).await?;
         return Err(OAuthError::grant("refresh token reuse detected; the grant was revoked"));
     }
-    let tokens = issue_tokens(state, &row.family).await.map_err(OAuthError::server)?;
+    let tokens = issue_tokens(state, &row.family, Some(&scope)).await.map_err(OAuthError::server)?;
     Ok(token_response(tokens, &scope))
 }
 
@@ -502,6 +507,9 @@ pub async fn revoke(State(state): State<AppState>, Form(f): Form<RevokeForm>) ->
 
 // -- dynamic client registration (RFC 7591, deprecated by MCP but still used) --
 
+/// Most dynamically registered clients kept at once (see `OAUTH_CLIENT_PRUNE` for how they expire).
+const MAX_DCR_CLIENTS: i64 = 5_000;
+
 pub async fn register(State(state): State<AppState>, Json(body): Json<Value>) -> Response {
     let err = |msg: &str| {
         let mut r = (StatusCode::BAD_REQUEST, Json(json!({ "error": "invalid_client_metadata", "error_description": msg }))).into_response();
@@ -519,6 +527,20 @@ pub async fn register(State(state): State<AppState>, Json(body): Json<Value>) ->
         redirect_uris,
     };
     let _ = q::OAUTH_CLIENT_PRUNE.on(&state.control).await;
+    // a hard cap on top of the TTL: a flood of registrations cannot grow the table without bound
+    #[derive(Deserialize, SurrealValue)]
+    struct Count {
+        count: i64,
+    }
+    let registered = match q::OAUTH_CLIENT_DCR_COUNT.on(&state.control).await {
+        Ok(mut r) => r.take::<Vec<Count>>(0).ok().and_then(|v| v.first().map(|c| c.count)).unwrap_or(0),
+        Err(e) => return OAuthError::server(e).into_response(),
+    };
+    if registered >= MAX_DCR_CLIENTS {
+        let mut r = (StatusCode::SERVICE_UNAVAILABLE, Json(json!({ "error": "temporarily_unavailable", "error_description": "too many registered clients; try again later" }))).into_response();
+        no_store(&mut r);
+        return r;
+    }
     let client_id = format!("eunomia_{}", uuid::Uuid::new_v4().simple());
     if let Err(e) = save_client(&state.control, &client_id, &meta, "dcr", None).await {
         return OAuthError::server(e).into_response();

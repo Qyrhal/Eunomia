@@ -169,8 +169,9 @@ pub struct IssuedTokens {
     pub refresh: String,
 }
 
-/// Mint an access and a refresh token in `family` (a grant id).
-pub async fn issue_tokens(state: &AppState, family: &surrealdb::types::RecordId) -> Result<IssuedTokens, surrealdb::Error> {
+/// Mint an access and a refresh token in `family` (a grant id). `scope` narrows them to a subset
+/// of the grant's scope (a refresh that asked for less); `None` carries the grant's scope.
+pub async fn issue_tokens(state: &AppState, family: &surrealdb::types::RecordId, scope: Option<&[String]>) -> Result<IssuedTokens, surrealdb::Error> {
     let access = format!("{ACCESS_PREFIX}{}", generate_token());
     let refresh = format!("{REFRESH_PREFIX}{}", generate_token());
     let ttl = format!("{ACCESS_TTL_SECS}s");
@@ -180,6 +181,7 @@ pub async fn issue_tokens(state: &AppState, family: &surrealdb::types::RecordId)
             .bind(("kind", kind))
             .bind(("token_hash", hash_token(tok)))
             .bind(("family", family.clone()))
+            .bind(("scope", scope.map(<[String]>::to_vec)))
             .bind(("ttl", ttl.to_string()))
             .await?
             .check()?;

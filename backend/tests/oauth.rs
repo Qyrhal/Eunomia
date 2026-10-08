@@ -306,6 +306,50 @@ async fn refresh_rotates_and_reuse_revokes_the_family() {
 }
 
 #[tokio::test]
+async fn refresh_with_a_narrower_scope_issues_only_that_scope() {
+    let app = TestApp::new().await;
+    let (client_id, t) = connect(&app, Some("memory:read memory:write")).await;
+    let refresh = t["refresh_token"].as_str().unwrap().to_string();
+
+    let r = form(&app, "/oauth/token", &[("grant_type", "refresh_token"), ("refresh_token", &refresh), ("client_id", &client_id), ("scope", "memory:read")]).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.body);
+    assert_eq!(r.body["scope"], "memory:read");
+    let narrow = r.body["access_token"].as_str().unwrap().to_string();
+    let write = mcp(&app, &narrow, rpc("tools/call", json!({"name": "memory_write", "arguments": {"subject": "x", "text": "y"}}))).await;
+    assert_eq!(write.status, StatusCode::FORBIDDEN);
+    assert_eq!(mcp(&app, &narrow, rpc("tools/call", json!({"name": "vault_list", "arguments": {}}))).await.status, StatusCode::OK);
+
+    // the next refresh keeps the narrowed scope unless asked for less
+    let again = form(&app, "/oauth/token", &[("grant_type", "refresh_token"), ("refresh_token", r.body["refresh_token"].as_str().unwrap()), ("client_id", &client_id)]).await;
+    assert_eq!(again.body["scope"], "memory:read");
+    // and can never widen back past what it carries
+    let wider = form(&app, "/oauth/token", &[("grant_type", "refresh_token"), ("refresh_token", again.body["refresh_token"].as_str().unwrap()), ("client_id", &client_id), ("scope", "memory:read memory:write")]).await;
+    assert_eq!(wider.body["error"], "invalid_scope");
+}
+
+#[tokio::test]
+async fn authorize_is_rate_limited_per_address_and_dcr_clients_are_capped_and_expire() {
+    let app = TestApp::new().await;
+    let router = eunomia_backend::app_with(app.state.clone(), eunomia_backend::ratelimit::RateConfig { auth_per_min: 2, ..Default::default() });
+    let mut codes = Vec::new();
+    for _ in 0..3 {
+        let req = Request::builder().uri("/oauth/authorize?client_id=nope").body(Body::empty()).unwrap();
+        codes.push(router.clone().oneshot(req).await.unwrap().status());
+    }
+    assert_eq!(codes[2], StatusCode::TOO_MANY_REQUESTS, "{codes:?}");
+    assert_ne!(codes[0], StatusCode::TOO_MANY_REQUESTS);
+
+    // a client unused for 30 days is pruned at the next registration, an active one is not
+    let old = register(&app).await;
+    let fresh = register(&app).await;
+    app.state.control.test_raw().query("UPDATE oauth_client SET fetched_at = time::now() - 31d WHERE client_id = $c").bind(("c", old.clone())).await.unwrap();
+    let _ = register(&app).await;
+    let mut res = app.state.control.test_raw().query("SELECT VALUE client_id FROM oauth_client WHERE kind = 'dcr'").await.unwrap();
+    let left: Vec<String> = res.take(0).unwrap();
+    assert!(!left.contains(&old) && left.contains(&fresh), "{left:?}");
+}
+
+#[tokio::test]
 async fn revoke_endpoint_and_connected_apps() {
     let app = TestApp::new().await;
     let (client_id, t) = connect(&app, None).await;

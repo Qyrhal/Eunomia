@@ -26,6 +26,8 @@ pub const ALL: &[&ControlStmt] = &[
     &OAUTH_CLIENT_GET,
     &OAUTH_CLIENT_UPSERT,
     &OAUTH_CLIENT_PRUNE,
+    &OAUTH_CLIENT_TOUCH,
+    &OAUTH_CLIENT_DCR_COUNT,
     &OAUTH_CODE_CREATE,
     &OAUTH_CODE_TAKE,
     &OAUTH_CODE_REDEEMED,
@@ -132,12 +134,20 @@ pub const OAUTH_CLIENT_UPSERT: ControlStmt = ControlStmt::new(
      redirect_uris = $redirect_uris, kind = $kind, fetched_at = time::now(), expires_at = $expires_at",
 );
 
-/// Registered clients nobody ever authorized are dropped after a week, so open registration cannot grow the table forever.
+/// A registered (DCR) client is dropped after 7 days if nobody ever authorized it, and after 30 days
+/// without use (`fetched_at` is bumped on every token issue) even if someone did, so open registration
+/// cannot grow the table forever. Existing grants keep refreshing: refresh does not look the client up.
 pub const OAUTH_CLIENT_PRUNE: ControlStmt = ControlStmt::new(
     "app.oauth_client_prune",
-    "DELETE oauth_client WHERE kind = 'dcr' AND fetched_at < time::now() - 7d \
-     AND client_id NOT IN (SELECT VALUE client_id FROM oauth_grant)",
+    "DELETE oauth_client WHERE kind = 'dcr' AND (fetched_at < time::now() - 30d \
+     OR (fetched_at < time::now() - 7d AND client_id NOT IN (SELECT VALUE client_id FROM oauth_grant)))",
 );
+
+pub const OAUTH_CLIENT_TOUCH: ControlStmt =
+    ControlStmt::new("app.oauth_client_touch", "UPDATE oauth_client SET fetched_at = time::now() WHERE client_id = $client_id AND kind = 'dcr'");
+
+pub const OAUTH_CLIENT_DCR_COUNT: ControlStmt =
+    ControlStmt::new("app.oauth_client_dcr_count", "SELECT count() FROM oauth_client WHERE kind = 'dcr' GROUP ALL");
 
 pub const OAUTH_CODE_CREATE: ControlStmt = ControlStmt::new(
     "app.oauth_code_create",
@@ -183,14 +193,15 @@ pub const OAUTH_GRANT_TOUCH: ControlStmt = ControlStmt::new(
 
 pub const OAUTH_TOKEN_CREATE: ControlStmt = ControlStmt::new(
     "app.oauth_token_create",
-    "CREATE oauth_token SET kind = $kind, token_hash = $token_hash, family = $family, expires_at = time::now() + <duration> $ttl",
+    "CREATE oauth_token SET kind = $kind, token_hash = $token_hash, family = $family, scope = $scope, \
+     expires_at = time::now() + <duration> $ttl",
 );
 
 /// Joins the family so one query serves both bearer verification and refresh.
 pub const OAUTH_TOKEN_BY_HASH: ControlStmt = ControlStmt::new(
     "app.oauth_token_by_hash",
     "SELECT id, kind, family, expires_at < time::now() AS expired, used_at, family.owner AS owner, \
-     family.client_id AS client_id, family.scope AS scope, family.resource AS resource \
+     family.client_id AS client_id, (scope ?? family.scope) AS scope, family.resource AS resource \
      FROM oauth_token WHERE token_hash = $token_hash LIMIT 1",
 );
 

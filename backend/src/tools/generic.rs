@@ -262,6 +262,10 @@ pub async fn get(db: &OrgDb, owner: &RecordId, id: &str) -> AppResult<Value> {
     }
 }
 
+fn is_ident(s: &str) -> bool {
+    s.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_') && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
 pub async fn list(
     db: &OrgDb,
     owner: &RecordId,
@@ -287,6 +291,25 @@ pub async fn list(
             }
         }
     }
+    // `payload__a__b` filters `payload.a.b`; every segment is an identifier, because it is spliced into the query text
+    let mut bad_paths: Vec<String> = Vec::new();
+    if let Some(filters) = filters {
+        for key in filters.keys() {
+            let mut parts = key.split("__");
+            let fname = parts.next().unwrap_or(key);
+            let rest: Vec<&str> = parts.collect();
+            let ok = if fname == "payload" { rest.iter().all(|seg| is_ident(seg)) } else { rest.is_empty() };
+            if !ok {
+                bad_paths.push(key.clone());
+            }
+        }
+    }
+    if !bad_paths.is_empty() {
+        bad_paths.sort();
+        return Ok(json!({
+            "error": format!("invalid filter key(s) {bad_paths:?}; use a field name, or payload__a__b with identifier segments")
+        }));
+    }
     if !bad.is_empty() {
         bad.sort();
         bad.dedup();
@@ -306,10 +329,10 @@ pub async fn list(
     }
     let mut filter_binds: Vec<(String, Value)> = Vec::new();
     if let Some(filters) = filters {
-        for (key, val) in filters.iter() {
-            let fname = key.split("__").next().unwrap_or(key);
-            let param = format!("filter_{fname}");
-            conditions.push(format!("{fname} = ${param}"));
+        for (i, (key, val)) in filters.iter().enumerate() {
+            let path = key.split("__").collect::<Vec<_>>().join(".");
+            let param = format!("filter_{i}");
+            conditions.push(format!("{path} = ${param}"));
             filter_binds.push((param, val.clone()));
         }
     }

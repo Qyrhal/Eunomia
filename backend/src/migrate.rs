@@ -30,7 +30,10 @@ pub const LATEST_TENANT: u32 = MIGRATIONS[MIGRATIONS.len() - 1].0;
 pub const MIN_SUPPORTED_TENANT: u32 = LATEST_TENANT - 1;
 
 /// Migrations for the control database.
-pub const CONTROL_MIGRATIONS: &[(u32, &str, &str)] = &[(1, "control", include_str!("../migrations/control/0001_control.surql"))];
+pub const CONTROL_MIGRATIONS: &[(u32, &str, &str)] = &[
+    (1, "control", include_str!("../migrations/control/0001_control.surql")),
+    (2, "oauth_token_scope", include_str!("../migrations/control/0002_oauth_token_scope.surql")),
+];
 
 /// The last tenant migration the legacy single database may be brought to before its data moves out
 /// (0009 drops the tables the move is about to read).
@@ -126,7 +129,8 @@ async fn apply(db: &Db, set: &[(u32, &str, &str)], max: u32) -> surrealdb::Resul
             }
             continue;
         }
-        if version == 2 {
+        // a pre-step of the tenant set only: control 0002 is unrelated
+        if version == 2 && std::ptr::eq(set, MIGRATIONS) {
             dedupe_entity_names(db).await?;
         }
         // DEFINE is allowed inside a transaction, so schema and ledger row commit together.
