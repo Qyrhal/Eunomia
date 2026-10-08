@@ -91,15 +91,22 @@ check "local edit survives" test "$(cat "$TMP/repo/compose.yml")" = mine
 (cd "$TMP/src" && mkdir -p scripts && printf '#!/bin/sh\necho UPGRADE >> "%s/docker.log"\nexit $(cat "%s/upgrade_rc")\n' "$TMP" "$TMP" > scripts/upgrade-surreal-v3.sh \
   && echo four > compose.yml && git_ add -A && git_ commit -qm v1.3 && git tag v1.3.0)
 echo surrealdb/surrealdb:v3.3.0 > "$TMP/images"; echo surrealdb/surrealdb:v2.7.0 > "$TMP/running"
+# an old install: no ENCRYPTION_KEY, no JWT_SECRET yet
+sed -i.bak -e '/^ENCRYPTION_KEY/d' -e '/^JWT_SECRET=/d' "$TMP/repo/.env" && rm -f "$TMP/repo/.env.bak"
 echo 1 > "$TMP/upgrade_rc"; : > "$TMP/docker.log"; touch "$S/requested"; update
 check "failed upgrade: ran before anything else" grep -qx UPGRADE "$TMP/docker.log"
 check "failed upgrade: nothing pulled" bash -c "! grep -q 'compose pull' '$TMP/docker.log'"
 check "failed upgrade: checkout put back" test "$(cat "$TMP/repo/compose.yml")" = two
 check "failed upgrade: .env back on the old release" grep -q '^EUNOMIA_IMAGE_TAG=v1.1.0$' "$TMP/repo/.env"
+check "failed upgrade: no encryption key injected (the old release must still decrypt)" bash -c "! grep -q '^ENCRYPTION_KEY' '$TMP/repo/.env'"
+check "failed upgrade: no JWT secret injected" bash -c "! grep -q '^JWT_SECRET=' '$TMP/repo/.env'"
 check "failed upgrade: status says why" grep -q 'upgrade failed' "$S/status.json"
 echo 0 > "$TMP/upgrade_rc"; : > "$TMP/docker.log"; touch "$S/requested"; update
 check "upgrade runs once, before the pull" bash -c "[ \$(grep -c UPGRADE '$TMP/docker.log') = 1 ] && [ \$(grep -n UPGRADE '$TMP/docker.log' | cut -d: -f1) -lt \$(grep -n 'compose pull' '$TMP/docker.log' | cut -d: -f1) ]"
 check "upgraded release is applied" test "$(cat "$TMP/repo/compose.yml")" = four
+check "after a good upgrade the encryption key and legacy flag appear" bash -c "grep -Eq '^ENCRYPTION_KEY=.{20,}$' '$TMP/repo/.env' && grep -q '^ENCRYPTION_KEY_LEGACY_EMPTY=1$' '$TMP/repo/.env'"
+check "a missing JWT secret is generated" grep -Eq '^JWT_SECRET=.{20,}$' "$TMP/repo/.env"
+KEY_AFTER_FIRST="$(sed -n 's/^ENCRYPTION_KEY=//p' "$TMP/repo/.env")"; JWT_AFTER="$(sed -n 's/^JWT_SECRET=//p' "$TMP/repo/.env")"
 echo surrealdb/surrealdb:v3.3.0 > "$TMP/running"
 (cd "$TMP/src" && echo five > compose.yml && git_ commit -qam v1.4 && git tag v1.4.0)
 : > "$TMP/docker.log"; touch "$S/requested"; update
@@ -109,6 +116,7 @@ rm -f "$TMP/images" "$TMP/running"
 
 # 4c. an existing key survives every later update, and a blank one is replaced
 check "later updates keep the encryption key" test "$(sed -n 's/^ENCRYPTION_KEY=//p' "$TMP/repo/.env")" = "$KEY_AFTER_FIRST"
+check "later updates keep the JWT secret" test "$(sed -n 's/^JWT_SECRET=//p' "$TMP/repo/.env")" = "$JWT_AFTER"
 check "later updates add only one key line" test "$(grep -c '^ENCRYPTION_KEY=' "$TMP/repo/.env")" = 1
 sed -i.bak 's/^ENCRYPTION_KEY=.*/ENCRYPTION_KEY=/' "$TMP/repo/.env" && rm -f "$TMP/repo/.env.bak"
 (cd "$TMP/src" && echo six > compose.yml && git_ commit -qam v1.5 && git tag v1.5.0)

@@ -83,16 +83,6 @@ main() {
     sed -i.bak '/^BACKUP_ENCRYPTION_KEY=/d' .env && rm -f .env.bak
     echo "BACKUP_ENCRYPTION_KEY=$(head -c 32 /dev/urandom | base64 | tr -d '\n')" >> .env
   fi
-  # Installs from before the key was required ran with an empty ENCRYPTION_KEY, so their stored
-  # credentials and org database passwords were written under it. Give them a real key and let the
-  # backend still read the old values (ENCRYPTION_KEY_LEGACY_EMPTY=1); new writes use the new key.
-  # See docs/deployment.md, "Rotating ENCRYPTION_KEY". An existing key is never replaced.
-  if ! grep -q '^ENCRYPTION_KEY=.' .env; then
-    sed -i.bak -e '/^ENCRYPTION_KEY=/d' -e '/^ENCRYPTION_KEY_LEGACY_EMPTY=/d' .env && rm -f .env.bak
-    echo "ENCRYPTION_KEY=$(head -c 32 /dev/urandom | base64 | tr -d '\n')" >> .env
-    echo "ENCRYPTION_KEY_LEGACY_EMPTY=1" >> .env
-  fi
-
   # A release that pins SurrealDB 3.x over a running 2.x needs its data moved
   # first (export, fresh volume, verify; see docs/upgrading-to-surrealdb-3.md).
   # The script rolls itself back on failure, so here we only undo the checkout
@@ -110,6 +100,22 @@ main() {
       write_status "$status_dir" "$current" "$latest" false "SurrealDB 3 upgrade failed and was rolled back, nothing changed: $(tail -3 "$status_dir/upgrade.log")"
       exit 1
     fi
+  fi
+
+  # Installs from before the key was required ran with an empty ENCRYPTION_KEY, so their stored
+  # credentials and org database passwords were written under it. Give them a real key and let the
+  # backend still read the old values (ENCRYPTION_KEY_LEGACY_EMPTY=1); new writes use the new key.
+  # See docs/deployment.md, "Rotating ENCRYPTION_KEY". An existing key is never replaced.
+  # Done only after the SurrealDB upgrade step: a rolled-back update must leave .env able to run the old release.
+  if ! grep -q '^ENCRYPTION_KEY=.' .env; then
+    sed -i.bak -e '/^ENCRYPTION_KEY=/d' -e '/^ENCRYPTION_KEY_LEGACY_EMPTY=/d' .env && rm -f .env.bak
+    echo "ENCRYPTION_KEY=$(head -c 32 /dev/urandom | base64 | tr -d '\n')" >> .env
+    echo "ENCRYPTION_KEY_LEGACY_EMPTY=1" >> .env
+  fi
+
+  if ! grep -q '^JWT_SECRET=.' .env; then
+    sed -i.bak '/^JWT_SECRET=/d' .env && rm -f .env.bak
+    echo "JWT_SECRET=$(head -c 32 /dev/urandom | base64 | tr -d '\n')" >> .env
   fi
 
   # Everything except the updater itself (recreating it here would kill this
