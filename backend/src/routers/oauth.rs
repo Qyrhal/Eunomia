@@ -115,6 +115,8 @@ struct ConsentResult {
     security(("cookie" = [])),
 )]
 async fn consent_decide(State(state): State<AppState>, user: User, Json(d): Json<ConsentDecision>) -> AppResult<Json<ConsentResult>> {
+    // a token must not mint a longer-lived, differently scoped credential for an OAuth client
+    crate::authz::require_session()?;
     let v = server::validate_authz(&state, &d.request).await.map_err(invalid)?;
     let redirect_to = if d.approve {
         let code = server::create_code(&state, &v, &user.id).await?;
@@ -146,6 +148,7 @@ struct Grant {
     security(("cookie" = [])),
 )]
 async fn list_grants(State(state): State<AppState>, user: User) -> AppResult<Json<Vec<Grant>>> {
+    crate::authz::require_session()?;
     #[derive(Deserialize, SurrealValue)]
     struct Row {
         id: RecordId,
@@ -184,6 +187,7 @@ async fn list_grants(State(state): State<AppState>, user: User) -> AppResult<Jso
     security(("cookie" = [])),
 )]
 async fn revoke_grant(State(state): State<AppState>, user: User, Path(grant_id): Path<String>) -> AppResult<Json<crate::openapi::DeletedBody>> {
+    crate::authz::require_session()?;
     let id = RecordId::from_table_key("oauth_grant", grant_id);
     let mut res = crate::store::control::OAUTH_GRANT_DELETE.on(&state.control).bind(("id", id.clone())).bind(("owner", user.id)).await?;
     let removed: Vec<server::Gone> = res.take(0)?;

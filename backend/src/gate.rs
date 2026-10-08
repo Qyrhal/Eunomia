@@ -137,6 +137,26 @@ fn client_ip(req: &Request, trusted: &[crate::ratelimit::Cidr]) -> String {
     crate::ratelimit::client_addr(peer, xff, trusted)
 }
 
+/// Set on every request: it came through a trusted proxy over https (see `ratelimit::forwarded_https`).
+#[derive(Debug, Clone, Copy)]
+pub struct ForwardedHttps(pub bool);
+
+/// `/oauth/token` refresh grants are keyed by client and address, apart from the strict `auth:` bucket.
+/// Returns the request (body put back) and the bucket key for a refresh grant, if it is one.
+async fn refresh_bucket(req: Request, ip: &str) -> (Request, Option<String>) {
+    if req.method() != Method::POST || req.uri().path() != "/oauth/token" {
+        return (req, None);
+    }
+    let (parts, body) = req.into_parts();
+    let Ok(bytes) = axum::body::to_bytes(body, 16 * 1024).await else {
+        return (Request::from_parts(parts, axum::body::Body::empty()), None);
+    };
+    let form: std::collections::HashMap<String, String> = serde_urlencoded::from_bytes(&bytes).unwrap_or_default();
+    let key = (form.get("grant_type").map(String::as_str) == Some("refresh_token"))
+        .then(|| format!("oauth-refresh:{}:{ip}", form.get("client_id").map_or("", |c| &c[..c.floor_char_boundary(64)])));
+    (Request::from_parts(parts, axum::body::Body::from(bytes)), key)
+}
+
 fn rate_limited(wait_secs: u64) -> Response {
     let mut resp = AppError::coded(ErrorCode::RateLimited, "Too many requests. Slow down and retry.").into_response();
     if let Ok(v) = HeaderValue::from_str(&wait_secs.to_string()) {
@@ -158,6 +178,12 @@ fn reject(g: &Gate, class: Class, err: AppError) -> Response {
 
 pub async fn gate(State(g): State<Gate>, mut req: Request, next: Next) -> Response {
     let class = classify(req.method(), req.uri().path());
+    let https = {
+        let peer = req.extensions().get::<ConnectInfo<SocketAddr>>().map(|c| c.0.ip());
+        let proto = req.headers().get("x-forwarded-proto").and_then(|v| v.to_str().ok());
+        crate::ratelimit::forwarded_https(peer, proto, &g.trusted())
+    };
+    req.extensions_mut().insert(ForwardedHttps(https));
     match class {
         Class::Public => return next.run(req).await,
         Class::Webhook => {
@@ -167,7 +193,14 @@ pub async fn gate(State(g): State<Gate>, mut req: Request, next: Next) -> Respon
             return next.run(req).await;
         }
         Class::AuthAttempt => {
-            if let Err(wait) = g.limiter.check(&format!("auth:{}", client_ip(&req, &g.trusted())), g.limits.auth_per_min) {
+            let ip = client_ip(&req, &g.trusted());
+            let (r, refresh) = refresh_bucket(req, &ip).await;
+            req = r;
+            let (key, per_min) = match refresh {
+                Some(k) => (k, g.limits.refresh_per_min),
+                None => (format!("auth:{ip}"), g.limits.auth_per_min),
+            };
+            if let Err(wait) = g.limiter.check(&key, per_min) {
                 return rate_limited(wait);
             }
             return next.run(req).await;

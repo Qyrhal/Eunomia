@@ -13,6 +13,13 @@ use eunomia_backend::telemetry::with_trace_id;
 use eunomia_backend::tools::registry;
 use serde_json::{json, Value};
 
+/// These tests read stored arguments back, so they opt in (the default keeps only a hash and shape).
+async fn new_app() -> TestApp {
+    // SAFETY: set before any other thread reads it, to the same value every time
+    unsafe { std::env::set_var("CAPSULE_ARGS", "redacted") };
+    TestApp::new().await
+}
+
 fn trace(n: u32) -> String {
     format!("{n:032x}")
 }
@@ -23,12 +30,12 @@ async fn failing_tool(app: &TestApp, trace_id: &str) -> Value {
         "entity_id": "person:nobody", "name": "x", "api_key": "sk-live-SECRET1", "note": "sent Bearer abcDEF123456 to host",
         "nested": { "password": "hunter2-SECRET2" }
     });
-    with_trace_id(trace_id.to_string(), registry::call(&app.state, &app.user, "entity_update", args)).await.unwrap()
+    with_trace_id(trace_id.to_string(), common::sys(registry::call(&app.state, &app.user, "entity_update", args))).await.unwrap()
 }
 
 #[tokio::test]
 async fn forced_tool_failure_records_a_redacted_capsule() {
-    let app = TestApp::new().await;
+    let app = new_app().await;
     let out = failing_tool(&app, &trace(1)).await;
     assert_eq!(out["code"], "entity.not_found");
 
@@ -47,17 +54,17 @@ async fn forced_tool_failure_records_a_redacted_capsule() {
 
 #[tokio::test]
 async fn validation_errors_leave_no_capsule() {
-    let app = TestApp::new().await;
-    let out = with_trace_id(trace(2), registry::call(&app.state, &app.user, "entity_update", json!({ "wrong": 1 }))).await.unwrap();
+    let app = new_app().await;
+    let out = with_trace_id(trace(2), common::sys(registry::call(&app.state, &app.user, "entity_update", json!({ "wrong": 1 })))).await.unwrap();
     assert_eq!(out["code"], "validation.invalid");
     assert!(capsules::get(&app.state.control, &trace(2)).await.unwrap().is_none());
 }
 
 #[tokio::test]
 async fn capsules_are_capped_at_16kb() {
-    let app = TestApp::new().await;
+    let app = new_app().await;
     let args = json!({ "entity_id": "person:nobody", "summary": "y ".repeat(40_000) });
-    with_trace_id(trace(3), registry::call(&app.state, &app.user, "entity_update", args)).await.unwrap();
+    with_trace_id(trace(3), common::sys(registry::call(&app.state, &app.user, "entity_update", args))).await.unwrap();
     let c = capsules::get(&app.state.control, &trace(3)).await.unwrap().unwrap();
     assert!(c.truncated);
     assert!(c.args.is_null(), "a cut capsule keeps no half-parsed args");
@@ -66,7 +73,7 @@ async fn capsules_are_capped_at_16kb() {
 
 #[tokio::test]
 async fn replay_reproduces_the_same_error_code_in_a_scratch_database() {
-    let app = TestApp::new().await;
+    let app = new_app().await;
     failing_tool(&app, &trace(4)).await;
     let r = replay::replay(&app.state, &app.state.settings, &trace(4)).await.unwrap();
     assert_eq!(r.replayed.code, "entity.not_found");
@@ -77,7 +84,7 @@ async fn replay_reproduces_the_same_error_code_in_a_scratch_database() {
 
 #[tokio::test]
 async fn replay_seeds_the_scratch_database_with_the_callers_data() {
-    let app = TestApp::new().await;
+    let app = new_app().await;
     app.tool("memory_write", json!({ "subject_name": "Ada", "subject_kind": "person", "text": "likes engines" })).await;
     let found = app.tool("entities_search", json!({ "query": "Ada" })).await;
     let id = found["results"][0]["id"].as_str().expect("entity id").to_string();
@@ -108,7 +115,7 @@ async fn replay_seeds_the_scratch_database_with_the_callers_data() {
 
 #[tokio::test]
 async fn a_5xx_route_records_a_route_capsule_that_replays() {
-    let app = TestApp::new().await;
+    let app = new_app().await;
     // a row the typed reader cannot decode: the route fails with a database error
     let bad = "REMOVE TABLE audit_log; DEFINE TABLE audit_log SCHEMALESS; CREATE audit_log SET owner = $u, tool_name = 'x', outcome = 5;";
     app.db().await.test_raw().query(bad).bind(("u", app.user.id.clone())).await.unwrap().check().unwrap();
@@ -127,7 +134,7 @@ async fn a_5xx_route_records_a_route_capsule_that_replays() {
 
 #[tokio::test]
 async fn retention_keeps_seven_days_and_the_newest_rows() {
-    let app = TestApp::new().await;
+    let app = new_app().await;
     let db = &app.state.control;
     for n in 10..15 {
         failing_tool(&app, &trace(n)).await;
@@ -145,7 +152,7 @@ async fn retention_keeps_seven_days_and_the_newest_rows() {
 
 #[tokio::test]
 async fn capsule_route_is_admin_only() {
-    let app = TestApp::new().await; // first user: the admin
+    let app = new_app().await; // first user: the admin
     failing_tool(&app, &trace(20)).await;
     let other = common::register(&app.state, "other@example.com").await;
     let other_token = models_user::create_api_token(&app.state.control, &other.id, "t").await.unwrap().token;

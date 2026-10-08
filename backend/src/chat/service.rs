@@ -30,7 +30,7 @@ use crate::config::Settings;
 use crate::connectors::crypto;
 use crate::pool::OrgDb;
 use crate::store;
-use crate::error::{AppError, AppResult};
+use crate::error::{AppError, AppResult, ErrorCode};
 use crate::models_user::User;
 use crate::state::OrgState;
 use crate::tools::registry;
@@ -85,7 +85,7 @@ pub enum ChatEvent {
     #[serde(rename = "done")]
     Done { reply: String, tool_calls_made: Vec<String> },
     #[serde(rename = "error")]
-    Error { message: String },
+    Error { message: String, code: String, trace_id: String },
 }
 
 // ---------------------------------------------------------------------------
@@ -496,10 +496,14 @@ pub async fn send_stream(
     user_message: String,
     tx: mpsc::Sender<ChatEvent>,
 ) {
-    if let Err(message) = run_send(&state, &user, &thread_id, &user_message, &tx).await {
-        let _ = tx.send(ChatEvent::Error { message }).await;
+    if let Err((code, message)) = run_send(&state, &user, &thread_id, &user_message, &tx).await {
+        let event = ChatEvent::Error { message, code: code.as_str().to_string(), trace_id: crate::telemetry::current_trace_id() };
+        let _ = tx.send(event).await;
     }
 }
+
+/// A failed chat turn: the stable error code and a message for the `error` event.
+type Failed = (ErrorCode, String);
 
 async fn run_send(
     state: &OrgState,
@@ -507,27 +511,27 @@ async fn run_send(
     thread_id: &RecordId,
     user_message: &str,
     tx: &mpsc::Sender<ChatEvent>,
-) -> Result<(), String> {
+) -> Result<(), Failed> {
     let owner = &user.id;
     let db = &state.db;
     let settings = &state.settings;
 
-    ensure_configured(db, settings, owner).await.map_err(|e| e.0)?;
+    ensure_configured(db, settings, owner).await.map_err(|e| (ErrorCode::ValidationInvalid, e.0))?;
 
-    let existing_rows = rows_for_thread(db, owner, thread_id).await.map_err(|e| e.message)?;
+    let existing_rows = rows_for_thread(db, owner, thread_id).await.map_err(|e| (e.code, e.message))?;
     let is_first_message = existing_rows.is_empty();
     let mut messages: Vec<Value> = vec![json!({ "role": "system", "content": SYSTEM_PROMPT })];
     messages.extend(existing_rows.iter().map(row_to_api_message));
 
-    persist(db, owner, thread_id, "user", user_message, None, None).await.map_err(|e| e.message)?;
+    persist(db, owner, thread_id, "user", user_message, None, None).await.map_err(|e| (e.code, e.message))?;
     if is_first_message {
-        touch_thread(db, thread_id, Some(&derive_title(user_message))).await.map_err(|e| e.message)?;
+        touch_thread(db, thread_id, Some(&derive_title(user_message))).await.map_err(|e| (e.code, e.message))?;
     } else {
-        touch_thread(db, thread_id, None).await.map_err(|e| e.message)?;
+        touch_thread(db, thread_id, None).await.map_err(|e| (e.code, e.message))?;
     }
     messages.push(json!({ "role": "user", "content": user_message }));
 
-    let (base_url, api_key) = resolve_openai(db, settings, owner).await.map_err(|e| e.message)?;
+    let (base_url, api_key) = resolve_openai(db, settings, owner).await.map_err(|e| (e.code, e.message))?;
     let auth_key = if api_key.is_empty() { "not-needed".to_string() } else { api_key };
     let tools = openai_tools();
     let mut tool_calls_made: Vec<String> = Vec::new();
@@ -543,12 +547,12 @@ async fn run_send(
             .json(&body)
             .send()
             .await
-            .map_err(|e| format!("OpenAI request failed: {e}"))?;
+            .map_err(|e| (ErrorCode::Internal, format!("OpenAI request failed: {e}")))?;
 
         if !resp.status().is_success() {
             let status = resp.status();
             let text = resp.text().await.unwrap_or_default();
-            return Err(format!("OpenAI request failed ({status}): {text}"));
+            return Err((ErrorCode::Internal, format!("OpenAI request failed ({status}): {text}")));
         }
 
         let mut byte_stream = resp.bytes_stream();
@@ -557,7 +561,7 @@ async fn run_send(
         let mut tool_calls_acc: BTreeMap<usize, ToolCallAcc> = BTreeMap::new();
 
         while let Some(chunk) = byte_stream.next().await {
-            let chunk = chunk.map_err(|e| format!("OpenAI stream error: {e}"))?;
+            let chunk = chunk.map_err(|e| (ErrorCode::Internal, format!("OpenAI stream error: {e}")))?;
             buf.push_str(&String::from_utf8_lossy(&chunk));
 
             while let Some(pos) = buf.find("\n\n") {
@@ -577,7 +581,7 @@ async fn run_send(
         }
 
         if tool_calls_acc.is_empty() {
-            persist(db, owner, thread_id, "assistant", &content, None, None).await.map_err(|e| e.message)?;
+            persist(db, owner, thread_id, "assistant", &content, None, None).await.map_err(|e| (e.code, e.message))?;
             let _ = tx.send(ChatEvent::Done { reply: content, tool_calls_made }).await;
             return Ok(());
         }
@@ -596,7 +600,7 @@ async fn run_send(
 
         persist(db, owner, thread_id, "assistant", &content, Some(tool_calls_dump.clone()), None)
             .await
-            .map_err(|e| e.message)?;
+            .map_err(|e| (e.code, e.message))?;
         messages.push(json!({ "role": "assistant", "content": content, "tool_calls": tool_calls_dump }));
 
         for tc in ordered {
@@ -606,14 +610,14 @@ async fn run_send(
             let args: Value = serde_json::from_str(&tc.arguments).unwrap_or_else(|_| json!({}));
             let result = match registry::call(&state.app, user, &name, args).await {
                 Ok(v) => v,
-                Err(e) => json!({ "error": e.message }),
+                Err(e) => e.to_tool_value(),
             };
             tool_calls_made.push(name.clone());
 
             let result_text = serde_json::to_string(&result).unwrap_or_else(|_| "null".to_string());
             persist(db, owner, thread_id, "tool", &result_text, None, tc.id.as_deref())
                 .await
-                .map_err(|e| e.message)?;
+                .map_err(|e| (e.code, e.message))?;
             messages.push(json!({ "role": "tool", "tool_call_id": tc.id, "content": result_text }));
             let _ = tx.send(ChatEvent::ToolResult { name }).await;
         }
@@ -623,7 +627,7 @@ async fn run_send(
         "I wasn't able to finish after {MAX_TOOL_ITERATIONS} tool calls -- stopping here rather than looping \
          further. Try rephrasing or breaking the request down."
     );
-    persist(db, owner, thread_id, "assistant", &limit_msg, None, None).await.map_err(|e| e.message)?;
+    persist(db, owner, thread_id, "assistant", &limit_msg, None, None).await.map_err(|e| (e.code, e.message))?;
     let _ = tx.send(ChatEvent::Done { reply: limit_msg, tool_calls_made }).await;
     Ok(())
 }
@@ -786,8 +790,8 @@ mod tests {
             json!({ "type": "done", "reply": "hi", "tool_calls_made": ["search"] })
         );
 
-        let e = ChatEvent::Error { message: "boom".to_string() };
-        assert_eq!(serde_json::to_value(&e).unwrap(), json!({ "type": "error", "message": "boom" }));
+        let e = ChatEvent::Error { message: "boom".to_string(), code: "internal".to_string(), trace_id: "t".to_string() };
+        assert_eq!(serde_json::to_value(&e).unwrap(), json!({ "type": "error", "message": "boom", "code": "internal", "trace_id": "t" }));
     }
 
     #[test]

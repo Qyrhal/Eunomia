@@ -58,7 +58,7 @@ async fn hammer(per_task: usize) -> Outcome {
             for i in 0..per_task {
                 for (n, (kind, text)) in [("world", format!("fact {t}-{i}")), ("observation", format!("belief {t}-{i}"))].into_iter().enumerate() {
                     let args = json!({"subject_name":"Alice","subject_kind":"person","text":text,"type":kind});
-                    match registry::call(&state, &user, "memory_write", args).await {
+                    match common::sys(registry::call(&state, &user, "memory_write", args)).await {
                         Ok(v) if v.get("error").is_none() => ok[n] += 1,
                         other => failed.push(format!("{other:?}")),
                     }

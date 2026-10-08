@@ -113,7 +113,9 @@ async fn housekeeping(db: &crate::pool::ControlDb) -> AppResult<()> {
     store::jobs::PRUNE_DONE.on(db).bind(("age", KEEP_DONE)).await?.check()?;
     if let Some(owner) = crate::capsules::first_user(db).await? {
         let key = super::periodic_key(kind::PRUNE_CAPSULES, &owner, 3600);
-        super::enqueue_lossy(db, NewJob::new(kind::PRUNE_CAPSULES, owner, key)).await;
+        super::enqueue_lossy(db, NewJob::new(kind::PRUNE_CAPSULES, owner.clone(), key)).await;
+        let key = super::periodic_key(kind::PRUNE_AUTH, &owner, 86400);
+        super::enqueue_lossy(db, NewJob::new(kind::PRUNE_AUTH, owner, key)).await;
     }
     Ok(())
 }

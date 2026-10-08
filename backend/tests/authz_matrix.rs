@@ -45,12 +45,12 @@ impl World {
 
     /// A fresh org vault owned by `owner`, with `member` active and `pending` invited.
     async fn vault(&self) -> RecordId {
-        let v = vaults::create_vault(&self.db, &self.owner.id, "Team", "org").await.unwrap();
+        let v = common::sys(vaults::create_vault(&self.db, &self.owner.id, "Team", "org")).await.unwrap();
         let v: RecordId = rid::parse(&v.id).unwrap();
         for (u, accept) in [(&self.member, true), (&self.pending, false)] {
-            vaults::invite_member(&self.db, &self.control, &self.owner.id, &v, &u.email, "member").await.unwrap();
+            common::sys(vaults::invite_member(&self.db, &self.control, &self.owner.id, &v, &u.email, "member")).await.unwrap();
             if accept {
-                vaults::accept_invitation(&self.db, &u.id, &v).await.unwrap();
+                common::sys(vaults::accept_invitation(&self.db, &u.id, &v)).await.unwrap();
             }
         }
         v
@@ -94,6 +94,7 @@ fn check(op: &str, who: Who, got: bool, want: bool) {
 
 #[tokio::test]
 async fn vault_operations_matrix() {
+    common::sys(Box::pin(async {
     let w = world().await;
     // [owner, member, pending, outsider]
     let rows: Vec<Row> = vec![
@@ -114,25 +115,28 @@ async fn vault_operations_matrix() {
             let got = match op {
                 "read memories" => allowed(entities::list_entities(&w.db, &u.id, None, Some(&v), None, 0).await),
                 "write memories" => allowed(entities::upsert_entity(&w.db, &u.id, "person", "Bob", None, Some(&v)).await),
-                "list members" => allowed(vaults::list_members(&w.db, &w.control, &u.id, &v).await),
-                "rename" => allowed(vaults::rename_vault(&w.db, &u.id, &v, "Renamed").await),
-                "invite" => allowed(vaults::invite_member(&w.db, &w.control, &u.id, &v, &w.spare.email, "member").await),
-                "remove member" => allowed(vaults::remove_member(&w.db, &w.control, &u.id, &v, &w.pending.email).await),
-                "delete" => allowed(vaults::delete_vault(&w.db, &u.id, &v).await),
-                "clone" => allowed(vaults::clone_vault(&w.db, &u.id, &v, None, "org").await),
+                "list members" => allowed(common::sys(vaults::list_members(&w.db, &w.control, &u.id, &v)).await),
+                "rename" => allowed(common::sys(vaults::rename_vault(&w.db, &u.id, &v, "Renamed")).await),
+                "invite" => allowed(common::sys(vaults::invite_member(&w.db, &w.control, &u.id, &v, &w.spare.email, "member")).await),
+                "remove member" => allowed(common::sys(vaults::remove_member(&w.db, &w.control, &u.id, &v, &w.pending.email)).await),
+                "delete" => allowed(common::sys(vaults::delete_vault(&w.db, &u.id, &v)).await),
+                "clone" => allowed(common::sys(vaults::clone_vault(&w.db, &u.id, &v, None, "org")).await),
                 "merge" => {
-                    let own = vaults::default_vault_id(&w.db, &u.id).await.unwrap();
-                    allowed(vaults::merge_vaults(&w.db, &u.id, &v, &own, None, "org").await)
+                    let own = common::sys(vaults::default_vault_id(&w.db, &u.id)).await.unwrap();
+                    allowed(common::sys(vaults::merge_vaults(&w.db, &u.id, &v, &own, None, "org")).await)
                 }
                 _ => unreachable!(),
             };
             check(op, who, got, want[i]);
         }
     }
+    }))
+    .await;
 }
 
 #[tokio::test]
 async fn entity_row_operations_matrix() {
+    common::sys(Box::pin(async {
     let w = world().await;
     // Row-level checks treat a non-member as "not found" (None/false), not a 403.
     for who in WHOS {
@@ -157,25 +161,31 @@ async fn entity_row_operations_matrix() {
         let got = entities::delete_entity(&w.db, &u.id, &eid).await.unwrap();
         check("delete entity", who, got, member_like);
     }
+    }))
+    .await;
 }
 
 #[tokio::test]
 async fn leave_and_invitation_rules() {
+    common::sys(Box::pin(async {
     let w = world().await;
     let v = w.vault().await;
     // a member leaves; a non-member leaving is a quiet no-op
-    vaults::leave_vault(&w.db, &w.member.id, &v).await.unwrap();
-    vaults::leave_vault(&w.db, &w.outsider.id, &v).await.unwrap();
-    assert!(!allowed(vaults::list_members(&w.db, &w.control, &w.member.id, &v).await));
+    common::sys(vaults::leave_vault(&w.db, &w.member.id, &v)).await.unwrap();
+    common::sys(vaults::leave_vault(&w.db, &w.outsider.id, &v)).await.unwrap();
+    assert!(!allowed(common::sys(vaults::list_members(&w.db, &w.control, &w.member.id, &v)).await));
     // only the invitee can accept
     let v2 = w.vault().await;
-    assert!(vaults::accept_invitation(&w.db, &w.outsider.id, &v2).await.is_err());
-    assert!(vaults::accept_invitation(&w.db, &w.pending.id, &v2).await.is_ok());
+    assert!(common::sys(vaults::accept_invitation(&w.db, &w.outsider.id, &v2)).await.is_err());
+    assert!(common::sys(vaults::accept_invitation(&w.db, &w.pending.id, &v2)).await.is_ok());
+    }))
+    .await;
 }
 
 /// `authorize()` itself, every action for every kind of user, against the role matrix.
 #[tokio::test]
 async fn authorize_matches_the_role_matrix_for_every_action() {
+    common::sys(Box::pin(async {
     use eunomia_backend::authz::{authorize, permits, Action, Role};
     let w = world().await;
     let v = w.vault().await;
@@ -195,4 +205,6 @@ async fn authorize_matches_the_role_matrix_for_every_action() {
             }
         }
     }
+    }))
+    .await;
 }

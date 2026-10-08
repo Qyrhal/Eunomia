@@ -20,7 +20,6 @@ use crate::rid::RecordIdExt;
 use crate::auth::Authn;
 use crate::pool::ControlDb;
 use crate::error::{AppResult, ErrorCode};
-use crate::models_user::User;
 use crate::state::AppState;
 use crate::store;
 
@@ -76,6 +75,41 @@ pub struct Failure {
     pub source: String,
 }
 
+/// `CAPSULE_ARGS`: `off` (default) stores only a hash and the JSON shape of a failed call's
+/// arguments, so user memory text never lands in the shared control database; `redacted` stores
+/// them with secrets masked, which is what `eunomia replay` needs.
+pub fn store_args() -> bool {
+    std::env::var("CAPSULE_ARGS").is_ok_and(|v| v.trim().eq_ignore_ascii_case("redacted"))
+}
+
+/// The JSON structure of `v` with every leaf replaced by its type name.
+pub fn shape(v: &Value) -> Value {
+    match v {
+        Value::Object(m) => Value::Object(m.iter().map(|(k, v)| (k.clone(), shape(v))).collect()),
+        Value::Array(a) => Value::Array(a.first().map(shape).into_iter().collect()),
+        Value::String(_) => json!("string"),
+        Value::Number(_) => json!("number"),
+        Value::Bool(_) => json!("boolean"),
+        Value::Null => json!("null"),
+    }
+}
+
+/// What a capsule keeps of the call's arguments: the masked arguments, or (default) only
+/// `{args_stored: false, hash, shape}`.
+fn capsule_args(args: &Value, keep: bool) -> Value {
+    if keep {
+        return redact(args);
+    }
+    json!({ "args_stored": false, "hash": crate::models_user::hash_token(&args.to_string()), "shape": shape(args) })
+}
+
+impl Capsule {
+    /// False when the server kept only a hash and shape of the arguments (`CAPSULE_ARGS=off`): not replayable.
+    pub fn args_stored(&self) -> bool {
+        self.args.get("args_stored") != Some(&Value::Bool(false))
+    }
+}
+
 /// Masks the value of every secret-looking key, at any depth, and scrubs every string.
 pub fn redact(v: &Value) -> Value {
     match v {
@@ -126,7 +160,7 @@ pub async fn record(db: &ControlDb, f: Failure) {
     let source: String = scrub(&f.source).chars().take(MAX_SOURCE_CHARS).collect();
     let version = crate::config::APP_VERSION;
     let used = trace_id.len() + f.name.len() + f.user.as_ref().map_or(0, String::len) + source.len() + version.len() + 256;
-    let args = redact(&f.args).to_string();
+    let args = capsule_args(&f.args, store_args()).to_string();
     let budget = MAX_CAPSULE_BYTES.saturating_sub(used);
     let (args, truncated) = if args.len() > budget { (cut(&args, budget).to_string(), true) } else { (args, false) };
 
@@ -212,19 +246,6 @@ pub async fn first_user(db: &ControlDb) -> AppResult<Option<RecordId>> {
     }
     let mut res = store::capsules::FIRST_USER.on(db).await?;
     Ok(res.take::<Vec<R>>(0)?.into_iter().next().map(|r| r.id))
-}
-
-/// An email listed in `EUNOMIA_ADMIN_EMAILS` (comma separated): an operator of the whole instance.
-pub fn is_operator(user: &User) -> bool {
-    std::env::var("EUNOMIA_ADMIN_EMAILS")
-        .unwrap_or_default()
-        .split(',')
-        .any(|e| !e.trim().is_empty() && e.trim().eq_ignore_ascii_case(&user.email))
-}
-
-/// Admin = the instance's first user, or an operator.
-pub async fn is_admin(db: &ControlDb, user: &User) -> AppResult<bool> {
-    Ok(is_operator(user) || first_user(db).await?.as_ref() == Some(&user.id))
 }
 
 /// Records a capsule for every 5xx response. Sits inside the gate (so the caller is known) and

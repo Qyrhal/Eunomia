@@ -4,7 +4,7 @@
 
 use surrealdb::types::SurrealValue;
 use axum::{
-    extract::{Path, State},
+    extract::{Extension, Path, State},
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{delete, get, post},
@@ -18,6 +18,7 @@ use crate::rid::RecordIdExt;
 use crate::audit::{self, Event};
 use crate::auth::{self, SESSION_COOKIE};
 use crate::authz;
+use crate::gate::ForwardedHttps;
 use crate::scopes;
 use crate::error::{AppError, AppResult, ErrorCode};
 use crate::store;
@@ -95,13 +96,42 @@ async fn onboarded(state: &AppState, user: &User) -> AppResult<bool> {
     Ok(row.map(|r| r.onboarded_at.is_some()).unwrap_or(false))
 }
 
-/// `Secure` whenever the public URL is https, so the cookie never travels over plain http.
-fn cookie_flags(public_url: &str) -> &'static str {
-    if public_url.starts_with("https://") { "; Secure" } else { "" }
+/// `COOKIE_SECURE`: `true`, `false`, or `auto` (default). `auto` marks the cookie `Secure` when the
+/// public URL is https or a trusted proxy says the browser connected over https (`X-Forwarded-Proto`).
+/// The browser talks to the frontend origin, which may be https while `PUBLIC_URL` (the API) is not.
+fn cookie_secure(mode: &str, public_url: &str, forwarded_https: bool) -> bool {
+    match mode.trim().to_ascii_lowercase().as_str() {
+        "true" | "1" => true,
+        "false" | "0" => false,
+        _ => forwarded_https || public_url.starts_with("https://"),
+    }
 }
 
-fn session_cookie_header(token: &str, public_url: &str) -> String {
-    format!("{SESSION_COOKIE}={token}; HttpOnly; SameSite=Lax; Path=/{}", cookie_flags(public_url))
+fn cookie_flags(public_url: &str, https: Option<Extension<ForwardedHttps>>) -> &'static str {
+    let mode = std::env::var("COOKIE_SECURE").unwrap_or_default();
+    if cookie_secure(&mode, public_url, https.is_some_and(|Extension(h)| h.0)) { "; Secure" } else { "" }
+}
+
+fn session_cookie_header(token: &str, public_url: &str, https: Option<Extension<ForwardedHttps>>) -> String {
+    format!("{SESSION_COOKIE}={token}; HttpOnly; SameSite=Lax; Path=/{}", cookie_flags(public_url, https))
+}
+
+/// `SIGNUP`: who may create an account once the install has a first user.
+/// `open` lets anyone who can reach the server sign up; `invite` only emails the operator listed in
+/// `SIGNUP_ALLOWLIST` or `EUNOMIA_ADMIN_EMAILS` (a vault invitation needs an existing account, so it
+/// cannot be the invitation); `closed` nobody. The first user can always sign up. Unknown values close.
+fn signup_allowed(mode: &str, has_users: bool, email: &str, allowlist: &str) -> bool {
+    if !has_users {
+        return true;
+    }
+    match mode.trim().to_ascii_lowercase().as_str() {
+        "" | "open" => true,
+        "invite" => {
+            let email = models_user::normalize_email(email);
+            allowlist.split(',').map(models_user::normalize_email).any(|e| !e.is_empty() && e == email)
+        }
+        _ => false,
+    }
 }
 
 #[utoipa::path(
@@ -116,9 +146,15 @@ fn session_cookie_header(token: &str, public_url: &str) -> String {
 )]
 async fn register(
     State(state): State<AppState>,
+    https: Option<Extension<ForwardedHttps>>,
     headers: HeaderMap,
     Json(body): Json<Credentials>,
 ) -> AppResult<Response> {
+    let has_users = crate::capsules::first_user(&state.control).await?.is_some();
+    let allowlist = format!("{},{}", std::env::var("SIGNUP_ALLOWLIST").unwrap_or_default(), std::env::var("EUNOMIA_ADMIN_EMAILS").unwrap_or_default());
+    if !signup_allowed(&std::env::var("SIGNUP").unwrap_or_default(), has_users, &body.email, &allowlist) {
+        return Err(AppError::coded(ErrorCode::AuthForbidden, "Signup is not open on this server. Ask the admin for access."));
+    }
     let user = models_user::register_user(&state, &body.email, &body.password)
         .await
         .map_err(|e| {
@@ -136,7 +172,7 @@ async fn register(
     let body = AuthOut { id: user.id.to_string(), email: user.email, onboarded: false };
     Ok((
         StatusCode::OK,
-        [(header::SET_COOKIE, session_cookie_header(&token, &state.settings.public_url))],
+        [(header::SET_COOKIE, session_cookie_header(&token, &state.settings.public_url, https))],
         Json(body),
     )
         .into_response())
@@ -154,6 +190,7 @@ async fn register(
 )]
 async fn login(
     State(state): State<AppState>,
+    https: Option<Extension<ForwardedHttps>>,
     headers: HeaderMap,
     Json(body): Json<Credentials>,
 ) -> AppResult<Response> {
@@ -179,7 +216,7 @@ async fn login(
     let body = AuthOut { id: user.id.to_string(), email: user.email, onboarded };
     Ok((
         StatusCode::OK,
-        [(header::SET_COOKIE, session_cookie_header(&token, &state.settings.public_url))],
+        [(header::SET_COOKIE, session_cookie_header(&token, &state.settings.public_url, https))],
         Json(body),
     )
         .into_response())
@@ -194,7 +231,7 @@ async fn login(
     responses((status = 200, body = crate::openapi::OkBody), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
     security(()),
 )]
-async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Response {
+async fn logout(State(state): State<AppState>, https: Option<Extension<ForwardedHttps>>, headers: HeaderMap) -> Response {
     if let Some(cookie_header) = headers.get(header::COOKIE).and_then(|v| v.to_str().ok())
         && let Some(token) = cookie_header.split(';').find_map(|p| {
             let p = p.trim();
@@ -202,7 +239,7 @@ async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Response {
         }) {
             auth::revoke_session_by_jwt(&state.control, &state.settings.jwt_secret, &token).await;
         }
-    let expired = format!("{SESSION_COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0{}", cookie_flags(&state.settings.public_url));
+    let expired = format!("{SESSION_COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0{}", cookie_flags(&state.settings.public_url, https));
     (StatusCode::OK, [(header::SET_COOKIE, expired)], Json(json!({ "ok": true }))).into_response()
 }
 
@@ -472,12 +509,12 @@ mod tests {
 
     #[test]
     fn session_cookie_header_includes_name_and_flags() {
-        let header = session_cookie_header("abc.def.ghi", "http://localhost:8001");
+        let header = session_cookie_header("abc.def.ghi", "http://localhost:8001", None);
         assert!(header.starts_with("eunomia_session=abc.def.ghi;"));
         assert!(header.contains("HttpOnly"));
         assert!(header.contains("SameSite=Lax"));
         assert!(!header.contains("Secure"));
-        assert!(session_cookie_header("t", "https://eunomia.example.com").ends_with("; Secure"));
+        assert!(session_cookie_header("t", "https://eunomia.example.com", None).ends_with("; Secure"));
     }
 
     #[test]
@@ -487,5 +524,29 @@ mod tests {
             if trimmed.is_empty() { "API token".to_string() } else { trimmed.to_string() }
         };
         assert_eq!(name, "API token");
+    }
+
+    #[test]
+    fn signup_modes() {
+        // a fresh install always lets the first user in
+        for m in ["open", "invite", "closed", "junk"] {
+            assert!(signup_allowed(m, false, "a@x.com", ""), "{m}");
+        }
+        assert!(signup_allowed("", true, "a@x.com", ""), "default is open");
+        assert!(signup_allowed("open", true, "a@x.com", ""));
+        assert!(!signup_allowed("closed", true, "a@x.com", "a@x.com"));
+        assert!(!signup_allowed("junk", true, "a@x.com", "a@x.com"), "a typo closes");
+        assert!(signup_allowed("invite", true, "A@x.com", "b@x.com, a@X.com"));
+        assert!(!signup_allowed("invite", true, "c@x.com", "b@x.com,"));
+    }
+
+    #[test]
+    fn cookie_secure_modes() {
+        assert!(cookie_secure("auto", "https://m.example", false));
+        assert!(cookie_secure("auto", "http://localhost:8001", true), "trusted proxy said https");
+        assert!(!cookie_secure("auto", "http://localhost:8001", false));
+        assert!(cookie_secure("", "http://localhost:8001", true));
+        assert!(cookie_secure("true", "http://localhost:8001", false));
+        assert!(!cookie_secure("false", "https://m.example", true));
     }
 }

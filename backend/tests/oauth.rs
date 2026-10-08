@@ -96,7 +96,7 @@ fn authz(client_id: &str, scope: Option<&str>, verifier: &str) -> Value {
 async fn approve(app: &TestApp, params: Value) -> String {
     let mut body = params;
     body["approve"] = json!(true);
-    let (status, res) = app.http("POST", "/api/oauth/consent", Some(body), true).await;
+    let (status, res) = app.http_session("POST", "/api/oauth/consent", Some(body)).await;
     assert_eq!(status, StatusCode::OK, "{res}");
     let url = reqwest::Url::parse(res["redirect_to"].as_str().unwrap()).unwrap();
     let q: std::collections::HashMap<_, _> = url.query_pairs().into_owned().collect();
@@ -174,7 +174,7 @@ async fn code_flow_with_pkce_issues_a_working_scoped_token() {
         authz(&client_id, Some("memory:read vaults:admin"), VERIFIER).as_object().unwrap().iter().map(|(k, v)| (k.clone(), v.as_str().unwrap().to_string())).collect::<Vec<_>>(),
     )
     .unwrap();
-    let (status, info) = app.http("GET", &format!("/api/oauth/consent?{q}"), None, true).await;
+    let (status, info) = app.http_session("GET", &format!("/api/oauth/consent?{q}"), None).await;
     assert_eq!(status, StatusCode::OK, "{info}");
     assert_eq!(info["client"]["name"], "Test Agent");
     assert_eq!(info["redirect_host"], "127.0.0.1:7777");
@@ -301,7 +301,7 @@ async fn refresh_rotates_and_reuse_revokes_the_family() {
     assert_eq!(mcp(&app, &access2, rpc("ping", json!({}))).await.status, StatusCode::UNAUTHORIZED);
     let dead = form(&app, "/oauth/token", &[("grant_type", "refresh_token"), ("refresh_token", &refresh2), ("client_id", &client_id)]).await;
     assert_eq!(dead.body["error"], "invalid_grant");
-    let (_, apps) = app.http("GET", "/api/oauth/grants", None, true).await;
+    let (_, apps) = app.http_session("GET", "/api/oauth/grants", None).await;
     assert_eq!(apps.as_array().unwrap().len(), 0);
 }
 
@@ -369,15 +369,15 @@ async fn revoke_endpoint_and_connected_apps() {
     assert_eq!(mcp(&app, access2, rpc("ping", json!({}))).await.status, StatusCode::OK);
 
     // the user disconnects the app from Settings: everything dies
-    let (_, apps) = app.http("GET", "/api/oauth/grants", None, true).await;
+    let (_, apps) = app.http_session("GET", "/api/oauth/grants", None).await;
     assert_eq!(apps[0]["client_name"], "Test Agent");
     assert!(apps[0]["last_used_at"].is_string());
     let id = apps[0]["id"].as_str().unwrap();
-    let (status, _) = app.http("DELETE", &format!("/api/oauth/grants/{id}"), None, true).await;
+    let (status, _) = app.http_session("DELETE", &format!("/api/oauth/grants/{id}"), None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(mcp(&app, access2, rpc("ping", json!({}))).await.status, StatusCode::UNAUTHORIZED);
     assert_eq!(form(&app, "/oauth/token", &[("grant_type", "refresh_token"), ("refresh_token", refresh2), ("client_id", &client_id)]).await.body["error"], "invalid_grant");
-    let (status, _) = app.http("DELETE", &format!("/api/oauth/grants/{id}"), None, true).await;
+    let (status, _) = app.http_session("DELETE", &format!("/api/oauth/grants/{id}"), None).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 
     // refresh-token revocation takes the whole grant
@@ -437,7 +437,7 @@ async fn redirects_pkce_and_scopes_are_validated() {
     // deny comes back as access_denied
     let mut body = authz(&client_id, None, VERIFIER);
     body["approve"] = json!(false);
-    let (_, res) = app.http("POST", "/api/oauth/consent", Some(body), true).await;
+    let (_, res) = app.http_session("POST", "/api/oauth/consent", Some(body)).await;
     assert!(res["redirect_to"].as_str().unwrap().contains("error=access_denied"));
 }
 
@@ -456,11 +456,11 @@ async fn registration_rejects_bad_redirects_and_cimd_cache_is_used() {
         "CREATE oauth_client SET client_id = '{id}', name = 'Cached App', redirect_uris = ['{REDIRECT}'], kind = 'cimd', expires_at = time::now() + 1h"
     )).await.unwrap().check().unwrap();
     let p = authz(id, None, VERIFIER);
-    let (status, info) = app.http("POST", "/api/oauth/consent", Some({ let mut b = p; b["approve"] = json!(true); b }), true).await;
+    let (status, info) = app.http_session("POST", "/api/oauth/consent", Some({ let mut b = p; b["approve"] = json!(true); b })).await;
     assert_eq!(status, StatusCode::OK, "{info}");
     let (status, info) = {
         let q = serde_urlencoded::to_string([("response_type", "code"), ("client_id", id), ("redirect_uri", REDIRECT), ("code_challenge", &challenge(VERIFIER)), ("code_challenge_method", "S256")]).unwrap();
-        app.http("GET", &format!("/api/oauth/consent?{q}"), None, true).await
+        app.http_session("GET", &format!("/api/oauth/consent?{q}"), None).await
     };
     assert_eq!((status, info["client"]["name"].as_str()), (StatusCode::OK, Some("Cached App")));
 }
@@ -488,7 +488,7 @@ async fn replaying_a_redeemed_code_revokes_the_tokens_issued_from_it() {
     assert_eq!(mcp(&app, access, rpc("ping", json!({}))).await.status, StatusCode::UNAUTHORIZED);
     let r = form(&app, "/oauth/token", &[("grant_type", "refresh_token"), ("refresh_token", refresh), ("client_id", &client_id)]).await;
     assert_eq!(r.body["error"], "invalid_grant");
-    let (_, apps) = app.http("GET", "/api/oauth/grants", None, true).await;
+    let (_, apps) = app.http_session("GET", "/api/oauth/grants", None).await;
     assert_eq!(apps.as_array().unwrap().len(), 0);
 }
 
@@ -541,4 +541,51 @@ async fn browser_mcp_clients_get_credential_free_cors_and_api_stays_strict() {
         .body(Body::from(rpc("ping", json!({})).to_string()))
         .unwrap();
     assert_eq!(app.router.clone().oneshot(req).await.unwrap().status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn refresh_grants_have_their_own_bucket_and_code_exchange_stays_strict() {
+    let app = TestApp::new().await;
+    let limits = eunomia_backend::ratelimit::RateConfig { auth_per_min: 2, refresh_per_min: 5, ..Default::default() };
+    let router = eunomia_backend::app_with(app.state.clone(), limits);
+    let post = |fields: Vec<(&'static str, &'static str)>| {
+        let router = router.clone();
+        async move {
+            let req = Request::builder()
+                .method("POST")
+                .uri("/oauth/token")
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(serde_urlencoded::to_string(&fields).unwrap()))
+                .unwrap();
+            router.oneshot(req).await.unwrap().status()
+        }
+    };
+    // many refreshes through one address and client: well past the strict 2 per minute
+    for i in 0..5 {
+        let s = post(vec![("grant_type", "refresh_token"), ("client_id", "c1"), ("refresh_token", "bad")]).await;
+        assert_ne!(s, StatusCode::TOO_MANY_REQUESTS, "refresh {i}");
+    }
+    assert_eq!(post(vec![("grant_type", "refresh_token"), ("client_id", "c1"), ("refresh_token", "bad")]).await, StatusCode::TOO_MANY_REQUESTS);
+    // another client behind the same address has its own bucket
+    assert_ne!(post(vec![("grant_type", "refresh_token"), ("client_id", "c2"), ("refresh_token", "bad")]).await, StatusCode::TOO_MANY_REQUESTS);
+    // code exchange is still on the strict per-address bucket
+    for _ in 0..2 {
+        assert_ne!(post(vec![("grant_type", "authorization_code"), ("code", "x")]).await, StatusCode::TOO_MANY_REQUESTS);
+    }
+    assert_eq!(post(vec![("grant_type", "authorization_code"), ("code", "x")]).await, StatusCode::TOO_MANY_REQUESTS);
+}
+
+#[tokio::test]
+async fn never_authorized_dcr_clients_are_pruned_after_24_hours() {
+    let app = TestApp::new().await;
+    let (stale, fresh) = (register(&app).await, register(&app).await);
+    let (granted_id, _) = connect(&app, None).await; // authorized: kept
+    let raw = app.state.control.test_raw();
+    raw.query("UPDATE oauth_client SET fetched_at = time::now() - 25h WHERE client_id IN [$a, $g]").bind(("a", stale.clone())).bind(("g", granted_id.clone())).await.unwrap();
+    raw.query("UPDATE oauth_client SET fetched_at = time::now() - 23h WHERE client_id = $f").bind(("f", fresh.clone())).await.unwrap();
+    let _ = register(&app).await; // registration prunes
+    let mut res = raw.query("SELECT VALUE client_id FROM oauth_client WHERE kind = 'dcr'").await.unwrap();
+    let left: Vec<String> = res.take(0).unwrap();
+    assert!(!left.contains(&stale), "unused for 25h and never authorized: {left:?}");
+    assert!(left.contains(&fresh) && left.contains(&granted_id), "{left:?}");
 }

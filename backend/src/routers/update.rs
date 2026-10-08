@@ -16,7 +16,7 @@ use axum::{
 use serde::Serialize;
 use serde_json::{json, Value};
 
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult, ErrorCode};
 use crate::models_user::User;
 use crate::state::AppState;
 
@@ -105,6 +105,15 @@ fn drop_marker(state: &AppState, name: &str) -> AppResult<Json<Value>> {
     Ok(Json(json!({ "configured": true, "requested": true })))
 }
 
+/// The updater restarts the stack and moves data: instance admins only.
+async fn require_admin(state: &AppState, user: &User) -> AppResult<()> {
+    if crate::authz::is_admin(&state.control, user).await? {
+        Ok(())
+    } else {
+        Err(AppError::coded(ErrorCode::AuthForbidden, "Only an instance admin can update this server."))
+    }
+}
+
 /// "Update now": apply the newest release.
 #[utoipa::path(
     operation_id = "requestUpdate",
@@ -115,7 +124,8 @@ fn drop_marker(state: &AppState, name: &str) -> AppResult<Json<Value>> {
     responses((status = 200, body = UpdateAck), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
     security(("cookie" = []), ("bearer" = [])),
 )]
-async fn request_update(State(state): State<AppState>, _user: User) -> AppResult<Json<Value>> {
+async fn request_update(State(state): State<AppState>, user: User) -> AppResult<Json<Value>> {
+    require_admin(&state, &user).await?;
     drop_marker(&state, "requested")
 }
 
@@ -130,7 +140,8 @@ async fn request_update(State(state): State<AppState>, _user: User) -> AppResult
     responses((status = 200, body = UpdateAck), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
     security(("cookie" = []), ("bearer" = [])),
 )]
-async fn check_now(State(state): State<AppState>, _user: User) -> AppResult<Json<Value>> {
+async fn check_now(State(state): State<AppState>, user: User) -> AppResult<Json<Value>> {
+    require_admin(&state, &user).await?;
     drop_marker(&state, "check")
 }
 

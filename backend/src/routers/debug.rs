@@ -35,7 +35,7 @@ pub struct Metrics {
     security(("cookie" = []), ("bearer" = [])),
 )]
 async fn get_metrics(State(state): State<AppState>, user: User) -> AppResult<Json<Metrics>> {
-    if !capsules::is_admin(&state.control, &user).await? {
+    if !crate::authz::is_admin(&state.control, &user).await? {
         return Err(AppError::coded(ErrorCode::AuthForbidden, "Only an instance admin can read metrics."));
     }
     Ok(Json(Metrics {
@@ -55,13 +55,13 @@ async fn get_metrics(State(state): State<AppState>, user: User) -> AppResult<Jso
     security(("cookie" = []), ("bearer" = [])),
 )]
 async fn get_capsule(State(state): State<AppState>, user: User, Path(trace_id): Path<String>) -> AppResult<Json<Capsule>> {
-    if !capsules::is_admin(&state.control, &user).await? {
+    if !crate::authz::is_admin(&state.control, &user).await? {
         return Err(AppError::coded(ErrorCode::AuthForbidden, "Only an instance admin can read failure capsules."));
     }
     capsules::get(&state.control, &trace_id)
         .await?
         // another org's capsule does not exist as far as this admin can tell (instance operators see all)
-        .filter(|c| capsules::is_operator(&user) || c.org.as_deref().is_none_or(|o| o == user.org.key()))
+        .filter(|c| crate::authz::is_operator(&user) || c.org.as_deref().is_none_or(|o| o == user.org.key()))
         .map(Json)
         .ok_or_else(|| AppError::not_found(format!("No failure capsule for trace {trace_id}.")))
 }
