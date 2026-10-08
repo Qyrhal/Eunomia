@@ -63,7 +63,7 @@ export async function downloadExport(): Promise<void> {
 // ---------------------------------------------------------------------------
 
 // One parsed Server-Sent Event from `POST /api/chat/threads/{id}` -- see
-// `chat/service.py`'s module docstring for the exact event shapes.
+// the backend chat module for the exact event shapes.
 export type ChatStreamEvent =
   | { type: "text"; delta: string }
   | { type: "tool_call"; name: string }

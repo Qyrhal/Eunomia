@@ -1,7 +1,7 @@
 # AI agents & MCP
 
 Eunomia is an MCP server (Streamable HTTP) at `http://localhost:8001/mcp`
-(also proxied at `http://localhost:3000/mcp`). It exposes the same tools the
+(also proxied at `http://localhost:3000/mcp`). The backend port listens on this machine only; agents on other machines use the frontend URL, e.g. `https://eunomia.example.com/mcp` (see [deployment](deployment.md#1-reverse-proxy--tls)). It exposes the same tools the
 in-app chat uses. Every call is scoped to the token's user and logged in the
 audit log if it changes anything.
 

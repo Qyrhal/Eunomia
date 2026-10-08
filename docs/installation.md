@@ -22,7 +22,7 @@ leaves `.env` secrets alone, and reconnects agents.
 | `--dir <path>` | `./eunomia` | install location |
 | `--ref <ref>` | latest release | tag, branch or `latest` |
 | `--frontend-port <port>` | `3000` | web app |
-| `--backend-port <port>` | `8001` | API + MCP server |
+| `--backend-port <port>` | `8001` | API + MCP server (bound to `127.0.0.1` only; see [deployment](deployment.md#1-reverse-proxy--tls)) |
 | `--openai-base-url <url>` | `https://api.openai.com/v1` | any OpenAI-compatible endpoint |
 | `--api-key <key>` | none | optional, see [agents](agents.md#do-i-need-an-openai-key) |
 | `--email <email>` | your git email | Eunomia account to create |

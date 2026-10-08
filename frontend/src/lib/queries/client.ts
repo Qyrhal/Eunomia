@@ -1,4 +1,4 @@
-import { QueryClient } from "@tanstack/react-query";
+import { MutationCache, QueryCache, QueryClient } from "@tanstack/react-query";
 import { ApiError } from "@/lib/api";
 
 // What every generated operation resolves to (responseStyle "fields", throwOnError off).
@@ -25,8 +25,24 @@ export async function call<D>(request: Result<D>): Promise<D> {
 // Retry only what can succeed on a second try: network failures, 5xx and a DB write conflict. Never 4xx.
 const retryable = (e: unknown) => !(e instanceof ApiError) || e.status >= 500 || e.code === "db.conflict";
 
+/** True for a 401 that means "sign in again" (not, say, wrong credentials on the login form). */
+export const isSessionEnded = (e: unknown) =>
+  e instanceof ApiError && e.status === 401 && ["auth.unauthorized", "auth.session_expired", "auth.token_expired"].includes(e.code);
+
+/** Sends any query or mutation that finds the session gone to /login, remembering where the user was. */
+function onSessionEnded(e: unknown) {
+  if (typeof window === "undefined" || !isSessionEnded(e)) return;
+  const { pathname, search } = window.location;
+  if (/^\/(login|register|consent|onboarding)/.test(pathname)) return;
+  // full reload on purpose: drops every cached query of the ended session
+  // eslint-disable-next-line @next/next/no-location-assign-relative-destination
+  window.location.href = `/login?next=${encodeURIComponent(pathname + search)}`;
+}
+
 export const makeQueryClient = () =>
   new QueryClient({
+    queryCache: new QueryCache({ onError: onSessionEnded }),
+    mutationCache: new MutationCache({ onError: onSessionEnded }),
     defaultOptions: {
       queries: {
         staleTime: 30_000,

@@ -8,21 +8,33 @@ vars are baked in at *build* time, not read at runtime.
 
 ## 1. Reverse proxy + TLS
 
-Put something in front of the `frontend` (`:3000`) and `backend` (`:8001`)
-containers that terminates TLS and proxies to them. [Caddy](https://caddyserver.com/)
-gets automatic HTTPS (it provisions and renews a Let's Encrypt cert itself)
-in a handful of lines, which is why it's recommended here over hand-rolling
-nginx + certbot:
+Put something in front of the `frontend` container (`:3000`) only. The
+frontend already proxies `/api`, `/mcp`, `/oauth`, `/.well-known`, `/healthz`
+and `/readyz` to the backend, and it is the one peer the backend trusts for
+`X-Forwarded-For` (`TRUSTED_PROXIES=frontend`). Do not send any path straight to the
+backend's port: it would see the Docker gateway address, so every user would share one
+rate-limit bucket and `COOKIE_SECURE=auto` could not see https.
+[Caddy](https://caddyserver.com/) gets automatic HTTPS (it provisions and renews a
+Let's Encrypt cert itself) in a few lines, which is why it's recommended here over
+hand-rolling nginx + certbot:
 
 ```caddyfile
 # Caddyfile
 eunomia.example.com {
-    reverse_proxy /api/* localhost:8001
-    reverse_proxy /mcp localhost:8001
-    reverse_proxy /healthz localhost:8001
-    reverse_proxy /* localhost:3000
+    reverse_proxy localhost:3000
 }
 ```
+
+Caddy sets `X-Forwarded-For` and `X-Forwarded-Proto` itself. Next.js passes
+both through unchanged to the backend (it only fills them in when they are
+missing), so the backend reads the real client address and sees https with no
+extra `TRUSTED_PROXIES` entry. Set `PUBLIC_URL=https://eunomia.example.com`.
+
+The compose file publishes the backend only on `127.0.0.1:8001`, so it is not
+reachable from the LAN. Agents on the same machine keep using
+`http://localhost:8001/mcp`; remote agents use `https://eunomia.example.com/mcp`.
+To expose the backend port anyway, set `BACKEND_BIND=0.0.0.0` in `.env` (requests
+then bypass the proxy chain, so the client address is the peer address).
 
 Run it alongside the compose stack (`caddy run` on the host, or as one more
 service in `docker-compose.yml` with ports 80/443 published). An nginx
@@ -49,7 +61,7 @@ their local-dev defaults in production:
 | `RATE_LIMIT_AUTH_PER_MIN` | `20` | Login, signup, OAuth token and failed-credential attempts per minute per client address (read from `X-Forwarded-For`, but only when the connecting peer is in `TRUSTED_PROXIES`). |
 | `RATE_LIMIT_WEBHOOK_PER_MIN` | `120` | Source webhook deliveries per minute per client address. |
 | `MAX_REQUEST_BODY_BYTES` | `1048576` | Largest request body any route accepts (413 over it). Raise it only if a route you use needs more. |
-| `TRUSTED_PROXIES` | loopback only (`127.0.0.0/8`, `::1/128`); `docker-compose.yml` sets `frontend` | Comma-separated proxies whose `X-Forwarded-For` is believed: CIDRs, bare addresses or hostnames. A hostname (the compose service `frontend`) is resolved at boot and again every 60 seconds; the last good answer is kept and failures are logged at warn. The right-most address that is not itself trusted is the client. A LAN or bridge peer that is not listed cannot spoof its address. Putting your own reverse proxy in front of the backend: add its address or name (`TRUSTED_PROXIES=frontend,203.0.113.5`). `none` trusts nobody (every client is its peer address). |
+| `TRUSTED_PROXIES` | loopback only (`127.0.0.0/8`, `::1/128`); `docker-compose.yml` sets `frontend` | Comma-separated proxies whose `X-Forwarded-For` is believed: CIDRs, bare addresses or hostnames. A hostname (the compose service `frontend`) is resolved at boot and again every 60 seconds; the last good answer is kept and failures are logged at warn. The right-most address that is not itself trusted is the client. A LAN or bridge peer that is not listed cannot spoof its address. Only if you point a proxy straight at the backend (not recommended, see section 1): add its address or name (`TRUSTED_PROXIES=frontend,203.0.113.5`). `none` trusts nobody (every client is its peer address). |
 | `PUBLIC_URL` | `http://localhost:8001` | The address MCP clients reach Eunomia at, no trailing slash, e.g. `https://eunomia.example.com`. Used in OAuth discovery documents and as the audience of OAuth tokens, so it must match what clients connect to. |
 | `SIGNUP` | `open` | Who can create an account once the install has a first user (the first user can always sign up). `open`: anyone who can reach the server. `invite`: only emails listed in `SIGNUP_ALLOWLIST` (comma separated) or `EUNOMIA_ADMIN_EMAILS`. `closed`: nobody. A typo closes signup. The default is `open` because a vault invitation needs an existing account (`no user with email`), so a team's second member has to be able to sign up before anyone can invite them. **On an instance reachable by people you do not trust, set `SIGNUP=invite` or `closed` after your team has signed up.** The same gate applies with `EUNOMIA_SIGNUP_ORG=personal`. |
 | `SIGNUP_ALLOWLIST` | empty | Emails allowed to sign up when `SIGNUP=invite`. |

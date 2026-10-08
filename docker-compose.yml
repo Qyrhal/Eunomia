@@ -38,7 +38,10 @@ services:
         docs: ./docs
     restart: always
     ports:
-      - "${BACKEND_PORT:-8001}:8001"
+      # Loopback only: local agents use http://localhost:8001. Browsers and remote agents go
+      # through the frontend (:3000), whose address the backend trusts for X-Forwarded-For.
+      # Set BACKEND_BIND=0.0.0.0 to expose it on the LAN (traffic then skips the proxy chain).
+      - "${BACKEND_BIND:-127.0.0.1}:${BACKEND_PORT:-8001}:8001"
     environment:
       - JWT_SECRET=${JWT_SECRET}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY}

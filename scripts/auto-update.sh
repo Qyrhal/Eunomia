@@ -73,7 +73,9 @@ main() {
     exit 1
   fi
 
+  local had_tag=false
   if grep -q '^EUNOMIA_IMAGE_TAG=' .env; then
+    had_tag=true
     sed -i.bak "s#^EUNOMIA_IMAGE_TAG=.*#EUNOMIA_IMAGE_TAG=$latest#" .env && rm -f .env.bak
   else
     echo "EUNOMIA_IMAGE_TAG=$latest" >> .env
@@ -96,7 +98,9 @@ main() {
     kill "$keepalive" 2>/dev/null
     if [ "$rc" -ne 0 ]; then
       git checkout --quiet "$prev_ref" 2>/dev/null
-      sed -i.bak "s#^EUNOMIA_IMAGE_TAG=.*#EUNOMIA_IMAGE_TAG=$current#" .env && rm -f .env.bak
+      # only write the old tag back if .env had one: "unknown" or a git tag would break the next pull
+      if $had_tag; then sed -i.bak "s#^EUNOMIA_IMAGE_TAG=.*#EUNOMIA_IMAGE_TAG=$current#" .env; else sed -i.bak '/^EUNOMIA_IMAGE_TAG=/d' .env; fi
+      rm -f .env.bak
       write_status "$status_dir" "$current" "$latest" false "SurrealDB 3 upgrade failed and was rolled back, nothing changed: $(tail -3 "$status_dir/upgrade.log")"
       exit 1
     fi

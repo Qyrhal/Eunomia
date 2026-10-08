@@ -101,6 +101,10 @@ check "failed upgrade: .env back on the old release" grep -q '^EUNOMIA_IMAGE_TAG
 check "failed upgrade: no encryption key injected (the old release must still decrypt)" bash -c "! grep -q '^ENCRYPTION_KEY' '$TMP/repo/.env'"
 check "failed upgrade: no JWT secret injected" bash -c "! grep -q '^JWT_SECRET=' '$TMP/repo/.env'"
 check "failed upgrade: status says why" grep -q 'upgrade failed' "$S/status.json"
+# same failure on an install whose .env has no EUNOMIA_IMAGE_TAG: the line must not be left behind
+sed -i.bak '/^EUNOMIA_IMAGE_TAG=/d' "$TMP/repo/.env" && rm -f "$TMP/repo/.env.bak"
+echo 1 > "$TMP/upgrade_rc"; : > "$TMP/docker.log"; touch "$S/requested"; update
+check "failed upgrade without a tag in .env: none written back" bash -c "! grep -q '^EUNOMIA_IMAGE_TAG=' '$TMP/repo/.env'"
 echo 0 > "$TMP/upgrade_rc"; : > "$TMP/docker.log"; touch "$S/requested"; update
 check "upgrade runs once, before the pull" bash -c "[ \$(grep -c UPGRADE '$TMP/docker.log') = 1 ] && [ \$(grep -n UPGRADE '$TMP/docker.log' | cut -d: -f1) -lt \$(grep -n 'compose pull' '$TMP/docker.log' | cut -d: -f1) ]"
 check "upgraded release is applied" test "$(cat "$TMP/repo/compose.yml")" = four
