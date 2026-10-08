@@ -5,7 +5,7 @@ import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } fr
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { AlertTriangle, ArrowRight } from "lucide-react";
-import type { ApiToken } from "@/lib/api";
+import type { ApiToken } from "@/lib/types";
 import type { EntityDetail, EntityKind, EntityMemory, SourceRow } from "@/lib/types";
 import { useCreateToken, useTokens } from "@/lib/queries/auth";
 import { entityKeys, type EntityList } from "@/lib/queries/entities";
@@ -95,7 +95,7 @@ function McpCard() {
     setBusy(true);
     setError(null);
     try {
-      const res = await createToken.mutateAsync("MCP");
+      const res = await createToken.mutateAsync({ name: "MCP" });
       setToken(res.token);
     } catch (err) {
       setError(failure(err, "Could not generate a token."));

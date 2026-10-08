@@ -3,9 +3,9 @@
 import ErrorLine, { failure, type Failure } from "@/components/ErrorLine";
 import { useEffect, useState } from "react";
 import { Loader2, ShieldAlert } from "lucide-react";
-import { oauth, type ConsentInfo } from "@/lib/api";
 import { getMe } from "@/lib/gen";
 import { call } from "@/lib/queries/client";
+import { useConsent, useDecideConsent } from "@/lib/queries/oauth";
 import EunomiaMark from "@/components/EunomiaMark";
 import ThemeToggle from "@/components/ThemeToggle";
 import { InputModeTracker } from "@/components/bits/motion";
@@ -14,34 +14,35 @@ import { InputModeTracker } from "@/components/bits/motion";
  * with the same query string; Allow or Deny posts the decision and follows the redirect the
  * server returns (the client's callback with a one-time code, or the denial). */
 export default function ConsentPage() {
-  const [info, setInfo] = useState<ConsentInfo | null>(null);
   const [error, setError] = useState<Failure | null>(null);
   const [busy, setBusy] = useState<"allow" | "deny" | null>(null);
   const [logoFailed, setLogoFailed] = useState(false);
+  const decideConsent = useDecideConsent();
+  // Read on the client only; until then the query stays disabled and the skeleton shows.
+  const params = typeof window === "undefined" ? null : Object.fromEntries(new URLSearchParams(window.location.search));
+  const consent = useConsent(params);
+  const info = consent.data ?? null;
+  const loadError = consent.error;
 
   useEffect(() => {
-    const query = window.location.search.slice(1);
-    oauth
-      .consent(query)
-      .then(setInfo)
-      .catch(async (e) => {
-        // No session: sign in first, then come straight back here.
-        const signedIn = await call(getMe()).then(() => true, () => false);
-        if (!signedIn) {
-          const back = encodeURIComponent(`/consent?${query}`);
-          window.location.replace(`/login?next=${back}`);
-          return;
-        }
-        setError(failure(e, "This connection request is not valid. Start it again from the app."));
-      });
-  }, []);
+    if (!loadError) return;
+    (async () => {
+      // No session: sign in first, then come straight back here.
+      const signedIn = await call(getMe()).then(() => true, () => false);
+      if (!signedIn) {
+        const back = encodeURIComponent(`/consent?${window.location.search.slice(1)}`);
+        window.location.replace(`/login?next=${back}`);
+        return;
+      }
+      setError(failure(loadError, "This connection request is not valid. Start it again from the app."));
+    })();
+  }, [loadError]);
 
   async function decide(approve: boolean) {
     setBusy(approve ? "allow" : "deny");
     setError(null);
     try {
-      const params = Object.fromEntries(new URLSearchParams(window.location.search));
-      const { redirect_to } = await oauth.decide(params, approve);
+      const { redirect_to } = await decideConsent.mutateAsync({ params: params ?? {}, approve });
       window.location.assign(redirect_to);
     } catch (e) {
       setError(failure(e, "Could not complete the request. Start it again from the app."));
