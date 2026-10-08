@@ -11,8 +11,10 @@ pub mod error;
 pub mod jobs;
 pub mod migrate;
 pub mod models_user;
+pub mod oauth;
 pub mod openapi;
 pub mod routers;
+pub mod scopes;
 pub mod sources;
 pub mod state;
 pub mod store;
@@ -58,11 +60,13 @@ pub fn app(state: AppState) -> axum::Router {
         .merge(routers::entities::router())
         .merge(routers::tools::router())
         .merge(routers::sources::router())
-        .merge(routers::sources::webhook_router());
+        .merge(routers::sources::webhook_router())
+        .merge(routers::oauth::router());
 
     axum::Router::new()
         .route("/healthz", axum::routing::get(healthz))
         .merge(routers::mcp::router())
+        .merge(oauth::router())
         .nest("/api", api)
         .layer(axum::middleware::from_fn(telemetry::trace_request))
         .layer(cors)

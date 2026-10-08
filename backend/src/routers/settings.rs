@@ -10,7 +10,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use surrealdb::RecordId;
 
@@ -64,17 +64,33 @@ fn app_settings_id(owner: &RecordId) -> RecordId {
     RecordId::from_table_key("app_settings", owner.key().clone())
 }
 
-fn out(row: &AppSettingsRow) -> Value {
-    json!({
-        "embedding_model": row.embedding_model,
-        "sync_intervals": row.sync_intervals,
-        "theme": row.theme,
-        "openai_api_key_set": !row.openai_api_key_encrypted.is_empty(),
-        "openai_base_url": row.openai_base_url,
-        "observations_mission": row.observations_mission,
-        "memory_skill": crate::docs::effective_skill(&row.memory_skill),
-        "memory_skill_custom": !row.memory_skill.trim().is_empty(),
-    })
+#[derive(Serialize, utoipa::ToSchema)]
+struct SettingsOut {
+    embedding_model: String,
+    /// Open map of source key to sync interval seconds.
+    #[schema(value_type = Object)]
+    sync_intervals: Value,
+    /// Open UI theme preferences.
+    #[schema(value_type = Object)]
+    theme: Value,
+    openai_api_key_set: bool,
+    openai_base_url: String,
+    observations_mission: String,
+    memory_skill: String,
+    memory_skill_custom: bool,
+}
+
+fn out(row: &AppSettingsRow) -> SettingsOut {
+    SettingsOut {
+        embedding_model: row.embedding_model.clone(),
+        sync_intervals: row.sync_intervals.clone(),
+        theme: row.theme.clone(),
+        openai_api_key_set: !row.openai_api_key_encrypted.is_empty(),
+        openai_base_url: row.openai_base_url.clone(),
+        observations_mission: row.observations_mission.clone(),
+        memory_skill: crate::docs::effective_skill(&row.memory_skill).to_string(),
+        memory_skill_custom: !row.memory_skill.trim().is_empty(),
+    }
 }
 
 /// The `app_settings:<owner_id>` row, creating it with defaults if missing.
@@ -190,40 +206,41 @@ async fn resolve_openai(db: &Db, owner: &RecordId, env_api_key: &Option<String>,
     Ok((base_url, key))
 }
 
-// ponytail: untyped response, give it a struct (see docs/architecture/foundation-plan.md 3.9)
 #[utoipa::path(
+    operation_id = "getSettings",
     get,
     path = "/api/settings",
     tag = "settings",
     summary = "Read app settings",
-    responses((status = 200, body = Object), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    responses((status = 200, body = SettingsOut), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
     security(("cookie" = []), ("bearer" = [])),
 )]
-async fn read_settings(State(state): State<AppState>, user: User) -> AppResult<Json<Value>> {
+async fn read_settings(State(state): State<AppState>, user: User) -> AppResult<Json<SettingsOut>> {
     let row = get_app_settings(&state.db, &user.id).await?;
     Ok(Json(out(&row)))
 }
 
-// ponytail: untyped response, give it a struct (see docs/architecture/foundation-plan.md 3.9)
 #[utoipa::path(
+    operation_id = "updateSettings",
     patch,
     path = "/api/settings",
     tag = "settings",
     summary = "Update app settings",
     request_body = SettingsUpdate,
-    responses((status = 200, body = Object), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    responses((status = 200, body = SettingsOut), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
     security(("cookie" = []), ("bearer" = [])),
 )]
 async fn patch_settings(
     State(state): State<AppState>,
     user: User,
     Json(body): Json<SettingsUpdate>,
-) -> AppResult<Json<Value>> {
+) -> AppResult<Json<SettingsOut>> {
     let row = update_app_settings(&state.db, &user.id, &body, &state.settings.encryption_key).await?;
     Ok(Json(out(&row)))
 }
 
 #[utoipa::path(
+    operation_id = "completeOnboarding",
     post,
     path = "/api/settings/complete-onboarding",
     tag = "settings",
@@ -250,19 +267,26 @@ struct ModelEntry {
     id: String,
 }
 
+#[derive(Serialize, utoipa::ToSchema)]
+struct ModelsOut {
+    models: Vec<String>,
+    /// Null on success.
+    error: Option<String>,
+}
+
 /// Lists models from the caller's configured OpenAI-compatible base URL.
 /// Never errors out to the caller -- an unreachable base URL or auth
 /// failure comes back as `{"models": [], "error": "..."}`.
-// ponytail: untyped response, give it a struct (see docs/architecture/foundation-plan.md 3.9)
 #[utoipa::path(
+    operation_id = "listOpenaiModels",
     get,
     path = "/api/settings/openai-models",
     tag = "settings",
     summary = "List models the configured OpenAI endpoint offers",
-    responses((status = 200, body = Object), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    responses((status = 200, body = ModelsOut), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
     security(("cookie" = []), ("bearer" = [])),
 )]
-async fn openai_models(State(state): State<AppState>, user: User) -> AppResult<Json<Value>> {
+async fn openai_models(State(state): State<AppState>, user: User) -> AppResult<Json<ModelsOut>> {
     let (base_url, api_key) = resolve_openai(&state.db, &user.id, &state.settings.openai_api_key, &state.settings.encryption_key).await?;
     let url = format!("{}/models", base_url.trim_end_matches('/'));
     let auth_key = if api_key.is_empty() { "not-needed" } else { api_key.as_str() };
@@ -270,21 +294,21 @@ async fn openai_models(State(state): State<AppState>, user: User) -> AppResult<J
     let client = reqwest::Client::new();
     let resp = match client.get(&url).bearer_auth(auth_key).send().await {
         Ok(r) => r,
-        Err(e) => return Ok(Json(json!({ "models": [], "error": e.to_string() }))),
+        Err(e) => return Ok(Json(ModelsOut { models: vec![], error: Some(e.to_string()) })),
     };
 
     if !resp.status().is_success() {
         let status = resp.status();
-        return Ok(Json(json!({ "models": [], "error": format!("HTTP {status}") })));
+        return Ok(Json(ModelsOut { models: vec![], error: Some(format!("HTTP {status}")) }));
     }
 
     match resp.json::<ModelsListResponse>().await {
         Ok(body) => {
             let mut ids: Vec<String> = body.data.into_iter().map(|m| m.id).collect();
             ids.sort();
-            Ok(Json(json!({ "models": ids, "error": Value::Null })))
+            Ok(Json(ModelsOut { models: ids, error: None }))
         }
-        Err(e) => Ok(Json(json!({ "models": [], "error": e.to_string() }))),
+        Err(e) => Ok(Json(ModelsOut { models: vec![], error: Some(e.to_string()) })),
     }
 }
 
@@ -315,20 +339,20 @@ mod tests {
 
     #[test]
     fn out_reports_key_set_true_when_encrypted_value_present() {
-        let v = out(&row(true));
+        let v = serde_json::to_value(out(&row(true))).unwrap();
         assert_eq!(v["openai_api_key_set"], json!(true));
         assert!(v.get("openai_api_key_encrypted").is_none());
     }
 
     #[test]
     fn out_reports_key_set_false_when_empty() {
-        let v = out(&row(false));
+        let v = serde_json::to_value(out(&row(false))).unwrap();
         assert_eq!(v["openai_api_key_set"], json!(false));
     }
 
     #[test]
     fn out_never_leaks_the_raw_secret() {
-        let v = out(&row(true));
+        let v = serde_json::to_value(out(&row(true))).unwrap();
         let dumped = v.to_string();
         assert!(!dumped.contains("sk-very-secret-123"));
     }

@@ -13,11 +13,36 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use serde::Serialize;
 use serde_json::{json, Value};
 
 use crate::error::AppResult;
 use crate::models_user::User;
 use crate::state::AppState;
+
+/// Documents the body of `GET /update/status`. The handler merges the on-disk
+/// `status.json` written by `scripts/auto-update.sh` verbatim, so every field
+/// except `configured` is absent when the updater is not configured.
+#[derive(Serialize, utoipa::ToSchema)]
+#[allow(dead_code)] // schema only: the handler passes the file's JSON through
+struct UpdateStatus {
+    configured: bool,
+    current_version: Option<String>,
+    latest_version: Option<String>,
+    update_available: Option<bool>,
+    checked_at: Option<String>,
+    applying: Option<bool>,
+    error: Option<String>,
+}
+
+/// Body of `POST /update/request` and `/update/check`.
+#[derive(Serialize, utoipa::ToSchema)]
+#[allow(dead_code)] // schema only: built with json! to keep the wire shape in one place
+struct UpdateAck {
+    configured: bool,
+    /// Present only when the updater is configured.
+    requested: Option<bool>,
+}
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -42,13 +67,13 @@ fn merge_status(data: Value) -> Value {
     merged
 }
 
-// ponytail: untyped response, give it a struct (see docs/architecture/foundation-plan.md 3.9)
 #[utoipa::path(
+    operation_id = "getUpdateStatus",
     get,
     path = "/api/update/status",
     tag = "update",
     summary = "Updater status",
-    responses((status = 200, body = Object), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    responses((status = 200, body = UpdateStatus), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
     security(("cookie" = []), ("bearer" = [])),
 )]
 async fn get_status(State(state): State<AppState>, _user: User) -> AppResult<Json<Value>> {
@@ -81,13 +106,13 @@ fn drop_marker(state: &AppState, name: &str) -> AppResult<Json<Value>> {
 }
 
 /// "Update now": apply the newest release.
-// ponytail: untyped response, give it a struct (see docs/architecture/foundation-plan.md 3.9)
 #[utoipa::path(
+    operation_id = "requestUpdate",
     post,
     path = "/api/update/request",
     tag = "update",
     summary = "Ask the updater to update",
-    responses((status = 200, body = Object), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    responses((status = 200, body = UpdateAck), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
     security(("cookie" = []), ("bearer" = [])),
 )]
 async fn request_update(State(state): State<AppState>, _user: User) -> AppResult<Json<Value>> {
@@ -96,13 +121,13 @@ async fn request_update(State(state): State<AppState>, _user: User) -> AppResult
 
 /// "Check now": ask GitHub for the newest release without waiting for the
 /// 10-minute throttle.
-// ponytail: untyped response, give it a struct (see docs/architecture/foundation-plan.md 3.9)
 #[utoipa::path(
+    operation_id = "checkForUpdate",
     post,
     path = "/api/update/check",
     tag = "update",
     summary = "Ask the updater to check now",
-    responses((status = 200, body = Object), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    responses((status = 200, body = UpdateAck), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
     security(("cookie" = []), ("bearer" = [])),
 )]
 async fn check_now(State(state): State<AppState>, _user: User) -> AppResult<Json<Value>> {

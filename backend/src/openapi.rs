@@ -83,6 +83,7 @@ pub fn spec() -> utoipa::openapi::OpenApi {
         routers::connectors::Doc::openapi(),
         routers::entities::Doc::openapi(),
         routers::export::Doc::openapi(),
+        routers::oauth::Doc::openapi(),
         routers::settings::Doc::openapi(),
         routers::sources::Doc::openapi(),
         routers::tools::Doc::openapi(),
@@ -102,6 +103,7 @@ pub fn spec_json() -> String {
 }
 
 #[utoipa::path(
+    operation_id = "getOpenapi",
     get,
     path = "/api/openapi.json",
     tag = "meta",
