@@ -244,6 +244,7 @@ function LiveMemory({ rows, selectedId, onSelect }: { rows: LiveRow[] | null; se
             <tr>
               <th style={{ width: 112 }}>Author</th>
               <th>Memory</th>
+              <th className="hidden md:table-cell" style={{ width: 160 }}>Entity</th>
               <th className="text-right" style={{ width: 56 }}>
                 Age
               </th>
@@ -287,6 +288,12 @@ function LiveMemory({ rows, selectedId, onSelect }: { rows: LiveRow[] | null; se
                     >
                       {m.text}
                     </button>
+                  </td>
+                  <td className="hidden md:table-cell overflow-hidden">
+                    <span className="flex items-center gap-1.5 min-w-0 text-[12.5px]" style={{ color: "var(--ink-dim)" }}>
+                      <span className="dot" style={{ background: `var(--kind-${m.entityKind})` }} aria-hidden />
+                      <span className="truncate">{m.entityName}</span>
+                    </span>
                   </td>
                   <td className="text-right font-mono text-[12px]" style={{ color: "var(--ink-faint)" }}>
                     <time dateTime={m.created_at}>{age(m.created_at)}</time>

@@ -415,9 +415,15 @@ export const chat = {
   // event as it arrives. Not built on `api.post`/EventSource: EventSource
   // can't send a POST body, and this needs to parse a `ReadableStream`
   // chunk-by-chunk rather than wait for the whole response.
-  send: async (threadId: string, message: string, onEvent: (event: ChatStreamEvent) => void): Promise<void> => {
+  send: async (
+    threadId: string,
+    message: string,
+    onEvent: (event: ChatStreamEvent) => void,
+    signal?: AbortSignal
+  ): Promise<void> => {
     const res = await fetch(`${API_URL}/api/chat/threads/${encodeURIComponent(threadId)}`, {
       method: "POST",
+      signal,
       credentials: "include",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message }),

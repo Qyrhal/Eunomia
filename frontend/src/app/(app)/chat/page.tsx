@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { AlertCircle, ArrowUp, Check, ChevronRight, CornerDownLeft, Loader2, RotateCcw, Plus, Trash2, Wrench } from "lucide-react";
+import { AlertCircle, ArrowUp, Square, Check, ChevronRight, CornerDownLeft, Loader2, RotateCcw, Plus, Trash2, Wrench } from "lucide-react";
 import Markdown from "@/components/Markdown";
 import AuthorTag from "@/components/AuthorTag";
 import { auth, chat, type ChatMessage, type ChatThread } from "@/lib/api";
@@ -377,6 +377,8 @@ export default function ChatPage() {
   }
 
   // `retry` resends the message already on screen instead of adding it again.
+  const abortRef = useRef<AbortController | null>(null);
+
   async function send(raw: string = input, retry = false) {
     const text = raw.trim();
     if (!text || sending || !activeId) return;
@@ -391,8 +393,10 @@ export default function ChatPage() {
     setStreamingText("");
     setLiveSteps([]);
     const steps: ToolStep[] = [];
+    const controller = new AbortController();
+    abortRef.current = controller;
+    let reply = "";
     try {
-      let reply = "";
       await chat.send(threadId, text, (event) => {
         if (event.type === "text") {
           reply += event.delta;
@@ -408,7 +412,7 @@ export default function ChatPage() {
           setError(event.message);
           setNeedsKey(/OpenAI API key/i.test(event.message));
         }
-      });
+      }, controller.signal);
       if (reply || steps.length) {
         // the stream only names tools; reopening the thread loads their full arguments and results
         const tool_calls = steps.map((s, i) => ({ id: `live_${i}`, type: "function" as const, function: { name: s.name, arguments: "" } }));
@@ -416,10 +420,16 @@ export default function ChatPage() {
       }
       chat.threads.list().then(setThreads);
     } catch (e) {
+      if (controller.signal.aborted) {
+        // stopped by the person: keep whatever streamed so far
+        if (reply) setMessages((prev) => [...(prev ?? []), { role: "assistant", content: reply, created_at: new Date().toISOString() }]);
+        return;
+      }
       const msg = e instanceof Error ? e.message : "Something went wrong.";
       setError(msg);
       setNeedsKey(/OpenAI API key/i.test(msg));
     } finally {
+      abortRef.current = null;
       setSending(false);
       setStreamingText("");
       setLiveSteps([]);
@@ -557,9 +567,15 @@ export default function ChatPage() {
                 <span className="hidden sm:flex items-center gap-1 text-[11.5px]" style={{ color: "var(--ink-faint)" }}>
                   <span className="kbd">Enter</span> send <span className="kbd ml-1.5">Shift Enter</span> new line
                 </span>
+                {sending ? (
+                  <button type="button" onClick={() => abortRef.current?.abort()} aria-label="Stop" title="Stop" className="btn btn-icon ml-auto">
+                    <Square size={12} strokeWidth={2.5} fill="currentColor" />
+                  </button>
+                ) : (
                 <button type="submit" disabled={!canSend} aria-label="Send" className="btn btn-primary btn-icon ml-auto">
-                  {sending ? <Loader2 size={15} strokeWidth={2} className="animate-spin" /> : <ArrowUp size={16} strokeWidth={2} />}
+                  <ArrowUp size={16} strokeWidth={2} />
                 </button>
+                )}
               </div>
             </div>
           </form>

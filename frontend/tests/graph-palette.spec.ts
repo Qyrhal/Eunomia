@@ -76,15 +76,16 @@ test.describe("Command palette", () => {
     await expect(page.getByText("What's next", { exact: true })).toBeVisible(); // hydrated
 
     const input = page.getByPlaceholder("Jump to a page…");
+    const palette = page.getByRole("dialog", { name: "Command palette" });
     await page.keyboard.press("ControlOrMeta+k");
     await expect(input).toBeFocused();
 
     await input.fill("Ada");
-    await expect(page.getByText("Ada Lovelace")).toBeVisible();
+    await expect(palette.getByText("Ada Lovelace")).toBeVisible();
 
     // Below the search threshold, data hits are hidden again.
     await input.fill("A");
-    await expect(page.getByText("Ada Lovelace")).toHaveCount(0);
+    await expect(palette.getByText("Ada Lovelace")).toHaveCount(0);
 
     await input.fill("sett");
     await page.keyboard.press("Enter");

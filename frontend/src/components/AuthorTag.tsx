@@ -4,7 +4,20 @@
 
 const AUTHOR_COLORS = 6;
 
+// Well-known agents get fixed, distinct colours so two of them never share one.
+const KNOWN: Record<string, number> = {
+  "claude code": 1,
+  claude: 1,
+  codex: 6,
+  cursor: 3,
+  eunomia: 5,
+  gemini: 2,
+  windsurf: 4,
+};
+
 export function authorColor(name: string): string {
+  const known = KNOWN[name.trim().toLowerCase()];
+  if (known) return `var(--author-${known})`;
   let h = 0;
   for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
   return `var(--author-${(h % AUTHOR_COLORS) + 1})`;

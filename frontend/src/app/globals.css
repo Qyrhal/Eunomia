@@ -167,6 +167,7 @@ body {
 
 .font-mono {
   font-family: var(--font-mono), ui-monospace, monospace;
+  font-feature-settings: normal;
   font-variant-numeric: tabular-nums;
 }
 
@@ -230,13 +231,17 @@ body {
   border-top: var(--hair) solid var(--border);
 }
 
-/* Figma-style selection: accent outline with four square handles. */
+/* Figma-style selection: accent outline with four square handles. Table rows
+   get the outline only (a pseudo-element would become an extra cell). */
 .frame-selected {
   position: relative;
   outline: 1px solid var(--accent);
   outline-offset: -1px;
 }
-.frame-selected::after {
+tr.frame-selected::after {
+  content: none;
+}
+.frame-selected:not(tr)::after {
   content: "";
   position: absolute;
   inset: -3px;
@@ -355,7 +360,16 @@ textarea::placeholder {
 button.pill:active {
   transform: scale(0.97);
 }
-.pill[aria-pressed="true"],
+/* Multi-select filters that are on: quiet, so a row of them never turns
+   into a wall of accent. Single-choice selection (tabs) keeps the accent. */
+.pill[aria-pressed="true"] {
+  border-color: var(--border-strong);
+  background: var(--surface-hover);
+  color: var(--ink);
+}
+.pill[aria-pressed="false"] {
+  opacity: 0.7;
+}
 .pill[aria-selected="true"] {
   border-color: var(--accent);
   background: var(--accent-soft);
@@ -453,10 +467,6 @@ button.pill:active {
   .data-table tbody tr:hover td {
     background: var(--surface-raised);
   }
-}
-
-.stat-ring-arc {
-  transition: stroke-dasharray 0.6s var(--ease-out);
 }
 
 /* Skeleton block for loading states. */
