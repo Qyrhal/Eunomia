@@ -14,7 +14,7 @@ use serde_json::json;
 use surrealdb::{Datetime, RecordId};
 
 use crate::auth::{self, SESSION_COOKIE};
-use crate::error::{AppError, AppResult};
+use crate::error::{AppError, AppResult, ErrorCode};
 use crate::models_user::{self, User};
 use crate::state::AppState;
 
@@ -67,8 +67,8 @@ async fn register(
     let user = models_user::register_user(&state.db, &body.email, &body.password)
         .await
         .map_err(|e| {
-            if e.message.contains("already contains") || e.message.to_lowercase().contains("already exist") {
-                AppError::new(StatusCode::CONFLICT, "A user with that email already exists.")
+            if e.code == ErrorCode::DbDuplicate {
+                AppError::coded(ErrorCode::AuthEmailTaken, "A user with that email already exists.")
             } else {
                 e
             }
@@ -165,10 +165,10 @@ async fn delete_token(
     user: User,
     Path(token_id): Path<String>,
 ) -> AppResult<Json<serde_json::Value>> {
-    let rid: RecordId = token_id.parse().map_err(|_| AppError::not_found("Token not found."))?;
+    let rid: RecordId = token_id.parse().map_err(|_| AppError::coded(ErrorCode::AuthNotFound, "Token not found."))?;
     let ok = models_user::revoke_api_token(&state.db, &user.id, &rid).await?;
     if !ok {
-        return Err(AppError::not_found("Token not found."));
+        return Err(AppError::coded(ErrorCode::AuthNotFound, "Token not found."));
     }
     Ok(Json(json!({ "ok": true })))
 }
@@ -221,11 +221,11 @@ async fn revoke_session_route(
     struct Row {
         owner: RecordId,
     }
-    let rid: RecordId = session_id.parse().map_err(|_| AppError::not_found("Session not found."))?;
+    let rid: RecordId = session_id.parse().map_err(|_| AppError::coded(ErrorCode::AuthNotFound, "Session not found."))?;
     let row: Option<Row> = state.db.select(rid.clone()).await?;
     match row {
         Some(r) if r.owner == user.id => {}
-        _ => return Err(AppError::not_found("Session not found.")),
+        _ => return Err(AppError::coded(ErrorCode::AuthNotFound, "Session not found.")),
     }
     state.db.query("UPDATE $id SET revoked = true").bind(("id", rid)).await?;
     Ok(Json(json!({ "ok": true })))

@@ -23,7 +23,7 @@ use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::StreamExt as _;
 
 use crate::chat::service::{self, ChatEvent};
-use crate::error::{AppError, AppResult};
+use crate::error::{AppError, AppResult, ErrorCode};
 use crate::models_user::User;
 use crate::state::AppState;
 
@@ -53,7 +53,7 @@ struct ThreadCreate {
 /// Path params are plain strings; parse here, same convention as
 /// `routers/vaults.rs`'s `parse_vault_id`.
 fn parse_thread_id(thread_id: &str) -> AppResult<RecordId> {
-    thread_id.parse().map_err(|_| AppError::not_found("not found"))
+    thread_id.parse().map_err(|_| AppError::coded(ErrorCode::ChatThreadNotFound, "not found"))
 }
 
 async fn list_threads(State(state): State<AppState>, user: User) -> AppResult<Json<Vec<service::ThreadOut>>> {
@@ -76,7 +76,7 @@ async fn delete_thread_route(
     let rid = parse_thread_id(&thread_id)?;
     let ok = service::delete_thread(&state.db, &user.id, &rid).await?;
     if !ok {
-        return Err(AppError::not_found("not found"));
+        return Err(AppError::coded(ErrorCode::ChatThreadNotFound, "not found"));
     }
     Ok(Json(json!({ "ok": true })))
 }
@@ -88,7 +88,7 @@ async fn thread_history(
 ) -> AppResult<Json<Vec<service::MessageOut>>> {
     let rid = parse_thread_id(&thread_id)?;
     let hist = service::history(&state.db, &user.id, &rid).await?;
-    hist.map(Json).ok_or_else(|| AppError::not_found("not found"))
+    hist.map(Json).ok_or_else(|| AppError::coded(ErrorCode::ChatThreadNotFound, "not found"))
 }
 
 async fn send_message(
@@ -99,7 +99,7 @@ async fn send_message(
 ) -> AppResult<Sse<impl Stream<Item = Result<Event, Infallible>>>> {
     let rid = parse_thread_id(&thread_id)?;
     if service::get_thread(&state.db, &user.id, &rid).await?.is_none() {
-        return Err(AppError::not_found("not found"));
+        return Err(AppError::coded(ErrorCode::ChatThreadNotFound, "not found"));
     }
     service::ensure_configured(&state.db, &state.settings, &user.id)
         .await

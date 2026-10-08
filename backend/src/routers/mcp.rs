@@ -18,6 +18,7 @@ use axum::{
 };
 use serde_json::{json, Value};
 
+use crate::error::{AppError, ErrorCode};
 use crate::models_user::{self, User};
 use crate::state::AppState;
 use crate::tools::registry;
@@ -42,23 +43,19 @@ async fn method_not_allowed() -> Response {
 
 async fn handle(State(state): State<AppState>, headers: HeaderMap, body: String) -> Response {
     if !origin_allowed(&headers, &state.settings.cors_allowed_origins) {
-        return (StatusCode::FORBIDDEN, "origin not allowed").into_response();
+        return AppError::coded(ErrorCode::AuthForbidden, "origin not allowed").into_response();
     }
     if let Some(v) = headers.get("mcp-protocol-version").and_then(|v| v.to_str().ok())
         && !SUPPORTED_VERSIONS.contains(&v) {
-            return (StatusCode::BAD_REQUEST, format!("unsupported MCP-Protocol-Version {v}")).into_response();
+            return AppError::bad_request(format!("unsupported MCP-Protocol-Version {v}")).into_response();
         }
     let Some(user) = bearer_user(&state, &headers).await else {
-        return (
-            StatusCode::UNAUTHORIZED,
-            [(header::WWW_AUTHENTICATE, "Bearer")],
-            Json(json!({ "error": "missing or invalid API token -- create one on the Eunomia dashboard" })),
-        )
-            .into_response();
+        let err = AppError::unauthorized("missing or invalid API token -- create one on the Eunomia dashboard");
+        return ([(header::WWW_AUTHENTICATE, "Bearer")], err).into_response();
     };
 
     let Ok(message) = serde_json::from_str::<Value>(&body) else {
-        return (StatusCode::BAD_REQUEST, Json(error_response(Value::Null, -32700, "Parse error"))).into_response();
+        return (StatusCode::BAD_REQUEST, Json(error_response(Value::Null, -32700, ErrorCode::ValidationInvalid, "Parse error"))).into_response();
     };
 
     let replies: Vec<Value> = match &message {
@@ -86,7 +83,9 @@ async fn handle(State(state): State<AppState>, headers: HeaderMap, body: String)
 async fn bearer_user(state: &AppState, headers: &HeaderMap) -> Option<User> {
     let value = headers.get(header::AUTHORIZATION)?.to_str().ok()?;
     let token = value.strip_prefix("Bearer ").or_else(|| value.strip_prefix("bearer "))?;
-    models_user::verify_api_token(&state.db, token.trim()).await.ok().flatten()
+    let user = models_user::verify_api_token(&state.db, token.trim()).await.ok().flatten()?;
+    crate::telemetry::record_user(&user.id.to_string());
+    Some(user)
 }
 
 /// DNS-rebinding guard the spec requires: non-browser clients send no
@@ -114,7 +113,7 @@ async fn handle_message(state: &AppState, user: &User, message: &Value) -> Optio
         if message.get("result").is_some() || message.get("error").is_some() {
             return None;
         }
-        return Some(error_response(message.get("id").cloned().unwrap_or(Value::Null), -32600, "Invalid Request"));
+        return Some(error_response(message.get("id").cloned().unwrap_or(Value::Null), -32600, ErrorCode::ValidationInvalid, "Invalid Request"));
     };
     let id = message.get("id").cloned()?; // notification: nothing to send back
     let params = message.get("params").cloned().unwrap_or(Value::Null);
@@ -128,7 +127,7 @@ async fn handle_message(state: &AppState, user: &User, message: &Value) -> Optio
         "ping" => result_response(id, json!({})),
         "tools/list" => result_response(id, json!({ "tools": tool_list() })),
         "tools/call" => call_tool(state, user, id, &params).await,
-        _ => error_response(id, -32601, &format!("Method not found: {method}")),
+        _ => error_response(id, -32601, ErrorCode::ValidationInvalid, &format!("Method not found: {method}")),
     })
 }
 
@@ -173,10 +172,10 @@ fn tool_list() -> Vec<Value> {
 
 async fn call_tool(state: &AppState, user: &User, id: Value, params: &Value) -> Value {
     let Some(name) = params.get("name").and_then(Value::as_str) else {
-        return error_response(id, -32602, "tools/call needs a tool `name`");
+        return error_response(id, -32602, ErrorCode::ValidationInvalid, "tools/call needs a tool `name`");
     };
     if !registry::all_tools().contains_key(name) {
-        return error_response(id, -32602, &format!("Unknown tool: {name}"));
+        return error_response(id, -32602, ErrorCode::ToolNotFound, &format!("Unknown tool: {name}"));
     }
     let args = match params.get("arguments") {
         None | Some(Value::Null) => json!({}),
@@ -184,13 +183,13 @@ async fn call_tool(state: &AppState, user: &User, id: Value, params: &Value) -> 
     };
 
     // Tool failures are results the model should see (isError), not
-    // protocol errors.
+    // protocol errors. The value carries `error`, `code` and `trace_id`.
     let (value, is_error) = match registry::call(state, &user.id, name, args).await {
         Ok(v) => {
             let is_error = v.get("error").is_some();
             (v, is_error)
         }
-        Err(e) => (json!({ "error": e.message }), true),
+        Err(e) => (e.to_tool_value(), true),
     };
     let text = serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string());
     result_response(id, json!({ "content": [{ "type": "text", "text": text }], "isError": is_error }))
@@ -200,8 +199,10 @@ fn result_response(id: Value, result: Value) -> Value {
     json!({ "jsonrpc": "2.0", "id": id, "result": result })
 }
 
-fn error_response(id: Value, code: i64, message: &str) -> Value {
-    json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } })
+/// JSON-RPC protocol error; `data` carries the same stable `code` and `trace_id` as REST errors.
+fn error_response(id: Value, code: i64, app_code: ErrorCode, message: &str) -> Value {
+    let data = json!({ "code": app_code.as_str(), "trace_id": crate::telemetry::current_trace_id() });
+    json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message, "data": data } })
 }
 
 #[cfg(test)]

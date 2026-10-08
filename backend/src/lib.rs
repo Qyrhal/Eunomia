@@ -12,10 +12,11 @@ pub mod models_user;
 pub mod routers;
 pub mod sources;
 pub mod state;
+pub mod telemetry;
 pub mod tools;
 pub mod vaults;
 
-use axum::http::{header, HeaderValue, Method};
+use axum::http::{header, HeaderName, HeaderValue, Method};
 use tower_http::cors::CorsLayer;
 
 use crate::state::AppState;
@@ -35,7 +36,8 @@ pub fn app(state: AppState) -> axum::Router {
         .allow_origin(allowed_origins)
         .allow_credentials(true)
         .allow_methods([Method::GET, Method::POST, Method::PATCH, Method::PUT, Method::DELETE])
-        .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION]);
+        .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION, HeaderName::from_static("traceparent")])
+        .expose_headers([HeaderName::from_static("x-trace-id")]);
 
     let api = axum::Router::new()
         .merge(routers::auth::router())
@@ -56,6 +58,7 @@ pub fn app(state: AppState) -> axum::Router {
         .route("/healthz", axum::routing::get(healthz))
         .merge(routers::mcp::router())
         .nest("/api", api)
+        .layer(axum::middleware::from_fn(telemetry::trace_request))
         .layer(cors)
         .with_state(state)
 }
