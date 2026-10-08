@@ -10,7 +10,6 @@ import {
   Mic,
   Music,
   Notebook,
-  Plug2,
   Workflow,
 } from "lucide-react";
 import type { Connector } from "@/lib/api";
@@ -23,101 +22,135 @@ export type ConnectorMeta = {
   icon: React.ReactNode;
   /** CSS custom property name carrying this connector's icon-tile tint. */
   tint: string;
+  /** Where to get the credential and which scopes it needs. */
   help?: React.ReactNode;
   fields: FieldDef[];
-  /** `sources.list()` key this connector's data lives under, once connected — null if it has no dedicated workspace. */
-  sourceKey: string | null;
+  /** `sources.list()` key this connector's data lives under. */
+  sourceKey: string;
   /** This connector's provider supports push webhooks -- shows the per-user webhook URL to register with it. */
   webhooks: boolean;
 };
 
+function A({ href, children }: { href: string; children: React.ReactNode }) {
+  return (
+    <a href={href} target="_blank" rel="noreferrer" className="underline" style={{ color: "var(--ink)" }}>
+      {children}
+    </a>
+  );
+}
+
+function Steps({ children }: { children: React.ReactNode }) {
+  return <ol className="list-decimal pl-5 flex flex-col gap-1">{children}</ol>;
+}
+
+const C = ({ children }: { children: React.ReactNode }) => <code className="font-mono break-all">{children}</code>;
+
+// Google and Spotify have no personal tokens: you bring your own OAuth client
+// and a refresh token, which the server exchanges for a fresh access token on
+// every sync.
+const OAUTH_FIELDS: FieldDef[] = [
+  { key: "client_id", label: "Client ID", placeholder: "…", secret: false },
+  { key: "client_secret", label: "Client secret", placeholder: "…", secret: true },
+  { key: "refresh_token", label: "Refresh token", placeholder: "…", secret: true },
+];
+
+function googleHelp(api: string, scope: string) {
+  return (
+    <Steps>
+      <li>
+        In <A href="https://console.cloud.google.com/apis/library">Google Cloud Console</A>, enable the {api}.
+      </li>
+      <li>
+        Configure the OAuth consent screen (External) and add yourself as a test user. Publish the app (&ldquo;In
+        production&rdquo;) or the refresh token expires after 7 days.
+      </li>
+      <li>
+        Create an OAuth client ID of type <em>Web application</em> with redirect URI{" "}
+        <C>https://developers.google.com/oauthplayground</C>.
+      </li>
+      <li>
+        In the <A href="https://developers.google.com/oauthplayground">OAuth 2.0 Playground</A>, open ⚙ → &ldquo;Use your
+        own OAuth credentials&rdquo;, authorize the scope <C>{scope}</C>, then &ldquo;Exchange authorization code for
+        tokens&rdquo; and copy the refresh token.
+      </li>
+    </Steps>
+  );
+}
+
 export const CONNECTOR_META: Record<Connector["kind"], ConnectorMeta> = {
   up_bank: {
     label: "Up Bank",
-    description: "Track transactions and balances from your Up Bank account.",
+    description: "Transactions, accounts and categories from your Up Bank account.",
     icon: <Landmark size={18} />,
     tint: "var(--connector-up-bank)",
     help: (
       <>
-        Generate a token at{" "}
-        <a href="https://api.up.com.au" target="_blank" rel="noreferrer" className="underline" style={{ color: "var(--ink)" }}>
-          api.up.com.au
-        </a>
-        .
+        Generate a personal access token at <A href="https://api.up.com.au/getting_started">api.up.com.au</A> (or in the
+        Up app: Profile → Data sharing). It is read-only. The webhook secret is optional — only needed if you register
+        the webhook URL below with Up.
       </>
     ),
     fields: [
       { key: "personal_access_token", label: "Personal access token", placeholder: "up:yeah:…", secret: true },
-      { key: "webhook_secret_key", label: "Webhook secret key", placeholder: "paste the secretKey Up gave you", secret: true },
+      { key: "webhook_secret_key", label: "Webhook secret key (optional)", placeholder: "the secretKey Up gave you", secret: true },
     ],
     sourceKey: "up_bank",
     webhooks: true,
   },
   pocketai: {
     label: "PocketAI",
-    description: "Sync meeting recordings and transcripts from HeyPocket.",
+    description: "Meeting recordings with transcripts and summaries from HeyPocket.",
     icon: <Mic size={18} />,
     tint: "var(--connector-pocketai)",
+    help: (
+      <>
+        Create an API key in your <A href="https://heypocketai.com">Pocket</A> account&apos;s developer settings. Leave
+        the base URL empty unless you were given a different API host.
+      </>
+    ),
     fields: [
-      { key: "base_url", label: "Base URL", placeholder: "https://public.heypocketai.com/api/v1", secret: false },
       { key: "api_key", label: "API key", placeholder: "pk_…", secret: true },
+      { key: "base_url", label: "Base URL (optional)", placeholder: "https://public.heypocketai.com/api/v1", secret: false },
     ],
     sourceKey: "heypocket",
     webhooks: false,
   },
-  open_connector: {
-    label: "Open Connector",
-    description: "Bridge to a self-hosted gateway for any app it brokers.",
-    icon: <Plug2 size={18} />,
-    tint: "var(--connector-open-connector)",
-    help: (
-      <>
-        Points at a self-hosted{" "}
-        <a href="https://github.com/oomol-lab/open-connector" target="_blank" rel="noreferrer" className="underline" style={{ color: "var(--ink)" }}>
-          Open Connector
-        </a>{" "}
-        gateway — its own runtime token, not an app-specific credential. Exposes any app it brokers as
-        the <code className="font-mono">open_connector_call</code> tool.
-      </>
-    ),
-    fields: [
-      { key: "base_url", label: "Base URL", placeholder: "http://localhost:3000", secret: false },
-      { key: "api_key", label: "Runtime token", placeholder: "…", secret: true },
-    ],
-    sourceKey: null,
-    webhooks: false,
-  },
   github: {
     label: "GitHub",
-    description: "Pull in notifications across every repo your token can see.",
+    description: "Issues and pull requests you created, are assigned to, or are mentioned in.",
     icon: <GitBranch size={18} />,
     tint: "var(--connector-github)",
     help: (
       <>
-        Generate a{" "}
-        <a href="https://github.com/settings/tokens" target="_blank" rel="noreferrer" className="underline" style={{ color: "var(--ink)" }}>
-          personal access token
-        </a>{" "}
-        with the <code className="font-mono">notifications</code> scope.
+        Create a <A href="https://github.com/settings/personal-access-tokens/new">fine-grained token</A> with read-only
+        access to <em>Issues</em> and <em>Pull requests</em> on the repositories you want (or a{" "}
+        <A href="https://github.com/settings/tokens/new?scopes=repo">classic token</A> with the <C>repo</C> scope). The
+        first sync reads the last 90 days.
       </>
     ),
-    fields: [{ key: "personal_access_token", label: "Personal access token", placeholder: "ghp_…", secret: true }],
+    fields: [{ key: "personal_access_token", label: "Personal access token", placeholder: "github_pat_… or ghp_…", secret: true }],
     sourceKey: "github",
     webhooks: false,
   },
   slack: {
     label: "Slack",
-    description: "Sync channels your bot has joined.",
+    description: "Messages in the channels your Slack app has joined.",
     icon: <MessagesSquare size={18} />,
     tint: "var(--connector-slack)",
     help: (
-      <>
-        Install a{" "}
-        <a href="https://api.slack.com/apps" target="_blank" rel="noreferrer" className="underline" style={{ color: "var(--ink)" }}>
-          Slack app
-        </a>{" "}
-        with a bot token (<code className="font-mono">xoxb-…</code>).
-      </>
+      <Steps>
+        <li>
+          Create an app at <A href="https://api.slack.com/apps">api.slack.com/apps</A> (From scratch).
+        </li>
+        <li>
+          OAuth &amp; Permissions → Bot Token Scopes: <C>channels:read</C>, <C>channels:history</C>, <C>groups:read</C>,{" "}
+          <C>groups:history</C>.
+        </li>
+        <li>Install it to your workspace and copy the Bot User OAuth Token.</li>
+        <li>
+          In Slack, <C>/invite @your-app</C> to each channel to sync. The first sync reads the last 30 days.
+        </li>
+      </Steps>
     ),
     fields: [{ key: "bot_token", label: "Bot token", placeholder: "xoxb-…", secret: true }],
     sourceKey: "slack",
@@ -125,30 +158,29 @@ export const CONNECTOR_META: Record<Connector["kind"], ConnectorMeta> = {
   },
   notion: {
     label: "Notion",
-    description: "Sync pages and databases shared with your integration.",
+    description: "Pages (with their text) and databases shared with your integration.",
     icon: <Notebook size={18} />,
     tint: "var(--connector-notion)",
     help: (
       <>
-        Create an{" "}
-        <a href="https://www.notion.so/my-integrations" target="_blank" rel="noreferrer" className="underline" style={{ color: "var(--ink)" }}>
-          internal integration
-        </a>{" "}
-        and share the pages you want synced with it.
+        Create an internal integration at <A href="https://www.notion.so/profile/integrations">notion.so/profile/integrations</A>{" "}
+        with the &ldquo;Read content&rdquo; capability and copy its secret. Then, on each page or database to sync, open
+        ••• → Connections and add the integration.
       </>
     ),
-    fields: [{ key: "integration_token", label: "Integration token", placeholder: "secret_…", secret: true }],
+    fields: [{ key: "integration_token", label: "Integration secret", placeholder: "ntn_… or secret_…", secret: true }],
     sourceKey: "notion",
     webhooks: false,
   },
   linear: {
     label: "Linear",
-    description: "Sync issues assigned to you.",
+    description: "Issues assigned to you.",
     icon: <Workflow size={18} />,
     tint: "var(--connector-linear)",
     help: (
       <>
-        Generate an API key from Linear&apos;s Settings → API page.
+        Create a personal API key in <A href="https://linear.app/settings/account/security">Linear → Settings → Security &amp; access</A>{" "}
+        (read access is enough).
       </>
     ),
     fields: [{ key: "api_key", label: "API key", placeholder: "lin_api_…", secret: true }],
@@ -157,72 +189,111 @@ export const CONNECTOR_META: Record<Connector["kind"], ConnectorMeta> = {
   },
   gmail: {
     label: "Gmail",
-    description: "Sync recent messages.",
+    description: "Your email from the last 30 days onwards, with subject, sender and text.",
     icon: <Mail size={18} />,
     tint: "var(--connector-gmail)",
-    help: <>Paste a live OAuth access token with the Gmail readonly scope (no refresh is performed here).</>,
-    fields: [{ key: "access_token", label: "OAuth access token", placeholder: "ya29.…", secret: true }],
+    help: googleHelp("Gmail API", "https://www.googleapis.com/auth/gmail.readonly"),
+    fields: OAUTH_FIELDS,
     sourceKey: "gmail",
     webhooks: false,
   },
   google_calendar: {
     label: "Google Calendar",
-    description: "Sync upcoming and recent events on your primary calendar.",
+    description: "Events on your primary calendar, 30 days back to 6 months ahead, kept up to date.",
     icon: <Calendar size={18} />,
     tint: "var(--connector-google-calendar)",
-    help: <>Paste a live OAuth access token with the Calendar readonly scope (no refresh is performed here).</>,
-    fields: [{ key: "access_token", label: "OAuth access token", placeholder: "ya29.…", secret: true }],
+    help: googleHelp("Google Calendar API", "https://www.googleapis.com/auth/calendar.readonly"),
+    fields: OAUTH_FIELDS,
     sourceKey: "google_calendar",
     webhooks: false,
   },
   discord: {
     label: "Discord",
-    description: "Sync recent messages from one channel your bot can read.",
+    description: "Messages from the channels you choose, read by your own bot.",
     icon: <MessageCircle size={18} />,
     tint: "var(--connector-discord)",
     help: (
-      <>
-        Create a bot in the{" "}
-        <a href="https://discord.com/developers/applications" target="_blank" rel="noreferrer" className="underline" style={{ color: "var(--ink)" }}>
-          Discord Developer Portal
-        </a>
-        , invite it to your server, then paste its bot token and the channel ID to watch.
-      </>
+      <Steps>
+        <li>
+          In the <A href="https://discord.com/developers/applications">Developer Portal</A>, create an application → Bot →
+          Reset Token and copy it; enable <em>Message Content Intent</em>.
+        </li>
+        <li>
+          OAuth2 → URL Generator: scope <C>bot</C>, permissions <em>View Channels</em> + <em>Read Message History</em>;
+          open the URL to add the bot to your server.
+        </li>
+        <li>
+          Channel IDs: turn on Developer Mode (User Settings → Advanced), right-click a channel → Copy Channel ID.
+          Separate several with commas.
+        </li>
+      </Steps>
     ),
     fields: [
       { key: "bot_token", label: "Bot token", placeholder: "…", secret: true },
-      { key: "channel_id", label: "Channel ID", placeholder: "123456789012345678", secret: false },
+      { key: "channel_id", label: "Channel IDs", placeholder: "123456789012345678, …", secret: false },
     ],
     sourceKey: "discord",
     webhooks: false,
   },
   spotify: {
     label: "Spotify",
-    description: "Sync your recently played tracks.",
+    description: "Tracks you play, building up a listening history over time.",
     icon: <Music size={18} />,
     tint: "var(--connector-spotify)",
-    help: <>Paste a live OAuth access token with the recently-played scope (no refresh is performed here).</>,
-    fields: [{ key: "access_token", label: "OAuth access token", placeholder: "BQ…", secret: true }],
+    help: (
+      <Steps>
+        <li>
+          Create an app at <A href="https://developer.spotify.com/dashboard">developer.spotify.com/dashboard</A> (Web API)
+          with redirect URI <C>http://127.0.0.1:8888/callback</C>.
+        </li>
+        <li>
+          Open{" "}
+          <C>
+            https://accounts.spotify.com/authorize?response_type=code&amp;scope=user-read-recently-played&amp;redirect_uri=http://127.0.0.1:8888/callback&amp;client_id=CLIENT_ID
+          </C>
+          , approve, and copy the <C>code</C> from the address bar (the page itself won&apos;t load).
+        </li>
+        <li>
+          Run{" "}
+          <C>
+            curl -u CLIENT_ID:CLIENT_SECRET -d grant_type=authorization_code -d code=CODE -d
+            redirect_uri=http://127.0.0.1:8888/callback https://accounts.spotify.com/api/token
+          </C>{" "}
+          and paste its <C>refresh_token</C> here.
+        </li>
+      </Steps>
+    ),
+    fields: OAUTH_FIELDS,
     sourceKey: "spotify",
     webhooks: false,
   },
   todoist: {
     label: "Todoist",
-    description: "Sync your active tasks.",
+    description: "Your active tasks, with project, due date and labels.",
     icon: <CheckSquare size={18} />,
     tint: "var(--connector-todoist)",
-    help: <>Find your API token under Todoist Settings → Integrations → Developer.</>,
+    help: (
+      <>
+        Copy your API token from <A href="https://app.todoist.com/app/settings/integrations/developer">Todoist → Settings →
+        Integrations → Developer</A>.
+      </>
+    ),
     fields: [{ key: "api_token", label: "API token", placeholder: "…", secret: true }],
     sourceKey: "todoist",
     webhooks: false,
   },
   stripe: {
     label: "Stripe",
-    description: "Sync recent charges.",
+    description: "Charges on your Stripe account.",
     icon: <CreditCard size={18} />,
     tint: "var(--connector-stripe)",
-    help: <>Use a restricted-access secret key scoped to read-only charges, not your full secret key.</>,
-    fields: [{ key: "secret_key", label: "Secret key", placeholder: "sk_live_…", secret: true }],
+    help: (
+      <>
+        Create a <A href="https://dashboard.stripe.com/apikeys">restricted key</A> with <em>Charges: Read</em> and no
+        other permissions — not your full secret key.
+      </>
+    ),
+    fields: [{ key: "secret_key", label: "Restricted key", placeholder: "rk_live_…", secret: true }],
     sourceKey: "stripe",
     webhooks: false,
   },
@@ -231,7 +302,6 @@ export const CONNECTOR_META: Record<Connector["kind"], ConnectorMeta> = {
 export const CONNECTOR_ORDER: Connector["kind"][] = [
   "up_bank",
   "pocketai",
-  "open_connector",
   "github",
   "slack",
   "notion",

@@ -1,15 +1,27 @@
 //! Spotify source: recently played tracks, via
-//! `GET /me/player/recently-played`. Real API shape; not exercised against a
-//! live account in this environment -- see `connectors::clients::SpotifyClient`.
+//! `GET /me/player/recently-played` (Spotify keeps only the last 50 plays,
+//! so polling regularly is what builds up history). Spotify has no personal
+//! tokens: the user brings their own app's `client_id` + `client_secret` and
+//! a `refresh_token` with scope `user-read-recently-played` (see
+//! docs/connectors.md); each sync refreshes the access token first.
+//!
+//! Incremental: `after=` the `cursors.after` millisecond timestamp Spotify
+//! returned last time.
 
 use async_trait::async_trait;
-use chrono::Utc;
 use serde_json::{json, Value};
 
-use crate::connectors::clients::SpotifyClient;
+use crate::connectors::clients::{bearer, refresh_access_token, Api};
 use crate::error::AppResult;
-use crate::sources::base::{Source, SourceCtx, SyncResult};
-use crate::sources::registry::credentials_for;
+use crate::sources::base::{envelope, items, rfc3339, s, Conn, Source, SyncResult};
+
+const BASE_URL: &str = "https://api.spotify.com/v1";
+const TOKEN_URL: &str = "https://accounts.spotify.com/api/token";
+
+async fn api(conn: &Conn) -> AppResult<Api> {
+    let token = refresh_access_token(&conn.config, TOKEN_URL, &conn.credentials).await?;
+    Ok(Api::new(&conn.config, BASE_URL, bearer(&token)))
+}
 
 pub struct SpotifySource;
 
@@ -24,69 +36,85 @@ impl Source for SpotifySource {
     }
 
     fn record_types(&self) -> &'static [&'static str] {
-        &["spotify.track"]
+        &["spotify.play"]
     }
 
-    fn auth_kind(&self) -> &'static str {
-        "oauth"
+    async fn check(&self, conn: &Conn) -> AppResult<()> {
+        api(conn).await?.get("/me", &[]).await.map(|_| ())
     }
 
-    async fn sync(&self, ctx: &SourceCtx<'_>, _mode: &str, _cursor: Option<String>) -> AppResult<SyncResult> {
-        let creds = credentials_for(ctx.db, ctx.encryption_key, ctx.owner, self).await?;
-        let client = SpotifyClient::new(&creds);
-        let resp = client.recently_played().await?;
-        let records = resp.get("items").and_then(|v| v.as_array()).cloned().unwrap_or_default();
-        Ok(SyncResult { records, cursor: Some(Utc::now().to_rfc3339()) })
+    async fn fetch(&self, conn: &Conn, cursor: Option<String>) -> AppResult<SyncResult> {
+        let mut query = vec![("limit", "50".to_string())];
+        if let Some(after) = &cursor {
+            query.push(("after", after.clone()));
+        }
+        let page = api(conn).await?.get("/me/player/recently-played", &query).await?;
+        let next = page.pointer("/cursors/after").and_then(|v| v.as_str()).map(String::from);
+        Ok(SyncResult { records: items(&page, "/items"), cursor: next.or(cursor) })
     }
 
     fn map(&self, raw: &Value) -> Option<Value> {
+        let played_at = raw.get("played_at").and_then(|v| v.as_str())?;
         let track = &raw["track"];
-        let id = track.get("id").and_then(|v| v.as_str())?;
-        let name = track.get("name").and_then(|v| v.as_str()).unwrap_or("");
-        let artists: Vec<&str> =
-            track.get("artists").and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|x| x.get("name").and_then(|v| v.as_str())).collect()).unwrap_or_default();
-        let artist_names = artists.join(", ");
-        Some(json!({
-            "id": format!("spotify:spotify.track:{id}"),
-            "source": "spotify",
-            "type": "spotify.track",
-            "external_id": id,
-            "title": name,
-            "body_text": format!("{name} — {artist_names}"),
-            "occurred_at": raw.get("played_at"),
-            "url": track.pointer("/external_urls/spotify").cloned().unwrap_or(Value::String(String::new())),
-            "payload": {
-                "artists": artist_names,
-                "album": track.pointer("/album/name"),
-            },
-            "links": [],
-            "deleted": false,
-        }))
+        let name = s(track, "/name");
+        let artists = items(track, "/artists").iter().map(|a| s(a, "/name").to_string()).collect::<Vec<_>>().join(", ");
+        let album = s(track, "/album/name");
+        Some(envelope(
+            "spotify",
+            "spotify.play",
+            &format!("{played_at}:{}", s(track, "/id")),
+            &format!("{name} — {artists}"),
+            &format!("Played {name} by {artists} from {album}"),
+            rfc3339(played_at),
+            s(track, "/external_urls/spotify"),
+            json!({
+                "track": name,
+                "artists": artists,
+                "album": album,
+                "duration_ms": track.get("duration_ms"),
+                "context": raw.pointer("/context/type"),
+            }),
+        ))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sources::mock::{assert_fetch_fails, envelopes, route, serve};
 
-    #[test]
-    fn map_joins_multiple_artists() {
-        let src = SpotifySource;
-        let raw = json!({
-            "played_at": "2024-01-01T00:00:00Z",
-            "track": {
-                "id": "t1", "name": "Song", "artists": [{"name": "A"}, {"name": "B"}],
-                "album": {"name": "Album"}, "external_urls": {"spotify": "https://open.spotify.com/track/t1"},
-            },
-        });
-        let env = src.map(&raw).unwrap();
-        assert_eq!(env["body_text"], "Song — A, B");
-        assert_eq!(env["payload"]["album"], "Album");
+    #[tokio::test]
+    async fn fetch_refreshes_then_reads_plays_after_the_cursor() {
+        let mock = serve(vec![
+            route("POST", "/oauth/token", json!({"access_token": "BQ-fresh", "token_type": "Bearer", "expires_in": 3600, "scope": "user-read-recently-played"})),
+            route("GET", "/me/player/recently-played", json!({
+                "items": [{
+                    "track": {"id": "4uLU6hMCjMI75M1A2tKUQC", "name": "Never Gonna Give You Up", "duration_ms": 213573,
+                              "artists": [{"name": "Rick Astley"}], "album": {"name": "Whenever You Need Somebody"},
+                              "external_urls": {"spotify": "https://open.spotify.com/track/4uLU6hMCjMI75M1A2tKUQC"}},
+                    "played_at": "2024-06-01T08:30:00.123Z", "context": {"type": "playlist"},
+                }],
+                "next": null, "cursors": {"after": "1717230600123", "before": "1717230600123"}, "limit": 50,
+            }))
+            .query("after=1717000000000"),
+        ])
+        .await;
+
+        let creds = json!({"client_id": "cid", "client_secret": "s", "refresh_token": "AQ-rt"});
+        let res = SpotifySource.fetch(&mock.conn(creds), Some("1717000000000".into())).await.unwrap();
+        assert_eq!(res.cursor.as_deref(), Some("1717230600123"));
+        assert_eq!(mock.requests()[1].header("authorization"), "Bearer BQ-fresh");
+
+        let envs = envelopes(&SpotifySource, &res.records);
+        assert_eq!(envs[0].title, "Never Gonna Give You Up — Rick Astley");
+        assert_eq!(envs[0].url, "https://open.spotify.com/track/4uLU6hMCjMI75M1A2tKUQC");
     }
 
-    #[test]
-    fn map_returns_none_without_track_id() {
-        let src = SpotifySource;
-        assert!(src.map(&json!({"track": {}})).is_none());
+    #[tokio::test]
+    async fn fetch_errors_are_visible() {
+        let creds = json!({"client_id": "cid", "client_secret": "s", "refresh_token": "rt"});
+        assert_fetch_fails(&SpotifySource, 401, "/me/player/recently-played", creds.clone(), "HTTP 401").await;
+        assert_fetch_fails(&SpotifySource, 429, "/me/player/recently-played", creds.clone(), "HTTP 429").await;
+        assert_fetch_fails(&SpotifySource, 500, "/me/player/recently-played", creds, "HTTP 500").await;
     }
 }
