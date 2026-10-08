@@ -26,6 +26,9 @@ pub enum ErrorCode {
     AuthSessionExpired,
     RateLimited,
     TenantDenied,
+    TenantNotFound,
+    TenantSchemaBehind,
+    TenantProvisioningDisabled,
     VaultNotFound,
     VaultForbidden,
     EntityNotFound,
@@ -56,6 +59,9 @@ impl ErrorCode {
         ErrorCode::AuthSessionExpired,
         ErrorCode::RateLimited,
         ErrorCode::TenantDenied,
+        ErrorCode::TenantNotFound,
+        ErrorCode::TenantSchemaBehind,
+        ErrorCode::TenantProvisioningDisabled,
         ErrorCode::VaultNotFound,
         ErrorCode::VaultForbidden,
         ErrorCode::EntityNotFound,
@@ -86,6 +92,9 @@ impl ErrorCode {
             ErrorCode::AuthSessionExpired => "auth.session_expired",
             ErrorCode::RateLimited => "rate.limited",
             ErrorCode::TenantDenied => "tenant.denied",
+            ErrorCode::TenantNotFound => "tenant.not_found",
+            ErrorCode::TenantSchemaBehind => "tenant.schema_behind",
+            ErrorCode::TenantProvisioningDisabled => "tenant.provisioning_disabled",
             ErrorCode::VaultNotFound => "vault.not_found",
             ErrorCode::VaultForbidden => "vault.forbidden",
             ErrorCode::EntityNotFound => "entity.not_found",
@@ -113,6 +122,8 @@ impl ErrorCode {
                 StatusCode::FORBIDDEN
             }
             ErrorCode::RateLimited => StatusCode::TOO_MANY_REQUESTS,
+            ErrorCode::TenantSchemaBehind => StatusCode::SERVICE_UNAVAILABLE,
+            ErrorCode::TenantProvisioningDisabled => StatusCode::NOT_IMPLEMENTED,
             ErrorCode::AuthEmailTaken | ErrorCode::DbConflict | ErrorCode::DbDuplicate => StatusCode::CONFLICT,
             ErrorCode::AuthNotFound
             | ErrorCode::VaultNotFound
@@ -122,6 +133,7 @@ impl ErrorCode {
             | ErrorCode::ConnectorNotFound
             | ErrorCode::SourceNotFound
             | ErrorCode::ToolNotFound
+            | ErrorCode::TenantNotFound
             | ErrorCode::ResourceNotFound => StatusCode::NOT_FOUND,
             ErrorCode::ConnectorNotConnected | ErrorCode::ValidationInvalid => StatusCode::BAD_REQUEST,
             ErrorCode::JobNoHandler | ErrorCode::JobLeaseExpired | ErrorCode::JobPanicked | ErrorCode::Internal => {
@@ -280,7 +292,8 @@ mod tests {
             match c {
                 ErrorCode::AuthUnauthorized | ErrorCode::AuthForbidden | ErrorCode::AuthEmailTaken | ErrorCode::AuthNotFound
                 | ErrorCode::AuthScope | ErrorCode::AuthTokenExpired | ErrorCode::AuthSessionExpired | ErrorCode::RateLimited
-                | ErrorCode::TenantDenied | ErrorCode::VaultNotFound | ErrorCode::VaultForbidden | ErrorCode::EntityNotFound
+                | ErrorCode::TenantDenied | ErrorCode::TenantNotFound | ErrorCode::TenantSchemaBehind
+                | ErrorCode::TenantProvisioningDisabled | ErrorCode::VaultNotFound | ErrorCode::VaultForbidden | ErrorCode::EntityNotFound
                 | ErrorCode::MemoryNotFound | ErrorCode::ChatThreadNotFound | ErrorCode::ConnectorNotFound
                 | ErrorCode::ConnectorNotConnected | ErrorCode::SourceNotFound | ErrorCode::ToolNotFound
                 | ErrorCode::ResourceNotFound | ErrorCode::ValidationInvalid | ErrorCode::DbConflict

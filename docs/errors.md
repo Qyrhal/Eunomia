@@ -23,6 +23,9 @@ The `ErrorCode` enum is in `backend/src/error.rs`. A unit test fails if a code i
 | `auth.session_expired` | 401 | The session cookie is past its (sliding) expiry or its JWT `exp`. Log in again. | `gate.rs`, `auth.rs` |
 | `rate.limited` | 429 | Too many requests for this user, token or (for login and signup) client address. Honour the `Retry-After` header. | `gate.rs` |
 | `tenant.denied` | 403 | The database refused a query on permissions grounds. Logged at error level; treat as a high-severity alert. | `error.rs` (DB error mapping) |
+| `tenant.not_found` | 404 | The org has no ready database: its routing row is missing or the database is still being created or moved. | `pool.rs` |
+| `tenant.schema_behind` | 503 | The org's database is more than one schema version behind this code (below N-1). The `migrate_tenant` job brings it up; retry shortly. | `pool.rs` |
+| `tenant.provisioning_disabled` | 501 | Signup needs to create an org database, and this binary was built without the `provisioning` feature. | `models_user.rs` |
 | `vault.not_found` | 404 | Vault id is malformed or unknown. | `routers/vaults.rs` |
 | `vault.forbidden` | 403 | You are not a member, or not an owner, of the vault (or of both entities' vaults). Also the default for a bare 403. | `vaults/service.rs`, `entities/service.rs` |
 | `entity.not_found` | 404 | Entity id unknown or not visible to you. | `routers/entities.rs`, `tools/registry.rs` |

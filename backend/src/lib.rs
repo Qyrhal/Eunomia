@@ -12,11 +12,15 @@ pub mod embeddings;
 pub mod entities;
 pub mod error;
 pub mod gate;
+#[cfg(feature = "test-support")]
+pub mod isolation;
 pub mod jobs;
 pub mod migrate;
 pub mod models_user;
 pub mod oauth;
 pub mod openapi;
+pub mod pool;
+pub mod provisioning;
 pub mod rid;
 pub mod ratelimit;
 pub mod replay;
