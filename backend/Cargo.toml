@@ -41,3 +41,4 @@ tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
 regex = "1"
 insta = { version = "1", features = ["json", "redactions"] }
+jsonschema = { version = "0.58.6", default-features = false }

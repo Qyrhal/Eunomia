@@ -15,7 +15,7 @@
           "audit"
         ],
         "summary": "Page of the caller's tool-call audit log",
-        "operationId": "get_audit",
+        "operationId": "listAudit",
         "parameters": [
           {
             "name": "limit",
@@ -42,7 +42,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object"
+                  "$ref": "#/components/schemas/AuditPage"
                 }
               }
             }
@@ -74,7 +74,7 @@
           "auth"
         ],
         "summary": "Whether any user exists yet",
-        "operationId": "bootstrap",
+        "operationId": "getBootstrap",
         "responses": {
           "200": {
             "description": "",
@@ -186,7 +186,7 @@
           "auth"
         ],
         "summary": "The signed in user",
-        "operationId": "me",
+        "operationId": "getMe",
         "responses": {
           "200": {
             "description": "",
@@ -269,7 +269,7 @@
           "auth"
         ],
         "summary": "List active sessions",
-        "operationId": "get_sessions",
+        "operationId": "listSessions",
         "responses": {
           "200": {
             "description": "",
@@ -311,7 +311,7 @@
           "auth"
         ],
         "summary": "Revoke a session",
-        "operationId": "revoke_session_route",
+        "operationId": "revokeSession",
         "parameters": [
           {
             "name": "session_id",
@@ -360,7 +360,7 @@
           "auth"
         ],
         "summary": "List API tokens",
-        "operationId": "get_tokens",
+        "operationId": "listTokens",
         "responses": {
           "200": {
             "description": "",
@@ -400,7 +400,7 @@
           "auth"
         ],
         "summary": "Create an API token",
-        "operationId": "create_token",
+        "operationId": "createToken",
         "requestBody": {
           "content": {
             "application/json": {
@@ -449,7 +449,7 @@
           "auth"
         ],
         "summary": "Revoke an API token",
-        "operationId": "delete_token",
+        "operationId": "deleteToken",
         "parameters": [
           {
             "name": "token_id",
@@ -498,7 +498,7 @@
           "chat"
         ],
         "summary": "List chat threads",
-        "operationId": "list_threads",
+        "operationId": "listThreads",
         "responses": {
           "200": {
             "description": "",
@@ -538,7 +538,7 @@
           "chat"
         ],
         "summary": "Create a chat thread",
-        "operationId": "create_thread",
+        "operationId": "createThread",
         "requestBody": {
           "content": {
             "application/json": {
@@ -587,7 +587,7 @@
           "chat"
         ],
         "summary": "Send a message, streamed back as server-sent events",
-        "operationId": "send_message",
+        "operationId": "sendMessage",
         "parameters": [
           {
             "name": "thread_id",
@@ -644,7 +644,7 @@
           "chat"
         ],
         "summary": "Delete a chat thread",
-        "operationId": "delete_thread_route",
+        "operationId": "deleteThread",
         "parameters": [
           {
             "name": "thread_id",
@@ -693,7 +693,7 @@
           "chat"
         ],
         "summary": "Messages in a thread",
-        "operationId": "thread_history",
+        "operationId": "getThreadHistory",
         "parameters": [
           {
             "name": "thread_id",
@@ -745,7 +745,7 @@
           "connectors"
         ],
         "summary": "List connectors with their status",
-        "operationId": "list_all",
+        "operationId": "listConnectors",
         "responses": {
           "200": {
             "description": "",
@@ -754,7 +754,7 @@
                 "schema": {
                   "type": "array",
                   "items": {
-                    "type": "object"
+                    "$ref": "#/components/schemas/ConnectorOut"
                   }
                 }
               }
@@ -787,7 +787,7 @@
           "connectors"
         ],
         "summary": "All PocketAI recordings",
-        "operationId": "pocketai_all",
+        "operationId": "getPocketaiAll",
         "parameters": [
           {
             "name": "limit",
@@ -837,7 +837,7 @@
           "connectors"
         ],
         "summary": "One PocketAI recording",
-        "operationId": "pocketai_detail",
+        "operationId": "getPocketaiDetail",
         "parameters": [
           {
             "name": "recording_id",
@@ -886,7 +886,7 @@
           "connectors"
         ],
         "summary": "Search PocketAI recordings",
-        "operationId": "pocketai_search",
+        "operationId": "searchPocketai",
         "parameters": [
           {
             "name": "query",
@@ -935,7 +935,7 @@
           "connectors"
         ],
         "summary": "PocketAI summary",
-        "operationId": "pocketai_summary",
+        "operationId": "getPocketaiSummary",
         "parameters": [
           {
             "name": "days",
@@ -953,7 +953,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object"
+                  "$ref": "#/components/schemas/PocketaiSummary"
                 }
               }
             }
@@ -985,7 +985,7 @@
           "connectors"
         ],
         "summary": "Up Bank finance summary",
-        "operationId": "up_bank_finance_summary",
+        "operationId": "getUpBankFinanceSummary",
         "parameters": [
           {
             "name": "days",
@@ -1003,7 +1003,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object"
+                  "$ref": "#/components/schemas/FinanceSummary"
                 }
               }
             }
@@ -1035,7 +1035,7 @@
           "connectors"
         ],
         "summary": "One connector",
-        "operationId": "get_one",
+        "operationId": "getConnector",
         "parameters": [
           {
             "name": "kind",
@@ -1052,7 +1052,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object"
+                  "$ref": "#/components/schemas/ConnectorOut"
                 }
               }
             }
@@ -1082,7 +1082,7 @@
           "connectors"
         ],
         "summary": "Update a connector",
-        "operationId": "put_one",
+        "operationId": "updateConnector",
         "parameters": [
           {
             "name": "kind",
@@ -1109,7 +1109,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object"
+                  "$ref": "#/components/schemas/ConnectorOut"
                 }
               }
             }
@@ -1141,7 +1141,7 @@
           "connectors"
         ],
         "summary": "Test a connector's credentials",
-        "operationId": "test_one",
+        "operationId": "testConnector",
         "parameters": [
           {
             "name": "kind",
@@ -1158,7 +1158,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object"
+                  "$ref": "#/components/schemas/TestOut"
                 }
               }
             }
@@ -1190,7 +1190,7 @@
           "entities"
         ],
         "summary": "List entities",
-        "operationId": "list_entities",
+        "operationId": "listEntities",
         "parameters": [
           {
             "name": "kind",
@@ -1233,7 +1233,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object"
+                  "$ref": "#/components/schemas/ListEntitiesOut"
                 }
               }
             }
@@ -1263,7 +1263,7 @@
           "entities"
         ],
         "summary": "Create or upsert an entity",
-        "operationId": "create_entity",
+        "operationId": "createEntity",
         "requestBody": {
           "content": {
             "application/json": {
@@ -1280,7 +1280,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object"
+                  "$ref": "#/components/schemas/EntityOut"
                 }
               }
             }
@@ -1312,7 +1312,7 @@
           "entities"
         ],
         "summary": "3D projection of vault vectors",
-        "operationId": "vector_cloud",
+        "operationId": "getVectorCloud",
         "parameters": [
           {
             "name": "vault_ids",
@@ -1330,7 +1330,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object"
+                  "$ref": "#/components/schemas/Cloud"
                 }
               }
             }
@@ -1362,7 +1362,7 @@
           "entities"
         ],
         "summary": "Entity graph",
-        "operationId": "entity_graph",
+        "operationId": "getEntityGraph",
         "parameters": [
           {
             "name": "vault_id",
@@ -1391,7 +1391,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object"
+                  "$ref": "#/components/schemas/GraphOut"
                 }
               }
             }
@@ -1423,7 +1423,7 @@
           "entities"
         ],
         "summary": "Delete a memory",
-        "operationId": "delete_memory",
+        "operationId": "deleteMemory",
         "parameters": [
           {
             "name": "memory_id",
@@ -1470,7 +1470,7 @@
           "entities"
         ],
         "summary": "Edit a memory",
-        "operationId": "update_memory",
+        "operationId": "updateMemory",
         "parameters": [
           {
             "name": "memory_id",
@@ -1497,7 +1497,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object"
+                  "$ref": "#/components/schemas/MemoryOut"
                 }
               }
             }
@@ -1529,7 +1529,7 @@
           "entities"
         ],
         "summary": "One entity with its memories and relations",
-        "operationId": "get_entity",
+        "operationId": "getEntity",
         "parameters": [
           {
             "name": "entity_id",
@@ -1546,7 +1546,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object"
+                  "$ref": "#/components/schemas/EntityDetail"
                 }
               }
             }
@@ -1576,7 +1576,7 @@
           "entities"
         ],
         "summary": "Delete an entity",
-        "operationId": "delete_entity",
+        "operationId": "deleteEntity",
         "parameters": [
           {
             "name": "entity_id",
@@ -1623,7 +1623,7 @@
           "entities"
         ],
         "summary": "Edit an entity",
-        "operationId": "update_entity",
+        "operationId": "updateEntity",
         "parameters": [
           {
             "name": "entity_id",
@@ -1650,7 +1650,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object"
+                  "$ref": "#/components/schemas/EntityOut"
                 }
               }
             }
@@ -1682,7 +1682,7 @@
           "entities"
         ],
         "summary": "Add a memory to an entity",
-        "operationId": "add_memory",
+        "operationId": "addMemory",
         "parameters": [
           {
             "name": "entity_id",
@@ -1709,7 +1709,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object"
+                  "$ref": "#/components/schemas/MemoryOut"
                 }
               }
             }
@@ -1741,7 +1741,7 @@
           "entities"
         ],
         "summary": "Merge a duplicate entity into this one",
-        "operationId": "merge_entities",
+        "operationId": "mergeEntities",
         "parameters": [
           {
             "name": "entity_id",
@@ -1768,7 +1768,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object"
+                  "$ref": "#/components/schemas/EntityOut"
                 }
               }
             }
@@ -1800,7 +1800,7 @@
           "entities"
         ],
         "summary": "Relate two entities",
-        "operationId": "add_relation",
+        "operationId": "addRelation",
         "parameters": [
           {
             "name": "entity_id",
@@ -1827,7 +1827,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object"
+                  "$ref": "#/components/schemas/RelationOut"
                 }
               }
             }
@@ -1859,7 +1859,7 @@
           "export"
         ],
         "summary": "Download the personal vault as JSON",
-        "operationId": "export_data",
+        "operationId": "exportData",
         "responses": {
           "200": {
             "description": "",
@@ -1898,7 +1898,7 @@
           "oauth"
         ],
         "summary": "Validate an authorization request and describe it for the consent page",
-        "operationId": "consent_info",
+        "operationId": "getOauthConsent",
         "parameters": [
           {
             "name": "response_type",
@@ -1998,7 +1998,7 @@
           "oauth"
         ],
         "summary": "Approve or deny an authorization request",
-        "operationId": "consent_decide",
+        "operationId": "decideOauthConsent",
         "requestBody": {
           "content": {
             "application/json": {
@@ -2044,7 +2044,7 @@
           "oauth"
         ],
         "summary": "List the apps connected through OAuth",
-        "operationId": "list_grants",
+        "operationId": "listOauthGrants",
         "responses": {
           "200": {
             "description": "",
@@ -2083,7 +2083,7 @@
           "oauth"
         ],
         "summary": "Disconnect an app: revoke all its tokens",
-        "operationId": "revoke_grant",
+        "operationId": "revokeOauthGrant",
         "parameters": [
           {
             "name": "grant_id",
@@ -2129,7 +2129,7 @@
           "meta"
         ],
         "summary": "This document",
-        "operationId": "openapi_json",
+        "operationId": "getOpenapi",
         "responses": {
           "200": {
             "description": "OpenAPI 3.1 document",
@@ -2153,14 +2153,14 @@
           "settings"
         ],
         "summary": "Read app settings",
-        "operationId": "read_settings",
+        "operationId": "getSettings",
         "responses": {
           "200": {
             "description": "",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object"
+                  "$ref": "#/components/schemas/SettingsOut"
                 }
               }
             }
@@ -2190,7 +2190,7 @@
           "settings"
         ],
         "summary": "Update app settings",
-        "operationId": "patch_settings",
+        "operationId": "updateSettings",
         "requestBody": {
           "content": {
             "application/json": {
@@ -2207,7 +2207,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object"
+                  "$ref": "#/components/schemas/SettingsOut"
                 }
               }
             }
@@ -2239,7 +2239,7 @@
           "settings"
         ],
         "summary": "Mark onboarding done",
-        "operationId": "complete_onboarding",
+        "operationId": "completeOnboarding",
         "responses": {
           "200": {
             "description": "",
@@ -2278,14 +2278,14 @@
           "settings"
         ],
         "summary": "List models the configured OpenAI endpoint offers",
-        "operationId": "openai_models",
+        "operationId": "listOpenaiModels",
         "responses": {
           "200": {
             "description": "",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object"
+                  "$ref": "#/components/schemas/ModelsOut"
                 }
               }
             }
@@ -2317,14 +2317,14 @@
           "connectors"
         ],
         "summary": "Combined snapshot of connector data",
-        "operationId": "snapshot",
+        "operationId": "getSnapshot",
         "responses": {
           "200": {
             "description": "",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object"
+                  "$ref": "#/components/schemas/SnapshotOut"
                 }
               }
             }
@@ -2356,7 +2356,7 @@
           "sources"
         ],
         "summary": "List sources with sync status",
-        "operationId": "list_sources",
+        "operationId": "listSources",
         "responses": {
           "200": {
             "description": "",
@@ -2365,7 +2365,7 @@
                 "schema": {
                   "type": "array",
                   "items": {
-                    "type": "object"
+                    "$ref": "#/components/schemas/SourceOut"
                   }
                 }
               }
@@ -2398,14 +2398,20 @@
           "sources"
         ],
         "summary": "Overall sync status",
-        "operationId": "sources_status",
+        "operationId": "getSourcesStatus",
         "responses": {
           "200": {
             "description": "",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object"
+                  "type": "object",
+                  "additionalProperties": {
+                    "$ref": "#/components/schemas/SyncStatusOut"
+                  },
+                  "propertyNames": {
+                    "type": "string"
+                  }
                 }
               }
             }
@@ -2437,7 +2443,7 @@
           "sources"
         ],
         "summary": "Sync a source now",
-        "operationId": "sync_now",
+        "operationId": "syncSource",
         "parameters": [
           {
             "name": "key",
@@ -2454,7 +2460,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object"
+                  "$ref": "#/components/schemas/SyncReport"
                 }
               }
             }
@@ -2486,7 +2492,7 @@
           "sources"
         ],
         "summary": "Source webhook (authenticated by the source's own signature)",
-        "operationId": "source_webhook",
+        "operationId": "receiveSourceWebhook",
         "parameters": [
           {
             "name": "key",
@@ -2511,7 +2517,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object"
+                  "$ref": "#/components/schemas/WebhookOut"
                 }
               }
             }
@@ -2538,7 +2544,7 @@
           "tools"
         ],
         "summary": "Names of the available tools",
-        "operationId": "catalogue",
+        "operationId": "listTools",
         "responses": {
           "200": {
             "description": "",
@@ -2575,7 +2581,7 @@
           "tools"
         ],
         "summary": "Invoke a tool",
-        "operationId": "invoke",
+        "operationId": "invokeTool",
         "parameters": [
           {
             "name": "name",
@@ -2635,14 +2641,14 @@
           "update"
         ],
         "summary": "Ask the updater to check now",
-        "operationId": "check_now",
+        "operationId": "checkForUpdate",
         "responses": {
           "200": {
             "description": "",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object"
+                  "$ref": "#/components/schemas/UpdateAck"
                 }
               }
             }
@@ -2674,14 +2680,14 @@
           "update"
         ],
         "summary": "Ask the updater to update",
-        "operationId": "request_update",
+        "operationId": "requestUpdate",
         "responses": {
           "200": {
             "description": "",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object"
+                  "$ref": "#/components/schemas/UpdateAck"
                 }
               }
             }
@@ -2713,14 +2719,14 @@
           "update"
         ],
         "summary": "Updater status",
-        "operationId": "get_status",
+        "operationId": "getUpdateStatus",
         "responses": {
           "200": {
             "description": "",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object"
+                  "$ref": "#/components/schemas/UpdateStatus"
                 }
               }
             }
@@ -2752,14 +2758,14 @@
           "vaults"
         ],
         "summary": "List vaults the caller belongs to",
-        "operationId": "list_vaults",
+        "operationId": "listVaults",
         "responses": {
           "200": {
             "description": "",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object"
+                  "$ref": "#/components/schemas/VaultList"
                 }
               }
             }
@@ -2789,7 +2795,7 @@
           "vaults"
         ],
         "summary": "Create a vault",
-        "operationId": "create_vault",
+        "operationId": "createVault",
         "requestBody": {
           "content": {
             "application/json": {
@@ -2806,7 +2812,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object"
+                  "$ref": "#/components/schemas/VaultOut"
                 }
               }
             }
@@ -2838,14 +2844,14 @@
           "vaults"
         ],
         "summary": "Pending vault invitations",
-        "operationId": "list_invitations",
+        "operationId": "listInvitations",
         "responses": {
           "200": {
             "description": "",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object"
+                  "$ref": "#/components/schemas/InvitationList"
                 }
               }
             }
@@ -2877,7 +2883,7 @@
           "vaults"
         ],
         "summary": "Merge two vaults",
-        "operationId": "merge_vaults",
+        "operationId": "mergeVaults",
         "requestBody": {
           "content": {
             "application/json": {
@@ -2894,7 +2900,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object"
+                  "$ref": "#/components/schemas/MergeOut"
                 }
               }
             }
@@ -2926,7 +2932,7 @@
           "vaults"
         ],
         "summary": "Delete a vault",
-        "operationId": "delete_vault",
+        "operationId": "deleteVault",
         "parameters": [
           {
             "name": "vault_id",
@@ -2973,7 +2979,7 @@
           "vaults"
         ],
         "summary": "Rename a vault",
-        "operationId": "rename_vault",
+        "operationId": "renameVault",
         "parameters": [
           {
             "name": "vault_id",
@@ -3000,7 +3006,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object"
+                  "$ref": "#/components/schemas/VaultOut"
                 }
               }
             }
@@ -3032,7 +3038,7 @@
           "vaults"
         ],
         "summary": "Clone a vault",
-        "operationId": "clone_vault",
+        "operationId": "cloneVault",
         "parameters": [
           {
             "name": "vault_id",
@@ -3059,7 +3065,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object"
+                  "$ref": "#/components/schemas/CloneOut"
                 }
               }
             }
@@ -3091,7 +3097,7 @@
           "vaults"
         ],
         "summary": "Accept an invitation",
-        "operationId": "accept_invitation",
+        "operationId": "acceptInvitation",
         "parameters": [
           {
             "name": "vault_id",
@@ -3108,7 +3114,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object"
+                  "$ref": "#/components/schemas/VaultWithRole"
                 }
               }
             }
@@ -3140,7 +3146,7 @@
           "vaults"
         ],
         "summary": "Decline an invitation",
-        "operationId": "decline_invitation",
+        "operationId": "declineInvitation",
         "parameters": [
           {
             "name": "vault_id",
@@ -3189,7 +3195,7 @@
           "vaults"
         ],
         "summary": "Leave a vault",
-        "operationId": "leave_vault",
+        "operationId": "leaveVault",
         "parameters": [
           {
             "name": "vault_id",
@@ -3238,7 +3244,7 @@
           "vaults"
         ],
         "summary": "List vault members",
-        "operationId": "list_members",
+        "operationId": "listMembers",
         "parameters": [
           {
             "name": "vault_id",
@@ -3255,7 +3261,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object"
+                  "$ref": "#/components/schemas/MemberList"
                 }
               }
             }
@@ -3285,7 +3291,7 @@
           "vaults"
         ],
         "summary": "Invite someone to a vault",
-        "operationId": "invite_member",
+        "operationId": "inviteMember",
         "parameters": [
           {
             "name": "vault_id",
@@ -3312,7 +3318,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object"
+                  "$ref": "#/components/schemas/InviteOut"
                 }
               }
             }
@@ -3344,7 +3350,7 @@
           "vaults"
         ],
         "summary": "Remove a vault member",
-        "operationId": "remove_member",
+        "operationId": "removeMember",
         "parameters": [
           {
             "name": "vault_id",
@@ -3398,6 +3404,58 @@
   },
   "components": {
     "schemas": {
+      "AuditEntry": {
+        "type": "object",
+        "required": [
+          "id",
+          "tool_name",
+          "args_summary",
+          "outcome"
+        ],
+        "properties": {
+          "args_summary": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "outcome": {
+            "type": "string"
+          },
+          "tool_name": {
+            "type": "string"
+          }
+        }
+      },
+      "AuditPage": {
+        "type": "object",
+        "required": [
+          "results",
+          "total",
+          "has_more"
+        ],
+        "properties": {
+          "has_more": {
+            "type": "boolean"
+          },
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AuditEntry"
+            }
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
       "AuthOut": {
         "type": "object",
         "required": [
@@ -3481,6 +3539,122 @@
         ],
         "properties": {
           "message": {
+            "type": "string"
+          }
+        }
+      },
+      "CloneOut": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "entities_copied"
+        ],
+        "properties": {
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "entities_copied": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "Cloud": {
+        "type": "object",
+        "required": [
+          "space",
+          "points"
+        ],
+        "properties": {
+          "points": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CloudPoint"
+            }
+          },
+          "space": {
+            "type": "string",
+            "description": "\"semantic\" (model embeddings) or \"lexical\" (hashed words, no model)"
+          }
+        }
+      },
+      "CloudPoint": {
+        "type": "object",
+        "required": [
+          "id",
+          "vault",
+          "kind",
+          "label",
+          "x",
+          "y",
+          "z"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "description": "\"record\", or the memory's type (world/experience/observation)"
+          },
+          "label": {
+            "type": "string"
+          },
+          "vault": {
+            "type": "string"
+          },
+          "x": {
+            "type": "number",
+            "format": "float"
+          },
+          "y": {
+            "type": "number",
+            "format": "float"
+          },
+          "z": {
+            "type": "number",
+            "format": "float"
+          }
+        }
+      },
+      "ConnectorOut": {
+        "type": "object",
+        "required": [
+          "kind",
+          "enabled",
+          "config",
+          "credentials_set",
+          "updated_at"
+        ],
+        "properties": {
+          "config": {
+            "type": "object",
+            "description": "Connector-specific settings (open object)."
+          },
+          "credentials_set": {
+            "type": "boolean"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "updated_at": {
             "type": "string"
           }
         }
@@ -3665,6 +3839,86 @@
           }
         }
       },
+      "EntityDetail": {
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "name",
+          "aliases",
+          "summary",
+          "memory",
+          "relations"
+        ],
+        "properties": {
+          "aliases": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "memory": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MemoryOut"
+            }
+          },
+          "name": {
+            "type": "string"
+          },
+          "owner_email": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "relations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RelationOut"
+            }
+          },
+          "summary": {
+            "type": "string"
+          }
+        }
+      },
+      "EntityOut": {
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "name",
+          "aliases",
+          "summary"
+        ],
+        "properties": {
+          "aliases": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          }
+        }
+      },
       "EntityUpdate": {
         "type": "object",
         "properties": {
@@ -3688,6 +3942,80 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "FinanceAccount": {
+        "type": "object",
+        "required": [
+          "name",
+          "balance"
+        ],
+        "properties": {
+          "balance": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "FinanceSummary": {
+        "type": "object",
+        "required": [
+          "balance",
+          "accounts",
+          "spend_by_category",
+          "spend_by_day",
+          "recent_transactions"
+        ],
+        "properties": {
+          "accounts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FinanceAccount"
+            }
+          },
+          "balance": {
+            "type": "number",
+            "format": "double"
+          },
+          "recent_transactions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FinanceTransaction"
+            }
+          },
+          "spend_by_category": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SpendByCategory"
+            }
+          },
+          "spend_by_day": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SpendByDay"
+            }
+          }
+        }
+      },
+      "FinanceTransaction": {
+        "type": "object",
+        "required": [
+          "description",
+          "amount",
+          "created_at"
+        ],
+        "properties": {
+          "amount": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
           }
         }
       },
@@ -3733,6 +4061,139 @@
           }
         }
       },
+      "GraphEdge": {
+        "type": "object",
+        "required": [
+          "source",
+          "target",
+          "label"
+        ],
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "owner_email": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "type": "string"
+          },
+          "target": {
+            "type": "string"
+          }
+        }
+      },
+      "GraphNode": {
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "owner_email": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "GraphOut": {
+        "type": "object",
+        "required": [
+          "nodes",
+          "edges"
+        ],
+        "properties": {
+          "edges": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GraphEdge"
+            }
+          },
+          "nodes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GraphNode"
+            }
+          }
+        }
+      },
+      "InvitationList": {
+        "type": "object",
+        "required": [
+          "results"
+        ],
+        "properties": {
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InvitationOut"
+            }
+          }
+        }
+      },
+      "InvitationOut": {
+        "type": "object",
+        "required": [
+          "vault_id",
+          "vault_name",
+          "vault_kind",
+          "role"
+        ],
+        "properties": {
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "role": {
+            "type": "string"
+          },
+          "vault_id": {
+            "type": "string"
+          },
+          "vault_kind": {
+            "type": "string"
+          },
+          "vault_name": {
+            "type": "string"
+          }
+        }
+      },
+      "InviteOut": {
+        "type": "object",
+        "required": [
+          "vault_id",
+          "user_email",
+          "role"
+        ],
+        "properties": {
+          "role": {
+            "type": "string"
+          },
+          "user_email": {
+            "type": "string"
+          },
+          "vault_id": {
+            "type": "string"
+          }
+        }
+      },
       "InviteRequest": {
         "type": "object",
         "required": [
@@ -3758,6 +4219,58 @@
           }
         }
       },
+      "ListEntitiesOut": {
+        "type": "object",
+        "required": [
+          "results",
+          "total",
+          "has_more"
+        ],
+        "properties": {
+          "has_more": {
+            "type": "boolean"
+          },
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EntityOut"
+            }
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "MemberList": {
+        "type": "object",
+        "required": [
+          "results"
+        ],
+        "properties": {
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MemberOut"
+            }
+          }
+        }
+      },
+      "MemberOut": {
+        "type": "object",
+        "required": [
+          "email",
+          "role"
+        ],
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          }
+        }
+      },
       "MemoryCreate": {
         "type": "object",
         "required": [
@@ -3769,6 +4282,86 @@
           },
           "type": {
             "type": "string"
+          }
+        }
+      },
+      "MemoryOut": {
+        "type": "object",
+        "required": [
+          "id",
+          "vault",
+          "subject",
+          "text",
+          "created_at",
+          "type",
+          "proof_count",
+          "version"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "owner": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "owner_email": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "proof_count": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "source": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source_memories": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "subject": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "vault": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       },
@@ -3786,6 +4379,44 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "MergeOut": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "entities",
+          "merged_from"
+        ],
+        "properties": {
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "entities": {
+            "type": "integer",
+            "description": "Entities in the merged vault (duplicates across the two sources count once).",
+            "minimum": 0
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "merged_from": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "name": {
+            "type": "string"
           }
         }
       },
@@ -3832,6 +4463,27 @@
           }
         }
       },
+      "ModelsOut": {
+        "type": "object",
+        "required": [
+          "models"
+        ],
+        "properties": {
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Null on success."
+          },
+          "models": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
       "OkBody": {
         "type": "object",
         "required": [
@@ -3840,6 +4492,49 @@
         "properties": {
           "ok": {
             "type": "boolean"
+          }
+        }
+      },
+      "PocketaiSummary": {
+        "type": "object",
+        "required": [
+          "recordings_count",
+          "total_duration_minutes",
+          "tag_breakdown",
+          "recent_recordings"
+        ],
+        "properties": {
+          "recent_recordings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RecentRecording"
+            }
+          },
+          "recordings_count": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "tag_breakdown": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TagCount"
+            }
+          },
+          "total_duration_minutes": {
+            "type": "number",
+            "format": "double"
+          }
+        }
+      },
+      "PocketaiWeek": {
+        "type": "object",
+        "required": [
+          "recordings_count"
+        ],
+        "properties": {
+          "recordings_count": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       },
@@ -3882,6 +4577,35 @@
           }
         }
       },
+      "RecentRecording": {
+        "type": "object",
+        "required": [
+          "title",
+          "duration_minutes",
+          "tags"
+        ],
+        "properties": {
+          "duration_minutes": {
+            "type": "number",
+            "format": "double"
+          },
+          "recorded_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "title": {
+            "type": "string"
+          }
+        }
+      },
       "RelationCreate": {
         "type": "object",
         "required": [
@@ -3894,6 +4618,59 @@
           },
           "to_id": {
             "type": "string"
+          }
+        }
+      },
+      "RelationOut": {
+        "type": "object",
+        "required": [
+          "id",
+          "in",
+          "out",
+          "label"
+        ],
+        "properties": {
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "direction": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "in": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "out": {
+            "type": "string"
+          },
+          "owner": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "owner_email": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },
@@ -3928,6 +4705,47 @@
           },
           "user_agent": {
             "type": "string"
+          }
+        }
+      },
+      "SettingsOut": {
+        "type": "object",
+        "required": [
+          "embedding_model",
+          "sync_intervals",
+          "theme",
+          "openai_api_key_set",
+          "openai_base_url",
+          "observations_mission",
+          "memory_skill",
+          "memory_skill_custom"
+        ],
+        "properties": {
+          "embedding_model": {
+            "type": "string"
+          },
+          "memory_skill": {
+            "type": "string"
+          },
+          "memory_skill_custom": {
+            "type": "boolean"
+          },
+          "observations_mission": {
+            "type": "string"
+          },
+          "openai_api_key_set": {
+            "type": "boolean"
+          },
+          "openai_base_url": {
+            "type": "string"
+          },
+          "sync_intervals": {
+            "type": "object",
+            "description": "Open map of source key to sync interval seconds."
+          },
+          "theme": {
+            "type": "object",
+            "description": "Open UI theme preferences."
           }
         }
       },
@@ -3967,6 +4785,217 @@
           },
           "sync_intervals": {},
           "theme": {}
+        }
+      },
+      "SnapshotOut": {
+        "type": "object",
+        "description": "Each side is null when that connector is not connected or its call failed.",
+        "properties": {
+          "pocketai": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PocketaiWeek"
+              }
+            ]
+          },
+          "up_bank": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/WeekSummary"
+              }
+            ]
+          }
+        }
+      },
+      "SourceOut": {
+        "type": "object",
+        "required": [
+          "key",
+          "label",
+          "provider",
+          "record_types",
+          "connected",
+          "sync_status",
+          "record_count"
+        ],
+        "properties": {
+          "connected": {
+            "type": "boolean"
+          },
+          "key": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "record_count": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "record_types": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "sync_status": {
+            "$ref": "#/components/schemas/SyncStatusOut"
+          }
+        }
+      },
+      "SpendByCategory": {
+        "type": "object",
+        "required": [
+          "category",
+          "amount"
+        ],
+        "properties": {
+          "amount": {
+            "type": "number",
+            "format": "double"
+          },
+          "category": {
+            "type": "string"
+          }
+        }
+      },
+      "SpendByDay": {
+        "type": "object",
+        "required": [
+          "day",
+          "amount"
+        ],
+        "properties": {
+          "amount": {
+            "type": "number",
+            "format": "double"
+          },
+          "day": {
+            "type": "string"
+          }
+        }
+      },
+      "SyncReport": {
+        "type": "object",
+        "description": "Outcome of a sync or webhook ingest: an ingest report, or `source` + `error`\nwhen the sync failed. Schema only: the handlers pass the report through.",
+        "required": [
+          "source"
+        ],
+        "properties": {
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "errors": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "failed": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "skipped": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "source": {
+            "type": "string"
+          },
+          "written": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          }
+        }
+      },
+      "SyncStatusOut": {
+        "type": "object",
+        "required": [
+          "cursor",
+          "last_error",
+          "consecutive_failures"
+        ],
+        "properties": {
+          "consecutive_failures": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "last_error": {
+            "type": "string"
+          },
+          "last_ok": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_run": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "TagCount": {
+        "type": "object",
+        "required": [
+          "tag",
+          "count"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "tag": {
+            "type": "string"
+          }
+        }
+      },
+      "TestOut": {
+        "type": "object",
+        "required": [
+          "ok"
+        ],
+        "properties": {
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Present only when the ping failed with an error."
+          },
+          "ok": {
+            "type": "boolean"
+          }
         }
       },
       "ThreadCreate": {
@@ -4061,6 +5090,73 @@
           }
         }
       },
+      "UpdateAck": {
+        "type": "object",
+        "description": "Body of `POST /update/request` and `/update/check`.",
+        "required": [
+          "configured"
+        ],
+        "properties": {
+          "configured": {
+            "type": "boolean"
+          },
+          "requested": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Present only when the updater is configured."
+          }
+        }
+      },
+      "UpdateStatus": {
+        "type": "object",
+        "description": "Documents the body of `GET /update/status`. The handler merges the on-disk\n`status.json` written by `scripts/auto-update.sh` verbatim, so every field\nexcept `configured` is absent when the updater is not configured.",
+        "required": [
+          "configured"
+        ],
+        "properties": {
+          "applying": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "checked_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "configured": {
+            "type": "boolean"
+          },
+          "current_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "latest_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "update_available": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        }
+      },
       "VaultClone": {
         "type": "object",
         "properties": {
@@ -4089,6 +5185,20 @@
           }
         }
       },
+      "VaultList": {
+        "type": "object",
+        "required": [
+          "results"
+        ],
+        "properties": {
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/VaultWithRole"
+            }
+          }
+        }
+      },
       "VaultMerge": {
         "type": "object",
         "required": [
@@ -4112,6 +5222,31 @@
           }
         }
       },
+      "VaultOut": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "kind"
+        ],
+        "properties": {
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
       "VaultRename": {
         "type": "object",
         "required": [
@@ -4120,6 +5255,100 @@
         "properties": {
           "name": {
             "type": "string"
+          }
+        }
+      },
+      "VaultWithRole": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "role"
+        ],
+        "properties": {
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          }
+        }
+      },
+      "WebhookOut": {
+        "type": "object",
+        "description": "Body of the webhook route: `{\"status\": \"ignored\"}` or an ingest report with\n`status: \"ok\"`. Schema only.",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "errors": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "failed": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "skipped": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "source": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string"
+          },
+          "written": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          }
+        }
+      },
+      "WeekSummary": {
+        "type": "object",
+        "required": [
+          "transaction_count",
+          "spent"
+        ],
+        "properties": {
+          "spent": {
+            "type": "number",
+            "format": "double"
+          },
+          "transaction_count": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       }

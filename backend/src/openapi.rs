@@ -103,6 +103,7 @@ pub fn spec_json() -> String {
 }
 
 #[utoipa::path(
+    operation_id = "getOpenapi",
     get,
     path = "/api/openapi.json",
     tag = "meta",

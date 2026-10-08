@@ -81,6 +81,7 @@ fn session_cookie_header(token: &str) -> String {
 }
 
 #[utoipa::path(
+    operation_id = "register",
     post,
     path = "/api/auth/register",
     tag = "auth",
@@ -117,6 +118,7 @@ async fn register(
 }
 
 #[utoipa::path(
+    operation_id = "login",
     post,
     path = "/api/auth/login",
     tag = "auth",
@@ -148,6 +150,7 @@ async fn login(
 }
 
 #[utoipa::path(
+    operation_id = "logout",
     post,
     path = "/api/auth/logout",
     tag = "auth",
@@ -168,6 +171,7 @@ async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Response {
 }
 
 #[utoipa::path(
+    operation_id = "getMe",
     get,
     path = "/api/auth/me",
     tag = "auth",
@@ -181,6 +185,7 @@ async fn me(State(state): State<AppState>, user: User) -> AppResult<Json<AuthOut
 }
 
 #[utoipa::path(
+    operation_id = "createToken",
     post,
     path = "/api/auth/tokens",
     tag = "auth",
@@ -213,6 +218,7 @@ struct TokenOut {
 }
 
 #[utoipa::path(
+    operation_id = "listTokens",
     get,
     path = "/api/auth/tokens",
     tag = "auth",
@@ -235,6 +241,7 @@ async fn get_tokens(State(state): State<AppState>, user: User) -> AppResult<Json
 }
 
 #[utoipa::path(
+    operation_id = "deleteToken",
     delete,
     path = "/api/auth/tokens/{token_id}",
     tag = "auth",
@@ -276,6 +283,7 @@ struct SessionOut {
 }
 
 #[utoipa::path(
+    operation_id = "listSessions",
     get,
     path = "/api/auth/sessions",
     tag = "auth",
@@ -302,6 +310,7 @@ async fn get_sessions(State(state): State<AppState>, user: User) -> AppResult<Js
 }
 
 #[utoipa::path(
+    operation_id = "revokeSession",
     delete,
     path = "/api/auth/sessions/{session_id}",
     tag = "auth",
@@ -330,6 +339,7 @@ async fn revoke_session_route(
 }
 
 #[utoipa::path(
+    operation_id = "getBootstrap",
     get,
     path = "/api/auth/bootstrap",
     tag = "auth",

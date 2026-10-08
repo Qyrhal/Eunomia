@@ -61,6 +61,7 @@ fn invalid(f: AuthzFail) -> AppError {
 }
 
 #[utoipa::path(
+    operation_id = "getOauthConsent",
     get,
     path = "/api/oauth/consent",
     tag = "oauth",
@@ -102,6 +103,7 @@ struct ConsentResult {
 }
 
 #[utoipa::path(
+    operation_id = "decideOauthConsent",
     post,
     path = "/api/oauth/consent",
     tag = "oauth",
@@ -133,6 +135,7 @@ struct Grant {
 }
 
 #[utoipa::path(
+    operation_id = "listOauthGrants",
     get,
     path = "/api/oauth/grants",
     tag = "oauth",
@@ -169,6 +172,7 @@ async fn list_grants(State(state): State<AppState>, user: User) -> AppResult<Jso
 }
 
 #[utoipa::path(
+    operation_id = "revokeOauthGrant",
     delete,
     path = "/api/oauth/grants/{grant_id}",
     tag = "oauth",
