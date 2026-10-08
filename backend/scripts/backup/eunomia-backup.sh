@@ -28,6 +28,10 @@ KEEP_WEEKLY="${KEEP_WEEKLY:-8}"
 log() { echo "[backup $(date -u +%FT%TZ)] $*"; }
 die() { log "ERROR: $*" >&2; exit 1; }
 
+# The surreal CLI to use. The pre-upgrade backup (scripts/upgrade-surreal-v3.sh) points this at a copy
+# of the RUNNING server's own binary, so a 2.x server is never exported with the 3.x CLI baked into this image.
+SURREAL="${SURREAL_BIN:-surreal}"
+
 KEY_FILE="${BACKUP_KEY_FILE:-$DIR/.backup-key}"
 MAGIC="EUNOMIA-BK2"
 
@@ -61,13 +65,13 @@ mac_of() { openssl dgst -sha256 -mac HMAC -macopt "hexkey:$MAC_KEY" -r | cut -d'
 
 
 export_db() { # export one database to stdout
-  surreal export --log none --endpoint "$ENDPOINT" --user "$USER_" --pass "$PASS_" --ns "$NS" --db "$1" -
+  "$SURREAL" export --log none --endpoint "$ENDPOINT" --user "$USER_" --pass "$PASS_" --ns "$NS" --db "$1" -
 }
 
 # The databases to back up: control, every org_<uuid> and $DB (the old single database) when the
 # tenancy layout is there; just $DB otherwise.
 list_dbs() {
-  info="$(echo 'INFO FOR NS;' | surreal sql --endpoint "$ENDPOINT" --user "$USER_" --pass "$PASS_" --ns "$NS" --hide-welcome --json 2>/dev/null || true)"
+  info="$(echo 'INFO FOR NS;' | "$SURREAL" sql --endpoint "$ENDPOINT" --user "$USER_" --pass "$PASS_" --ns "$NS" --hide-welcome --json 2>/dev/null || true)"
   if ! echo "$info" | grep -q '"control"'; then echo "$DB"; return; fi
   { echo "$info" | grep -oE '"(control|org_[0-9a-f]{32})"[[:space:]]*:' | sed -E 's/^"([^"]+)".*/\1/'
     echo "$info" | grep -q "\"$DB\"[[:space:]]*:" && echo "$DB"; } | sort -u
@@ -80,9 +84,21 @@ encrypt_to() { # stdin -> $1, atomically; refuses an empty export
   # append the MAC (64 hex chars, no newline) of everything written so far
   m="$(mac_of < "$tmp")" || { rm -f "$tmp"; return 1; }
   printf '%s' "$m" >> "$tmp"
-  # Guard against pipe failures that sh cannot see: an empty export still encrypts to ~32 bytes.
   [ "$(wc -c < "$tmp")" -gt 160 ] || { rm -f "$tmp"; return 1; }
   mv "$tmp" "$1"
+}
+
+# dump_to DB OUT: export, then encrypt. sh has no pipefail, so the export goes to a private temp file
+# (shredded after) whose exit status and last line are checked: a dump that died midway never becomes a backup.
+dump_to() {
+  x="$(mktemp)" || return 1
+  if export_db "$1" > "$x" && tail -c 4096 "$x" | grep . | tail -n 1 | grep -q ';$'; then
+    encrypt_to "$2" < "$x"; rc=$?
+  else
+    rc=1
+  fi
+  shred -u -f "$x" 2>/dev/null || rm -f "$x"
+  return "$rc"
 }
 
 do_backup() {
@@ -91,15 +107,15 @@ do_backup() {
   mkdir -p "$DIR"
   name="$prefix-$(date -u +%Y%m%dT%H%M%SZ)"
   dbs="$(list_dbs)"
-  # export | encrypt in one pipe: the plaintext dump never touches disk. --log none keeps log lines out of stdout (they would corrupt the dump).
+  # --log none keeps log lines out of stdout (they would corrupt the dump).
   if [ "$dbs" = "$DB" ]; then
     out="$DIR/$name.surql.enc"
-    export_db "$DB" | encrypt_to "$out" || { rm -f "$out"; die "export failed (is SurrealDB reachable at $ENDPOINT and are the credentials right?)"; }
+    dump_to "$DB" "$out" || { rm -f "$out"; die "export failed (is SurrealDB reachable at $ENDPOINT and are the credentials right?)"; }
   else
     out="$DIR/$name"
     mkdir -p "$out.part"
     for d in $dbs; do
-      export_db "$d" | encrypt_to "$out.part/$d.surql.enc" || { rm -rf "$out.part"; die "export of database $d failed (is SurrealDB reachable at $ENDPOINT and are the credentials right?)"; }
+      dump_to "$d" "$out.part/$d.surql.enc" || { rm -rf "$out.part"; die "export of database $d failed (is SurrealDB reachable at $ENDPOINT and are the credentials right?)"; }
     done
     mv "$out.part" "$out"
   fi
@@ -136,12 +152,12 @@ restore_one() { # restore_one FILE DB [--wipe]
   decrypt_to "$1" "$plain"
   if [ "${3:-}" = "--wipe" ]; then
     log "wiping database $NS/$2"
-    echo "REMOVE DATABASE IF EXISTS \`$2\`;" | surreal sql --endpoint "$ENDPOINT" --user "$USER_" --pass "$PASS_" --ns "$NS" --hide-welcome >/dev/null \
+    echo "REMOVE DATABASE IF EXISTS \`$2\`;" | "$SURREAL" sql --endpoint "$ENDPOINT" --user "$USER_" --pass "$PASS_" --ns "$NS" --hide-welcome >/dev/null \
       || die "wipe failed"
   fi
-  echo "DEFINE DATABASE IF NOT EXISTS \`$2\`;" | surreal sql --endpoint "$ENDPOINT" --user "$USER_" --pass "$PASS_" --ns "$NS" --hide-welcome >/dev/null \
+  echo "DEFINE DATABASE IF NOT EXISTS \`$2\`;" | "$SURREAL" sql --endpoint "$ENDPOINT" --user "$USER_" --pass "$PASS_" --ns "$NS" --hide-welcome >/dev/null \
     || die "could not create database $2"
-  surreal import --endpoint "$ENDPOINT" --user "$USER_" --pass "$PASS_" --ns "$NS" --db "$2" "$plain" \
+  "$SURREAL" import --endpoint "$ENDPOINT" --user "$USER_" --pass "$PASS_" --ns "$NS" --db "$2" "$plain" \
     || die "import of $2 failed. If the database already has data, retry with --wipe (this deletes it first)."
   rm -f "$plain"
 }
@@ -174,7 +190,7 @@ case "${1:-}" in
     log "nightly backups to $DIR at 03:00 (TZ=${TZ:-UTC}), keeping $KEEP_DAILY daily + $KEEP_WEEKLY weekly"
     while :; do
       sleep "$(secs_to_next_3am)"
-      do_backup daily || log "nightly backup failed, will retry tomorrow"
+      ( do_backup daily ) || log "nightly backup failed, will retry tomorrow"
       [ "$(date +%u)" = 7 ] && { ls -1dt "$DIR"/daily-* | head -1 | while read -r f; do
         cp -R "$f" "$DIR/weekly-${f##*/daily-}"; done; rotate weekly "$KEEP_WEEKLY"; }
     done ;;

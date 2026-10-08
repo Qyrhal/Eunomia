@@ -9,14 +9,17 @@ PASS=0; FAIL=0
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 check() { local d="$1"; shift; if "$@" >/dev/null 2>&1; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); echo "FAIL: $d"; fi; }
 
-mkdir -p "$TMP/bin" "$TMP/backups"
+mkdir -p "$TMP/bin" "$TMP/backups" "$TMP/tmpd"; export TMPDIR="$TMP/tmpd"
 cat > "$TMP/bin/surreal" <<'SHIM'
 #!/bin/sh
 cmd="$1"; shift
 db=""; file=""
 while [ $# -gt 0 ]; do case "$1" in --db) db="$2"; shift ;; --ns|--endpoint|--user|--pass|--log) shift ;; --*) ;; *) file="$1" ;; esac; shift; done
 case "$cmd" in
-  export) echo "OPTION IMPORT; -- dump of $db -- padding padding padding padding padding padding padding padding" ;;
+  export) if [ -f "$SHIM_FAIL" ] && grep -q "$db" "$SHIM_FAIL"; then
+            rm -f "$SHIM_FAIL"; echo "OPTION IMPORT; -- dump of $db -- padding padding padding padding padding padding"; printf 'CREATE half'
+            [ "$SHIM_MODE" = truncate ] && exit 0; exit 1; fi
+          echo "OPTION IMPORT; -- dump of $db -- padding padding padding padding padding padding padding padding;" ;;
   import) echo "import $db: $(cat "$file")" >> "$SHIM_LOG" ;;
   sql) in="$(cat)"; echo "sql: $in" >> "$SHIM_LOG"
        case "$in" in
@@ -27,7 +30,7 @@ case "$cmd" in
 esac
 SHIM
 chmod +x "$TMP/bin/surreal"
-export PATH="$TMP/bin:$PATH" SHIM_LOG="$TMP/shim.log" BACKUP_DIR="$TMP/backups" BACKUP_ENCRYPTION_KEY=testkey SURREAL_NS=eunomia SURREAL_DB=eunomia
+export PATH="$TMP/bin:$PATH" SHIM_LOG="$TMP/shim.log" SHIM_FAIL="$TMP/shim.fail" BACKUP_DIR="$TMP/backups" BACKUP_ENCRYPTION_KEY=testkey SURREAL_NS=eunomia SURREAL_DB=eunomia
 bk() { sh "$SCRIPT" "$@"; }
 # decrypt a new-format file by restoring it through the script (the shim logs the import)
 dump_of() { : > "$SHIM_LOG"; sh "$SCRIPT" restore "$1" >/dev/null 2>&1; cat "$SHIM_LOG"; }
@@ -74,6 +77,39 @@ rm -rf "$TMP/backups"/*
 for s in 1 2 3 4; do mkdir "$TMP/backups/daily-2026010${s}T000000Z"; done; touch "$TMP/backups/daily-20260105T000000Z.surql.enc"
 KEEP_DAILY=2 MOCK_TENANCY=1 bk now daily >/dev/null
 check "only the newest two daily backups stay" test "$(ls -1d "$TMP"/backups/daily-* | wc -l | tr -d ' ')" = 2
+
+# 5. an export that dies midway (non-zero exit, no closing statement) never becomes a backup
+rm -rf "$TMP/backups"/*
+echo eunomia > "$SHIM_FAIL"; SHIM_MODE=die bk now manual >/dev/null 2>&1; rc=$?
+check "a failed export makes the command fail" test "$rc" -ne 0
+check "a failed export leaves no backup file" test -z "$(ls -A "$TMP/backups" | grep -v '^\.backup-key$')"
+echo eunomia > "$SHIM_FAIL"; SHIM_MODE=truncate bk now manual >/dev/null 2>&1; rc=$?
+check "an export that exits 0 but is cut off is refused too" test "$rc" -ne 0 -a -z "$(ls "$TMP/backups" | grep -v '^\.backup-key$')"
+check "no plaintext temp dump is left behind" test -z "$(ls -A "$TMP/tmpd")"
+rm -rf "$TMP/backups"/*; echo control > "$SHIM_FAIL"; SHIM_MODE=die MOCK_TENANCY=1 bk now manual >/dev/null 2>&1
+check "a tenancy backup failing on one database leaves no directory" test -z "$(ls "$TMP/backups")"
+
+# 6. the nightly loop survives a failed run and the next one succeeds
+rm -rf "$TMP/backups"/*
+mkdir -p "$TMP/loopbin"
+cat > "$TMP/loopbin/sleep" <<'S'
+#!/bin/sh
+n=$(( $(cat "$SLEEPS" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$SLEEPS"
+[ "$n" -lt 3 ] || { kill "$(cat "$LOOPPID")"; sleep 5; }
+S
+cat > "$TMP/loopbin/date" <<'S'
+#!/bin/sh
+case "$*" in *-d*) echo 99999999999 ;; *) exec /bin/date "$@" ;; esac
+S
+chmod +x "$TMP/loopbin/sleep" "$TMP/loopbin/date"
+echo eunomia > "$SHIM_FAIL"; SHIM_MODE=die
+export SLEEPS="$TMP/sleeps" LOOPPID="$TMP/looppid" SHIM_MODE
+# the shim's `sleep 5` after the kill must be the real one: call it by path
+sed -i.bak 's#; sleep 5; }#; /bin/sleep 5; }#' "$TMP/loopbin/sleep"; rm -f "$TMP/loopbin/sleep.bak"
+PATH="$TMP/loopbin:$PATH" sh -c 'echo $$ > "$LOOPPID"; exec sh "$0" loop' "$SCRIPT" > "$TMP/loop.log" 2>&1 &
+wait $! 2>/dev/null
+check "the loop logs the failure and keeps going" grep -q 'nightly backup failed' "$TMP/loop.log"
+check "the next night's run still produced a backup" test -n "$(ls "$TMP"/backups/daily-* 2>/dev/null)"
 
 echo "backup.test.sh: $PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]
