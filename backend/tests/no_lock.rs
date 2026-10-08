@@ -199,4 +199,8 @@ async fn concurrent_first_signups_converge_on_one_org() {
     let mut res = state.control.test_raw().query("SELECT count() FROM org GROUP ALL").await.unwrap();
     let n: Option<i64> = res.take("count").unwrap();
     assert_eq!(n, Some(1));
+    // both signups saw an empty org and both provisioned it (idempotent): still only one may own it
+    let mut res = state.control.test_raw().query("SELECT count() FROM membership WHERE role = 'owner' GROUP ALL").await.unwrap();
+    let owners: Option<i64> = res.take("count").unwrap();
+    assert_eq!(owners, Some(1), "exactly one owner");
 }

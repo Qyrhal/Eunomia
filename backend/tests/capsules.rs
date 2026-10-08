@@ -204,3 +204,16 @@ async fn capsule_source_never_holds_quoted_values() {
     let got = capsules::get(&app.state.control, &trace(31)).await.unwrap().unwrap();
     assert!(!got.source.contains("CANARY") && got.source.contains("entity_name") && got.source.contains("entity:abc"), "{}", got.source);
 }
+
+#[tokio::test]
+async fn a_route_capsule_keeps_the_path_and_query_names_never_the_values() {
+    let app = new_app().await;
+    let bad = "REMOVE TABLE audit_log; DEFINE TABLE audit_log SCHEMALESS; CREATE audit_log SET owner = $u, tool_name = 'x', outcome = 5;";
+    app.db().await.test_raw().query(bad).bind(("u", app.user.id.clone())).await.unwrap().check().unwrap();
+    let ((status, body), _) = http(&app.router, "GET", "/api/audit?limit=5&note=LEAKME-private-text&access_token=LEAKME-tok", None, Some(&app.token), None).await;
+    assert_eq!(status, 500);
+    let c = capsules::get(&app.state.control, body["trace_id"].as_str().unwrap()).await.unwrap().expect("route capsule");
+    assert_eq!(c.args["uri"], "/api/audit");
+    assert_eq!(c.args["query_names"], json!(["limit", "note", "access_token"]));
+    assert!(!serde_json::to_string(&c).unwrap().contains("LEAKME"));
+}

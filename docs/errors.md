@@ -15,13 +15,13 @@ The `ErrorCode` enum is in `backend/src/error.rs`. A unit test fails if a code i
 | Code | HTTP | Meaning | Emitted by |
 |------|------|---------|------------|
 | `auth.unauthorized` | 401 | No valid session cookie or API token, or wrong email or password. | `auth.rs` (extractor), `routers/auth.rs`, `routers/mcp.rs` |
-| `auth.forbidden` | 403 | Request rejected before auth, for example a disallowed browser `Origin` on `/mcp`, or a non-admin reading `/api/debug/capsules/{trace_id}`. | `routers/mcp.rs`, `routers/debug.rs` |
+| `auth.forbidden` | 403 | Request rejected before auth, for example a disallowed browser `Origin` on `/mcp`, a non-admin reading `/api/debug/capsules/{trace_id}`, or a signup the server refuses (closed, not on the allow list, or an address reserved in `EUNOMIA_ADMIN_EMAILS`). | `routers/mcp.rs`, `routers/debug.rs`, `routers/auth.rs` |
 | `auth.email_taken` | 409 | Signup with an email that already has an account. | `models_user.rs`, `routers/auth.rs` |
 | `auth.not_found` | 404 | API token or session id does not exist or is not yours. | `routers/auth.rs` |
 | `auth.scope` | 403 | The token lacks the scope this route or tool needs, or is restricted to another vault, or the route is account-level and the token is vault-restricted. | `gate.rs`, `authz.rs`, `tools/registry.rs` |
 | `auth.token_expired` | 401 | The API token's `expires_at` has passed. Create a new token. | `gate.rs`, `auth.rs` |
 | `auth.session_expired` | 401 | The session cookie is past its (sliding) expiry or its JWT `exp`. Log in again. | `gate.rs`, `auth.rs` |
-| `rate.limited` | 429 | Too many requests for this user, token or (for login and signup) client address. Honour the `Retry-After` header. | `gate.rs` |
+| `rate.limited` | 429 | Too many requests for this user, token or (for login and signup) client address. Also 10 failed logins for one email, or 30 failed token requests for one OAuth client, in 15 minutes, whatever the address (counted per process). Honour the `Retry-After` header. | `gate.rs`, `routers/auth.rs`, `oauth/server.rs` |
 | `tenant.denied` | 403 | The database refused a query on permissions grounds, or a statement named a table of the other database (control vs org) and was refused before it was sent. Logged at error level; treat as a high-severity alert. | `error.rs` (DB error mapping), `store/mod.rs` (`CROSSING_MARK`) |
 | `tenant.not_found` | 404 | The org has no ready database: its routing row is missing or the database is still being created or moved. | `pool.rs` |
 | `tenant.schema_behind` | 503 | The org's database is more than one schema version behind this code (below N-1). The `migrate_tenant` job brings it up; retry shortly. | `pool.rs` |

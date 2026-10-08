@@ -291,7 +291,14 @@ pub async fn first_user(db: &ControlDb) -> AppResult<Option<RecordId>> {
 /// buffers small request bodies so the route can be replayed.
 pub async fn capture(State(state): State<AppState>, req: Request, next: Next) -> Response {
     let method = req.method().clone();
-    let uri = req.uri().to_string();
+    // path and query keys only: query values can carry tokens and tenant content
+    let path = scrub(req.uri().path());
+    let query_names: Vec<String> = req
+        .uri()
+        .to_string()
+        .split_once('?')
+        .map(|(_, q)| url::form_urlencoded::parse(q.as_bytes()).take(32).map(|(k, _)| scrub(&k.chars().take(64).collect::<String>())).collect())
+        .unwrap_or_default();
     let route = req.extensions().get::<MatchedPath>().map_or_else(|| req.uri().path().to_string(), |m| m.as_str().to_string());
     let user = req.extensions().get::<Authn>().map(|a| a.user.id.to_string());
     let org = req.extensions().get::<Authn>().map(|a| a.user.org.key());
@@ -328,7 +335,7 @@ pub async fn capture(State(state): State<AppState>, req: Request, next: Next) ->
                 kind: "route",
                 name: format!("{method} {route}"),
                 user,
-                args: json!({ "method": method.as_str(), "uri": uri, "body": body }),
+                args: json!({ "method": method.as_str(), "uri": path, "query_names": query_names, "body": body }),
                 code,
                 status: resp.status().as_u16(),
                 source,
