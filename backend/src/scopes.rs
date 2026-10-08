@@ -1,11 +1,15 @@
 //! Token scopes: what a personal access token (or, later, an OAuth grant) may do.
 //! Which scope each route and tool needs is decided in `gate.rs` and `tools::registry`.
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
 pub enum Scope {
+    #[serde(rename = "memory:read")]
     MemoryRead,
+    #[serde(rename = "memory:write")]
     MemoryWrite,
+    #[serde(rename = "vaults:admin")]
     VaultsAdmin,
+    #[serde(rename = "connectors")]
     Connectors,
 }
 

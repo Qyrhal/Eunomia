@@ -168,3 +168,27 @@ async fn leave_and_invitation_rules() {
     assert!(vaults::accept_invitation(&w.db, &w.outsider.id, &v2).await.is_err());
     assert!(vaults::accept_invitation(&w.db, &w.pending.id, &v2).await.is_ok());
 }
+
+/// `authorize()` itself, every action for every kind of user, against the role matrix.
+#[tokio::test]
+async fn authorize_matches_the_role_matrix_for_every_action() {
+    use eunomia_backend::authz::{authorize, permits, Action, Role};
+    let w = world().await;
+    let v = w.vault().await;
+    for who in WHOS {
+        let role = match who {
+            Owner => Some(Role::Owner),
+            Member => Some(Role::Member),
+            Pending | Outsider => None,
+        };
+        for action in Action::ALL {
+            let got = authorize(&w.db, &w.user(who).id, action, &v).await;
+            let want = role.is_some_and(|r| permits(r, action));
+            assert_eq!(got.is_ok(), want, "{who:?} {action:?}");
+            match got {
+                Ok(scope) => assert_eq!((scope.vault(), Some(scope.role())), (&v, role)),
+                Err(e) => assert_eq!((e.status, e.code.as_str()), (axum::http::StatusCode::FORBIDDEN, "vault.forbidden")),
+            }
+        }
+    }
+}

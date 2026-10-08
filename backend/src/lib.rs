@@ -1,3 +1,4 @@
+pub mod audit;
 pub mod auth;
 pub mod authz;
 pub mod cache;
@@ -9,9 +10,11 @@ pub mod docs;
 pub mod embeddings;
 pub mod entities;
 pub mod error;
+pub mod gate;
 pub mod migrate;
 pub mod models_user;
 pub mod openapi;
+pub mod ratelimit;
 pub mod routers;
 pub mod scopes;
 pub mod sources;
@@ -29,6 +32,11 @@ use crate::state::AppState;
 
 /// The full HTTP app (CORS included), shared by `main` and the tests.
 pub fn app(state: AppState) -> axum::Router {
+    app_with(state, ratelimit::RateConfig::from_env())
+}
+
+/// [`app`] with explicit rate limits (the tests use tiny ones).
+pub fn app_with(state: AppState, limits: ratelimit::RateConfig) -> axum::Router {
     let allowed_origins: Vec<HeaderValue> = state
         .settings
         .cors_allowed_origins
@@ -65,6 +73,7 @@ pub fn app(state: AppState) -> axum::Router {
         .route("/healthz", axum::routing::get(healthz))
         .merge(routers::mcp::router())
         .nest("/api", api)
+        .layer(axum::middleware::from_fn_with_state(gate::Gate::new(state.clone(), limits), gate::gate))
         .layer(axum::middleware::from_fn(telemetry::trace_request))
         .layer(cors)
         .with_state(state)

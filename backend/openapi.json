@@ -3489,6 +3489,15 @@
           }
         }
       },
+      "Scope": {
+        "type": "string",
+        "enum": [
+          "memory:read",
+          "memory:write",
+          "vaults:admin",
+          "connectors"
+        ]
+      },
       "SessionOut": {
         "type": "object",
         "required": [
@@ -3590,8 +3599,32 @@
           "name"
         ],
         "properties": {
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "RFC 3339 timestamp in the future. Omit for a token that never expires."
+          },
           "name": {
             "type": "string"
+          },
+          "scopes": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/Scope"
+            },
+            "description": "Defaults to every scope. Cannot exceed the creating credential's own scopes."
+          },
+          "vault_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Restrict the token to one vault you belong to."
           }
         }
       },
@@ -3600,18 +3633,37 @@
         "required": [
           "id",
           "name",
-          "token"
+          "token",
+          "scopes"
         ],
         "properties": {
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "id": {
             "type": "string"
           },
           "name": {
             "type": "string"
           },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Scope"
+            }
+          },
           "token": {
             "type": "string",
             "description": "Shown once, never retrievable again."
+          },
+          "vault_id": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },
@@ -3619,7 +3671,8 @@
         "type": "object",
         "required": [
           "id",
-          "name"
+          "name",
+          "scopes"
         ],
         "properties": {
           "created_at": {
@@ -3627,6 +3680,13 @@
               "string",
               "null"
             ]
+          },
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`null` for a token that never expires."
           },
           "id": {
             "type": "string"
@@ -3639,6 +3699,18 @@
           },
           "name": {
             "type": "string"
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Scope"
+            }
+          },
+          "vault_id": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },

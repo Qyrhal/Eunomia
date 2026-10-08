@@ -202,6 +202,12 @@ pub async fn default_vault_id(db: &Db, user_id: &RecordId) -> AppResult<RecordId
         authz::ensure_member(db, user_id, &only).await?;
         return Ok(only);
     }
+    personal_vault_id(db, user_id).await
+}
+
+/// The user's own personal vault, whatever the credential is restricted to. The
+/// only vault that also draws on the user's synced source records.
+pub async fn personal_vault_id(db: &Db, user_id: &RecordId) -> AppResult<RecordId> {
     #[derive(Deserialize)]
     struct Row {
         vault: RecordId,
