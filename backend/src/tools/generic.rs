@@ -128,58 +128,6 @@ async fn full(db: &Db, owner: &RecordId, rec: CacheRecord) -> AppResult<Value> {
     }))
 }
 
-/// `cache_record_fts_idx` is a composite BM25 index over `(title, body_text)`,
-/// but matches against the `@N@` operator only resolve against the index's
-/// first field (`title`) -- `body_text`-only matches raise "no suitable
-/// index". Use the index for `title`, then fall back to a plain substring
-/// scan for `body_text` so keyword search still covers both fields
-/// (functionally correct; just not BM25-ranked for body-only hits).
-async fn keyword_ids(db: &Db, owner: &RecordId, q: &str, limit: usize) -> AppResult<Vec<String>> {
-    #[derive(serde::Deserialize)]
-    struct IdRow {
-        id: RecordId,
-    }
-
-    let mut res = db
-        .query(
-            "SELECT id, search::score(1) AS score FROM cache_record \
-             WHERE owner = $owner AND title @1@ $q AND deleted = false \
-             ORDER BY score DESC LIMIT $limit",
-        )
-        .bind(("owner", owner.clone()))
-        .bind(("q", q.to_string()))
-        .bind(("limit", limit as i64))
-        .await?;
-    let rows: Vec<IdRow> = res.take(0)?;
-    let mut ids: Vec<String> = rows.iter().map(|r| literal(r.id.key())).collect();
-
-    if ids.len() < limit {
-        let seen: Vec<RecordId> = ids.iter().map(|i| scoped_rid(owner, i)).collect();
-        let mut res = db
-            .query(
-                "SELECT id FROM cache_record WHERE owner = $owner AND \
-                 string::contains(string::lowercase(body_text), string::lowercase($q)) \
-                 AND deleted = false AND id NOT IN $seen LIMIT $limit",
-            )
-            .bind(("owner", owner.clone()))
-            .bind(("q", q.to_string()))
-            .bind(("seen", seen))
-            .bind(("limit", (limit - ids.len()) as i64))
-            .await?;
-        let extra: Vec<IdRow> = res.take(0)?;
-        ids.extend(extra.iter().map(|r| literal(r.id.key())));
-    }
-    ids.truncate(limit);
-    Ok(ids)
-}
-
-/// No Rust `embeddings` module exists yet to generate a query vector, so this
-/// always returns no results -- see the module docs. Takes the same shape as
-/// `keyword_ids` so it drops in once embeddings land.
-async fn semantic_ids(_db: &Db, _owner: &RecordId, _q: &str, _limit: usize) -> AppResult<Vec<String>> {
-    Ok(Vec::new())
-}
-
 /// Reciprocal Rank Fusion, k=60: sum of `1/(60+rank+1)` per id across any
 /// number of ranked lists.
 fn rrf(ranked_lists: &[Vec<String>]) -> Vec<String> {
@@ -202,6 +150,7 @@ fn rrf(ranked_lists: &[Vec<String>]) -> Vec<String> {
 #[allow(clippy::too_many_arguments)]
 pub async fn search(
     db: &Db,
+    settings: &crate::config::Settings,
     owner: &RecordId,
     query: &str,
     sources: Option<&[String]>,
@@ -216,13 +165,21 @@ pub async fn search(
     let offset = offset.max(0) as usize;
     let pool = (limit * 4).max(40);
 
+    // Shared with recall (cache::search): per-term keyword matching, and real
+    // embeddings when the server has them -- keyword-only otherwise.
+    use crate::cache::search as cs;
+    let semantic_ok = crate::embeddings::service::available(db, settings, owner).await;
     let ids = match mode {
-        "keyword" => keyword_ids(db, owner, query, pool).await?,
-        "semantic" => semantic_ids(db, owner, query, pool).await?,
+        "semantic" if semantic_ok => cs::semantic_ids(db, settings, owner, query, pool).await?,
+        "keyword" | "semantic" => cs::keyword_ids(db, owner, query, pool).await?,
         _ => {
-            let kw = keyword_ids(db, owner, query, pool).await?;
-            let sem = semantic_ids(db, owner, query, pool).await?;
-            rrf(&[kw, sem])
+            let kw = cs::keyword_ids(db, owner, query, pool).await?;
+            if semantic_ok {
+                let sem = cs::semantic_ids(db, settings, owner, query, pool).await.unwrap_or_default();
+                rrf(&[kw, sem])
+            } else {
+                kw
+            }
         }
     };
 

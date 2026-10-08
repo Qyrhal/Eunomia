@@ -299,6 +299,7 @@ fn register_all(registry: &mut HashMap<&'static str, ToolSpec>) {
                 };
                 generic::search(
                     &state.db,
+                    &state.settings,
                     owner,
                     &a.query,
                     a.sources.as_deref(),

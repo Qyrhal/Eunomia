@@ -136,6 +136,34 @@ test.describe("MCP server", () => {
     expect((await call("entity_delete", { entity_id: entityId })).data.deleted).toBe(true);
   });
 
+  test("full-sentence questions find memories and records (not just exact keywords)", async ({ request }) => {
+    const token = await newToken(request);
+    let n = 0;
+    const call = async (name: string, args: object) =>
+      JSON.parse(
+        (await (await rpc(request, token, { jsonrpc: "2.0", id: ++n, method: "tools/call", params: { name, arguments: args } })).json())
+          .result.content[0].text
+      );
+
+    await call("memory_write", { subject_name: "Homelab", subject_kind: "location", text: "Updates run in a separate updater container triggered by a marker file." });
+    await call("memory_write", { subject_name: "Ada", subject_kind: "person", text: "Ada prefers async updates over meetings." });
+    await call("memory_write", { subject_name: "Grace", subject_kind: "person", text: "Grace invented the first compiler." });
+
+    // every word of the question used to be required, so this returned nothing
+    const texts = (await call("recall", { query: "How do updates work with the updater container?" })).results.map((r: { text: string }) => r.text);
+    expect(texts[0]).toContain("updater container"); // matches the most words, so it ranks first
+    expect(texts).toContain("Ada prefers async updates over meetings.");
+    expect(texts).not.toContain("Grace invented the first compiler.");
+    expect((await call("recall", { query: "what does Grace do?" })).results.map((r: { text: string }) => r.text)).toContain("Grace invented the first compiler.");
+
+    // the same for synced records via search
+    expect((await request.post("/api/sources/demo/sync")).ok()).toBeTruthy();
+    const listed = await call("list", { limit: 1 });
+    const word = (listed.results[0].title as string).split(/\W+/).find((w: string) => w.length > 3) ?? listed.results[0].title;
+    const found = await call("search", { query: `can you show me anything about ${word} please?` });
+    expect(found.results.map((r: { id: string }) => r.id)).toContain(listed.results[0].id);
+  });
+
   test("initialize tells the agent it is the model", async ({ request }) => {
     const token = await newToken(request);
     const init = await (

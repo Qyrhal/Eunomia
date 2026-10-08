@@ -179,20 +179,27 @@ async fn graph_arm(db: &Db, owner: &RecordId, vault: &RecordId, query: &str, lim
 /// any vault the caller can read.
 async fn memory_text_arm(db: &Db, vault: &RecordId, query: &str, limit: usize) -> AppResult<Vec<String>> {
     #[derive(Deserialize)]
-    struct IdRow {
+    struct ScoredRow {
         id: RecordId,
+        #[serde(default)]
+        score: f64,
     }
-    let mut res = db
-        .query(
-            "SELECT id, search::score(1) AS score FROM memory \
-             WHERE vault = $vault AND text @1@ $q ORDER BY score DESC LIMIT $limit",
-        )
-        .bind(("vault", vault.clone()))
-        .bind(("q", query.to_string()))
-        .bind(("limit", limit as i64))
-        .await?;
-    let rows: Vec<IdRow> = res.take(0)?;
-    Ok(rows.into_iter().map(|r| format!("memory:{}", r.id)).collect())
+    // one BM25 match per term: `@@` with a whole question needs every word to match
+    let mut per_term = Vec::new();
+    for term in cs::search_terms(query) {
+        let mut res = db
+            .query(
+                "SELECT id, search::score(1) AS score FROM memory \
+                 WHERE vault = $vault AND text @1@ $t ORDER BY score DESC LIMIT $limit",
+            )
+            .bind(("vault", vault.clone()))
+            .bind(("t", term))
+            .bind(("limit", limit as i64))
+            .await?;
+        let rows: Vec<ScoredRow> = res.take(0)?;
+        per_term.push(rows.into_iter().map(|r| (format!("memory:{}", r.id), r.score)).collect());
+    }
+    Ok(cs::rank_term_hits(per_term, limit))
 }
 
 /// Explicit date-range filter only -- no NL date parsing in v1. Merges

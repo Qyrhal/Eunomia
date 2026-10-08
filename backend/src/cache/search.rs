@@ -237,50 +237,88 @@ pub async fn set_embedding(db: &Db, owner: &RecordId, record_id: &str, vector: V
     Ok(())
 }
 
+/// Words worth matching on, from a natural-language query: lowercase, split
+/// on non-alphanumerics, minus filler words, deduped, at most 8. SurrealDB's
+/// `@@` full-text match (and a whole-query substring scan) only hit when
+/// EVERY word matches, so a question like "how do updates work?" found
+/// nothing; callers instead match each term and rank with [`rank_term_hits`].
+pub(crate) fn search_terms(q: &str) -> Vec<String> {
+    const FILLER: &[&str] = &[
+        "a", "an", "the", "and", "or", "but", "if", "of", "to", "in", "on", "at", "by", "for", "from", "with", "about",
+        "into", "as", "is", "are", "was", "were", "be", "been", "am", "do", "does", "did", "done", "have", "has", "had",
+        "i", "me", "my", "we", "us", "our", "you", "your", "he", "she", "it", "its", "they", "them", "their", "this",
+        "that", "these", "those", "what", "which", "who", "whom", "whose", "when", "where", "why", "how", "can",
+        "could", "would", "should", "will", "shall", "may", "might", "must", "so", "than", "then", "there", "here",
+        "any", "some", "all", "not", "no", "yes", "just", "also", "please", "tell", "know", "remember", "recall",
+        "anything", "something", "thing", "things", "get", "got", "like", "up", "out", "s", "t",
+    ];
+    let mut out: Vec<String> = Vec::new();
+    for w in q.to_lowercase().split(|c: char| !c.is_alphanumeric()) {
+        if !w.is_empty() && !FILLER.contains(&w) && !out.iter().any(|o| o == w) {
+            out.push(w.to_string());
+        }
+    }
+    out.truncate(8);
+    out
+}
+
+/// Fuses per-term hit lists (`(id, score)`, one list per term) into one
+/// ranking: items matching more of the terms first, then by summed score.
+pub(crate) fn rank_term_hits(per_term: Vec<Vec<(String, f64)>>, limit: usize) -> Vec<String> {
+    let mut acc: HashMap<String, (usize, f64)> = HashMap::new();
+    for hits in per_term {
+        let mut seen = std::collections::HashSet::new();
+        for (id, score) in hits {
+            if seen.insert(id.clone()) {
+                let e = acc.entry(id).or_insert((0, 0.0));
+                e.0 += 1;
+                e.1 += score;
+            }
+        }
+    }
+    let mut ranked: Vec<(String, (usize, f64))> = acc.into_iter().collect();
+    ranked.sort_by(|a, b| b.1 .0.cmp(&a.1 .0).then(b.1 .1.partial_cmp(&a.1 .1).unwrap_or(std::cmp::Ordering::Equal)).then(a.0.cmp(&b.0)));
+    ranked.into_iter().take(limit).map(|(id, _)| id).collect()
+}
+
 /// `cache_record_fts_idx` is a composite BM25 index over `(title,
 /// body_text)`, but this SurrealDB version only resolves the `@N@` match
 /// operator against the FIRST field of a composite search index (title) --
-/// body_text-only matches raise "no suitable index". Use the index for
-/// title, then fall back to a plain substring scan for body_text so keyword
-/// search still covers both fields (functionally correct; just not
-/// BM25-ranked for body-only hits). Mirrors `cache/search.py`'s
-/// `_keyword_ids`.
+/// body_text-only matches raise "no suitable index". So per search term: the
+/// index for title (BM25-scored, +1 so a title hit beats a body-only one),
+/// plus a substring scan of body_text; fused by [`rank_term_hits`].
 pub(crate) async fn keyword_ids(db: &Db, owner: &RecordId, q: &str, limit: usize) -> AppResult<Vec<String>> {
     #[derive(Deserialize)]
-    struct IdRow {
+    struct ScoredRow {
         id: RecordId,
+        #[serde(default)]
+        score: f64,
     }
 
-    let mut res = db
-        .query(
-            "SELECT id, search::score(1) AS score FROM cache_record \
-             WHERE owner = $owner AND title @1@ $q AND deleted = false ORDER BY score DESC LIMIT $limit",
-        )
-        .bind(("owner", owner.clone()))
-        .bind(("q", q.to_string()))
-        .bind(("limit", limit as i64))
-        .await?;
-    let rows: Vec<IdRow> = res.take(0)?;
-    let mut ids: Vec<String> = rows.iter().map(|r| literal(&r.id)).collect();
-
-    if ids.len() < limit {
-        let seen: Vec<RecordId> = ids.iter().map(|i| rid(owner, i)).collect();
+    let mut per_term = Vec::new();
+    for term in search_terms(q) {
         let mut res = db
             .query(
-                "SELECT id FROM cache_record WHERE owner = $owner AND \
-                 string::contains(string::lowercase(body_text), string::lowercase($q)) \
-                 AND deleted = false AND id NOT IN $seen LIMIT $limit",
+                "SELECT id, search::score(1) AS score FROM cache_record \
+                 WHERE owner = $owner AND title @1@ $t AND deleted = false ORDER BY score DESC LIMIT $limit; \
+                 SELECT id, 0.0 AS score FROM cache_record WHERE owner = $owner AND deleted = false \
+                 AND string::contains(string::lowercase(body_text), $t) LIMIT $limit",
             )
             .bind(("owner", owner.clone()))
-            .bind(("q", q.to_string()))
-            .bind(("seen", seen))
-            .bind(("limit", (limit - ids.len()) as i64))
+            .bind(("t", term))
+            .bind(("limit", limit as i64))
             .await?;
-        let extra: Vec<IdRow> = res.take(0)?;
-        ids.extend(extra.into_iter().map(|r| literal(&r.id)));
+        let title: Vec<ScoredRow> = res.take(0)?;
+        let body: Vec<ScoredRow> = res.take(1)?;
+        per_term.push(
+            title
+                .into_iter()
+                .map(|r| (literal(&r.id), r.score + 1.0))
+                .chain(body.into_iter().map(|r| (literal(&r.id), 0.5)))
+                .collect(),
+        );
     }
-    ids.truncate(limit);
-    Ok(ids)
+    Ok(rank_term_hits(per_term, limit))
 }
 
 /// Mirrors `cache/search.py`'s `_semantic_ids`. The KNN `<|K|>` operator
@@ -551,6 +589,33 @@ pub async fn links(db: &Db, owner: &RecordId, record_id: &str, rel: Option<&str>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn search_terms_drop_filler_and_keep_content_words() {
+        assert_eq!(search_terms("How do updates work in Eunomia?"), vec!["updates", "work", "eunomia"]);
+        assert_eq!(search_terms("What does Ada like?"), vec!["ada"]);
+        assert_eq!(search_terms("the the THE"), Vec::<String>::new());
+        assert_eq!(search_terms("v1.2.0 release notes"), vec!["v1", "2", "0", "release", "notes"]);
+        assert_eq!(search_terms(&"word ".repeat(3)), vec!["word"]);
+        assert_eq!(search_terms("a b c d e f g h i j k l m n o p").len(), 8);
+    }
+
+    #[test]
+    fn rank_term_hits_prefers_items_matching_more_terms() {
+        let per_term = vec![
+            vec![("a".to_string(), 5.0), ("b".to_string(), 1.0)],
+            vec![("b".to_string(), 1.0), ("c".to_string(), 9.0)],
+        ];
+        // b matched both terms, so it beats higher-scoring single-term hits
+        assert_eq!(rank_term_hits(per_term, 10), vec!["b", "c", "a"]);
+    }
+
+    #[test]
+    fn rank_term_hits_counts_a_term_once_per_item_and_truncates() {
+        let per_term = vec![vec![("a".to_string(), 1.0), ("a".to_string(), 1.0), ("b".to_string(), 3.0)]];
+        assert_eq!(rank_term_hits(per_term, 1), vec!["b"]);
+        assert!(rank_term_hits(vec![], 5).is_empty());
+    }
 
     fn env(title: &str, body: &str) -> Envelope {
         Envelope {
