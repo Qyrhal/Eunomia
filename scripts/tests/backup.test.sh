@@ -23,7 +23,9 @@ case "$cmd" in
   import) echo "import $db: $(cat "$file")" >> "$SHIM_LOG" ;;
   sql) in="$(cat)"; echo "sql: $in" >> "$SHIM_LOG"
        case "$in" in
-         "INFO FOR NS;") if [ -n "${MOCK_TENANCY:-}" ]; then
+         "INFO FOR NS;") [ -z "${MOCK_INFO_FAIL:-}" ] || { echo "connection refused" >&2; exit 1; }
+            [ -z "${MOCK_INFO_GARBAGE:-}" ] || { echo '[{"error":"namespace does not exist"}]'; exit 0; }
+            if [ -n "${MOCK_TENANCY:-}" ]; then
               echo '[{"databases":{"control":"DEFINE DATABASE control","eunomia":"DEFINE DATABASE eunomia","org_0123456789abcdef0123456789abcdef":"DEFINE DATABASE org_0123456789abcdef0123456789abcdef"}}]'
             else echo '[{"databases":{"eunomia":"DEFINE DATABASE eunomia"}}]'; fi ;;
        esac ;;
@@ -88,6 +90,16 @@ check "an export that exits 0 but is cut off is refused too" test "$rc" -ne 0 -a
 check "no plaintext temp dump is left behind" test -z "$(ls -A "$TMP/tmpd")"
 rm -rf "$TMP/backups"/*; echo control > "$SHIM_FAIL"; SHIM_MODE=die MOCK_TENANCY=1 bk now manual >/dev/null 2>&1
 check "a tenancy backup failing on one database leaves no directory" test -z "$(ls "$TMP/backups")"
+
+# 5b. a failing INFO FOR NS is an error, never a quiet fallback to the stale single database
+rm -rf "$TMP/backups"/*
+MOCK_TENANCY=1 MOCK_INFO_FAIL=1 bk now manual >/dev/null 2>&1; rc=$?
+check "INFO FOR NS failing makes the backup fail" test "$rc" -ne 0
+check "INFO FOR NS failing writes no backup" test -z "$(ls "$TMP/backups" | grep -v '^\.backup-key$')"
+MOCK_INFO_GARBAGE=1 bk now manual >/dev/null 2>&1; rc=$?
+check "an unexpected INFO FOR NS answer fails too" test "$rc" -ne 0 -a -z "$(ls "$TMP/backups" | grep -v '^\.backup-key$')"
+bk now manual >/dev/null 2>&1; rc=$?
+check "no control database (pre-tenancy) still falls back to one file" test "$rc" -eq 0 -a -n "$(ls "$TMP"/backups/manual-*.surql.enc 2>/dev/null)"
 
 # 6. the nightly loop survives a failed run and the next one succeeds
 rm -rf "$TMP/backups"/*

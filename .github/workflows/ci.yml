@@ -35,6 +35,10 @@ jobs:
 
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo nextest run
+      # The whole suite under the --allow-funcs list read out of docker-compose.yml.
+      - run: TEST_HARDENED=1 cargo nextest run
+      # The isolation proof with the application-level owner/vault filters switched off.
+      - run: ISOLATION_TEST_NO_APP_FILTERS=1 cargo nextest run --test isolation
       - run: cargo build --release
 
   frontend:
@@ -153,3 +157,13 @@ jobs:
         with:
           fetch-depth: 0   # case B reads the released v1.2.2 compose file from its tag
       - run: bash scripts/tests/upgrade-surreal-v3.test.sh
+
+  # Backups really restore, on a throwaway SurrealDB 3.3.1 container. The two drills share the
+  # container name fw-backup-db and port 8211, so they run one after the other.
+  restore-drill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash scripts/restore-drill.sh
+      - run: bash scripts/restore-drill-tenancy.sh

@@ -42,7 +42,7 @@ Checks before you rely on it:
 
 ## Update for SurrealDB 3.3.1 (the shipped allow list)
 
-The grep above missed some families. The list `docker-compose.yml` ships, and that the whole test suite runs under (`TEST_HARDENED=1 cargo test`, which reads the `--allow-funcs=` value out of the compose file), is:
+The grep above missed some families. The list `docker-compose.yml` ships, and that the whole test suite runs under (`TEST_HARDENED=1 cargo nextest run`, which reads the `--allow-funcs=` value out of the compose file; CI runs it as its own step after the plain `cargo nextest run`, plus `ISOLATION_TEST_NO_APP_FILTERS=1 cargo nextest run --test isolation`), is:
 
 ```
 --deny-all --allow-funcs=time,string,search,count,array,vector,math --deny-guests --query-timeout=60s --transaction-timeout=60s
@@ -53,4 +53,5 @@ The grep above missed some families. The list `docker-compose.yml` ships, and th
 - `math::max`: `jobs.release_worker`.
 - `string::len/trim/concat` are covered by `string`. The HNSW `<|K,EF|>` operator and `search::score` need nothing beyond `search`.
 - Removing `vector` from the list makes the suite fail with "Function 'vector::similarity::cosine' is not allowed", so the list is both necessary and sufficient for the code today.
+- `--query-timeout=60s --transaction-timeout=60s` are for the running app only. A dump import or restore runs on a server without them (`docker-compose.import.yml`, used by `scripts/upgrade-surreal-v3.sh` and `backend/scripts/restore.sh`), then the hardened server is started again. The tests do not set the timeouts.
 - Not verified against a running 3.3.1 server (Docker was unavailable): `--deny-all` may also deny the RPC/HTTP surfaces and arbitrary queries for the root user. If the backend cannot connect, add `--allow-rpc --allow-http --allow-arbitrary-query=system` (all exist in 3.3.1 `start --help`). The flag names, not their interaction, were checked.

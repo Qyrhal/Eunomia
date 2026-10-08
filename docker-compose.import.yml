@@ -1,0 +1,21 @@
+# Used ONLY while a dump is loaded: scripts/upgrade-surreal-v3.sh and backend/scripts/restore.sh start
+# surrealdb with this file layered over docker-compose.yml, then bring the hardened server back.
+# The same server as docker-compose.yml minus --query-timeout and --transaction-timeout: an import is
+# one INSERT per table plus the HNSW index, which takes far longer than 60 s on a real install.
+# Keep the rest of this list identical to the entrypoint in docker-compose.yml. Not for normal runs.
+services:
+  surrealdb:
+    entrypoint:
+      - /surreal
+      - start
+      - --user
+      - ${SURREAL_USER:-root}
+      - --pass
+      - ${SURREAL_PASS:-root}
+      - --deny-all
+      - --allow-rpc
+      - --allow-http
+      - --allow-arbitrary-query=system
+      - --allow-funcs=time,string,search,count,array,vector,math
+      - --deny-guests
+      - rocksdb:/data/eunomia.db

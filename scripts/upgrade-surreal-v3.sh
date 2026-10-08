@@ -15,9 +15,11 @@
 #      copy (the old volume is never opened by a newer version, because 2.6 -> 2.7 cannot be
 #      reverted in place); `surreal export --v3` from that copy, then rewrite the two
 #      index kinds 3.x dropped (MTREE -> HNSW, multi-field FULLTEXT -> one per field)
-#   4. start the 3.x image from the compose file on a NEW
-#      volume (SURREAL_DATA_VOLUME=eunomia-surreal-data-v3), import
-#   5. compare per-table record counts and the _migration ledger with 2.x
+#   4. start the 3.x image from the compose file on a NEW volume (SURREAL_DATA_VOLUME=
+#      eunomia-surreal-data-v3) WITHOUT the 60 s query and transaction timeouts (the layered
+#      docker-compose.import.yml: loading tens of thousands of 1536-d embeddings takes longer),
+#      import, then recreate the server from the plain, hardened compose file
+#   5. compare per-table record counts and the _migration ledger with 2.x (on the hardened server)
 #   6. match: record the new volume in .env. Mismatch or any error: delete the
 #      half-built new volume, start the old image on the OLD volume again, restart
 #      the backend, exit 1.
@@ -57,6 +59,7 @@ ENDPOINT=http://surrealdb:8000
 SCRATCH_HOST=v2scratch   # the 2.7 server on the copy of the data
 
 # --- 1. what is running, what does the compose file want ---
+[ -f docker-compose.import.yml ] || die "docker-compose.import.yml is missing from the checkout"
 cid="$(compose ps -q surrealdb 2>/dev/null | head -1)"
 running=false
 [ -n "$cid" ] && [ "$(docker inspect -f '{{.State.Running}}' "$cid" 2>/dev/null)" = true ] && running=true
@@ -233,10 +236,12 @@ docker rm -f "$SCRATCH_CTR" >/dev/null 2>&1
 ENDPOINT=http://surrealdb:8000
 v3_volume_names | while read -r v; do docker volume rm "$v" >/dev/null 2>&1 && log "removed leftover volume $v from an earlier attempt"; done
 export SURREAL_DATA_VOLUME="$V3_VOLUME"
-compose up -d --wait surrealdb >/dev/null || die "SurrealDB $target_image did not start on the new volume"
+# docker-compose.import.yml (shipped with this release) drops the timeouts for the import only
+IMPORT_COMPOSE="$base_compose:$PWD/docker-compose.import.yml"
+COMPOSE_FILE="$IMPORT_COMPOSE" compose up -d --wait surrealdb >/dev/null || die "SurrealDB $target_image did not start on the new volume"
 echo "DEFINE NAMESPACE IF NOT EXISTS \`$NS\`; USE NS \`$NS\`; DEFINE DATABASE IF NOT EXISTS \`$DB\`;" | docker run --rm -i --network "$NET" \
   -e SURREAL_USER -e SURREAL_PASS "$target_image" sql --endpoint "$ENDPOINT" --hide-welcome >/dev/null 2>&1
-log "importing into $target_image"
+log "importing into $target_image (no query timeout; large installs take a while)"
 ic="$(docker create --network "$NET" -e SURREAL_USER -e SURREAL_PASS "$target_image" import \
       --endpoint "$ENDPOINT" --ns "$NS" --db "$DB" /tmp/import.surql)" || die "could not create the import container"
 docker cp "$T/import.surql" "$ic:/tmp/import.surql" >/dev/null && docker start -a "$ic"
@@ -244,6 +249,9 @@ rc=$?; docker rm "$ic" >/dev/null 2>&1
 [ "$rc" -eq 0 ] || die "import failed"
 # test hook: SurrealQL run on 3.x after the import (used to fake a mismatch)
 [ -z "${UPGRADE_TEST_SQL:-}" ] || echo "$UPGRADE_TEST_SQL" | sqlq "$target_image" >/dev/null
+
+# back to the hardened server (with the timeouts) on the same volume; it is what runs from now on
+compose up -d --wait surrealdb >/dev/null || die "the hardened SurrealDB did not restart on the new volume"
 
 # --- 6. verify ---
 counts3="$(count_tables "$target_image" "${tables[@]}")"

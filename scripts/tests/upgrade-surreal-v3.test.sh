@@ -5,6 +5,9 @@
 #   1. 2.7.0 on a RocksDB volume, legacy schema + data in every table
 #   2. a forced count mismatch must roll back to the 2.x volume with data intact
 #   3. the real upgrade must land on 3.3 with equal counts, KNN and full-text working
+# UPGRADE_TEST_LARGE=1 (or a row count) adds that many 1536-d cache_record rows (default 50000)
+# before the upgrade: the import must finish well past the hardened server's 60 s limits. Slow
+# (many minutes, a few GB of disk), so it is off by default and not run in CI.
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$HERE/../.."
@@ -33,6 +36,7 @@ mkdir -p "$W/backend/scripts/backup"
 cp "$ROOT"/backend/scripts/backup/* "$W/backend/scripts/backup/"
 sed -i.bak "s#^FROM surrealdb/surrealdb:.*AS surreal#FROM $OLD_IMG AS surreal#" "$W/backend/scripts/backup/Dockerfile"
 cp "$ROOT/scripts/upgrade-surreal-v3.sh" "$W/upgrade.sh"
+cp "$ROOT/docker-compose.import.yml" "$W/"
 sed "s#surrealdb/surrealdb:v[0-9.]*#$OLD_IMG#" "$ROOT/docker-compose.yml" > "$W/compose.old"
 sed "s#surrealdb/surrealdb:v[0-9.]*#$NEW_IMG#" "$ROOT/docker-compose.yml" > "$W/compose.new"
 cat > "$W/standin.yml" <<'YML'
@@ -97,7 +101,24 @@ CREATE _migration:2 SET version = 2, name = 'entity_name_unique', checksum = 'bb
 errs="$(sq "$OLD_IMG" < "$W/load.surql" | grep -c '"[A-Za-z ]*\(error\|Incorrect\|failed\)')"
 check "legacy data loaded into 2.7 without errors" test "$errs" = 0
 
-EXPECT="_migration:2 api_token:3 app_settings:3 audit_log:5 cache_record:60 chat_message:12 chat_thread:3 connector:4 embed_cache:4 file:6 linked_to:10 location:5 memory:30 organisation:6 person:8 relates_to:10 repository:4 session:2 symbol:7 sync_status:2 user:3 vault:3 vault_member:3"
+if [ -n "${UPGRADE_TEST_LARGE:-}" ]; then
+  N="$UPGRADE_TEST_LARGE"; [ "$N" -gt 1 ] 2>/dev/null || N=50000
+  echo "=== large case: loading $N cache_record rows of 1536 floats ==="
+  # batches of 100 rows per INSERT; ids start at 1000 so they never meet r1..r60
+  awk -v n="$N" 'BEGIN { srand(11)
+    for (b = 0; b * 100 < n; b++) {
+      printf "INSERT INTO cache_record ["
+      for (i = 1; i <= 100 && b * 100 + i <= n; i++) {
+        k = 1000 + b * 100 + i
+        printf "%s{ id: cache_record:r%d, owner: user:u1, source: \"s\", type: \"t\", external_id: \"big%d\", title: \"big %d\", body_text: \"filler %d\", content_hash: \"hb%d\", ingested_at: time::now(), updated_at: time::now(), embedding: [", (i > 1 ? "," : ""), k, k, k, k, k
+        for (d = 1; d <= 1536; d++) printf "%s%.4f", (d > 1 ? "," : ""), rand() * 2 - 1
+        printf "] }"
+      }
+      print "];"
+    }}' | sq "$OLD_IMG" >/dev/null
+  EXPECT_BIG=$((60 + N))
+fi
+EXPECT="_migration:2 api_token:3 app_settings:3 audit_log:5 cache_record:${EXPECT_BIG:-60} chat_message:12 chat_thread:3 connector:4 embed_cache:4 file:6 linked_to:10 location:5 memory:30 organisation:6 person:8 relates_to:10 repository:4 session:2 symbol:7 sync_status:2 user:3 vault:3 vault_member:3"
 counts_ok() { local img="$1" bad=0 p; for p in $EXPECT; do [ "$(count "$img" "${p%%:*}")" = "${p##*:}" ] || { echo "count mismatch on ${p%%:*}: want ${p##*:}, got $(count "$img" "${p%%:*}")"; bad=1; }; done; return $bad; }
 check "2.7 holds the expected rows in all $(echo $EXPECT | wc -w | tr -d " ") tables" counts_ok "$OLD_IMG"
 check "the installed server is 2.7" test "$(running_image)" = "$OLD_IMG"

@@ -71,7 +71,12 @@ export_db() { # export one database to stdout
 # The databases to back up: control, every org_<uuid> and $DB (the old single database) when the
 # tenancy layout is there; just $DB otherwise.
 list_dbs() {
-  info="$(echo 'INFO FOR NS;' | "$SURREAL" sql --endpoint "$ENDPOINT" --user "$USER_" --pass "$PASS_" --ns "$NS" --hide-welcome --json 2>/dev/null || true)"
+  # A failed command must stop the backup: falling back to $DB here would back up only the stale
+  # pre-move database and still log success. Only "the namespace answered but has no control
+  # database" (pre-tenancy, or a 2.x server) means the single-database layout.
+  info="$(echo 'INFO FOR NS;' | "$SURREAL" sql --endpoint "$ENDPOINT" --user "$USER_" --pass "$PASS_" --ns "$NS" --hide-welcome --json 2>/dev/null)" \
+    || die "could not list the databases of namespace $NS (is SurrealDB reachable at $ENDPOINT and are the credentials right?)"
+  echo "$info" | grep -q '"databases"' || die "unexpected answer to INFO FOR NS: $(echo "$info" | head -c 300)"
   if ! echo "$info" | grep -q '"control"'; then echo "$DB"; return; fi
   { echo "$info" | grep -oE '"(control|org_[0-9a-f]{32})"[[:space:]]*:' | sed -E 's/^"([^"]+)".*/\1/'
     echo "$info" | grep -q "\"$DB\"[[:space:]]*:" && echo "$DB"; } | sort -u
@@ -106,7 +111,7 @@ do_backup() {
   need_key
   mkdir -p "$DIR"
   name="$prefix-$(date -u +%Y%m%dT%H%M%SZ)"
-  dbs="$(list_dbs)"
+  dbs="$(list_dbs)" || exit 1
   # --log none keeps log lines out of stdout (they would corrupt the dump).
   if [ "$dbs" = "$DB" ]; then
     out="$DIR/$name.surql.enc"
@@ -158,7 +163,7 @@ restore_one() { # restore_one FILE DB [--wipe]
   echo "DEFINE DATABASE IF NOT EXISTS \`$2\`;" | "$SURREAL" sql --endpoint "$ENDPOINT" --user "$USER_" --pass "$PASS_" --ns "$NS" --hide-welcome >/dev/null \
     || die "could not create database $2"
   "$SURREAL" import --endpoint "$ENDPOINT" --user "$USER_" --pass "$PASS_" --ns "$NS" --db "$2" "$plain" \
-    || die "import of $2 failed. If the database already has data, retry with --wipe (this deletes it first)."
+    || die "import of $2 failed. If the database already has data, retry with --wipe (this deletes it first). A big database can hit the server's 60 s transaction limit: restore with backend/scripts/restore.sh, which runs the import on a server without it."
   rm -f "$plain"
 }
 

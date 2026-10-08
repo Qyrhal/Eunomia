@@ -8,7 +8,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PASS=0; FAIL=0
 T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
 check() { local d="$1"; shift; if "$@" >/dev/null 2>&1; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); echo "FAIL: $d"; fi; }
-mkdir -p "$T/bin" "$T/repo"; : > "$T/repo/.env"
+mkdir -p "$T/bin" "$T/repo"; : > "$T/repo/.env"; touch "$T/repo/docker-compose.import.yml"
 cat > "$T/bin/docker" <<SHIM
 #!/bin/sh
 echo "\$@" >> "$T/docker.log"
