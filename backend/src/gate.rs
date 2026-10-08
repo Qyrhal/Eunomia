@@ -77,7 +77,7 @@ pub fn explicit_class(method: &Method, path: &str) -> Option<Class> {
         ["api", "connectors", ..] | ["api", "snapshot"] => Account(scopes::CONNECTORS),
         ["api", "sources", _, "webhook", _] => Public,
         ["api", "sources", ..] => Account(scopes::CONNECTORS),
-        ["api", "settings" | "export" | "update" | "audit" | "chat" | "oauth", ..] => Account(scopes::VAULTS_ADMIN),
+        ["api", "settings" | "debug" | "export" | "update" | "audit" | "chat" | "oauth", ..] => Account(scopes::VAULTS_ADMIN),
         // OAuth endpoints for MCP clients: public, so limited per client address like login
         ["oauth", "token" | "register" | "revoke"] => AuthAttempt,
         ["api", ..] => return None,

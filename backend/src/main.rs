@@ -10,6 +10,10 @@ use tokio::sync::watch;
 #[tokio::main]
 async fn main() {
     let settings = Settings::load();
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(String::as_str) == Some("replay") {
+        std::process::exit(eunomia_backend::replay::cli(&args[1..], &settings).await);
+    }
     let _otel = eunomia_backend::telemetry::init(&settings.log_level);
     let role = Role::from_env();
     let conn = db::connect(&settings).await.expect("failed to connect to SurrealDB");

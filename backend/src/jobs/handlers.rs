@@ -19,6 +19,7 @@ pub fn registry() -> Registry {
         .register(kind::EMBED, embed)
         .register(kind::EXTRACT, extract_record)
         .register(kind::CONSOLIDATE, consolidate_subject)
+        .register(kind::PRUNE_CAPSULES, prune_capsules)
 }
 
 fn payload_str<'a>(job: &'a Job, field: &str) -> Result<&'a str, JobError> {
@@ -125,4 +126,9 @@ async fn consolidate_subject(state: AppState, job: Job) -> Result<(), JobError> 
 pub async fn enqueue_extract(db: &crate::db::Db, owner: &RecordId, record_id: &str, hash: &str) {
     let key = format!("{}:{}:{record_id}:{hash}", kind::EXTRACT, crate::sources::base::owner_key_str(owner));
     super::enqueue_lossy(db, NewJob::new(kind::EXTRACT, owner.clone(), key).payload(json!({ "record": record_id }))).await;
+}
+
+/// Failure capsules older than 7 days, and all but the newest 1000.
+async fn prune_capsules(state: AppState, _job: Job) -> Result<(), JobError> {
+    Ok(crate::capsules::prune_default(&state.db).await?)
 }

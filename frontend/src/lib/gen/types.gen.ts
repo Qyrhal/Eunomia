@@ -39,6 +39,40 @@ export type BootstrapOut = {
     has_users: boolean;
 };
 
+export type Capsule = {
+    /**
+     * Tool arguments, or `{method, uri, body}` for a route. Secrets are masked.
+     */
+    args: {
+        [key: string]: unknown;
+    };
+    code: string;
+    created_at: string;
+    /**
+     * `tool` or `route`.
+     */
+    kind: string;
+    /**
+     * The tool name, or `METHOD /matched/route` for a route.
+     */
+    name: string;
+    /**
+     * The raw error text. Never sent to ordinary clients; admins only.
+     */
+    source: string;
+    status: number;
+    trace_id: string;
+    /**
+     * True when `args` was cut to fit the size cap (not replayable).
+     */
+    truncated: boolean;
+    /**
+     * The caller's record id, if the request was authenticated.
+     */
+    user?: string | null;
+    version: string;
+};
+
 export type ChatRequest = {
     message: string;
 };
@@ -1213,6 +1247,30 @@ export type TestConnectorResponses = {
 };
 
 export type TestConnectorResponse = TestConnectorResponses[keyof TestConnectorResponses];
+
+export type GetFailureCapsuleData = {
+    body?: never;
+    path: {
+        trace_id: string;
+    };
+    query?: never;
+    url: '/api/debug/capsules/{trace_id}';
+};
+
+export type GetFailureCapsuleErrors = {
+    /**
+     * Error
+     */
+    default: Problem;
+};
+
+export type GetFailureCapsuleError = GetFailureCapsuleErrors[keyof GetFailureCapsuleErrors];
+
+export type GetFailureCapsuleResponses = {
+    200: Capsule;
+};
+
+export type GetFailureCapsuleResponse = GetFailureCapsuleResponses[keyof GetFailureCapsuleResponses];
 
 export type ListEntitiesData = {
     body?: never;

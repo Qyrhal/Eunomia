@@ -28,6 +28,7 @@ pub mod kind {
     pub const EMBED: &str = "embed";
     pub const EXTRACT: &str = "extract";
     pub const CONSOLIDATE: &str = "consolidate";
+    pub const PRUNE_CAPSULES: &str = "prune_capsules";
 }
 
 /// Which loops this process runs (`EUNOMIA_ROLE`). `all` keeps the one-container install working.

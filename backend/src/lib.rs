@@ -2,6 +2,7 @@ pub mod audit;
 pub mod auth;
 pub mod authz;
 pub mod cache;
+pub mod capsules;
 pub mod chat;
 pub mod config;
 pub mod connectors;
@@ -17,6 +18,7 @@ pub mod models_user;
 pub mod oauth;
 pub mod openapi;
 pub mod ratelimit;
+pub mod replay;
 pub mod routers;
 pub mod scopes;
 pub mod sources;
@@ -62,6 +64,7 @@ pub fn app_with(state: AppState, limits: ratelimit::RateConfig) -> axum::Router 
         .merge(routers::settings::router())
         .merge(routers::audit::router())
         .merge(routers::export::router())
+        .merge(routers::debug::router())
         .merge(routers::update::router())
         .merge(routers::vaults::router())
         .merge(routers::connectors::router())
@@ -77,6 +80,7 @@ pub fn app_with(state: AppState, limits: ratelimit::RateConfig) -> axum::Router 
         .merge(routers::mcp::router())
         .merge(oauth::router())
         .nest("/api", api)
+        .layer(axum::middleware::from_fn_with_state(state.clone(), capsules::capture))
         .layer(axum::middleware::from_fn_with_state(gate::Gate::new(state.clone(), limits), gate::gate))
         .layer(axum::middleware::from_fn(telemetry::trace_request))
         .layer(cors)

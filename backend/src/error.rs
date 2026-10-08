@@ -10,6 +10,11 @@ use axum::{
 };
 use serde_json::json;
 
+tokio::task_local! {
+    /// Set by `registry::call` so the raw cause of a tool error (which `to_tool_value` hides) reaches the failure capsule.
+    pub static TOOL_SOURCE: std::sync::Arc<std::sync::Mutex<Option<String>>>;
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ErrorCode {
     AuthUnauthorized,
@@ -194,8 +199,11 @@ impl AppError {
         }
     }
 
-    /// The `{error, code, trace_id}` shape tools return.
+    /// The `{error, code, trace_id}` shape tools return. The raw cause is parked for the failure capsule.
     pub fn to_tool_value(&self) -> serde_json::Value {
+        if let Some(s) = &self.source {
+            let _ = TOOL_SOURCE.try_with(|c| *c.lock().unwrap() = Some(s.clone()));
+        }
         json!({ "error": self.detail(), "code": self.code.as_str(), "trace_id": crate::telemetry::current_trace_id() })
     }
 
@@ -215,6 +223,7 @@ impl AppError {
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         self.log();
+        let info = crate::capsules::FailureInfo { code: self.code, source: self.source.clone().unwrap_or_else(|| self.message.clone()) };
         let body = json!({
             "type": "about:blank",
             "title": self.status.canonical_reason().unwrap_or("Error"),
@@ -223,7 +232,9 @@ impl IntoResponse for AppError {
             "code": self.code.as_str(),
             "trace_id": crate::telemetry::current_trace_id(),
         });
-        (self.status, [(header::CONTENT_TYPE, "application/problem+json")], body.to_string()).into_response()
+        let mut resp = (self.status, [(header::CONTENT_TYPE, "application/problem+json")], body.to_string()).into_response();
+        resp.extensions_mut().insert(info);
+        resp
     }
 }
 
