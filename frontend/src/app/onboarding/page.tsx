@@ -2,8 +2,10 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { X } from "lucide-react";
+import { ArrowLeft, Loader2, X } from "lucide-react";
 import { auth, settings, type Me, type AppSettings } from "@/lib/api";
+import EunomiaMark from "@/components/EunomiaMark";
+import ThemeToggle from "@/components/ThemeToggle";
 
 const STEP_LABELS = ["Welcome", "OpenAI key"];
 
@@ -58,8 +60,7 @@ export default function OnboardingPage() {
       if (Object.keys(changes).length) await settings.update(changes);
       await finish();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not save key.");
-    } finally {
+      setError(err instanceof Error ? err.message : "Could not save the key. Check the URL and key, or skip for now.");
       setBusy(false);
     }
   }
@@ -70,102 +71,144 @@ export default function OnboardingPage() {
       await finish();
     } catch {
       // Finishing the wizard shouldn't trap the user even if the server
-      // call fails -- let them into the app and they can set things up
+      // call fails: let them into the app and they can set things up
       // from Settings/Connectors later.
       router.replace("/");
-    } finally {
-      setBusy(false);
     }
   }
 
-  if (!me) return null;
-
   return (
-    <div className="min-h-screen w-full flex items-center justify-center p-6">
-      <div className="surface w-full max-w-md p-8 flex flex-col gap-6">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <div className="eyebrow mb-2">
-              Step {step + 1} of {steps.length}
-            </div>
-            <h1 className="font-display text-2xl">{steps[step]}</h1>
-          </div>
-          <button
-            onClick={skip}
-            disabled={busy}
-            aria-label="Skip setup"
-            className="shrink-0 p-1.5 rounded-lg"
-            style={{ color: "var(--ink-faint)" }}
-          >
-            <X size={16} />
-          </button>
-        </div>
-
-        {step === 0 && (
-          <div className="flex flex-col gap-5">
-            <p className="text-[13.5px]" style={{ color: "var(--ink-dim)" }}>
-              You&apos;re signed in as <strong>{me.email}</strong>. Let&apos;s get you set up — one quick
-              step, then you&apos;re in. You can connect a data source any time from Connectors.
-            </p>
-            <button
-              onClick={() => (skipOpenAiStep ? finish() : setStep(1))}
-              className="self-start px-4 py-2.5 text-[13px] font-medium rounded-xl"
-              style={{ background: "var(--felt)", color: "var(--canvas)" }}
-            >
-              Let&apos;s go
+    <div className="canvas-grid min-h-screen w-full flex flex-col px-6 py-6 sm:px-10">
+      <header className="flex items-center justify-between">
+        <span className="inline-flex items-center gap-2 text-[14px] font-semibold tracking-[-0.01em]">
+          <EunomiaMark size={22} />
+          Eunomia
+        </span>
+        <div className="flex items-center gap-1">
+          <ThemeToggle />
+          {me && (
+            <button onClick={skip} disabled={busy} aria-label="Skip setup" title="Skip setup" className="btn btn-ghost btn-icon btn-sm" style={{ width: 26 }}>
+              <X size={14} strokeWidth={1.75} />
             </button>
-          </div>
-        )}
+          )}
+        </div>
+      </header>
 
-        {step === 1 && !skipOpenAiStep && (
-          <div className="flex flex-col gap-4">
-            <p className="text-[13px]" style={{ color: "var(--ink-dim)" }}>
-              Optional. A connected AI agent (Claude, Codex, …) can recall and write memory using its own
-              model. Adding an OpenAI-compatible endpoint lets Eunomia do embeddings and answer synthesis
-              itself, which saves your agent&apos;s tokens. Skip it and add it later from Settings if you like.
-            </p>
-            <label className="text-[12px] flex flex-col gap-1.5" style={{ color: "var(--ink-dim)" }}>
-              Base URL
-              <input
-                className="field px-3 py-2 text-[13px] font-mono"
-                placeholder="https://api.openai.com/v1"
-                value={baseUrlInput}
-                onChange={(e) => setBaseUrlInput(e.target.value)}
-              />
-            </label>
-            <label className="text-[12px] flex flex-col gap-1.5" style={{ color: "var(--ink-dim)" }}>
-              API key
-              <input
-                type="password"
-                className="field px-3 py-2 text-[13px] font-mono"
-                placeholder="sk-…"
-                value={apiKeyInput}
-                onChange={(e) => setApiKeyInput(e.target.value)}
-              />
-            </label>
-
-            {error && (
-              <p className="text-[12.5px]" style={{ color: "var(--critical)" }}>
-                {error}
-              </p>
-            )}
-
-            <div className="flex items-center gap-3">
-              <button
-                onClick={saveApiKey}
-                disabled={busy}
-                className="px-4 py-2.5 text-[13px] font-medium rounded-xl disabled:opacity-50"
-                style={{ background: "var(--felt)", color: "var(--canvas)" }}
-              >
-                {busy ? "Finishing…" : "Finish"}
-              </button>
-              <button onClick={finish} className="px-4 py-2 text-[13px]" style={{ color: "var(--ink-faint)" }}>
-                Skip & finish
-              </button>
+      <main className="flex-1 flex items-center justify-center py-10">
+        <div className="panel w-full max-w-[440px] p-7">
+          {!me ? (
+            <div className="flex flex-col gap-4" aria-busy="true" aria-label="Loading">
+              <div className="skeleton h-1 w-full" />
+              <div className="skeleton h-6 w-2/3 mt-4" />
+              <div className="skeleton h-4 w-full" />
+              <div className="skeleton h-4 w-4/5" />
+              <div className="skeleton h-9 w-28 mt-2" />
             </div>
-          </div>
-        )}
-      </div>
+          ) : (
+            <>
+              <ol className="flex gap-2 mb-7" aria-label="Setup progress">
+                {steps.map((label, i) => (
+                  <li key={label} className="flex-1" aria-current={i === step ? "step" : undefined}>
+                    <span
+                      className="block h-[3px] rounded-full"
+                      style={{ background: i <= step ? "var(--accent)" : "var(--border-strong)", transition: "background-color 200ms ease" }}
+                    />
+                    <span className="mt-2 flex items-center gap-1.5 whitespace-nowrap text-[12px]" style={{ color: i === step ? "var(--ink)" : "var(--ink-faint)" }}>
+                      <span className="font-mono">{i + 1}</span>
+                      {label}
+                      {i === 1 && <span className="hidden sm:inline" style={{ color: "var(--ink-faint)" }}>(optional)</span>}
+                    </span>
+                  </li>
+                ))}
+              </ol>
+
+              {step === 0 && (
+                <div className="flex flex-col gap-4">
+                  <h1 className="page-title">Welcome to Eunomia</h1>
+                  <p className="text-[14px] leading-[1.6]" style={{ color: "var(--ink-dim)" }}>
+                    You&apos;re signed in as{" "}
+                    <span className="font-medium" style={{ color: "var(--ink)" }}>
+                      {me.email}
+                    </span>
+                    . {skipOpenAiStep ? "Nothing else to set up, so you can go straight in." : "One optional step, then you're in."} You can
+                    connect a data source any time from Connectors.
+                  </p>
+                  <button
+                    onClick={() => (skipOpenAiStep ? skip() : setStep(1))}
+                    disabled={busy}
+                    className="btn btn-primary h-9 self-start mt-2 px-4"
+                  >
+                    {busy && <Loader2 size={14} strokeWidth={1.75} className="animate-spin" aria-hidden />}
+                    Let&apos;s go
+                  </button>
+                </div>
+              )}
+
+              {step === 1 && !skipOpenAiStep && (
+                <div className="flex flex-col gap-4">
+                  <h1 className="page-title">Add an OpenAI key</h1>
+                  <p className="text-[13.5px] leading-[1.6]" style={{ color: "var(--ink-dim)" }}>
+                    Connected agents like Claude Code and Codex can recall and write memory with their own model. An
+                    OpenAI-compatible endpoint lets Eunomia run embeddings and answers itself, which saves your
+                    agents&apos; tokens. You can add it later in Settings.
+                  </p>
+                  <div className="flex flex-col gap-1.5">
+                    <label htmlFor="base-url" className="text-[12.5px] font-medium" style={{ color: "var(--ink-dim)" }}>
+                      Base URL
+                    </label>
+                    <input
+                      id="base-url"
+                      type="url"
+                      autoComplete="off"
+                      spellCheck={false}
+                      className="field h-9 px-3 text-[13px] font-mono"
+                      placeholder="https://api.openai.com/v1"
+                      value={baseUrlInput}
+                      onChange={(e) => setBaseUrlInput(e.target.value)}
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    <label htmlFor="api-key" className="text-[12.5px] font-medium" style={{ color: "var(--ink-dim)" }}>
+                      API key
+                    </label>
+                    <input
+                      id="api-key"
+                      type="password"
+                      autoComplete="off"
+                      spellCheck={false}
+                      className="field h-9 px-3 text-[13px] font-mono"
+                      placeholder="sk-…"
+                      value={apiKeyInput}
+                      onChange={(e) => setApiKeyInput(e.target.value)}
+                    />
+                  </div>
+
+                  {error && (
+                    <div role="alert" className="rounded-[7px] px-3 py-2 text-[13px]" style={{ background: "var(--critical-soft)", color: "var(--critical)" }}>
+                      {error}
+                    </div>
+                  )}
+
+                  <div className="flex items-center gap-2 mt-2">
+                    <button onClick={() => setStep(0)} disabled={busy} className="btn btn-ghost h-9 px-2.5">
+                      <ArrowLeft size={14} strokeWidth={1.75} aria-hidden />
+                      Back
+                    </button>
+                    <div className="flex-1" />
+                    <button onClick={skip} disabled={busy} className="btn btn-ghost h-9">
+                      Skip &amp; finish
+                    </button>
+                    <button onClick={saveApiKey} disabled={busy} aria-busy={busy} className="btn btn-primary h-9 px-4">
+                      {busy && <Loader2 size={14} strokeWidth={1.75} className="animate-spin" aria-hidden />}
+                      {busy ? "Finishing…" : "Finish"}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      </main>
     </div>
   );
 }
