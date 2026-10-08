@@ -258,6 +258,7 @@ impl From<surrealdb::Error> for AppError {
         let lower = raw.to_lowercase();
         let (code, message) = match &err {
             _ if crate::tx::is_conflict(&err) => (ErrorCode::DbConflict, "The write conflicted with another; retry it."),
+            _ if lower.contains(crate::store::CROSSING_MARK) => (ErrorCode::TenantDenied, "Internal server error."),
             _ if err.is_not_allowed() => (ErrorCode::TenantDenied, "Internal server error."),
             _ if lower.contains("you don't have permission") || lower.contains("not enough permissions") => {
                 (ErrorCode::TenantDenied, "Internal server error.")

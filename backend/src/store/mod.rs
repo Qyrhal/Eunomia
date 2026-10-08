@@ -72,15 +72,24 @@ impl Stmt<Control> {
     }
 }
 
+/// Names of the dynamic statements built so far in this process. `tests/dynamic_queries.rs` drives every
+/// builder and then checks this against the names found in the source, so a new one cannot go untested.
+#[cfg(feature = "test-support")]
+pub static DYNAMIC_SEEN: std::sync::Mutex<std::collections::BTreeSet<&'static str>> = std::sync::Mutex::new(std::collections::BTreeSet::new());
+
 /// For the few statements whose text is built at runtime (a table name or
 /// an optional clause). Still named, so they still trace.
-// ponytail: not covered by every_query_executes; keep these rare.
+// ponytail: not covered by every_query_executes; `tests/dynamic_queries.rs` drives each builder instead. Keep these rare.
 pub fn dynamic<'a>(db: &'a OrgDb, name: &'static str, sql: impl AsRef<str>) -> Q<'a> {
+    #[cfg(feature = "test-support")]
+    DYNAMIC_SEEN.lock().unwrap().insert(name);
     Q::new(db.raw(RawKey(())), Scope::Org(db.org()), name, sql.as_ref())
 }
 
 /// [`dynamic`] for the control database.
 pub fn dynamic_control<'a>(db: &'a ControlDb, name: &'static str, sql: impl AsRef<str>) -> Q<'a> {
+    #[cfg(feature = "test-support")]
+    DYNAMIC_SEEN.lock().unwrap().insert(name);
     Q::new(db.raw(RawKey(())), Scope::Control, name, sql.as_ref())
 }
 
@@ -110,10 +119,16 @@ pub(crate) enum Scope {
     Root,
 }
 
+/// In the error text of a statement refused for naming the other database's tables; `AppError` maps it
+/// to `tenant.denied`.
+pub const CROSSING_MARK: &str = "reaches across the tenant boundary";
+
 pub struct Q<'a> {
     name: &'static str,
     inner: Query<'a, Any>,
     scope: Scope,
+    /// Set when the text names a table of the other database: the await fails and nothing is sent.
+    denied: Option<String>,
 }
 
 impl<'a> Q<'a> {
@@ -128,10 +143,11 @@ impl<'a> Q<'a> {
             Scope::Control => crossing_table(sql, false),
             Scope::Root => None,
         };
-        if let Some(table) = crossing {
+        let denied = crossing.map(|table| {
             crate::pool::no_org_context(&format!("{name} reaches for {table} in the wrong database"));
-        }
-        Q { name, inner: db.query(format!("-- op:{name} trace:{trace}\n{sql}")), scope }
+            format!("statement {name} {CROSSING_MARK}: it names {table}, which lives in the other database")
+        });
+        Q { name, inner: db.query(format!("-- op:{name} trace:{trace}\n{sql}")), scope, denied }
     }
 
     pub fn bind(mut self, bindings: impl IntoVariables) -> Self {
@@ -145,6 +161,9 @@ impl<'a> IntoFuture for Q<'a> {
     type IntoFuture = Pin<Box<dyn Future<Output = Self::Output> + Send + 'a>>;
 
     fn into_future(self) -> Self::IntoFuture {
+        if let Some(why) = self.denied {
+            return Box::pin(async move { Err(surrealdb::Error::thrown(why)) });
+        }
         let org = match self.scope {
             Scope::Org(o) => o.key(),
             _ => String::new(),
