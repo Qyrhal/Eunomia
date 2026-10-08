@@ -164,6 +164,25 @@ test.describe("MCP server", () => {
     expect(found.results.map((r: { id: string }) => r.id)).toContain(listed.results[0].id);
   });
 
+  test("a huge memory can't crowd everything out of a token-budgeted recall (the hook's case)", async ({ request }) => {
+    const token = await newToken(request);
+    let n = 0;
+    const call = async (name: string, args: object) =>
+      JSON.parse(
+        (await (await rpc(request, token, { jsonrpc: "2.0", id: ++n, method: "tools/call", params: { name, arguments: args } })).json())
+          .result.content[0].text
+      );
+    await call("memory_write", { subject_name: "Archive", subject_kind: "organisation", text: "Transcript about the updater container. " + "filler words ".repeat(3000) });
+    await call("memory_write", { subject_name: "Homelab", subject_kind: "location", text: "The updater container applies updates." });
+    const results = (await call("recall", { query: "how does the updater container work?", limit: 6, max_tokens: 600 })).results;
+    expect(results.length).toBe(2); // used to be 0: the oversized first hit ended the list
+    const texts = results.map((r: { text: string }) => r.text);
+    expect(texts).toContain("The updater container applies updates.");
+    const trimmed = texts.find((t: string) => t.startsWith("Transcript"));
+    expect(trimmed.endsWith("…")).toBe(true);
+    expect(trimmed.length).toBeLessThanOrEqual(800);
+  });
+
   test("initialize tells the agent it is the model", async ({ request }) => {
     const token = await newToken(request);
     const init = await (

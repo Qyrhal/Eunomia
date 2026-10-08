@@ -1127,7 +1127,7 @@ dependencies = [
 
 [[package]]
 name = "eunomia-backend"
-version = "1.2.1"
+version = "1.2.2"
 dependencies = [
  "aes-gcm",
  "async-trait",

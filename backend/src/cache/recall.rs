@@ -433,21 +433,33 @@ pub async fn recall(
     scored.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
     scored.truncate(limit);
 
-    let Some(max_tokens) = max_tokens else {
-        return Ok(scored);
-    };
+    Ok(match max_tokens {
+        Some(budget) => fit_budget(scored, budget),
+        None => scored,
+    })
+}
 
+/// Fits ranked items into a token budget (~4 chars/token). Each item is
+/// capped at a third of the budget -- trimmed with "…", its `id` kept so the
+/// caller can fetch the full text -- and an item that doesn't fit is skipped
+/// rather than ending the list, so one huge memory (an imported transcript,
+/// say) can't crowd out everything after it.
+fn fit_budget(items: Vec<RecallItem>, budget: usize) -> Vec<RecallItem> {
+    let cap_chars = (budget / 3).max(60) * 4;
     let mut out = Vec::new();
-    let mut total = 0usize;
-    for item in scored {
-        let tokens = item.text.chars().count() / 4;
-        if total + tokens > max_tokens {
-            break;
+    let mut used = 0usize;
+    for mut item in items {
+        if item.text.chars().count() > cap_chars {
+            item.text = item.text.chars().take(cap_chars - 1).collect::<String>() + "\u{2026}";
         }
-        total += tokens;
+        let tokens = item.text.chars().count().div_ceil(4);
+        if used + tokens > budget {
+            continue;
+        }
+        used += tokens;
         out.push(item);
     }
-    Ok(out)
+    out
 }
 
 #[cfg(test)]
@@ -487,6 +499,32 @@ mod tests {
         assert!(b0 > b_half);
         assert!(b_half > b_full);
         assert!((b_full - RECENCY_FLOOR).abs() < 1e-9);
+    }
+
+    fn item(text: &str) -> RecallItem {
+        RecallItem { id: "m".into(), kind: "memory", text: text.into(), source: None, occurred_at: None, score: 1.0, arms_hit: 1 }
+    }
+
+    #[test]
+    fn fit_budget_trims_a_huge_item_instead_of_returning_nothing() {
+        let out = fit_budget(vec![item(&"x".repeat(40_000)), item("small fact")], 600);
+        assert_eq!(out.len(), 2);
+        assert!(out[0].text.ends_with('\u{2026}'));
+        assert!(out[0].text.chars().count() <= 200 * 4);
+        assert_eq!(out[1].text, "small fact");
+    }
+
+    #[test]
+    fn fit_budget_skips_what_does_not_fit_and_keeps_going() {
+        // budget 350 -> items capped at 116 tokens: three fit (348), the fourth is
+        // skipped, and the short one after it still fits
+        let big = "y".repeat(10_000);
+        let out = fit_budget(vec![item(&big), item(&big), item(&big), item(&big), item("tiny")], 350);
+        let total: usize = out.iter().map(|i| i.text.chars().count().div_ceil(4)).sum();
+        assert!(total <= 350);
+        assert_eq!(out.len(), 4);
+        assert_eq!(out.last().unwrap().text, "tiny");
+        assert!(fit_budget(vec![], 100).is_empty());
     }
 
     #[test]
