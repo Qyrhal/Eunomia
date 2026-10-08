@@ -25,7 +25,19 @@ env:
   TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
+  # A tag that pins SurrealDB 3.x ships only after a bridge release with the
+  # upgrade hook (docs/releasing.md).
+  release-order:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+          fetch-depth: 0
+      - run: bash scripts/ci/check-release-order.sh "$TAG"
+
   build:
+    needs: release-order
     strategy:
       matrix:
         image: [backend, frontend, backup]
