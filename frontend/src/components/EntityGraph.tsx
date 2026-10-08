@@ -1,5 +1,6 @@
 "use client";
 
+import ErrorLine, { failure, type Failure } from "@/components/ErrorLine";
 import Select from "@/components/Select";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { forceCenter, forceLink, forceManyBody, forceSimulation } from "d3-force-3d";
@@ -111,14 +112,14 @@ export default function EntityGraph({
   const [visibleKinds, setVisibleKinds] = useState<Set<EntityKind>>(new Set(shownKinds));
   const [showCreate, setShowCreate] = useState(false);
   const [createForm, setCreateForm] = useState({ kind: shownKinds[0], name: "", aliases: "" });
-  const [createError, setCreateError] = useState<string | null>(null);
+  const [createError, setCreateError] = useState<Failure | null>(null);
   const [creating, setCreating] = useState(false);
 
   const [editing, setEditing] = useState(false);
   const [editForm, setEditForm] = useState({ name: "", aliases: "", summary: "" });
   const [memoryText, setMemoryText] = useState("");
   const [relForm, setRelForm] = useState({ to: "", label: "" });
-  const [actionError, setActionError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<Failure | null>(null);
   const [busy, setBusy] = useState(false);
   // "Add memory" progress: spinner while saving, a drawn check for 1.2s after
   const [memoryStatus, setMemoryStatus] = useState<"idle" | "running" | "done">("idle");
@@ -243,7 +244,7 @@ export default function EntityGraph({
       await refreshGraph();
       await selectNode(created.id);
     } catch (err) {
-      setCreateError(err instanceof Error ? err.message : "Could not create the entity.");
+      setCreateError(failure(err, "Could not create the entity."));
     } finally {
       setCreating(false);
     }
@@ -271,7 +272,7 @@ export default function EntityGraph({
       await refreshGraph();
       await selectNode(selected.id);
     } catch (err) {
-      setActionError(err instanceof Error ? err.message : "Could not save changes.");
+      setActionError(failure(err, "Could not save changes."));
     } finally {
       setBusy(false);
     }
@@ -287,7 +288,7 @@ export default function EntityGraph({
       setSelected(null);
       await refreshGraph();
     } catch (err) {
-      setActionError(err instanceof Error ? err.message : "Could not delete this entity.");
+      setActionError(failure(err, "Could not delete this entity."));
       setBusy(false);
     }
   }
@@ -309,7 +310,7 @@ export default function EntityGraph({
       memoryTimer.current = setTimeout(() => setMemoryStatus("idle"), 1200);
     } catch (err) {
       setMemoryStatus("idle");
-      setActionError(err instanceof Error ? err.message : "Could not add that memory.");
+      setActionError(failure(err, "Could not add that memory."));
     } finally {
       setBusy(false);
     }
@@ -324,7 +325,7 @@ export default function EntityGraph({
       await entities.deleteMemory(memoryId);
       await selectNode(selected.id);
     } catch (err) {
-      setActionError(err instanceof Error ? err.message : "Could not delete that memory.");
+      setActionError(failure(err, "Could not delete that memory."));
     } finally {
       setBusy(false);
     }
@@ -341,7 +342,7 @@ export default function EntityGraph({
       await refreshGraph();
       await selectNode(selected.id);
     } catch (err) {
-      setActionError(err instanceof Error ? err.message : "Could not add that relation.");
+      setActionError(failure(err, "Could not add that relation."));
     } finally {
       setBusy(false);
     }
@@ -463,11 +464,7 @@ export default function EntityGraph({
             placeholder="e.g. JB, Jordy"
           />
         </label>
-        {createError && (
-          <p className="text-[12px] rounded-[7px] px-2.5 py-1.5" style={{ color: "var(--critical)", background: "var(--critical-soft)" }}>
-            {createError}
-          </p>
-        )}
+        {createError && <ErrorLine error={createError} />}
         <div className="flex justify-end gap-2 pt-1">
           <button type="button" className="btn btn-ghost" onClick={() => setShowCreate(false)}>
             Cancel
@@ -644,11 +641,7 @@ export default function EntityGraph({
           )}
         </dl>
 
-        {actionError && (
-          <p className="text-[12px] rounded-[7px] px-2.5 py-1.5" style={{ color: "var(--critical)", background: "var(--critical-soft)" }} role="alert">
-            {actionError}
-          </p>
-        )}
+        {actionError && <ErrorLine error={actionError} />}
 
         {editing ? (
           <form onSubmit={saveEdit} className="flex flex-col gap-2.5">

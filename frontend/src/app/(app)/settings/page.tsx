@@ -1,5 +1,6 @@
 "use client";
 
+import ErrorLine, { failure, type Failure } from "@/components/ErrorLine";
 import Select from "@/components/Select";
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
@@ -21,18 +22,6 @@ import HoldButton from "@/components/bits/HoldButton";
 import SyncMark from "@/components/bits/SyncMark";
 
 const ICON = { size: 14, strokeWidth: 1.75 } as const;
-
-function errText(e: unknown, fallback: string) {
-  return e instanceof Error && e.message ? e.message : fallback;
-}
-
-function ErrorLine({ children }: { children: React.ReactNode }) {
-  return (
-    <p role="alert" className="text-[12.5px] px-3 py-2 rounded-[7px]" style={{ color: "var(--critical)", background: "var(--critical-soft)" }}>
-      {children}
-    </p>
-  );
-}
 
 /* reveal: a freshly minted secret decrypts in once (the token, never a command). */
 function CopyField({ value, reveal = false }: { value: string; reveal?: boolean }) {
@@ -142,7 +131,7 @@ function TokensSection() {
   const [name, setName] = useState("");
   const [minted, setMinted] = useState<{ name: string; token: string } | null>(null);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<Failure | null>(null);
 
   const load = () => auth.tokens.list().then(setTokens).catch(() => setTokens([]));
   useEffect(() => {
@@ -158,7 +147,7 @@ function TokensSection() {
       setName("");
       await load();
     } catch (e) {
-      setError(errText(e, "Could not create a token. Check that you're still signed in, then try again."));
+      setError(failure(e, "Could not create a token. Check that you're still signed in, then try again."));
     } finally {
       setBusy(false);
     }
@@ -170,7 +159,7 @@ function TokensSection() {
       await auth.tokens.revoke(id);
       await load();
     } catch (e) {
-      setError(errText(e, "Could not revoke that token. Reload and try again."));
+      setError(failure(e, "Could not revoke that token. Reload and try again."));
     }
   }
 
@@ -223,7 +212,7 @@ function TokensSection() {
         </div>
       )}
 
-      {error && <ErrorLine>{error}</ErrorLine>}
+      {error && <ErrorLine error={error} />}
 
       <div className="ledger overflow-x-auto">
         <table className="data-table">
@@ -269,7 +258,7 @@ function TokensSection() {
 
 function SessionsSection() {
   const [sessions, setSessions] = useState<Session[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<Failure | null>(null);
 
   const load = () => auth.sessions.list().then(setSessions).catch(() => setSessions([]));
   useEffect(() => {
@@ -282,14 +271,14 @@ function SessionsSection() {
       await auth.sessions.revoke(id);
       await load();
     } catch (e) {
-      setError(errText(e, "Could not revoke that session. Reload and try again."));
+      setError(failure(e, "Could not revoke that session. Reload and try again."));
     }
   }
 
   return (
     <div className="flex flex-col gap-5">
       <PanelHead title="Active sessions">Browser sign-ins. Revoking one signs that browser out immediately.</PanelHead>
-      {error && <ErrorLine>{error}</ErrorLine>}
+      {error && <ErrorLine error={error} />}
       <div className="ledger overflow-x-auto">
         <table className="data-table">
           <thead>
@@ -354,7 +343,7 @@ function UpdateSection() {
   const [checkResult, setCheckResult] = useState<"done" | "failed" | null>(null);
   const [wasChecking, setWasChecking] = useState(false);
   const [stale, setStale] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<Failure | null>(null);
   const requestedAt = useRef(0);
 
   const busy = phase !== "idle";
@@ -410,7 +399,7 @@ function UpdateSection() {
       setTarget(status.latest_version);
       setPhase("waiting");
     } catch (e) {
-      setError(errText(e, "Could not request an update. Check that the updater container is running, then retry."));
+      setError(failure(e, "Could not request an update. Check that the updater container is running, then retry."));
     }
   }
 
@@ -533,7 +522,7 @@ function UpdateSection() {
         </p>
       )}
       {status.error && !busy && <ErrorLine>Last update attempt failed: {status.error}. Check the updater logs, then retry.</ErrorLine>}
-      {error && <ErrorLine>{error}</ErrorLine>}
+      {error && <ErrorLine error={error} />}
     </div>
   );
 }
@@ -546,7 +535,7 @@ function GeneralSection({ settings, onSaved }: { settings: AppSettings; onSaved:
   const [modelsError, setModelsError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<Failure | null>(null);
 
   const urlInvalid = baseUrlInput.trim() !== "" && !/^https?:\/\/\S+$/.test(baseUrlInput.trim());
   const dirty =
@@ -579,7 +568,7 @@ function GeneralSection({ settings, onSaved }: { settings: AppSettings; onSaved:
       setSaved(true);
       setTimeout(() => setSaved(false), 1500);
     } catch (e) {
-      setError(errText(e, "Could not save settings. Check the values above and try again."));
+      setError(failure(e, "Could not save settings. Check the values above and try again."));
     } finally {
       setSaving(false);
     }
@@ -702,7 +691,7 @@ function GeneralSection({ settings, onSaved }: { settings: AppSettings; onSaved:
             </button>
           </div>
         </div>
-        {error && <ErrorLine>{error}</ErrorLine>}
+        {error && <ErrorLine error={error} />}
       </form>
     </div>
   );
@@ -710,7 +699,7 @@ function GeneralSection({ settings, onSaved }: { settings: AppSettings; onSaved:
 
 function DataSection() {
   const [exporting, setExporting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<Failure | null>(null);
 
   async function doExport() {
     setExporting(true);
@@ -718,7 +707,7 @@ function DataSection() {
     try {
       await downloadExport();
     } catch (e) {
-      setError(errText(e, "Could not prepare the export.") + " Try again in a moment.");
+      setError(failure(e, "Could not prepare the export.", " Try again in a moment."));
     } finally {
       setExporting(false);
     }
@@ -739,7 +728,7 @@ function DataSection() {
           {exporting ? "Preparing…" : "Download my data"}
         </button>
       </div>
-      {error && <ErrorLine>{error}</ErrorLine>}
+      {error && <ErrorLine error={error} />}
     </div>
   );
 }

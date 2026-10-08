@@ -1,5 +1,6 @@
 "use client";
 
+import ErrorLine, { failure, type Failure } from "@/components/ErrorLine";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import { AlertTriangle, ArrowRight } from "lucide-react";
@@ -80,7 +81,7 @@ function McpCard({ onCreated }: { onCreated: () => void }) {
   const mcpUrl = useMcpUrl();
   const [token, setToken] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<Failure | null>(null);
 
   async function generate() {
     setBusy(true);
@@ -90,7 +91,7 @@ function McpCard({ onCreated }: { onCreated: () => void }) {
       setToken(res.token);
       onCreated();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not generate a token.");
+      setError(failure(err, "Could not generate a token."));
     } finally {
       setBusy(false);
     }
@@ -138,11 +139,7 @@ function McpCard({ onCreated }: { onCreated: () => void }) {
         </>
       )}
 
-      {error && (
-        <p className="text-[12.5px] rounded-md px-2.5 py-2" style={{ color: "var(--critical)", background: "var(--critical-soft)" }}>
-          {error} Try again, or mint a token in Settings.
-        </p>
-      )}
+      {error && <ErrorLine error={error}>{error.message} Try again, or mint a token in Settings.</ErrorLine>}
 
       <div className="flex flex-col gap-1.5 pt-3.5" style={{ borderTop: "var(--hair) solid var(--border)" }}>
         <p className="text-[12px] leading-relaxed" style={{ color: "var(--ink-faint)" }}>

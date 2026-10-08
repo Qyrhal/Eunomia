@@ -20,12 +20,42 @@ function errorMessage(status: number, path: string, body: unknown): string {
   return `${status} ${path}`;
 }
 
+export class ApiError extends Error {
+  status: number;
+  code: string;
+  detail: string;
+  traceId?: string;
+  constructor(status: number, code: string, detail: string, traceId?: string) {
+    super(detail);
+    this.name = "ApiError";
+    this.status = status;
+    this.code = code;
+    this.detail = detail;
+    this.traceId = traceId;
+  }
+}
+
+// Old bodies are `{ detail }`; new ones are RFC 9457 problem+json with `code` and `trace_id`.
+function apiError(res: Response, path: string, body: unknown): ApiError {
+  const b = body && typeof body === "object" ? (body as { code?: unknown; trace_id?: unknown }) : {};
+  const code = typeof b.code === "string" && b.code ? b.code : `http.${res.status}`;
+  const traceId = (typeof b.trace_id === "string" && b.trace_id) || res.headers.get("x-trace-id") || undefined;
+  return new ApiError(res.status, code, errorMessage(res.status, path, body), traceId);
+}
+
+const hex = (n: number) =>
+  Array.from(crypto.getRandomValues(new Uint8Array(n)), (b) => b.toString(16).padStart(2, "0")).join("");
+
+// W3C traceparent (version 00, sampled) so the backend joins the browser's trace.
+const traceparent = () => `00-${hex(16)}-${hex(8)}-01`;
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API_URL}${path}`, {
     ...init,
     credentials: "include",
     headers: {
       "Content-Type": "application/json",
+      traceparent: traceparent(),
       ...init?.headers,
     },
   });
@@ -36,7 +66,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     } catch {
       // non-JSON error body, fall through with no `detail`
     }
-    throw new Error(errorMessage(res.status, path, body));
+    throw apiError(res, path, body);
   }
   if (res.status === 204) return undefined as T;
   const text = await res.text();
