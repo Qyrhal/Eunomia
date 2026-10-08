@@ -362,24 +362,30 @@ pub(crate) async fn keyword_ids(
         score: f64,
     }
 
+    // every term's two lookups in one round trip
     let cond = filter.sql();
-    let sql = format!(
-        "SELECT id, search::score(1) AS score FROM cache_record \
-         WHERE owner = $owner AND title @1@ $t AND deleted = false{cond} ORDER BY score DESC, id LIMIT $limit; \
-         SELECT id, search::score(2) AS score FROM cache_record \
-         WHERE owner = $owner AND body_text @2@ $t AND deleted = false{cond} ORDER BY score DESC, id LIMIT $limit"
-    );
+    let terms = search_terms(q);
+    let mut sql = String::new();
+    for i in 0..terms.len() {
+        sql.push_str(&format!(
+            "SELECT id, search::score(1) AS score FROM cache_record \
+             WHERE owner = $owner AND title @1@ $t{i} AND deleted = false{cond} ORDER BY score DESC, id LIMIT $limit; \
+             SELECT id, search::score(2) AS score FROM cache_record \
+             WHERE owner = $owner AND body_text @2@ $t{i} AND deleted = false{cond} ORDER BY score DESC, id LIMIT $limit;"
+        ));
+    }
+    if terms.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut query = db.query(sql).bind(filter.clone()).bind(("owner", owner.clone())).bind(("limit", limit as i64));
+    for (i, t) in terms.into_iter().enumerate() {
+        query = query.bind((format!("t{i}"), t));
+    }
+    let mut res = query.await?;
     let mut per_term = Vec::new();
-    for term in search_terms(q) {
-        let mut res = db
-            .query(sql.as_str())
-            .bind(filter.clone())
-            .bind(("owner", owner.clone()))
-            .bind(("t", term))
-            .bind(("limit", limit as i64))
-            .await?;
-        let title: Vec<ScoredRow> = res.take(0)?;
-        let body: Vec<ScoredRow> = res.take(1)?;
+    for i in 0..res.num_statements() / 2 {
+        let title: Vec<ScoredRow> = res.take(2 * i)?;
+        let body: Vec<ScoredRow> = res.take(2 * i + 1)?;
         per_term.push(
             title
                 .into_iter()

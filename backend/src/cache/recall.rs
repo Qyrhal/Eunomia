@@ -1,11 +1,11 @@
-//! Recall pipeline: 5 arms in parallel (semantic, keyword, graph, temporal, memory text),
+//! Recall pipeline: 5 arms (semantic, keyword, graph, temporal, memory text),
 //! fused via Reciprocal Rank Fusion, then boosted by recency + "proof" (how
 //! many arms agreed on an item), then truncated to a token budget.
 //!
 //! Pipeline, matching the reference diagram:
 //!
 //! ```text
-//!     [semantic | keyword | graph | temporal | memory text]  (5 arms, run concurrently)
+//!     [semantic | keyword, graph, temporal, memory text]  (provider arm alongside the DB arms)
 //!                      |
 //!                 RRF fusion (k=60, reusing cache::search's rrf_scores)
 //!                      |
@@ -150,16 +150,18 @@ async fn graph_arm(
     if terms.is_empty() {
         return Ok(Vec::new());
     }
-    let mut sql = String::new();
+    // one statement: per-statement overhead, not the index lookups, dominates
+    let mut lookups = Vec::new();
     for kind in ENTITY_KINDS {
         for i in 0..terms.len() {
             for field in ["name", "aliases"] {
-                sql.push_str(&format!(
-                    "SELECT id, name, aliases FROM {kind} WHERE vault = $vault AND {field} @@ $t{i} LIMIT {GRAPH_CANDIDATES};"
+                lookups.push(format!(
+                    "(SELECT id, name, aliases FROM {kind} WHERE vault = $vault AND {field} @@ $t{i} LIMIT {GRAPH_CANDIDATES})"
                 ));
             }
         }
     }
+    let sql = format!("RETURN array::flatten([{}]);", lookups.join(", "));
     let mut q = db.query(sql).bind(("vault", vault.clone()));
     for (i, t) in terms.iter().enumerate() {
         q = q.bind((format!("t{i}"), t.clone()));
@@ -169,8 +171,8 @@ async fn graph_arm(
     let q_lower = query.to_lowercase();
     let mut seen = HashSet::new();
     let mut matches: Vec<(usize, RecordId)> = Vec::new();
-    for i in 0..ENTITY_KINDS.len() * terms.len() * 2 {
-        let rows: Vec<EntityRow> = res.take(i)?;
+    let rows: Vec<EntityRow> = res.take(0)?;
+    {
         for row in rows {
             let best = std::iter::once(row.name.as_str())
                 .chain(row.aliases.iter().map(String::as_str))
@@ -196,10 +198,13 @@ async fn graph_arm(
         #[serde(default)]
         source: Option<RecordId>,
     }
+    // WITH INDEX: left to itself the planner walks the whole vault's memories
+    // (memory_vault_idx) for each entity
     let mut sql = String::new();
     for i in 0..matches.len() {
         sql.push_str(&format!(
-            "SELECT id, source FROM memory WHERE subject = $e{i} AND vault = $vault ORDER BY created_at DESC LIMIT $limit;"
+            "SELECT id, source, created_at FROM memory WITH INDEX memory_subject_idx \
+             WHERE subject = $e{i} AND vault = $vault ORDER BY created_at DESC LIMIT $limit;"
         ));
     }
     let mut q = db.query(sql).bind(("vault", vault.clone())).bind(("limit", limit as i64));
@@ -249,19 +254,28 @@ async fn memory_text_arm(db: &Db, vault: &RecordId, query: &str, limit: usize) -
         #[serde(default)]
         score: f64,
     }
-    // one BM25 match per term: `@@` with a whole question needs every word to match
-    let mut per_term = Vec::new();
-    for term in cs::search_terms(query) {
-        let mut res = db
-            .query(
+    // one BM25 match per term (`@@` with a whole question needs every word to
+    // match), all in one round trip
+    let terms = cs::search_terms(query);
+    if terms.is_empty() {
+        return Ok(Vec::new());
+    }
+    let sql: String = (0..terms.len())
+        .map(|i| {
+            format!(
                 "SELECT id, search::score(1) AS score FROM memory \
-                 WHERE vault = $vault AND text @1@ $t ORDER BY score DESC LIMIT $limit",
+                 WHERE vault = $vault AND text @1@ $t{i} ORDER BY score DESC LIMIT $limit;"
             )
-            .bind(("vault", vault.clone()))
-            .bind(("t", term))
-            .bind(("limit", limit as i64))
-            .await?;
-        let rows: Vec<ScoredRow> = res.take(0)?;
+        })
+        .collect();
+    let mut q = db.query(sql).bind(("vault", vault.clone())).bind(("limit", limit as i64));
+    for (i, t) in terms.iter().enumerate() {
+        q = q.bind((format!("t{i}"), t.clone()));
+    }
+    let mut res = q.await?;
+    let mut per_term = Vec::new();
+    for i in 0..terms.len() {
+        let rows: Vec<ScoredRow> = res.take(i)?;
         per_term.push(rows.into_iter().map(|r| (format!("memory:{}", r.id), r.score)).collect());
     }
     Ok(cs::rank_term_hits(per_term, limit))
@@ -456,8 +470,12 @@ async fn arm(
     optional: bool,
     fut: impl std::future::Future<Output = AppResult<Vec<String>>>,
 ) -> AppResult<Vec<String>> {
+    let started = std::time::Instant::now();
     match tokio::time::timeout(ARM_DEADLINE, fut).await {
-        Ok(Ok(keys)) => Ok(keys),
+        Ok(Ok(keys)) => {
+            tracing::debug!(arm = name, candidates = keys.len(), elapsed_ms = started.elapsed().as_millis() as u64, "recall: arm done");
+            Ok(keys)
+        }
         Ok(Err(e)) if optional => {
             tracing::warn!("recall: {name} arm skipped: {}", e.message);
             Ok(Vec::new())
@@ -498,28 +516,35 @@ pub async fn recall(
     let no_filter = cs::RecordFilter::default();
     let record_keys = |ids: Vec<String>| ids.into_iter().map(|i| format!("cache_record:{i}")).collect::<Vec<_>>();
 
-    // The five arms are independent: run them concurrently, each under its own
-    // deadline. No embeddings (no OpenAI key -- the MCP agent is the model) or
-    // a failing/hanging provider must not take down the other four arms.
-    let (semantic_keys, keyword_keys, graph_keys, temporal_keys, memory_keys) = tokio::join!(
-        arm("semantic", true, async {
-            if personal && crate::embeddings::service::available(db, settings, owner).await {
-                Ok(record_keys(cs::semantic_ids(db, settings, owner, query, &no_filter, pool).await?))
-            } else {
-                Ok(Vec::new())
-            }
-        }),
-        arm("keyword", false, async {
+    // The semantic arm waits on an external embedding provider: it runs
+    // concurrently with the rest, so a slow or hanging provider costs at most
+    // its deadline and never holds up the other four. Those four only query
+    // SurrealDB and run one after another -- measured on a 5000-entity vault,
+    // running them concurrently made each several times slower (they contend
+    // inside the database) and the whole recall slower. Every arm has its own
+    // deadline (see `arm`).
+    let semantic = arm("semantic", true, async {
+        if personal && crate::embeddings::service::available(db, settings, owner).await {
+            Ok(record_keys(cs::semantic_ids(db, settings, owner, query, &no_filter, pool).await?))
+        } else {
+            Ok(Vec::new())
+        }
+    });
+    let local = async {
+        let keyword = arm("keyword", false, async {
             if personal {
                 Ok(record_keys(cs::keyword_ids(db, owner, query, &no_filter, pool).await?))
             } else {
                 Ok(Vec::new())
             }
-        }),
-        arm("graph", false, graph_arm(db, owner, &vault, query, pool, personal)),
-        arm("temporal", false, temporal_ids(db, owner, &vault, time_range, pool, personal)),
-        arm("memory_text", false, memory_text_arm(db, &vault, query, pool)),
-    );
+        })
+        .await;
+        let graph = arm("graph", false, graph_arm(db, owner, &vault, query, pool, personal)).await;
+        let temporal = arm("temporal", false, temporal_ids(db, owner, &vault, time_range, pool, personal)).await;
+        let memory = arm("memory_text", false, memory_text_arm(db, &vault, query, pool)).await;
+        (keyword, graph, temporal, memory)
+    };
+    let (semantic_keys, (keyword_keys, graph_keys, temporal_keys, memory_keys)) = tokio::join!(semantic, local);
     let arms = [semantic_keys?, keyword_keys?, graph_keys?, temporal_keys?, memory_keys?];
     tracing::debug!(
         semantic = arms[0].len(),

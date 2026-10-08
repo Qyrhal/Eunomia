@@ -180,7 +180,7 @@ pub async fn consolidate_subject(
 
     let mut res = db
         .query(
-            r#"SELECT id, text FROM memory WHERE subject = $id AND type IN ["world","experience"] ORDER BY created_at, id;
+            r#"SELECT id, text, created_at FROM memory WHERE subject = $id AND type IN ["world","experience"] ORDER BY created_at, id;
                SELECT text, source_memories, status FROM memory WHERE subject = $id AND type = "observation" LIMIT 1"#,
         )
         .bind(("id", subject_id.clone()))

@@ -342,6 +342,14 @@ fn same_vault(a: &EntityRow, b: &EntityRow) -> AppResult<()> {
 // Core CRUD
 // ---------------------------------------------------------------------------
 
+/// Serialises this process's find-then-create of entities and observations.
+/// The UNIQUE indexes are the cross-process guarantee, but SurrealDB 2.3 has
+/// been seen to let two simultaneous CREATEs through one of them (about one
+/// run in five of the concurrency e2e test), so writes from this server also
+/// queue here. Held only around the lookup and the write -- a few ms.
+static ENTITY_WRITE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+static OBSERVATION_WRITE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 /// Whether a failed write lost a race to a concurrent one: a UNIQUE index
 /// rejected it, or SurrealDB aborted the conflicting transaction.
 fn is_write_conflict(e: &surrealdb::Error) -> bool {
@@ -387,6 +395,7 @@ pub async fn upsert_entity(
     }
     let needle = name.to_lowercase();
 
+    let guard = ENTITY_WRITE.lock().await;
     let mut found = find_entity(db, table, &vault, &needle).await?;
     if found.is_none() {
         let mut created = db
@@ -407,6 +416,7 @@ pub async fn upsert_entity(
             Err(e) => return Err(e.into()),
         }
     }
+    drop(guard);
     let row = found.ok_or_else(|| AppError::internal("entity vanished during a concurrent write"))?;
 
     let existing: HashSet<String> = row.aliases.iter().cloned().collect();
@@ -511,6 +521,7 @@ pub(crate) async fn save_observation(
          type = \"observation\", status = \"fresh\"{set_lineage} RETURN AFTER"
     );
     let proof = lineage.as_ref().map(|l| l.len() as i64);
+    let _guard = OBSERVATION_WRITE.lock().await;
     for attempt in 0..3 {
         for sql in [&update, &create] {
             let mut res = db
@@ -974,21 +985,24 @@ pub async fn get_entity(db: &Db, owner: &RecordId, entity_id: &RecordId) -> AppR
 
     // Only rows in the entity's own vault: a cross-vault edge or memory left
     // over from before relations/merges were confined to one vault stays hidden.
+    // Edges are read through the graph (`$id->relates_to`): with a plain
+    // `WHERE out = $id AND in.vault = $vault` SurrealDB 2.3 plans `in.vault`
+    // as a lookup on the vault/name indexes and returns nothing.
     let mut mem_res = db
-        .query("SELECT * FROM memory WHERE subject = $id AND vault = $vault ORDER BY created_at DESC")
+        .query("SELECT * FROM memory WITH INDEX memory_subject_idx WHERE subject = $id AND vault = $vault ORDER BY created_at DESC")
         .bind(("id", entity_id.clone()))
         .bind(("vault", row.vault.clone()))
         .await?;
     let memories: Vec<MemoryRow> = mem_res.take(0)?;
 
     let mut out_res = db
-        .query("SELECT * FROM relates_to WHERE in = $id AND out.vault = $vault")
+        .query("SELECT * FROM $id->relates_to WHERE out.vault = $vault")
         .bind(("id", entity_id.clone()))
         .bind(("vault", row.vault.clone()))
         .await?;
     let outgoing: Vec<RelationRow> = out_res.take(0)?;
     let mut in_res = db
-        .query("SELECT * FROM relates_to WHERE out = $id AND in.vault = $vault")
+        .query("SELECT * FROM $id<-relates_to WHERE in.vault = $vault")
         .bind(("id", entity_id.clone()))
         .bind(("vault", row.vault.clone()))
         .await?;
