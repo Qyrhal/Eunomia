@@ -219,7 +219,7 @@ pub async fn summary(ctx: &SourceCtx<'_>, days: i64) -> AppResult<Value> {
 
 pub async fn list_recordings(ctx: &SourceCtx<'_>, days: i64, tag: Option<&str>, limit: i64) -> AppResult<Value> {
     let recs = cached_recordings(ctx, days).await?;
-    let limit = limit.min(200).max(0) as usize;
+    let limit = limit.clamp(0, 200) as usize;
     let out: Vec<Value> = recs
         .iter()
         .filter(|r| tag.map(|t| tags_of(&r.payload).iter().any(|x| x == t)).unwrap_or(true))

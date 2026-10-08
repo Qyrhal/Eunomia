@@ -1,5 +1,6 @@
 "use client";
 
+import ErrorLine, { failure, type Failure } from "@/components/ErrorLine";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import Markdown from "@/components/Markdown";
@@ -28,7 +29,7 @@ export default function SkillPage() {
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<Failure | null>(null);
 
   useEffect(() => {
     settingsApi
@@ -37,7 +38,7 @@ export default function SkillPage() {
         setSkill(s.memory_skill);
         setCustom(s.memory_skill_custom);
       })
-      .catch(() => setError("Could not load the skill. Check that the backend is running, then reload."));
+      .catch((e) => setError(failure(e, "Could not load the skill.", " Check that the backend is running, then reload.")));
   }, []);
 
   async function save(text: string) {
@@ -51,7 +52,7 @@ export default function SkillPage() {
       setSaved(true);
       setTimeout(() => setSaved(false), 1800);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not save the skill.");
+      setError(failure(e, "Could not save the skill."));
     } finally {
       setBusy(false);
     }
@@ -132,11 +133,7 @@ export default function SkillPage() {
               <SyncMark status={saved ? "done" : "idle"} />
               Saved. New agent sessions pick it up.
             </p>
-            {error && (
-              <p className="text-[12.5px] rounded-[7px] px-3 py-2" style={{ color: "var(--critical)", background: "var(--critical-soft)" }}>
-                {error}
-              </p>
-            )}
+            {error && <ErrorLine error={error} />}
           </div>
 
           {skill === null ? (

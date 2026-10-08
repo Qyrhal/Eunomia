@@ -1,12 +1,12 @@
 [package]
 name = "eunomia-backend"
 version = "1.2.2"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
-axum = { version = "0.7", features = ["macros"] }
+axum = { version = "0.8", features = ["macros"] }
 tokio = { version = "1", features = ["full"] }
-tower-http = { version = "0.5", features = ["cors"] }
+tower-http = { version = "0.6", features = ["cors"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 surrealdb = { version = "2", features = ["protocol-ws", "kv-mem"] }

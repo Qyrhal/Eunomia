@@ -286,16 +286,14 @@ fn message_out(row: MessageRow) -> MessageOut {
 /// unit-testable. Mirrors `chat/service.py::_row_to_message`.
 fn row_to_api_message(row: &MessageRow) -> Value {
     let mut msg = json!({ "role": row.role, "content": row.content });
-    if let Some(tool_calls) = &row.tool_calls {
-        if !tool_calls.is_empty() {
+    if let Some(tool_calls) = &row.tool_calls
+        && !tool_calls.is_empty() {
             msg["tool_calls"] = json!(tool_calls);
         }
-    }
-    if let Some(tool_call_id) = &row.tool_call_id {
-        if !tool_call_id.is_empty() {
+    if let Some(tool_call_id) = &row.tool_call_id
+        && !tool_call_id.is_empty() {
             msg["tool_call_id"] = json!(tool_call_id);
         }
-    }
     msg
 }
 
@@ -438,12 +436,11 @@ struct ToolCallAcc {
 /// unit-testable without a live OpenAI stream.
 fn apply_delta(content: &mut String, acc: &mut BTreeMap<usize, ToolCallAcc>, delta: &StreamDelta) -> Option<String> {
     let mut emitted = None;
-    if let Some(c) = &delta.content {
-        if !c.is_empty() {
+    if let Some(c) = &delta.content
+        && !c.is_empty() {
             content.push_str(c);
             emitted = Some(c.clone());
         }
-    }
     if let Some(tool_calls) = &delta.tool_calls {
         for tcd in tool_calls {
             let entry = acc.entry(tcd.index).or_default();

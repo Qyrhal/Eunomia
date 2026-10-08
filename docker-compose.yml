@@ -76,5 +76,27 @@ services:
       - .:/eunomia
       - /var/run/docker.sock:/var/run/docker.sock
 
+  # Nightly encrypted SurrealDB export at 03:00 into the eunomia-backups
+  # volume (see backend/scripts/backup/). No ports. Exits with a clear log line
+  # if BACKUP_ENCRYPTION_KEY is empty.
+  backup:
+    image: ghcr.io/qyrhal/eunomia-backup:${EUNOMIA_IMAGE_TAG:-latest}
+    build: ./backend/scripts/backup
+    restart: unless-stopped
+    environment:
+      - BACKUP_ENCRYPTION_KEY=${BACKUP_ENCRYPTION_KEY:-}
+      - TZ=${TZ:-UTC}
+      - SURREAL_ENDPOINT=http://surrealdb:8000
+      - SURREAL_USER=${SURREAL_USER:-root}
+      - SURREAL_PASS=${SURREAL_PASS:-root}
+      - SURREAL_NS=${SURREAL_NS:-eunomia}
+      - SURREAL_DB=${SURREAL_DB:-eunomia}
+    volumes:
+      - eunomia-backups:/backups
+    depends_on:
+      surrealdb:
+        condition: service_healthy
+
 volumes:
   eunomia-surreal-data:
+  eunomia-backups:

@@ -47,6 +47,7 @@ update
 check "checked out the new release" test "$(cat "$TMP/repo/compose.yml")" = two
 check ".env is pinned to the new release" grep -q '^EUNOMIA_IMAGE_TAG=v1.1.0$' "$TMP/repo/.env"
 check ".env keeps its other settings" grep -q '^JWT_SECRET=x$' "$TMP/repo/.env"
+check ".env gains a backup key" grep -Eq '^BACKUP_ENCRYPTION_KEY=.{20,}$' "$TMP/repo/.env"
 check "images were pulled" grep -q 'compose pull backend frontend' "$TMP/docker.log"
 check "stack was restarted" grep -q 'compose up -d' "$TMP/docker.log"
 check "the updater service is left out of the restart" bash -c "! grep -q 'up -d --remove-orphans.*updater' '$TMP/docker.log'"

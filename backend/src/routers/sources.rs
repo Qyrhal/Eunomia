@@ -31,12 +31,12 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/sources", get(list_sources))
         .route("/sources/status", get(sources_status))
-        .route("/sources/:key/sync", post(sync_now))
+        .route("/sources/{key}/sync", post(sync_now))
 }
 
 /// No `User` extractor: see this module's doc comment.
 pub fn webhook_router() -> Router<AppState> {
-    Router::new().route("/sources/:key/webhook/:owner_id", post(source_webhook))
+    Router::new().route("/sources/{key}/webhook/{owner_id}", post(source_webhook))
 }
 
 #[derive(Debug, Deserialize)]

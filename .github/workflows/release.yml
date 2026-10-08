@@ -28,7 +28,7 @@ jobs:
   build:
     strategy:
       matrix:
-        image: [backend, frontend]
+        image: [backend, frontend, backup]
         arch: [amd64, arm64]
     runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     steps:
@@ -46,7 +46,8 @@ jobs:
 
       - uses: docker/build-push-action@v6
         with:
-          context: ./${{ matrix.image }}
+          # backup is a small image that lives under backend/scripts.
+          context: ${{ matrix.image == 'backup' && './backend/scripts/backup' || format('./{0}', matrix.image) }}
           platforms: linux/${{ matrix.arch }}
           push: true
           provenance: false # plain per-arch manifests, so they can be joined below
@@ -59,7 +60,7 @@ jobs:
     runs-on: ubuntu-24.04
     strategy:
       matrix:
-        image: [backend, frontend]
+        image: [backend, frontend, backup]
     steps:
       - uses: docker/setup-buildx-action@v3
 

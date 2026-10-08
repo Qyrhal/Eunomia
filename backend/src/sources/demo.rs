@@ -110,6 +110,7 @@ fn gen_recordings(rng: &mut StdRng, now: DateTime<Utc>) -> Vec<Value> {
         .collect()
 }
 
+#[allow(clippy::too_many_arguments)] // flat constructor for demo fixtures
 fn env(
     id: String,
     source: &str,

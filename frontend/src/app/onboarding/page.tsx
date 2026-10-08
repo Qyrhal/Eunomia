@@ -1,5 +1,6 @@
 "use client";
 
+import ErrorLine, { failure, type Failure } from "@/components/ErrorLine";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, Loader2, X } from "lucide-react";
@@ -21,7 +22,7 @@ export default function OnboardingPage() {
   const [baseUrlInput, setBaseUrlInput] = useState("");
   const [apiKeyInput, setApiKeyInput] = useState("");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<Failure | null>(null);
   // The welcome moment plays once; coming Back shows it at rest.
   const [welcomed, setWelcomed] = useState(false);
 
@@ -69,7 +70,7 @@ export default function OnboardingPage() {
       if (Object.keys(changes).length) await settings.update(changes);
       await finish(from);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not save the key. Check the URL and key, or skip for now.");
+      setError(failure(err, "Could not save the key. Check the URL and key, or skip for now."));
       setBusy(false);
     }
   }
@@ -198,11 +199,7 @@ export default function OnboardingPage() {
                     />
                   </div>
 
-                  {error && (
-                    <div role="alert" className="rounded-[7px] px-3 py-2 text-[13px]" style={{ background: "var(--critical-soft)", color: "var(--critical)" }}>
-                      {error}
-                    </div>
-                  )}
+                  {error && <ErrorLine error={error} />}
 
                   <div className="flex items-center gap-2 mt-2">
                     <button

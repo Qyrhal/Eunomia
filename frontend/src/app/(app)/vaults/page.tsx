@@ -1,5 +1,6 @@
 "use client";
 
+import ErrorLine, { failure, type Failure } from "@/components/ErrorLine";
 import Select from "@/components/Select";
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import {
@@ -34,10 +35,6 @@ import { cssVar, prefersReducedMotion } from "@/components/bits/motion";
 const ICON = { size: 14, strokeWidth: 1.75 } as const;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-function errText(e: unknown, fallback: string) {
-  return e instanceof Error && e.message ? e.message : fallback;
-}
-
 function ago(iso: string | null): string | null {
   if (!iso) return null;
   const mins = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
@@ -59,18 +56,6 @@ function RoleChip({ role }: { role: VaultRole }) {
     >
       {role === "owner" ? "Owner" : "Member"}
     </span>
-  );
-}
-
-function ErrorLine({ children }: { children: React.ReactNode }) {
-  return (
-    <p
-      role="alert"
-      className="text-[12.5px] px-3 py-2 rounded-[7px]"
-      style={{ color: "var(--critical)", background: "var(--critical-soft)" }}
-    >
-      {children}
-    </p>
   );
 }
 
@@ -130,7 +115,7 @@ function VaultInspector({
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<VaultRole>("member");
   const [touched, setTouched] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<Failure | null>(null);
   const [busy, setBusy] = useState(false);
   const [removing, setRemoving] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<"leave" | "delete" | null>(null);
@@ -177,9 +162,7 @@ function VaultInspector({
       setTouched(false);
       onMembersChanged();
     } catch (e) {
-      setError(
-        `${errText(e, "Could not send that invite.")} Check the address and try again.`,
-      );
+      setError(failure(e, "Could not send that invite.", " Check the address and try again."));
     } finally {
       setBusy(false);
     }
@@ -195,7 +178,7 @@ function VaultInspector({
       await action();
       after();
     } catch (e) {
-      setError(errText(e, fallback));
+      setError(failure(e, fallback));
     }
   }
 
@@ -208,7 +191,7 @@ function VaultInspector({
       setCloned(true);
       onVaultsChanged();
     } catch (e) {
-      setError(errText(e, "Could not clone this vault. Try a different name."));
+      setError(failure(e, "Could not clone this vault. Try a different name."));
     } finally {
       setCloneBusy(false);
     }
@@ -509,7 +492,7 @@ function VaultInspector({
             )}
           </div>
         )}
-        {error && <ErrorLine>{error}</ErrorLine>}
+        {error && <ErrorLine error={error} />}
       </div>
     </aside>
   );
@@ -521,7 +504,7 @@ function InvitationsPanel({ onChanged }: { onChanged: () => void }) {
   );
   const [busyId, setBusyId] = useState<string | null>(null);
   const [joined, setJoined] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<Failure | null>(null);
 
   const load = () =>
     vaultsApi
@@ -546,7 +529,7 @@ function InvitationsPanel({ onChanged }: { onChanged: () => void }) {
       await load();
     } catch (e) {
       setError(
-        errText(
+        failure(
           e,
           "Could not accept this invitation. It may have been withdrawn, so reload to check.",
         ),
@@ -565,7 +548,7 @@ function InvitationsPanel({ onChanged }: { onChanged: () => void }) {
       await load();
     } catch (e) {
       setError(
-        errText(e, "Could not decline this invitation. Reload and try again."),
+        failure(e, "Could not decline this invitation. Reload and try again."),
       );
     } finally {
       setBusyId(null);
@@ -619,7 +602,7 @@ function InvitationsPanel({ onChanged }: { onChanged: () => void }) {
           </div>
         </div>
       ))}
-      {error && <ErrorLine>{error}</ErrorLine>}
+      {error && <ErrorLine error={error} />}
     </section>
   );
 }
@@ -701,7 +684,7 @@ function CreateVaultForm({
 }) {
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<Failure | null>(null);
 
   async function create() {
     const trimmed = name.trim();
@@ -714,7 +697,7 @@ function CreateVaultForm({
       onCreated();
     } catch (e) {
       setError(
-        errText(e, "Could not create that vault. Try a different name."),
+        failure(e, "Could not create that vault. Try a different name."),
       );
     } finally {
       setBusy(false);
@@ -758,7 +741,7 @@ function CreateVaultForm({
           {busy ? "Creating…" : "Create"}
         </button>
       </div>
-      {error && <ErrorLine>{error}</ErrorLine>}
+      {error && <ErrorLine error={error} />}
     </form>
   );
 }
@@ -778,7 +761,7 @@ function MergeVaultsCard({
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<string | null>(null);
   const [chips, setChips] = useState<{ from: [string, string]; to: string; id: number } | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<Failure | null>(null);
 
   async function merge() {
     setBusy(true);
@@ -795,7 +778,7 @@ function MergeVaultsCard({
       onMerged();
     } catch (e) {
       setError(
-        errText(
+        failure(
           e,
           "Could not merge those vaults. Check you are a member of both and try again.",
         ),
@@ -883,7 +866,7 @@ function MergeVaultsCard({
             {chips && <MergeChips key={chips.id} from={chips.from} to={chips.to} />}
           </div>
         )}
-        {error && <ErrorLine>{error}</ErrorLine>}
+        {error && <ErrorLine error={error} />}
       </div>
     </section>
   );

@@ -274,7 +274,7 @@ pub(crate) fn compute_finance_summary(
 
     let mut txns: Vec<&CachedRecord> =
         txns.iter().filter(|t| iso(&t.occurred_at).map(|o| o.as_str() >= since).unwrap_or(false)).collect();
-    txns.sort_by(|a, b| iso(&b.occurred_at).unwrap_or_default().cmp(&iso(&a.occurred_at).unwrap_or_default()));
+    txns.sort_by_key(|t| std::cmp::Reverse(iso(&t.occurred_at).unwrap_or_default()));
 
     let mut by_cat: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
     let mut by_day: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
@@ -335,8 +335,8 @@ pub async fn list_transactions(ctx: &SourceCtx<'_>, days: i64, category: Option<
     if let Some(category) = category {
         txns.retain(|t| t.payload.get("category").and_then(|v| v.as_str()) == Some(category));
     }
-    txns.sort_by(|a, b| iso(&b.occurred_at).unwrap_or_default().cmp(&iso(&a.occurred_at).unwrap_or_default()));
-    let limit = limit.min(200).max(0) as usize;
+    txns.sort_by_key(|t| std::cmp::Reverse(iso(&t.occurred_at).unwrap_or_default()));
+    let limit = limit.clamp(0, 200) as usize;
     let out: Vec<Value> = txns
         .iter()
         .take(limit)

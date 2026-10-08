@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [main]
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   backend:
     runs-on: ubuntu-latest
@@ -15,16 +19,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # No SurrealDB service container needed: the test suite is pure unit
-      # tests (no live DB) -- see backend/src/**/*.rs's `#[cfg(test)]` modules.
+      # Tests run against an in-memory SurrealDB, so no service container is
+      # needed.
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
 
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: backend
 
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
+
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo nextest run
       - run: cargo build --release
-      - run: cargo test --release
 
   frontend:
     runs-on: ubuntu-latest
@@ -46,6 +57,65 @@ jobs:
       # something runs Next at least once. Build first, then re-typecheck.
       - run: bun run build
       - run: bunx tsc --noEmit
+
+  e2e:
+    needs: [backend, frontend]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - run: docker compose -p eunomia-ci build
+
+      # Throwaway secrets, generated fresh for every run.
+      - name: Start stack
+        run: |
+          export JWT_SECRET="$(openssl rand -hex 32)"
+          export ENCRYPTION_KEY="$(openssl rand -hex 32)"
+          docker compose -p eunomia-ci up -d backend frontend
+
+      - name: Wait for backend and frontend
+        run: |
+          for url in http://localhost:8001/healthz http://localhost:3000; do
+            for _ in $(seq 1 60); do
+              if curl -fsS -o /dev/null "$url"; then
+                echo "$url is up"
+                continue 2
+              fi
+              sleep 2
+            done
+            echo "$url did not become ready" >&2
+            docker compose -p eunomia-ci logs --no-color
+            exit 1
+          done
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.14"
+
+      - run: bun install --frozen-lockfile
+        working-directory: frontend
+      - run: bunx playwright install --with-deps chromium
+        working-directory: frontend
+
+      # E2E_BASE_URL points Playwright at the running compose frontend
+      # instead of starting `bun run dev`.
+      - run: bunx playwright test
+        working-directory: frontend
+        env:
+          E2E_BASE_URL: http://localhost:3000
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: |
+            frontend/playwright-report
+            frontend/test-results
+          if-no-files-found: ignore
+
+      - name: Tear down stack
+        if: always()
+        run: docker compose -p eunomia-ci down -v
 
   scripts:
     runs-on: ubuntu-latest

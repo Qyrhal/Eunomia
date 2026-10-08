@@ -213,7 +213,7 @@ pub async fn embed(db: &Db, settings: &Settings, texts: &[String], owner: Option
             embed_stub(&fresh_texts)
         };
 
-        for (i, v) in missing_idx.into_iter().zip(vecs.into_iter()) {
+        for (i, v) in missing_idx.into_iter().zip(vecs) {
             let k = keys[i].clone();
             db.query("UPSERT $id SET text_hmac = $hmac, vector = $vector")
                 .bind(("id", RecordId::from_table_key("embed_cache", k.clone())))
