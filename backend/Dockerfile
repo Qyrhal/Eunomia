@@ -3,6 +3,8 @@ FROM rust:1-bookworm AS builder
 WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
+# Migrations are compiled in via include_str! (src/migrate.rs).
+COPY migrations ./migrations
 # docs/ (repo root) is compiled in via include_str! -- passed as the `docs`
 # build context by docker-compose.yml and the release workflow.
 COPY --from=docs . /docs
