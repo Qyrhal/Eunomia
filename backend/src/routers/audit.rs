@@ -86,6 +86,7 @@ async fn get_audit(
     user: User,
     Query(q): Query<AuditQuery>,
 ) -> AppResult<Json<AuditPage>> {
+    let state = state.org(&user.org).await?;
     let mut res = store::app::AUDIT_LIST
         .on(&state.db)
         .bind(("owner", user.id.clone()))

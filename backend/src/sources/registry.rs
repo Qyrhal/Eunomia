@@ -19,7 +19,8 @@ use surrealdb::types::RecordId;
 use crate::rid::RecordIdExt;
 
 use crate::connectors::service;
-use crate::db::Db;
+use crate::pool::OrgDb;
+use crate::state::OrgState;
 use crate::store;
 use crate::error::{AppError, AppResult, ErrorCode};
 use crate::sources::base::{owner_key_str, Source, SourceCtx};
@@ -66,11 +67,11 @@ pub fn get(key: &str) -> Option<Arc<dyn Source>> {
 }
 
 /// The connector row that holds this source's credentials, scoped to `owner`.
-pub async fn connector_for(db: &Db, owner: &RecordId, src: &dyn Source) -> AppResult<Option<service::Connector>> {
+pub async fn connector_for(db: &OrgDb, owner: &RecordId, src: &dyn Source) -> AppResult<Option<service::Connector>> {
     service::get_connector(db, owner, src.provider_key()).await
 }
 
-pub async fn credentials_for(db: &Db, encryption_key: &str, owner: &RecordId, src: &dyn Source) -> AppResult<Value> {
+pub async fn credentials_for(db: &OrgDb, encryption_key: &str, owner: &RecordId, src: &dyn Source) -> AppResult<Value> {
     service::credentials_for(db, encryption_key, owner, src.provider_key()).await
 }
 
@@ -86,7 +87,7 @@ struct ConnectorKindRow {
 /// ones in demo mode (a missing `demo` key and an explicit `false` both count
 /// as "not demo mode", filtered in Rust rather than the query, same as the
 /// Python version's comment explains).
-pub async fn enabled(db: &Db, owner: &RecordId) -> AppResult<Vec<Arc<dyn Source>>> {
+pub async fn enabled(db: &OrgDb, owner: &RecordId) -> AppResult<Vec<Arc<dyn Source>>> {
     let mut res = store::app::CONNECTOR_ENABLED
         .on(db)
         .bind(("owner", owner.clone()))
@@ -188,12 +189,12 @@ fn str_field(env: &Value, key: &str) -> String {
     env.get(key).and_then(|v| v.as_str()).unwrap_or("").to_string()
 }
 
-async fn upsert_one(db: &Db, owner: &RecordId, env: &Value) -> AppResult<bool> {
+async fn upsert_one(db: &OrgDb, owner: &RecordId, env: &Value) -> AppResult<bool> {
     let literal_id = str_field(env, "id");
     let rid = cache_record_id(owner, &literal_id);
     let h = hash_envelope(env);
 
-    let existing: Option<ExistingRecord> = db.select(rid.clone()).await?;
+    let existing: Option<ExistingRecord> = store::get(db, &rid).await?;
     let now = chrono::Utc::now();
     if let Some(existing) = &existing
         && existing.content_hash == h && !existing.deleted {
@@ -236,7 +237,8 @@ async fn upsert_one(db: &Db, owner: &RecordId, env: &Value) -> AppResult<bool> {
 }
 
 /// Map -> upsert every raw record for `source_key`, scoped to `owner`.
-pub async fn ingest(db: &Db, owner: &RecordId, source_key: &str, raw_records: &[Value], src: &dyn Source) -> IngestReport {
+pub async fn ingest(state: &OrgState, owner: &RecordId, source_key: &str, raw_records: &[Value], src: &dyn Source) -> IngestReport {
+    let db = &state.db;
     let mut report = IngestReport::new(source_key);
 
     for raw in raw_records {
@@ -253,7 +255,7 @@ pub async fn ingest(db: &Db, owner: &RecordId, source_key: &str, raw_records: &[
             Ok(true) => {
                 report.written += 1;
                 if !env.get("deleted").and_then(|v| v.as_bool()).unwrap_or(false) {
-                    crate::jobs::handlers::enqueue_extract(db, owner, &str_field(&env, "id"), &hash_envelope(&env)).await;
+                    crate::jobs::handlers::enqueue_extract(state, owner, &str_field(&env, "id"), &hash_envelope(&env)).await;
                 }
             }
             Ok(false) => report.skipped += 1,
@@ -271,24 +273,23 @@ pub async fn ingest(db: &Db, owner: &RecordId, source_key: &str, raw_records: &[
 
 /// Builds the per-source-call context. A thin constructor so call sites read
 /// like the Python `registry.run_sync(owner, key, mode, cursor)` call.
-pub fn ctx<'a>(db: &'a Db, encryption_key: &'a str, owner: &'a RecordId) -> SourceCtx<'a> {
+pub fn ctx<'a>(db: &'a OrgDb, encryption_key: &'a str, owner: &'a RecordId) -> SourceCtx<'a> {
     SourceCtx { db, encryption_key, owner }
 }
 
 /// Sync one source through the (reduced) ingest pipeline, scoped to `owner`.
 /// Returns `(report, next_cursor)`.
 pub async fn run_sync(
-    db: &Db,
-    encryption_key: &str,
+    state: &OrgState,
     owner: &RecordId,
     key: &str,
     mode: &str,
     cursor: Option<String>,
 ) -> AppResult<(IngestReport, Option<String>)> {
     let src = get(key).ok_or_else(|| AppError::coded(ErrorCode::SourceNotFound, format!("no source {key:?}")))?;
-    let source_ctx = ctx(db, encryption_key, owner);
+    let source_ctx = ctx(&state.db, &state.settings.encryption_key, owner);
     let result = src.sync(&source_ctx, mode, cursor).await?;
-    let report = ingest(db, owner, key, &result.records, src.as_ref()).await;
+    let report = ingest(state, owner, key, &result.records, src.as_ref()).await;
     Ok((report, result.cursor))
 }
 

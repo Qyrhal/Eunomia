@@ -12,7 +12,7 @@ use crate::cache::search;
 use crate::embeddings::service as embeddings;
 use crate::entities::{consolidate, extract};
 use crate::error::{AppError, ErrorCode};
-use crate::state::AppState;
+use crate::state::{AppState, OrgState};
 use crate::store;
 
 pub fn registry() -> Registry {
@@ -22,6 +22,13 @@ pub fn registry() -> Registry {
         .register(kind::EXTRACT, extract_record)
         .register(kind::CONSOLIDATE, consolidate_subject)
         .register(kind::PRUNE_CAPSULES, prune_capsules)
+        .register(kind::MIGRATE_TENANT, migrate_tenant)
+}
+
+/// The org database a job works in. A missing org is permanent; a database that is not ready or is
+/// behind on schema is retried (`AppError` 5xx), an unknown org is not (404).
+async fn org_state(state: &AppState, job: &Job) -> Result<OrgState, JobError> {
+    Ok(state.org(&job.org_id()?).await?)
 }
 
 fn payload_str<'a>(job: &'a Job, field: &str) -> Result<&'a str, JobError> {
@@ -35,7 +42,8 @@ fn payload_str<'a>(job: &'a Job, field: &str) -> Result<&'a str, JobError> {
 /// fails, so a failing source ends this job normally and the next window tries again.
 async fn sync(state: AppState, job: Job) -> Result<(), JobError> {
     let source = payload_str(&job, "source")?;
-    let report = crate::sources::scheduler::sync_source(&state.db, &state.settings.encryption_key, &job.owner, source, "poll").await;
+    let state = org_state(&state, &job).await?;
+    let report = crate::sources::scheduler::sync_source(&state, &job.owner, source, "poll").await;
     match report.get("error") {
         Some(e) => tracing::warn!(source, error = %e, "source sync failed"),
         None => tracing::info!(source, report = %report, "source synced"),
@@ -49,6 +57,7 @@ const EMBED_BATCHES: usize = 10;
 
 /// Embed cache records whose `embedding` is NONE.
 async fn embed(state: AppState, job: Job) -> Result<(), JobError> {
+    let state = org_state(&state, &job).await?;
     #[derive(serde::Deserialize, SurrealValue)]
     struct Row {
         id: RecordId,
@@ -90,6 +99,7 @@ async fn embed(state: AppState, job: Job) -> Result<(), JobError> {
 
 /// Pull entities out of one cache record, then queue consolidation for each entity that got a fact.
 async fn extract_record(state: AppState, job: Job) -> Result<(), JobError> {
+    let state = org_state(&state, &job).await?;
     let db = &state.db;
     let record_id = payload_str(&job, "record")?;
     if !embeddings::chat_available(db, &state.settings, &job.owner).await {
@@ -103,7 +113,7 @@ async fn extract_record(state: AppState, job: Job) -> Result<(), JobError> {
     let record = extract::ExtractRecord { id: rec.id, title: rec.title, body_text: rec.body_text };
     for subject in extract::extract_entities(db, &state.settings, &job.owner, &record).await {
         if let Ok(subject) = crate::rid::parse(&subject) {
-            super::enqueue_lossy(db, super::leader::consolidate_job(&job.owner, &subject)).await;
+            super::enqueue_lossy(&state.control, super::leader::consolidate_job(state.db.org(), &job.owner, &subject)).await;
         }
     }
     Ok(())
@@ -111,6 +121,7 @@ async fn extract_record(state: AppState, job: Job) -> Result<(), JobError> {
 
 /// Rewrite one entity's observation from its raw facts.
 async fn consolidate_subject(state: AppState, job: Job) -> Result<(), JobError> {
+    let state = org_state(&state, &job).await?;
     let db = &state.db;
     let subject = payload_str(&job, "subject")?;
     if !embeddings::chat_available(db, &state.settings, &job.owner).await {
@@ -125,12 +136,23 @@ async fn consolidate_subject(state: AppState, job: Job) -> Result<(), JobError> 
 
 /// Queue entity extraction for a freshly written cache record. `hash` is its content hash, so an
 /// unchanged record never extracts twice. Best effort: a lost enqueue only delays enrichment.
-pub async fn enqueue_extract(db: &crate::db::Db, owner: &RecordId, record_id: &str, hash: &str) {
+pub async fn enqueue_extract(state: &OrgState, owner: &RecordId, record_id: &str, hash: &str) {
     let key = format!("{}:{}:{record_id}:{hash}", kind::EXTRACT, crate::sources::base::owner_key_str(owner));
-    super::enqueue_lossy(db, NewJob::new(kind::EXTRACT, owner.clone(), key).payload(json!({ "record": record_id }))).await;
+    let job = NewJob::new(kind::EXTRACT, owner.clone(), key).in_org(state.db.org()).payload(json!({ "record": record_id }));
+    super::enqueue_lossy(&state.control, job).await;
 }
 
 /// Failure capsules older than 7 days, and all but the newest 1000.
 async fn prune_capsules(state: AppState, _job: Job) -> Result<(), JobError> {
-    Ok(crate::capsules::prune_default(&state.db).await?)
+    Ok(crate::capsules::prune_default(&state.control).await?)
+}
+
+/// Bring one org's database to the latest tenant schema. Idempotent: migrating a current database is a no-op.
+async fn migrate_tenant(state: AppState, job: Job) -> Result<(), JobError> {
+    let org = job.org_id()?;
+    let Some(p) = &state.provisioner else {
+        return Err(JobError::permanent(ErrorCode::TenantProvisioningDisabled, "this build cannot migrate org databases"));
+    };
+    p.migrate_org(&state.control, &org).await?;
+    Ok(())
 }

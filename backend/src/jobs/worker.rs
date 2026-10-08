@@ -6,7 +6,7 @@ use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 
 use futures::future::BoxFuture;
-use futures::{FutureExt, StreamExt};
+use futures::FutureExt;
 use tokio::sync::{watch, Notify, OwnedSemaphorePermit, Semaphore};
 use tokio::task::JoinSet;
 use tracing::{field::Empty, Instrument};
@@ -41,7 +41,7 @@ impl Registry {
 /// returned future (a crash, in tests) leaves leases to expire.
 pub async fn run(state: AppState, registry: Registry, cfg: WorkerConfig, mut shutdown: watch::Receiver<bool>) {
     let wake = Arc::new(Notify::new());
-    let _live = AbortOnDrop(tokio::spawn(live_wake(state.db.clone(), wake.clone(), shutdown.clone())));
+    let _live = AbortOnDrop(tokio::spawn(crate::store::jobs::live_wake(state.control.clone(), wake.clone(), shutdown.clone())));
     let slots = Arc::new(Semaphore::new(cfg.concurrency));
     let mut running = JoinSet::new();
     tracing::info!(worker = %cfg.id, concurrency = cfg.concurrency, "job worker started");
@@ -51,7 +51,7 @@ pub async fn run(state: AppState, registry: Registry, cfg: WorkerConfig, mut shu
         let free = slots.available_permits();
         let mut full_batch = false;
         if free > 0 {
-            match super::claim(&state.db, &cfg.id, free, cfg.lease, cfg.owner_cap).await {
+            match super::claim(&state.control, &cfg.id, free, cfg.lease, cfg.owner_cap).await {
                 Ok(jobs) => {
                     full_batch = jobs.len() == free;
                     for job in jobs {
@@ -77,7 +77,7 @@ pub async fn run(state: AppState, registry: Registry, cfg: WorkerConfig, mut shu
         running.abort_all();
         while running.join_next().await.is_some() {}
     }
-    match super::release_worker(&state.db, &cfg.id).await {
+    match super::release_worker(&state.control, &cfg.id).await {
         Ok(n) => tracing::info!(worker = %cfg.id, released = n, "job worker stopped"),
         Err(e) => tracing::warn!(worker = %cfg.id, error = %e.message, "releasing leases failed; they will expire"),
     }
@@ -89,30 +89,6 @@ struct AbortOnDrop(tokio::task::JoinHandle<()>);
 impl Drop for AbortOnDrop {
     fn drop(&mut self) {
         self.0.abort();
-    }
-}
-
-/// Early wake-up when a job is created. LIVE queries are node-local and have had stability fixes,
-/// so this is only a latency optimisation: polling is the guarantee.
-async fn live_wake(db: crate::db::Db, wake: Arc<Notify>, mut shutdown: watch::Receiver<bool>) {
-    use surrealdb::types::Action;
-    while !*shutdown.borrow() {
-        match db.select::<Vec<surrealdb::types::Value>>("job").live().await {
-            Ok(mut stream) => loop {
-                tokio::select! {
-                    n = stream.next() => match n {
-                        Some(Ok(n)) => if n.action == Action::Create { wake.notify_one() },
-                        _ => break,
-                    },
-                    _ = shutdown.changed() => return,
-                }
-            },
-            Err(e) => tracing::debug!(error = %e, "job live query unavailable; polling only"),
-        }
-        tokio::select! {
-            _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {}
-            _ = shutdown.changed() => {}
-        }
     }
 }
 
@@ -155,7 +131,7 @@ async fn attempt(state: &AppState, registry: &Registry, cfg: &WorkerConfig, job:
 async fn keep_lease(state: &AppState, cfg: &WorkerConfig, job: &Job) {
     loop {
         tokio::time::sleep(cfg.lease / 3).await;
-        match super::heartbeat(&state.db, job, &cfg.id, cfg.lease).await {
+        match super::heartbeat(&state.control, job, &cfg.id, cfg.lease).await {
             Ok(true) => {}
             Ok(false) => return,
             Err(e) => tracing::warn!(error = %e.message, "job heartbeat failed"), // the lease may still hold; try again
@@ -165,12 +141,12 @@ async fn keep_lease(state: &AppState, cfg: &WorkerConfig, job: &Job) {
 
 async fn finish(state: &AppState, cfg: &WorkerConfig, job: &Job, result: Result<(), JobError>) {
     match result {
-        Ok(()) => match super::complete(&state.db, job, &cfg.id).await {
+        Ok(()) => match super::complete(&state.control, job, &cfg.id).await {
             Ok(true) => tracing::info!("job done"),
             Ok(false) => tracing::warn!("job finished after losing its lease"),
             Err(e) => tracing::warn!(error = %e.message, "recording job completion failed; the lease will expire and it will rerun"),
         },
-        Err(err) => match super::fail(&state.db, job, &cfg.id, &err, cfg.retry_base).await {
+        Err(err) => match super::fail(&state.control, job, &cfg.id, &err, cfg.retry_base).await {
             Ok(status) => tracing::warn!(code = err.code.as_str(), error = %err.message, status = status.as_deref().unwrap_or("lost"), "job failed"),
             Err(e) => tracing::warn!(error = %e.message, "recording job failure failed; the lease will expire and it will rerun"),
         },

@@ -20,7 +20,7 @@ use surrealdb::types::RecordId;
 use crate::cache::recall::{self, MemoryType};
 use crate::cache::reflect;
 use crate::config::Settings;
-use crate::db::Db;
+use crate::pool::OrgDb;
 use crate::error::AppResult;
 
 /// Mirrors `cache/tools.py::recall`'s `time_range = tuple(time_range) if
@@ -35,7 +35,7 @@ fn time_range_tuple(time_range: Option<&[String]>) -> Option<(&str, &str)> {
 
 #[allow(clippy::too_many_arguments)]
 pub async fn recall_tool(
-    db: &Db,
+    db: &OrgDb,
     settings: &Settings,
     owner: &RecordId,
     query: &str,
@@ -50,7 +50,7 @@ pub async fn recall_tool(
 }
 
 pub async fn reflect_tool(
-    db: &Db,
+    db: &OrgDb,
     settings: &Settings,
     owner: &RecordId,
     query: &str,

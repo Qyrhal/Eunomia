@@ -27,7 +27,7 @@ use crate::error::{AppError, AppResult, ErrorCode};
 use crate::models_user::User;
 use crate::sources::registry;
 use crate::sources::scheduler::sync_source;
-use crate::state::AppState;
+use crate::state::{AppState, OrgState};
 use crate::store;
 
 pub fn router() -> Router<AppState> {
@@ -62,7 +62,7 @@ struct SyncStatusRow {
     consecutive_failures: i64,
 }
 
-async fn sync_status_rows(state: &AppState, owner: &RecordId) -> AppResult<std::collections::HashMap<String, SyncStatusRow>> {
+async fn sync_status_rows(state: &OrgState, owner: &RecordId) -> AppResult<std::collections::HashMap<String, SyncStatusRow>> {
     let mut res = store::app::SOURCES_SYNC_STATUS_LIST
         .on(&state.db)
         .bind(("owner", owner.clone()))
@@ -83,7 +83,7 @@ async fn sync_status_rows(state: &AppState, owner: &RecordId) -> AppResult<std::
 
 /// Cached-record count per source key, for the dashboard's totals -- a single
 /// grouped count, not a per-source query.
-async fn record_counts(state: &AppState, owner: &RecordId) -> AppResult<std::collections::HashMap<String, i64>> {
+async fn record_counts(state: &OrgState, owner: &RecordId) -> AppResult<std::collections::HashMap<String, i64>> {
     #[derive(Deserialize, SurrealValue)]
     struct Row {
         source: String,
@@ -168,6 +168,7 @@ fn status_out(row: Option<&SyncStatusRow>) -> SyncStatusOut {
     security(("cookie" = []), ("bearer" = [])),
 )]
 async fn list_sources(State(state): State<AppState>, user: User) -> AppResult<Json<Vec<SourceOut>>> {
+    let state = state.org(&user.org).await?;
     let statuses = sync_status_rows(&state, &user.id).await?;
     let enabled_keys: std::collections::HashSet<&'static str> =
         registry::enabled(&state.db, &user.id).await?.iter().map(|s| s.key()).collect();
@@ -201,6 +202,7 @@ async fn list_sources(State(state): State<AppState>, user: User) -> AppResult<Js
     security(("cookie" = []), ("bearer" = [])),
 )]
 async fn sources_status(State(state): State<AppState>, user: User) -> AppResult<Json<std::collections::HashMap<String, SyncStatusOut>>> {
+    let state = state.org(&user.org).await?;
     let statuses = sync_status_rows(&state, &user.id).await?;
     Ok(Json(statuses.iter().map(|(k, v)| (k.clone(), status_out(Some(v)))).collect()))
 }
@@ -216,10 +218,11 @@ async fn sources_status(State(state): State<AppState>, user: User) -> AppResult<
     security(("cookie" = []), ("bearer" = [])),
 )]
 async fn sync_now(State(state): State<AppState>, user: User, Path(key): Path<String>) -> AppResult<Json<Value>> {
+    let state = state.org(&user.org).await?;
     if registry::get(&key).is_none() {
         return Err(AppError::coded(ErrorCode::SourceNotFound, format!("no source {key:?}")));
     }
-    let report = sync_source(&state.db, &state.settings.encryption_key, &user.id, &key, "poll").await;
+    let report = sync_source(&state, &user.id, &key, "poll").await;
     Ok(Json(report))
 }
 
@@ -243,6 +246,9 @@ async fn source_webhook(
     };
 
     let owner: RecordId = crate::rid::parse(&owner_id).map_err(|_| AppError::not_found("unknown owner"))?;
+    // the owner's org decides whose database the delivery lands in; an unknown owner has none
+    let org = crate::models_user::org_of(&state.control, &owner).await.map_err(|_| AppError::not_found("unknown owner"))?;
+    let state = state.org(&org).await?;
 
     let (parts, body) = request.into_parts();
     let body_bytes = axum::body::to_bytes(body, usize::MAX)
@@ -261,7 +267,7 @@ async fn source_webhook(
         return Ok(Json(json!({"status": "ignored"})));
     };
 
-    let report = registry::ingest(&state.db, &owner, &key, &raw_records, src.as_ref()).await;
+    let report = registry::ingest(&state, &owner, &key, &raw_records, src.as_ref()).await;
     tracing::info!(source = %key, owner = %owner.to_string(), report = ?report.as_value(), "webhook: processed");
 
     let mut out = report.as_value();

@@ -8,7 +8,7 @@ use surrealdb::types::RecordId;
 use crate::rid::RecordIdExt;
 
 use crate::authz::Actor;
-use crate::db::Db;
+use crate::pool::ControlDb;
 use crate::store;
 
 pub struct Event<'a> {
@@ -25,9 +25,9 @@ pub fn anonymous() -> Actor {
     Actor { kind: "anonymous", id: String::new() }
 }
 
-pub async fn record(db: &Db, e: Event<'_>) {
+pub async fn record(db: &ControlDb, e: Event<'_>) {
     let detail: String = e.detail.chars().take(500).collect();
-    let res = store::app::AUDIT_EVENT_CREATE
+    let res = store::control::AUDIT_EVENT_CREATE
         .on(db)
         .bind(("user", e.user.cloned()))
         .bind(("actor_kind", e.actor.kind.to_string()))
@@ -49,7 +49,7 @@ pub async fn record(db: &Db, e: Event<'_>) {
 
 /// Records an event for the current request's credential (the gate's caller), or
 /// a plain user actor outside a request.
-pub async fn record_as_caller(db: &Db, user: &RecordId, action: &str, target: &str, outcome: &str) {
+pub async fn record_as_caller(db: &ControlDb, user: &RecordId, action: &str, target: &str, outcome: &str) {
     let actor = crate::authz::current().map(|c| c.actor).unwrap_or_else(|| Actor { kind: "user", id: user.to_string() });
     record(db, Event { user: Some(user), actor: &actor, action, target, outcome, detail: "" }).await;
 }

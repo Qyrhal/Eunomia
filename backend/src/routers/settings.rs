@@ -16,7 +16,7 @@ use serde_json::{json, Value};
 use surrealdb::types::RecordId;
 use crate::rid::RecordIdExt;
 
-use crate::db::Db;
+use crate::pool::OrgDb;
 use crate::store;
 use crate::error::{AppError, AppResult};
 use crate::models_user::User;
@@ -104,14 +104,14 @@ fn out(row: &AppSettingsRow) -> SettingsOut {
 
 /// The `app_settings:<owner_id>` row, creating it with defaults if missing.
 /// The skill text for `owner` (theirs, or the built-in default).
-pub async fn memory_skill(db: &Db, owner: &RecordId) -> AppResult<String> {
+pub async fn memory_skill(db: &OrgDb, owner: &RecordId) -> AppResult<String> {
     let row = get_app_settings(db, owner).await?;
     Ok(crate::docs::effective_skill(&row.memory_skill).to_string())
 }
 
-async fn get_app_settings(db: &Db, owner: &RecordId) -> AppResult<AppSettingsRow> {
+async fn get_app_settings(db: &OrgDb, owner: &RecordId) -> AppResult<AppSettingsRow> {
     let rid = app_settings_id(owner);
-    let row: Option<AppSettingsRow> = db.select(rid.clone()).await?;
+    let row: Option<AppSettingsRow> = store::get(db, &rid).await?;
     if let Some(row) = row {
         return Ok(row);
     }
@@ -134,7 +134,7 @@ async fn get_app_settings(db: &Db, owner: &RecordId) -> AppResult<AppSettingsRow
 
 /// Partial update: each provided field replaces its current value outright
 /// (no deep merge), matching the Python router's semantics.
-async fn update_app_settings(db: &Db, owner: &RecordId, body: &SettingsUpdate, encryption_key: &str) -> AppResult<AppSettingsRow> {
+async fn update_app_settings(db: &OrgDb, owner: &RecordId, body: &SettingsUpdate, encryption_key: &str) -> AppResult<AppSettingsRow> {
     get_app_settings(db, owner).await?; // ensure the row exists
 
     let mut set_parts: Vec<&str> = Vec::new();
@@ -200,7 +200,7 @@ async fn update_app_settings(db: &Db, owner: &RecordId, body: &SettingsUpdate, e
 }
 
 /// Resolve `(base_url, api_key)` for `owner`'s OpenAI-compatible backend.
-async fn resolve_openai(db: &Db, owner: &RecordId, env_api_key: &Option<String>, encryption_key: &str) -> AppResult<(String, String)> {
+async fn resolve_openai(db: &OrgDb, owner: &RecordId, env_api_key: &Option<String>, encryption_key: &str) -> AppResult<(String, String)> {
     let row = get_app_settings(db, owner).await?;
     let base_url = if row.openai_base_url.is_empty() {
         DEFAULT_OPENAI_BASE_URL.to_string()
@@ -225,6 +225,7 @@ async fn resolve_openai(db: &Db, owner: &RecordId, env_api_key: &Option<String>,
     security(("cookie" = []), ("bearer" = [])),
 )]
 async fn read_settings(State(state): State<AppState>, user: User) -> AppResult<Json<SettingsOut>> {
+    let state = state.org(&user.org).await?;
     let row = get_app_settings(&state.db, &user.id).await?;
     Ok(Json(out(&row)))
 }
@@ -244,6 +245,7 @@ async fn patch_settings(
     user: User,
     Json(body): Json<SettingsUpdate>,
 ) -> AppResult<Json<SettingsOut>> {
+    let state = state.org(&user.org).await?;
     let row = update_app_settings(&state.db, &user.id, &body, &state.settings.encryption_key).await?;
     Ok(Json(out(&row)))
 }
@@ -258,8 +260,8 @@ async fn patch_settings(
     security(("cookie" = []), ("bearer" = [])),
 )]
 async fn complete_onboarding(State(state): State<AppState>, user: User) -> AppResult<Json<Value>> {
-    store::app::AUTH_USER_ONBOARDED
-        .on(&state.db)
+    store::control::AUTH_USER_ONBOARDED
+        .on(&state.control)
         .bind(("id", user.id.clone()))
         .await?;
     Ok(Json(json!({ "ok": true })))
@@ -296,6 +298,7 @@ struct ModelsOut {
     security(("cookie" = []), ("bearer" = [])),
 )]
 async fn openai_models(State(state): State<AppState>, user: User) -> AppResult<Json<ModelsOut>> {
+    let state = state.org(&user.org).await?;
     let (base_url, api_key) = resolve_openai(&state.db, &user.id, &state.settings.openai_api_key, &state.settings.encryption_key).await?;
     let url = format!("{}/models", base_url.trim_end_matches('/'));
     let auth_key = if api_key.is_empty() { "not-needed" } else { api_key.as_str() };

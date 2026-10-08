@@ -146,7 +146,7 @@ pub async fn gate(State(g): State<Gate>, mut req: Request, next: Next) -> Respon
         Ok(a) => a,
         Err(e) => {
             audit::record(
-                &g.state.db,
+                &g.state.control,
                 Event { user: None, actor: &audit::anonymous(), action: "auth.failed", target: &target, outcome: e.code.as_str(), detail: "" },
             )
             .await;
@@ -161,7 +161,7 @@ pub async fn gate(State(g): State<Gate>, mut req: Request, next: Next) -> Respon
                 return rate_limited(wait);
             }
             audit::record(
-                &g.state.db,
+                &g.state.control,
                 Event { user: None, actor: &audit::anonymous(), action: "auth.failed", target: &target, outcome: ErrorCode::AuthUnauthorized.as_str(), detail: "" },
             )
             .await;
@@ -186,7 +186,7 @@ pub async fn gate(State(g): State<Gate>, mut req: Request, next: Next) -> Respon
     };
     if let Some(message) = denied {
         audit::record(
-            &g.state.db,
+            &g.state.control,
             Event { user: Some(&authn.user.id), actor: &authn.caller.actor, action: "authz.denied", target: &target, outcome: ErrorCode::AuthScope.as_str(), detail: &message },
         )
         .await;

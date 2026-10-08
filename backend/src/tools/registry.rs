@@ -28,17 +28,18 @@ use tracing::{field::Empty, Instrument};
 
 use crate::audit::{self, Event};
 use crate::authz;
-use crate::db::Db;
+use crate::pool::{ControlDb, OrgDb};
+use crate::models_user::User;
 use crate::scopes;
 use crate::store;
 use crate::error::{AppError, AppResult, ErrorCode};
-use crate::state::AppState;
+use crate::state::{AppState, OrgState};
 
 /// A registered tool handler: owner-scoped, takes the raw JSON args object,
 /// returns a JSON result (an `{"error": ...}` value on a handled failure, or
 /// an `Err` for anything that should surface as a 500 / propagate).
 pub type ToolFn =
-    Arc<dyn for<'a> Fn(&'a AppState, &'a RecordId, Value) -> BoxFuture<'a, AppResult<Value>> + Send + Sync>;
+    Arc<dyn for<'a> Fn(&'a OrgState, &'a RecordId, Value) -> BoxFuture<'a, AppResult<Value>> + Send + Sync>;
 
 pub type BoxFuture<'a, T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>;
 
@@ -147,19 +148,19 @@ fn summarize_args(args: &Value) -> String {
 
 /// The owner-facing `audit_log` row (what `GET /api/audit` shows) plus the
 /// append-only `audit_event` row with the actor, the outcome code and the trace id.
-async fn record_audit(db: &Db, owner: &RecordId, tool_name: &str, args: &Value, outcome: &str, code: &str) {
+async fn record_audit(state: &OrgState, owner: &RecordId, tool_name: &str, args: &Value, outcome: &str, code: &str) {
     let summary = summarize_args(args);
     let _ = store::cache::RECORD_AUDIT
-        .on(db)
+        .on(&state.db)
         .bind(("owner", owner.clone()))
         .bind(("tool_name", tool_name.to_string()))
         .bind(("args_summary", summary.clone()))
         .bind(("outcome", outcome.to_string()))
         .await;
-    record_event(db, owner, tool_name, code, &summary).await;
+    record_event(&state.control, owner, tool_name, code, &summary).await;
 }
 
-async fn record_event(db: &Db, owner: &RecordId, tool_name: &str, code: &str, detail: &str) {
+async fn record_event(db: &ControlDb, owner: &RecordId, tool_name: &str, code: &str, detail: &str) {
     let actor = authz::current().map(|c| c.actor).unwrap_or(authz::Actor { kind: "user", id: owner.to_string() });
     let action = format!("tool.{tool_name}");
     audit::record(db, Event { user: Some(owner), actor: &actor, action: &action, target: "", outcome: code, detail }).await;
@@ -608,7 +609,7 @@ fn register_all(registry: &mut HashMap<&'static str, ToolSpec>) {
                     Ok(r) => r,
                     Err(e) => return Ok(e),
                 };
-                match entities_tools::entities_get(&state.db, owner, &rid).await {
+                match entities_tools::entities_get(&state.db, &state.control, owner, &rid).await {
                     Ok(Some(entity)) => Ok(serde_json::to_value(entity).unwrap_or_else(|e| json!({ "error": e.to_string() }))),
                     Ok(None) => Ok(crate::error::AppError::coded(crate::error::ErrorCode::EntityNotFound, "not found").to_tool_value()),
                     Err(e) => Ok(e.to_tool_value()),
@@ -649,7 +650,7 @@ fn register_all(registry: &mut HashMap<&'static str, ToolSpec>) {
                     Ok(v) => v,
                     Err(e) => return Ok(e),
                 };
-                let result = entities_tools::entities_graph(&state.db, owner, a.kinds.as_deref(), vault_id.as_ref()).await;
+                let result = entities_tools::entities_graph(&state.db, &state.control, owner, a.kinds.as_deref(), vault_id.as_ref()).await;
                 Ok(to_tool_value(result))
             })
         }),
@@ -1171,7 +1172,7 @@ fn register_all(registry: &mut HashMap<&'static str, ToolSpec>) {
                     Ok(v) => v,
                     Err(e) => return Ok(e),
                 };
-                Ok(vaults_tools::vault_invite(&state.db, owner, &vault_id, &a.email, &a.role).await)
+                Ok(vaults_tools::vault_invite(&state.db, &state.control, owner, &vault_id, &a.email, &a.role).await)
             })
         }),
     );
@@ -1195,7 +1196,7 @@ fn register_all(registry: &mut HashMap<&'static str, ToolSpec>) {
                     Ok(v) => v,
                     Err(e) => return Ok(e),
                 };
-                Ok(vaults_tools::vault_members(&state.db, owner, &vault_id).await)
+                Ok(vaults_tools::vault_members(&state.db, &state.control, owner, &vault_id).await)
             })
         }),
     );
@@ -1224,7 +1225,7 @@ fn register_all(registry: &mut HashMap<&'static str, ToolSpec>) {
                     Ok(v) => v,
                     Err(e) => return Ok(e),
                 };
-                Ok(vaults_tools::vault_remove_member(&state.db, owner, &vault_id, &a.email).await)
+                Ok(vaults_tools::vault_remove_member(&state.db, &state.control, owner, &vault_id, &a.email).await)
             })
         }),
     );
@@ -1304,7 +1305,7 @@ pub fn all_tools() -> &'static HashMap<&'static str, ToolSpec> {
 /// The owner's own audit log, newest first -- backs `GET /api/audit` (an
 /// admin/REST concern, not an agent-facing tool; an agent auditing its own
 /// writes isn't a real use case this codebase needs yet).
-pub async fn list_audit(db: &Db, owner: &RecordId, limit: i64, offset: i64) -> AppResult<Value> {
+pub async fn list_audit(db: &OrgDb, owner: &RecordId, limit: i64, offset: i64) -> AppResult<Value> {
     #[derive(serde::Deserialize, SurrealValue)]
     struct AuditRow {
         id: RecordId,
@@ -1351,7 +1352,8 @@ pub async fn list_audit(db: &Db, owner: &RecordId, limit: i64, offset: i64) -> A
 /// ..."}`` for a name that isn't registered, matching the Python version
 /// rather than a 404 -- the REST router is the one that turns an unknown
 /// name into a 404 before ever calling this.
-pub async fn call(state: &AppState, owner: &RecordId, name: &str, args: Value) -> AppResult<Value> {
+pub async fn call(app: &AppState, user: &User, name: &str, args: Value) -> AppResult<Value> {
+    let owner = &user.id;
     let tools = all_tools();
     let Some(spec) = tools.get(name) else {
         return Ok(AppError::coded(ErrorCode::ToolNotFound, format!("unknown tool {name}")).to_tool_value());
@@ -1361,9 +1363,10 @@ pub async fn call(state: &AppState, owner: &RecordId, name: &str, args: Value) -
         if reads_source_records(name) { authz::require_unrestricted() } else { Ok(()) }
     });
     if let Err(e) = needed {
-        record_event(&state.db, owner, name, e.code.as_str(), "").await;
+        record_event(&app.control, owner, name, e.code.as_str(), "").await;
         return Err(e);
     }
+    let state = &app.org(&user.org).await?;
 
     let vault = args.get("vault_id").and_then(Value::as_str).unwrap_or("personal").to_string();
     let span = tracing::info_span!("tool.call", tool = name, vault = %vault, outcome = Empty, duration_ms = Empty);
@@ -1393,7 +1396,7 @@ pub async fn call(state: &AppState, owner: &RecordId, name: &str, args: Value) -
 }
 
 /// A capsule for any failure but bad input, so `eunomia replay` can reproduce it.
-async fn record_failure(state: &AppState, owner: &RecordId, name: &str, args: Value, result: &AppResult<Value>, source: Option<String>) {
+async fn record_failure(state: &OrgState, owner: &RecordId, name: &str, args: Value, result: &AppResult<Value>, source: Option<String>) {
     let (code, text) = match result {
         Ok(v) if v.get("error").is_some() => {
             let code = v.get("code").and_then(Value::as_str).and_then(|c| ErrorCode::ALL.iter().find(|e| e.as_str() == c));
@@ -1407,6 +1410,7 @@ async fn record_failure(state: &AppState, owner: &RecordId, name: &str, args: Va
     }
     let status = code.default_status().as_u16();
     let failure = crate::capsules::Failure {
+        org: Some(state.db.org().key()),
         kind: "tool",
         name: name.to_string(),
         user: Some(owner.to_string()),
@@ -1415,10 +1419,10 @@ async fn record_failure(state: &AppState, owner: &RecordId, name: &str, args: Va
         status,
         source: source.unwrap_or(text),
     };
-    crate::capsules::record(&state.db, failure).await;
+    crate::capsules::record(&state.control, failure).await;
 }
 
-async fn run_tool(state: &AppState, owner: &RecordId, name: &str, spec: &ToolSpec, args: Value) -> AppResult<Value> {
+async fn run_tool(state: &OrgState, owner: &RecordId, name: &str, spec: &ToolSpec, args: Value) -> AppResult<Value> {
     if is_read_only(name) {
         return (spec.handler)(state, owner, args).await;
     }
@@ -1429,7 +1433,7 @@ async fn run_tool(state: &AppState, owner: &RecordId, name: &str, spec: &ToolSpe
         Ok(_) => ("ok", "ok"),
         Err(e) => ("error", e.code.as_str()),
     };
-    record_audit(&state.db, owner, name, &args, outcome, code).await;
+    record_audit(state, owner, name, &args, outcome, code).await;
     result
 }
 

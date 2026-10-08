@@ -64,7 +64,7 @@ async fn invoke(
         return Err(crate::error::AppError::coded(crate::error::ErrorCode::ToolNotFound, format!("unknown tool {name:?}")));
     }
     let args = body.map(|Json(v)| v).unwrap_or(Value::Object(serde_json::Map::new()));
-    let result = registry::call(&state, &user.id, &name, args).await?;
+    let result = registry::call(&state, &user, &name, args).await?;
     Ok(Json(result))
 }
 

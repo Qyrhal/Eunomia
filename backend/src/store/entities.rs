@@ -1,9 +1,9 @@
 //! Statements for the entities area. See the module docs in store/mod.rs.
 
-use super::{dynamic, Q, Stmt};
-use crate::db::Db;
+use super::{dynamic, ControlStmt, Q, Stmt};
+use crate::pool::OrgDb;
 
-pub const EMAILS_FOR: Stmt = Stmt::new("entities.emails_for", "SELECT id, email FROM user WHERE id IN $ids");
+pub const EMAILS_FOR: ControlStmt = ControlStmt::new("entities.emails_for", "SELECT id, email FROM user WHERE id IN $ids");
 
 pub const MERGE_ALIASES: Stmt = Stmt::new(
     "entities.merge_aliases",
@@ -141,7 +141,6 @@ pub const UPSERT_APP_SETTINGS: Stmt =
     Stmt::new("entities.upsert_app_settings", "UPSERT $id SET owner = $owner RETURN AFTER");
 
 pub const ALL: &[&Stmt] = &[
-    &EMAILS_FOR,
     &MERGE_ALIASES,
     &WRITE_OBSERVATION,
     &WRITE_FACT,
@@ -175,7 +174,7 @@ pub const ALL: &[&Stmt] = &[
 // "field = $field" fragments chosen by the caller.
 
 /// `SELECT * FROM {table} WHERE vault = $vault`, optionally ordered by name.
-pub fn select_by_vault<'a>(db: &'a Db, table: &str, ordered: bool) -> Q<'a> {
+pub fn select_by_vault<'a>(db: &'a OrgDb, table: &str, ordered: bool) -> Q<'a> {
     if ordered {
         dynamic(db, "entities.list_by_vault", format!("SELECT * FROM {table} WHERE vault = $vault ORDER BY name"))
     } else {
@@ -183,7 +182,7 @@ pub fn select_by_vault<'a>(db: &'a Db, table: &str, ordered: bool) -> Q<'a> {
     }
 }
 
-pub fn create_entity<'a>(db: &'a Db, table: &str) -> Q<'a> {
+pub fn create_entity<'a>(db: &'a OrgDb, table: &str) -> Q<'a> {
     dynamic(
         db,
         "entities.create_entity",
@@ -192,6 +191,6 @@ pub fn create_entity<'a>(db: &'a Db, table: &str) -> Q<'a> {
 }
 
 /// Entity edit where only the passed fields change (7 combinations).
-pub fn update_entity<'a>(db: &'a Db, set: &str) -> Q<'a> {
+pub fn update_entity<'a>(db: &'a OrgDb, set: &str) -> Q<'a> {
     dynamic(db, "entities.update_entity", format!("UPDATE $id SET {set} RETURN AFTER"))
 }

@@ -259,7 +259,7 @@ async fn tokens_are_audience_bound() {
     let (_, t) = connect(&app, None).await;
     let access = t["access_token"].as_str().unwrap();
     assert_eq!(mcp(&app, access, rpc("ping", json!({}))).await.status, StatusCode::OK);
-    app.state.db.query("UPDATE oauth_grant SET resource = 'https://other.example/mcp'").await.unwrap();
+    app.state.control.test_raw().query("UPDATE oauth_grant SET resource = 'https://other.example/mcp'").await.unwrap();
     assert_eq!(mcp(&app, access, rpc("ping", json!({}))).await.status, StatusCode::UNAUTHORIZED);
 }
 
@@ -268,12 +268,12 @@ async fn expired_access_tokens_and_codes_are_rejected() {
     let app = TestApp::new().await;
     let (_, t) = connect(&app, None).await;
     let access = t["access_token"].as_str().unwrap();
-    app.state.db.query("UPDATE oauth_token SET expires_at = time::now() - 1m WHERE kind = 'access'").await.unwrap();
+    app.state.control.test_raw().query("UPDATE oauth_token SET expires_at = time::now() - 1m WHERE kind = 'access'").await.unwrap();
     assert_eq!(mcp(&app, access, rpc("ping", json!({}))).await.status, StatusCode::UNAUTHORIZED);
 
     let client_id = register(&app).await;
     let code = approve(&app, authz(&client_id, None, VERIFIER)).await;
-    app.state.db.query("UPDATE oauth_code SET expires_at = time::now() - 1s").await.unwrap();
+    app.state.control.test_raw().query("UPDATE oauth_code SET expires_at = time::now() - 1s").await.unwrap();
     assert_eq!(exchange(&app, &client_id, &code, VERIFIER).await.body["error"], "invalid_grant");
 }
 
@@ -408,7 +408,7 @@ async fn registration_rejects_bad_redirects_and_cimd_cache_is_used() {
 
     // a fresh cached CIMD client resolves with no network; an expired one would be refetched
     let id = "https://app.example.com/oauth/client.json";
-    app.state.db.query(format!(
+    app.state.control.test_raw().query(format!(
         "CREATE oauth_client SET client_id = '{id}', name = 'Cached App', redirect_uris = ['{REDIRECT}'], kind = 'cimd', expires_at = time::now() + 1h"
     )).await.unwrap().check().unwrap();
     let p = authz(id, None, VERIFIER);

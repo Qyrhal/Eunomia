@@ -66,6 +66,7 @@ fn parse_thread_id(thread_id: &str) -> AppResult<RecordId> {
     security(("cookie" = []), ("bearer" = [])),
 )]
 async fn list_threads(State(state): State<AppState>, user: User) -> AppResult<Json<Vec<service::ThreadOut>>> {
+    let state = state.org(&user.org).await?;
     Ok(Json(service::list_threads(&state.db, &user.id).await?))
 }
 
@@ -84,6 +85,7 @@ async fn create_thread(
     user: User,
     Json(body): Json<ThreadCreate>,
 ) -> AppResult<Json<service::ThreadOut>> {
+    let state = state.org(&user.org).await?;
     Ok(Json(service::create_thread(&state.db, &user.id, body.title.as_deref()).await?))
 }
 
@@ -102,6 +104,7 @@ async fn delete_thread_route(
     user: User,
     Path(thread_id): Path<String>,
 ) -> AppResult<Json<Value>> {
+    let state = state.org(&user.org).await?;
     let rid = parse_thread_id(&thread_id)?;
     let ok = service::delete_thread(&state.db, &user.id, &rid).await?;
     if !ok {
@@ -125,6 +128,7 @@ async fn thread_history(
     user: User,
     Path(thread_id): Path<String>,
 ) -> AppResult<Json<Vec<service::MessageOut>>> {
+    let state = state.org(&user.org).await?;
     let rid = parse_thread_id(&thread_id)?;
     let hist = service::history(&state.db, &user.id, &rid).await?;
     hist.map(Json).ok_or_else(|| AppError::coded(ErrorCode::ChatThreadNotFound, "not found"))
@@ -147,6 +151,7 @@ async fn send_message(
     Path(thread_id): Path<String>,
     Json(body): Json<ChatRequest>,
 ) -> AppResult<Sse<impl Stream<Item = Result<Event, Infallible>>>> {
+    let state = state.org(&user.org).await?;
     let rid = parse_thread_id(&thread_id)?;
     if service::get_thread(&state.db, &user.id, &rid).await?.is_none() {
         return Err(AppError::coded(ErrorCode::ChatThreadNotFound, "not found"));
@@ -156,10 +161,9 @@ async fn send_message(
         .map_err(|e| AppError::bad_request(e.0))?;
 
     let (tx, rx) = mpsc::channel::<ChatEvent>(EVENT_CHANNEL_CAPACITY);
-    let owner = user.id.clone();
     let state_for_task = state.clone();
     tokio::spawn(async move {
-        service::send_stream(state_for_task, owner, rid, body.message, tx).await;
+        service::send_stream(state_for_task, user, rid, body.message, tx).await;
     });
 
     let stream = ReceiverStream::new(rx).map(|event| {

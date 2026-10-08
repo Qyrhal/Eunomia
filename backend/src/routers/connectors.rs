@@ -25,7 +25,7 @@ use crate::connectors::clients::{
 use crate::connectors::service::{self, Connector, CONNECTOR_KINDS};
 use crate::error::{AppError, AppResult, ErrorCode};
 use crate::models_user::User;
-use crate::state::AppState;
+use crate::state::{AppState, OrgState};
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -269,6 +269,7 @@ struct SearchQuery {
     security(("cookie" = []), ("bearer" = [])),
 )]
 async fn list_all(State(state): State<AppState>, user: User) -> AppResult<Json<Vec<ConnectorOut>>> {
+    let state = state.org(&user.org).await?;
     let rows = service::list_connectors(&state.db, &user.id).await?;
     Ok(Json(rows.iter().map(connector_out).collect()))
 }
@@ -288,6 +289,7 @@ async fn up_bank_finance_summary(
     user: User,
     Query(q): Query<DaysQuery>,
 ) -> AppResult<Json<Value>> {
+    let state = state.org(&user.org).await?;
     let row = service::get_or_create_connector(&state.db, &user.id, "up_bank").await?;
     let creds = service::credentials_for(&state.db, &state.settings.encryption_key, &user.id, "up_bank").await?;
     let has_token = creds.get("personal_access_token").and_then(|v| v.as_str()).map(|s| !s.is_empty()).unwrap_or(false);
@@ -299,7 +301,7 @@ async fn up_bank_finance_summary(
     Ok(Json(summary))
 }
 
-async fn pocketai_client_or_400(state: &AppState, user: &User) -> AppResult<PocketAIClient> {
+async fn pocketai_client_or_400(state: &OrgState, user: &User) -> AppResult<PocketAIClient> {
     let row = service::get_or_create_connector(&state.db, &user.id, "pocketai").await?;
     let creds = service::credentials_for(&state.db, &state.settings.encryption_key, &user.id, "pocketai").await?;
     let has_key = creds.get("api_key").and_then(|v| v.as_str()).map(|s| !s.is_empty()).unwrap_or(false);
@@ -325,6 +327,7 @@ async fn pocketai_summary(
     user: User,
     Query(q): Query<DaysQuery>,
 ) -> AppResult<Json<Value>> {
+    let state = state.org(&user.org).await?;
     let client = pocketai_client_or_400(&state, &user).await?;
     let since = (Utc::now() - Duration::days(q.days)).date_naive().to_string();
     Ok(Json(client.summary(&since).await?))
@@ -346,6 +349,7 @@ async fn pocketai_all(
     user: User,
     Query(q): Query<LimitQuery>,
 ) -> AppResult<Json<Value>> {
+    let state = state.org(&user.org).await?;
     let client = pocketai_client_or_400(&state, &user).await?;
     Ok(Json(client.recordings(&[("limit", q.limit.to_string())]).await?))
 }
@@ -366,6 +370,7 @@ async fn pocketai_search(
     user: User,
     Query(q): Query<SearchQuery>,
 ) -> AppResult<Json<Value>> {
+    let state = state.org(&user.org).await?;
     let client = pocketai_client_or_400(&state, &user).await?;
     Ok(Json(client.search(&q.query).await?))
 }
@@ -386,6 +391,7 @@ async fn pocketai_detail(
     user: User,
     Path(recording_id): Path<String>,
 ) -> AppResult<Json<Value>> {
+    let state = state.org(&user.org).await?;
     let client = pocketai_client_or_400(&state, &user).await?;
     Ok(Json(client.recording(&recording_id).await?))
 }
@@ -401,6 +407,7 @@ async fn pocketai_detail(
     security(("cookie" = []), ("bearer" = [])),
 )]
 async fn get_one(State(state): State<AppState>, user: User, Path(kind): Path<String>) -> AppResult<Json<ConnectorOut>> {
+    let state = state.org(&user.org).await?;
     require_known_kind(&kind)?;
     let row = service::get_or_create_connector(&state.db, &user.id, &kind).await?;
     Ok(Json(connector_out(&row)))
@@ -423,6 +430,7 @@ async fn put_one(
     Path(kind): Path<String>,
     Json(body): Json<ConnectorUpdateBody>,
 ) -> AppResult<Json<ConnectorOut>> {
+    let state = state.org(&user.org).await?;
     require_known_kind(&kind)?;
     let row = service::upsert_connector(
         &state.db,
@@ -448,6 +456,7 @@ async fn put_one(
     security(("cookie" = []), ("bearer" = [])),
 )]
 async fn test_one(State(state): State<AppState>, user: User, Path(kind): Path<String>) -> AppResult<Json<TestOut>> {
+    let state = state.org(&user.org).await?;
     require_known_kind(&kind)?;
     let row = service::get_or_create_connector(&state.db, &user.id, &kind).await?;
     let creds = service::credentials_for(&state.db, &state.settings.encryption_key, &user.id, &kind).await?;
@@ -471,6 +480,7 @@ async fn test_one(State(state): State<AppState>, user: User, Path(kind): Path<St
     security(("cookie" = []), ("bearer" = [])),
 )]
 async fn snapshot(State(state): State<AppState>, user: User) -> AppResult<Json<Value>> {
+    let state = state.org(&user.org).await?;
     let mut result = json!({ "up_bank": Value::Null, "pocketai": Value::Null });
 
     let now = Utc::now();

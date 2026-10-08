@@ -47,11 +47,11 @@ fn bearer(token: &str) -> Vec<(&'static str, String)> {
 
 async fn token(app: &TestApp, granted: &[&str], vault: Option<&RecordId>) -> String {
     let granted: Vec<String> = granted.iter().map(|s| s.to_string()).collect();
-    create_api_token_with(&app.state.db, &app.user.id, "t", &granted, vault, None).await.unwrap().token
+    create_api_token_with(&app.state.control, &app.user.id, "t", &granted, vault, None).await.unwrap().token
 }
 
 async fn org_vault(app: &TestApp) -> RecordId {
-    rid::parse(&vaults::create_vault(&app.state.db, &app.user.id, "Team", "org").await.unwrap().id).unwrap()
+    rid::parse(&vaults::create_vault(&app.db().await, &app.user.id, "Team", "org").await.unwrap().id).unwrap()
 }
 
 /// A JSON-RPC `tools/call` over `/mcp`; returns (isError, tool value).
@@ -64,7 +64,7 @@ async fn mcp_call(app: &TestApp, token: &str, name: &str, args: Value) -> (bool,
 }
 
 async fn events(app: &TestApp, filter: &str) -> Vec<Value> {
-    let mut res = app.state.db.query(format!(
+    let mut res = app.state.control.test_raw().query(format!(
         "SELECT action, actor_kind, actor_id, target, outcome, trace_id, detail, (IF user != NONE THEN <string> user ELSE '' END) AS user, <string> created_at AS created_at \
          FROM audit_event WHERE {filter} ORDER BY created_at"
     )).await.unwrap();
@@ -174,8 +174,8 @@ async fn token_creation_validates_and_cannot_escalate() {
         assert!(status.is_client_error(), "{bad}");
     }
     // a vault the creator is not in
-    let other = eunomia_backend::models_user::register_user(&app.state.db, "other@example.com", PASSWORD).await.unwrap();
-    let theirs = vaults::default_vault_id(&app.state.db, &other.id).await.unwrap();
+    let other = common::register(&app.state, "other@example.com").await;
+    let theirs = vaults::default_vault_id(&app.db().await, &other.id).await.unwrap();
     let (status, _, body) = send(
         &app.router,
         "POST",
@@ -199,7 +199,7 @@ async fn token_creation_validates_and_cannot_escalate() {
 async fn vault_restricted_token_is_confined_to_its_vault() {
     let app = TestApp::new().await;
     let org = org_vault(&app).await;
-    let personal = vaults::default_vault_id(&app.state.db, &app.user.id).await.unwrap();
+    let personal = vaults::default_vault_id(&app.db().await, &app.user.id).await.unwrap();
     // personal data the restricted token must never see
     app.tool("memory_write", json!({"subject_name": "Secret", "subject_kind": "person", "text": "in personal"})).await;
 
@@ -270,15 +270,15 @@ async fn vault_restricted_token_is_confined_to_its_vault() {
 #[tokio::test]
 async fn restricted_token_loses_access_when_removed_from_its_vault() {
     let app = TestApp::new().await;
-    let other = eunomia_backend::models_user::register_user(&app.state.db, "o@example.com", PASSWORD).await.unwrap();
-    let theirs: RecordId = rid::parse(&vaults::create_vault(&app.state.db, &other.id, "Theirs", "org").await.unwrap().id).unwrap();
-    vaults::invite_member(&app.state.db, &other.id, &theirs, &app.user.email, "member").await.unwrap();
-    vaults::accept_invitation(&app.state.db, &app.user.id, &theirs).await.unwrap();
+    let other = common::register(&app.state, "o@example.com").await;
+    let theirs: RecordId = rid::parse(&vaults::create_vault(&app.db().await, &other.id, "Theirs", "org").await.unwrap().id).unwrap();
+    vaults::invite_member(&app.db().await, app.control(), &other.id, &theirs, &app.user.email, "member").await.unwrap();
+    vaults::accept_invitation(&app.db().await, &app.user.id, &theirs).await.unwrap();
     let t = token(&app, scopes::ALL, Some(&theirs)).await;
 
     let (status, _, _) = send(&app.router, "GET", "/api/entities", None, &bearer(&t)).await;
     assert_eq!(status, StatusCode::OK);
-    vaults::remove_member(&app.state.db, &other.id, &theirs, &app.user.email).await.unwrap();
+    vaults::remove_member(&app.db().await, app.control(), &other.id, &theirs, &app.user.email).await.unwrap();
     let (status, _, body) = send(&app.router, "GET", "/api/entities", None, &bearer(&t)).await;
     assert_eq!((status, body["code"].as_str()), (StatusCode::FORBIDDEN, Some("vault.forbidden")));
 }
@@ -289,9 +289,9 @@ async fn restricted_token_loses_access_when_removed_from_its_vault() {
 async fn expired_token_is_401_token_expired() {
     let app = TestApp::new().await;
     let past = Datetime::from(chrono::Utc::now() - chrono::Duration::minutes(1));
-    let expired = create_api_token_with(&app.state.db, &app.user.id, "old", &all(), None, Some(past)).await.unwrap().token;
+    let expired = create_api_token_with(&app.state.control, &app.user.id, "old", &all(), None, Some(past)).await.unwrap().token;
     let future = Datetime::from(chrono::Utc::now() + chrono::Duration::days(1));
-    let live = create_api_token_with(&app.state.db, &app.user.id, "new", &all(), None, Some(future)).await.unwrap().token;
+    let live = create_api_token_with(&app.state.control, &app.user.id, "new", &all(), None, Some(future)).await.unwrap().token;
 
     let (status, _, body) = send(&app.router, "GET", "/api/auth/me", None, &bearer(&expired)).await;
     assert_eq!((status, body["code"].as_str()), (StatusCode::UNAUTHORIZED, Some("auth.token_expired")));
@@ -313,7 +313,7 @@ async fn login_cookie(app: &TestApp) -> String {
 }
 
 async fn session_expiry_secs_from_now(app: &TestApp) -> i64 {
-    let mut res = app.state.db.query("SELECT VALUE expires_at FROM session").await.unwrap();
+    let mut res = app.state.control.test_raw().query("SELECT VALUE expires_at FROM session").await.unwrap();
     (res.take::<Vec<Datetime>>(0).unwrap()[0].into_inner() - chrono::Utc::now()).num_seconds()
 }
 
@@ -330,19 +330,19 @@ async fn expired_session_is_401_and_live_one_slides_at_most_hourly() {
     assert!((29 * day..=30 * day).contains(&secs), "default 30 day window, got {secs}s");
 
     // used within the hour: not extended
-    app.state.db.query("UPDATE session SET expires_at = time::now() + 29d + 23h + 30m").await.unwrap().check().unwrap();
+    app.state.control.test_raw().query("UPDATE session SET expires_at = time::now() + 29d + 23h + 30m").await.unwrap().check().unwrap();
     send(&app.router, "GET", "/api/auth/me", None, &c).await;
     let secs = session_expiry_secs_from_now(&app).await;
     assert!(secs < 29 * day + 23 * 3600 + 31 * 60, "not extended, got {secs}s");
 
     // idle for a while: extended back to the full window
-    app.state.db.query("UPDATE session SET expires_at = time::now() + 10d").await.unwrap().check().unwrap();
+    app.state.control.test_raw().query("UPDATE session SET expires_at = time::now() + 10d").await.unwrap().check().unwrap();
     send(&app.router, "GET", "/api/auth/me", None, &c).await;
     let secs = session_expiry_secs_from_now(&app).await;
     assert!(secs > 29 * day, "slid forward, got {secs}s");
 
     // past expiry: rejected
-    app.state.db.query("UPDATE session SET expires_at = time::now() - 1m").await.unwrap().check().unwrap();
+    app.state.control.test_raw().query("UPDATE session SET expires_at = time::now() - 1m").await.unwrap().check().unwrap();
     let (status, _, body) = send(&app.router, "GET", "/api/auth/me", None, &c).await;
     assert_eq!((status, body["code"].as_str()), (StatusCode::UNAUTHORIZED, Some("auth.session_expired")));
 }
@@ -351,9 +351,7 @@ async fn expired_session_is_401_and_live_one_slides_at_most_hourly() {
 async fn jwt_exp_is_enforced_and_legacy_cookies_without_exp_still_work() {
     let app = TestApp::new().await;
     let sid = eunomia_backend::models_user::generate_token();
-    app.state
-        .db
-        .query("CREATE session SET owner = $o, sid = $sid, expires_at = time::now() + 1d")
+    app.state.control.test_raw().query("CREATE session SET owner = $o, sid = $sid, expires_at = time::now() + 1d")
         .bind(("o", app.user.id.clone()))
         .bind(("sid", sid.clone()))
         .await
@@ -386,10 +384,7 @@ async fn jwt_exp_is_enforced_and_legacy_cookies_without_exp_still_work() {
 /// An OAuth access token for `scope`, minted straight into the database.
 async fn oauth_token(app: &TestApp, scope: &[&str]) -> String {
     let token = format!("eoa_{}", eunomia_backend::models_user::generate_token());
-    let grant: Option<RecordId> = app
-        .state
-        .db
-        .query(
+    let grant: Option<RecordId> = app.state.control.test_raw().query(
             "CREATE oauth_grant SET owner = $o, client_id = 'client-x', client_name = 'X', scope = $scope, \
              resource = 'http://localhost:8001/mcp' RETURN VALUE id",
         )
@@ -399,9 +394,7 @@ async fn oauth_token(app: &TestApp, scope: &[&str]) -> String {
         .unwrap()
         .take(0)
         .unwrap();
-    app.state
-        .db
-        .query("CREATE oauth_token SET kind = 'access', token_hash = $h, family = $g, expires_at = time::now() + 15m")
+    app.state.control.test_raw().query("CREATE oauth_token SET kind = 'access', token_hash = $h, family = $g, expires_at = time::now() + 15m")
         .bind(("h", eunomia_backend::models_user::hash_token(&token)))
         .bind(("g", grant.unwrap()))
         .await

@@ -1,10 +1,8 @@
-use std::sync::Arc;
 use std::time::Duration;
 
 use eunomia_backend::config::Settings;
-use eunomia_backend::db;
 use eunomia_backend::jobs::{self, Role, WorkerConfig};
-use eunomia_backend::state::{AppState, AppStateInner};
+use eunomia_backend::state::AppState;
 use tokio::sync::watch;
 
 #[tokio::main]
@@ -16,10 +14,7 @@ async fn main() {
     }
     let _otel = eunomia_backend::telemetry::init(&settings.log_level);
     let role = Role::from_env();
-    let conn = db::connect(&settings).await.expect("failed to connect to SurrealDB");
-    eunomia_backend::migrate::migrate(&conn, &settings).await.expect("failed to apply migrations");
-
-    let state = AppState(Arc::new(AppStateInner { db: conn, settings: settings.clone() }));
+    let state = AppState::build(&settings, surrealdb::opt::Config::new()).await.expect("failed to set up the databases");
 
     let (stop, stopped) = watch::channel(false);
     let mut background = Vec::new();

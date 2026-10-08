@@ -3,14 +3,13 @@
 //! Nothing here touches the network.
 #![allow(dead_code)]
 
-use std::sync::Arc;
-
 use axum::body::Body;
 use axum::http::{header, Request, StatusCode};
 use axum::Router;
 use eunomia_backend::config::Settings;
 use eunomia_backend::models_user::{self, User};
-use eunomia_backend::state::{AppState, AppStateInner};
+use eunomia_backend::pool::{ControlDb, OrgDb};
+use eunomia_backend::state::AppState;
 use eunomia_backend::tools::registry;
 use http_body_util::BodyExt;
 use serde_json::Value;
@@ -30,14 +29,15 @@ pub struct TestApp {
 /// started with the hardened flags from docker-compose.yml; each call then gets a fresh database.
 pub fn test_settings() -> Settings {
     let url = std::env::var("TEST_SURREAL_URL").unwrap_or_else(|_| "mem://".into());
-    let db = if url == "mem://" { "test".to_string() } else { format!("t{}", uuid::Uuid::new_v4().simple()) };
+    // a real server is shared between tests: every call gets its own namespace, so its own control database
+    let ns = if url == "mem://" { "test".to_string() } else { format!("t{}", uuid::Uuid::new_v4().simple()) };
     Settings {
         jwt_secret: "test-jwt-secret".into(),
         surreal_url: url,
         surreal_user: std::env::var("TEST_SURREAL_USER").unwrap_or_else(|_| "root".into()),
         surreal_pass: std::env::var("TEST_SURREAL_PASS").unwrap_or_else(|_| "root".into()),
-        surreal_ns: "test".into(),
-        surreal_db: db,
+        surreal_ns: ns,
+        surreal_db: "legacy".into(),
         openai_api_key: None,
         openai_base_url: "http://127.0.0.1:9/v1".into(), // unroutable: never reached without a key
         encryption_key: "test-encryption-key".into(),
@@ -50,10 +50,10 @@ pub fn test_settings() -> Settings {
     }
 }
 
-/// Connect like production. `TEST_HARDENED=1` (mem:// only) runs the embedded engine with
+/// Engine options like production. `TEST_HARDENED=1` (mem:// only) runs the embedded engine with
 /// everything denied except the `--allow-funcs` list in docker-compose.yml, so the whole suite
 /// proves the list is complete.
-pub async fn connect(settings: &Settings) -> eunomia_backend::db::Db {
+pub fn engine_config() -> surrealdb::opt::Config {
     let mut config = surrealdb::opt::Config::new();
     if std::env::var("TEST_HARDENED").is_ok() {
         let compose = include_str!("../../../docker-compose.yml");
@@ -64,15 +64,22 @@ pub async fn connect(settings: &Settings) -> eunomia_backend::db::Db {
         }
         config = config.capabilities(caps);
     }
-    eunomia_backend::db::connect_with(settings, config).await.expect("db")
+    config
 }
 
-/// Fresh DB + schema + app state, no users yet.
+/// Fresh databases (control, no orgs yet) + app state, no users yet.
 pub async fn bare_state() -> AppState {
-    let settings = test_settings();
-    let db = connect(&settings).await;
-    eunomia_backend::migrate::migrate(&db, &settings).await.expect("schema");
-    AppState(Arc::new(AppStateInner { db, settings }))
+    AppState::build(&test_settings(), engine_config()).await.expect("state")
+}
+
+/// Register a user the way signup does (and, for the first, create the install's org).
+pub async fn register(state: &AppState, email: &str) -> User {
+    models_user::register_user(state, email, PASSWORD).await.expect("register")
+}
+
+/// The user's org database.
+pub async fn org_db(state: &AppState, user: &User) -> OrgDb {
+    state.pool.for_org(&user.org).await.expect("org db")
 }
 
 impl TestApp {
@@ -80,15 +87,24 @@ impl TestApp {
     /// as signup creates it) and an API token for Bearer auth.
     pub async fn new() -> Self {
         let state = bare_state().await;
-        let user = models_user::register_user(&state.db, "tester@example.com", PASSWORD).await.expect("register");
-        let token = models_user::create_api_token(&state.db, &user.id, "test").await.expect("token").token;
+        let user = register(&state, "tester@example.com").await;
+        let token = models_user::create_api_token(&state.control, &user.id, "test").await.expect("token").token;
         let router = eunomia_backend::app(state.clone());
         TestApp { state, user, token, router }
     }
 
+    /// The test user's org database.
+    pub async fn db(&self) -> OrgDb {
+        org_db(&self.state, &self.user).await
+    }
+
+    pub fn control(&self) -> &ControlDb {
+        &self.state.control
+    }
+
     /// Call a registry tool as the test user (the same choke point REST and MCP use).
     pub async fn tool(&self, name: &str, args: Value) -> Value {
-        registry::call(&self.state, &self.user.id, name, args).await.expect("tool call")
+        registry::call(&self.state, &self.user, name, args).await.expect("tool call")
     }
 
     /// One HTTP request against the real router. `auth` adds the Bearer token.
@@ -154,4 +170,9 @@ impl Normalizer {
         }
         serde_json::from_str(&s).unwrap()
     }
+}
+
+/// Register a user in an org of their own (signup with `EUNOMIA_SIGNUP_ORG=personal`).
+pub async fn register_personal(state: &AppState, email: &str) -> User {
+    models_user::register_user_with(state, email, PASSWORD, true).await.expect("register")
 }

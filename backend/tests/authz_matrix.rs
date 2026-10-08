@@ -4,10 +4,10 @@
 
 mod common;
 
-use eunomia_backend::db::Db;
+use eunomia_backend::pool::{ControlDb, OrgDb};
 use eunomia_backend::entities::service as entities;
 use eunomia_backend::error::AppResult;
-use eunomia_backend::models_user::{self, User};
+use eunomia_backend::models_user::User;
 use eunomia_backend::vaults::service as vaults;
 use eunomia_backend::rid;
 use surrealdb::types::RecordId;
@@ -24,7 +24,8 @@ use Who::*;
 const WHOS: [Who; 4] = [Owner, Member, Pending, Outsider];
 
 struct World {
-    db: Db,
+    db: OrgDb,
+    control: ControlDb,
     owner: User,
     member: User,
     pending: User,
@@ -47,7 +48,7 @@ impl World {
         let v = vaults::create_vault(&self.db, &self.owner.id, "Team", "org").await.unwrap();
         let v: RecordId = rid::parse(&v.id).unwrap();
         for (u, accept) in [(&self.member, true), (&self.pending, false)] {
-            vaults::invite_member(&self.db, &self.owner.id, &v, &u.email, "member").await.unwrap();
+            vaults::invite_member(&self.db, &self.control, &self.owner.id, &v, &u.email, "member").await.unwrap();
             if accept {
                 vaults::accept_invitation(&self.db, &u.id, &v).await.unwrap();
             }
@@ -60,11 +61,13 @@ async fn world() -> World {
     let state = common::bare_state().await;
     let mut users = Vec::new();
     for name in ["owner", "member", "pending", "outsider", "spare"] {
-        users.push(models_user::register_user(&state.db, &format!("{name}@example.com"), common::PASSWORD).await.unwrap());
+        users.push(common::register(&state, &format!("{name}@example.com")).await);
     }
+    let db = common::org_db(&state, &users[0]).await;
     let mut it = users.into_iter();
     World {
-        db: state.db.clone(),
+        db,
+        control: state.control.clone(),
         owner: it.next().unwrap(),
         member: it.next().unwrap(),
         pending: it.next().unwrap(),
@@ -111,10 +114,10 @@ async fn vault_operations_matrix() {
             let got = match op {
                 "read memories" => allowed(entities::list_entities(&w.db, &u.id, None, Some(&v), None, 0).await),
                 "write memories" => allowed(entities::upsert_entity(&w.db, &u.id, "person", "Bob", None, Some(&v)).await),
-                "list members" => allowed(vaults::list_members(&w.db, &u.id, &v).await),
+                "list members" => allowed(vaults::list_members(&w.db, &w.control, &u.id, &v).await),
                 "rename" => allowed(vaults::rename_vault(&w.db, &u.id, &v, "Renamed").await),
-                "invite" => allowed(vaults::invite_member(&w.db, &u.id, &v, &w.spare.email, "member").await),
-                "remove member" => allowed(vaults::remove_member(&w.db, &u.id, &v, &w.pending.email).await),
+                "invite" => allowed(vaults::invite_member(&w.db, &w.control, &u.id, &v, &w.spare.email, "member").await),
+                "remove member" => allowed(vaults::remove_member(&w.db, &w.control, &u.id, &v, &w.pending.email).await),
                 "delete" => allowed(vaults::delete_vault(&w.db, &u.id, &v).await),
                 "clone" => allowed(vaults::clone_vault(&w.db, &u.id, &v, None, "org").await),
                 "merge" => {
@@ -141,7 +144,7 @@ async fn entity_row_operations_matrix() {
         let u = w.user(who);
         let member_like = matches!(who, Owner | Member);
 
-        let got = entities::get_entity(&w.db, &u.id, &eid).await.unwrap().is_some();
+        let got = entities::get_entity(&w.db, &w.control, &u.id, &eid).await.unwrap().is_some();
         check("get entity", who, got, member_like);
         let got = entities::update_entity(&w.db, &u.id, &eid, Some("Alicia"), None, None).await.unwrap().is_some();
         check("update entity", who, got, member_like);
@@ -163,7 +166,7 @@ async fn leave_and_invitation_rules() {
     // a member leaves; a non-member leaving is a quiet no-op
     vaults::leave_vault(&w.db, &w.member.id, &v).await.unwrap();
     vaults::leave_vault(&w.db, &w.outsider.id, &v).await.unwrap();
-    assert!(!allowed(vaults::list_members(&w.db, &w.member.id, &v).await));
+    assert!(!allowed(vaults::list_members(&w.db, &w.control, &w.member.id, &v).await));
     // only the invitee can accept
     let v2 = w.vault().await;
     assert!(vaults::accept_invitation(&w.db, &w.outsider.id, &v2).await.is_err());

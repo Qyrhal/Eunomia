@@ -13,7 +13,7 @@ use surrealdb::types::{Datetime, RecordId};
 use crate::rid::RecordIdExt;
 
 use crate::authz::{Actor, Caller};
-use crate::db::Db;
+use crate::pool::ControlDb;
 use crate::error::{AppError, AppResult, ErrorCode};
 use crate::models_user::{self, TokenCheck, User};
 use crate::state::AppState;
@@ -61,14 +61,14 @@ pub fn create_session_jwt(user: &User, sid: &str, secret: &str) -> Result<String
 }
 
 pub async fn start_session(
-    db: &Db,
+    db: &ControlDb,
     secret: &str,
     user: &User,
     user_agent: Option<&str>,
 ) -> Result<String, AppError> {
     let sid = models_user::generate_token();
     let ua: String = user_agent.unwrap_or("").chars().take(300).collect();
-    store::app::AUTH_SESSION_CREATE.on(db)
+    store::control::AUTH_SESSION_CREATE.on(db)
         .bind(("owner", user.id.clone()))
         .bind(("sid", sid.clone()))
         .bind(("user_agent", ua))
@@ -84,7 +84,7 @@ pub struct Authn {
     pub caller: Caller,
 }
 
-async fn session_authn(db: &Db, secret: &str, token: &str) -> AppResult<Option<Authn>> {
+async fn session_authn(db: &ControlDb, secret: &str, token: &str) -> AppResult<Option<Authn>> {
     let data = match decode::<Claims>(token, &DecodingKey::from_secret(secret.as_bytes()), &validation()) {
         Ok(d) => d,
         Err(e) if matches!(e.kind(), ErrorKind::ExpiredSignature) => {
@@ -101,7 +101,7 @@ async fn session_authn(db: &Db, secret: &str, token: &str) -> AppResult<Option<A
         #[serde(default)]
         expired: bool,
     }
-    let mut res = store::app::AUTH_SESSION_FIND
+    let mut res = store::control::AUTH_SESSION_FIND
         .on(db)
         .bind(("sid", claims.sid.clone()))
         .bind(("owner", rid.clone()))
@@ -115,14 +115,14 @@ async fn session_authn(db: &Db, secret: &str, token: &str) -> AppResult<Option<A
     }
 
     let ttl = session_ttl();
-    let _ = store::app::AUTH_SESSION_TOUCH
+    let _ = store::control::AUTH_SESSION_TOUCH
         .on(db)
         .bind(("id", row.id))
         .bind(("new_exp", Datetime::from(now + ttl)))
         .bind(("threshold", Datetime::from(now + ttl - Duration::hours(1))))
         .await;
 
-    let user = User { id: rid, email: claims.email };
+    let user = models_user::load_user(db, rid, claims.email).await?;
     let caller = Caller::session(&user.id);
     Ok(Some(Authn { user, caller }))
 }
@@ -136,11 +136,11 @@ pub async fn bearer_authn(state: &AppState, token: &str, allow_oauth: bool) -> A
             return Ok(None);
         }
         let Some((user, granted)) = crate::oauth::verify_access_token(state, token).await else { return Ok(None) };
-        let client = crate::oauth::server::token_row(&state.db, token).await.and_then(|r| r.client_id).unwrap_or_default();
+        let client = crate::oauth::server::token_row(&state.control, token).await.and_then(|r| r.client_id).unwrap_or_default();
         let caller = Caller { actor: Actor { kind: "oauth", id: client }, scopes: granted, vault: None };
         return Ok(Some(Authn { user, caller }));
     }
-    match models_user::check_api_token(&state.db, token).await? {
+    match models_user::check_api_token(&state.control, token).await? {
         TokenCheck::Valid(v) => {
             let actor = Actor { kind: "token", id: v.token_id.to_string() };
             Ok(Some(Authn { user: v.user, caller: Caller { actor, scopes: v.scopes, vault: v.vault } }))
@@ -170,12 +170,12 @@ pub async fn authenticate(state: &AppState, headers: &HeaderMap, mcp: bool) -> A
     if !mcp
         && let Some(token) = session_token(headers)
     {
-        return session_authn(&state.db, &state.settings.jwt_secret, &token).await;
+        return session_authn(&state.control, &state.settings.jwt_secret, &token).await;
     }
     Ok(None)
 }
 
-pub async fn revoke_session_by_jwt(db: &Db, secret: &str, token: &str) {
+pub async fn revoke_session_by_jwt(db: &ControlDb, secret: &str, token: &str) {
     let Ok(data) = decode::<Claims>(
         token,
         &DecodingKey::from_secret(secret.as_bytes()),
@@ -183,7 +183,7 @@ pub async fn revoke_session_by_jwt(db: &Db, secret: &str, token: &str) {
     ) else {
         return;
     };
-    let _ = store::app::AUTH_SESSION_REVOKE_BY_SID
+    let _ = store::control::AUTH_SESSION_REVOKE_BY_SID
         .on(db)
         .bind(("sid", data.claims.sid))
         .await;
@@ -222,7 +222,7 @@ mod tests {
     use super::*;
 
     fn test_user() -> User {
-        User { id: crate::rid::parse("user:abc123").unwrap(), email: "a@example.com".to_string() }
+        User { id: crate::rid::parse("user:abc123").unwrap(), email: "a@example.com".to_string(), org: crate::pool::OrgId::new() }
     }
 
     #[test]

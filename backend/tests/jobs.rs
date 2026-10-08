@@ -12,8 +12,8 @@ use common::{bare_state, test_settings};
 use eunomia_backend::error::ErrorCode;
 use eunomia_backend::jobs::worker::{self, Registry};
 use eunomia_backend::jobs::{self, handlers, kind, leader, Job, JobError, NewJob, WorkerConfig};
-use eunomia_backend::models_user;
-use eunomia_backend::state::{AppState, AppStateInner};
+use eunomia_backend::models_user::User;
+use eunomia_backend::state::AppState;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use surrealdb::types::SurrealValue;
@@ -60,12 +60,20 @@ struct Row {
 }
 
 async fn rows(state: &AppState, kind: &str) -> Vec<Row> {
-    let mut res = state.db.query("SELECT status, attempts, last_error_code FROM job WHERE kind = $k").bind(("k", kind.to_string())).await.unwrap();
+    let mut res = state.control.test_raw().query("SELECT status, attempts, last_error_code FROM job WHERE kind = $k").bind(("k", kind.to_string())).await.unwrap();
     res.take(0).unwrap()
 }
 
+/// A count in the control database (the job queue).
 async fn count(state: &AppState, q: &str) -> i64 {
-    let mut res = state.db.query(q).await.unwrap();
+    let mut res = state.control.test_raw().query(q).await.unwrap();
+    let n: Option<i64> = res.take("n").unwrap();
+    n.unwrap_or(0)
+}
+
+/// A count in the user's org database.
+async fn org_count(state: &AppState, user: &User, q: &str) -> i64 {
+    let mut res = common::org_db(state, user).await.test_raw().query(q).await.unwrap();
     let n: Option<i64> = res.take("n").unwrap();
     n.unwrap_or(0)
 }
@@ -74,11 +82,11 @@ async fn count(state: &AppState, q: &str) -> i64 {
 async fn enqueue_dedupes_on_idempotency_key() {
     let state = bare_state().await;
     let mk = |key: &str| NewJob::new("t", owner(1), key).payload(json!({"x": 1}));
-    assert!(jobs::enqueue(&state.db, mk("same")).await.unwrap());
-    assert!(!jobs::enqueue(&state.db, mk("same")).await.unwrap());
-    assert!(jobs::enqueue(&state.db, mk("other")).await.unwrap());
+    assert!(jobs::enqueue(&state.control, mk("same")).await.unwrap());
+    assert!(!jobs::enqueue(&state.control, mk("same")).await.unwrap());
+    assert!(jobs::enqueue(&state.control, mk("other")).await.unwrap());
     // concurrent enqueues of one key: exactly one wins
-    let wins = futures::future::join_all((0..8).map(|_| jobs::enqueue(&state.db, mk("race")))).await;
+    let wins = futures::future::join_all((0..8).map(|_| jobs::enqueue(&state.control, mk("race")))).await;
     assert_eq!(wins.into_iter().filter(|r| *r.as_ref().unwrap()).count(), 1);
     assert_eq!(count(&state, "SELECT count() AS n FROM job GROUP ALL").await, 3);
 }
@@ -87,7 +95,7 @@ async fn enqueue_dedupes_on_idempotency_key() {
 async fn concurrent_workers_run_each_job_once() {
     let state = bare_state().await;
     for i in 0..300 {
-        jobs::enqueue(&state.db, NewJob::new("t", owner(i % 5), format!("k{i}"))).await.unwrap();
+        jobs::enqueue(&state.control, NewJob::new("t", owner(i % 5), format!("k{i}"))).await.unwrap();
     }
     let runs: Arc<Mutex<HashMap<String, u32>>> = Default::default();
     let reg = {
@@ -114,7 +122,7 @@ async fn concurrent_workers_run_each_job_once() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn crashed_worker_job_is_reclaimed_after_the_lease() {
     let state = bare_state().await;
-    jobs::enqueue(&state.db, NewJob::new("t", owner(1), "crash")).await.unwrap();
+    jobs::enqueue(&state.control, NewJob::new("t", owner(1), "crash")).await.unwrap();
     let started = Arc::new(AtomicU32::new(0));
     let finished = Arc::new(AtomicU32::new(0));
     let reg = {
@@ -147,7 +155,7 @@ async fn crashed_worker_job_is_reclaimed_after_the_lease() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn heartbeats_keep_a_long_job_from_being_stolen() {
     let state = bare_state().await;
-    jobs::enqueue(&state.db, NewJob::new("t", owner(1), "long")).await.unwrap();
+    jobs::enqueue(&state.control, NewJob::new("t", owner(1), "long")).await.unwrap();
     let runs = Arc::new(AtomicU32::new(0));
     let reg = {
         let runs = runs.clone();
@@ -172,10 +180,10 @@ async fn failures_back_off_then_dead_letter() {
     let state = bare_state().await;
     let mut transient = NewJob::new("flaky", owner(1), "flaky");
     transient.max_attempts = 3;
-    jobs::enqueue(&state.db, transient).await.unwrap();
-    jobs::enqueue(&state.db, NewJob::new("bad", owner(1), "bad")).await.unwrap();
-    jobs::enqueue(&state.db, NewJob::new("nobody", owner(1), "nobody")).await.unwrap();
-    jobs::enqueue(&state.db, NewJob::new("boom", owner(1), "boom")).await.unwrap();
+    jobs::enqueue(&state.control, transient).await.unwrap();
+    jobs::enqueue(&state.control, NewJob::new("bad", owner(1), "bad")).await.unwrap();
+    jobs::enqueue(&state.control, NewJob::new("nobody", owner(1), "nobody")).await.unwrap();
+    jobs::enqueue(&state.control, NewJob::new("boom", owner(1), "boom")).await.unwrap();
     let tries = Arc::new(AtomicU32::new(0));
     let reg = {
         let tries = tries.clone();
@@ -206,7 +214,7 @@ async fn failures_back_off_then_dead_letter() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_retry_waits_for_its_backoff() {
     let state = bare_state().await;
-    jobs::enqueue(&state.db, NewJob::new("t", owner(1), "wait")).await.unwrap();
+    jobs::enqueue(&state.control, NewJob::new("t", owner(1), "wait")).await.unwrap();
     let stamps: Arc<Mutex<Vec<Instant>>> = Default::default();
     let reg = {
         let stamps = stamps.clone();
@@ -228,12 +236,12 @@ async fn a_retry_waits_for_its_backoff() {
 async fn owner_cap_limits_running_jobs_per_owner() {
     let state = bare_state().await;
     for i in 0..6 {
-        jobs::enqueue(&state.db, NewJob::new("t", owner(1), format!("a{i}"))).await.unwrap();
+        jobs::enqueue(&state.control, NewJob::new("t", owner(1), format!("a{i}"))).await.unwrap();
     }
-    jobs::enqueue(&state.db, NewJob::new("t", owner(2), "b0")).await.unwrap();
-    let first = jobs::claim(&state.db, "w", 3, Duration::from_secs(30), 2).await.unwrap();
+    jobs::enqueue(&state.control, NewJob::new("t", owner(2), "b0")).await.unwrap();
+    let first = jobs::claim(&state.control, "w", 3, Duration::from_secs(30), 2).await.unwrap();
     assert_eq!(first.len(), 3); // soft cap: one batch may overshoot
-    let second = jobs::claim(&state.db, "w", 3, Duration::from_secs(30), 2).await.unwrap();
+    let second = jobs::claim(&state.control, "w", 3, Duration::from_secs(30), 2).await.unwrap();
     assert_eq!(second.len(), 1, "owner 1 is at its cap, only owner 2 can claim");
     assert_eq!(second[0].owner, owner(2));
 }
@@ -241,7 +249,7 @@ async fn owner_cap_limits_running_jobs_per_owner() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn shutdown_releases_leases_without_burning_an_attempt() {
     let state = bare_state().await;
-    jobs::enqueue(&state.db, NewJob::new("t", owner(1), "slow")).await.unwrap();
+    jobs::enqueue(&state.control, NewJob::new("t", owner(1), "slow")).await.unwrap();
     let started = Arc::new(AtomicU32::new(0));
     let reg = {
         let started = started.clone();
@@ -268,21 +276,21 @@ async fn one_leader_at_a_time() {
     let ttl = Duration::from_millis(400);
     for _ in 0..5 {
         // reset the lease between rounds
-        jobs::release_leader(&state.db, "a").await.unwrap();
-        jobs::release_leader(&state.db, "b").await.unwrap();
-        let (a, b) = tokio::join!(jobs::acquire_leader(&state.db, "a", ttl), jobs::acquire_leader(&state.db, "b", ttl));
+        jobs::release_leader(&state.control, "a").await.unwrap();
+        jobs::release_leader(&state.control, "b").await.unwrap();
+        let (a, b) = tokio::join!(jobs::acquire_leader(&state.control, "a", ttl), jobs::acquire_leader(&state.control, "b", ttl));
         assert!(a.unwrap() ^ b.unwrap(), "exactly one candidate leads");
     }
-    jobs::release_leader(&state.db, "a").await.unwrap();
-    jobs::release_leader(&state.db, "b").await.unwrap();
-    assert!(jobs::acquire_leader(&state.db, "a", ttl).await.unwrap());
-    assert!(jobs::acquire_leader(&state.db, "a", ttl).await.unwrap(), "the leader renews");
-    assert!(!jobs::acquire_leader(&state.db, "b", ttl).await.unwrap());
+    jobs::release_leader(&state.control, "a").await.unwrap();
+    jobs::release_leader(&state.control, "b").await.unwrap();
+    assert!(jobs::acquire_leader(&state.control, "a", ttl).await.unwrap());
+    assert!(jobs::acquire_leader(&state.control, "a", ttl).await.unwrap(), "the leader renews");
+    assert!(!jobs::acquire_leader(&state.control, "b", ttl).await.unwrap());
     tokio::time::sleep(ttl + Duration::from_millis(100)).await;
-    assert!(jobs::acquire_leader(&state.db, "b", ttl).await.unwrap(), "takeover after the lease expires");
-    assert!(!jobs::acquire_leader(&state.db, "a", ttl).await.unwrap());
-    jobs::release_leader(&state.db, "b").await.unwrap();
-    assert!(jobs::acquire_leader(&state.db, "a", ttl).await.unwrap(), "a released lease is free at once");
+    assert!(jobs::acquire_leader(&state.control, "b", ttl).await.unwrap(), "takeover after the lease expires");
+    assert!(!jobs::acquire_leader(&state.control, "a", ttl).await.unwrap());
+    jobs::release_leader(&state.control, "b").await.unwrap();
+    assert!(jobs::acquire_leader(&state.control, "a", ttl).await.unwrap(), "a released lease is free at once");
 }
 
 /// A state whose embeddings backend is `backend` ("stub": embeddings work offline, no LLM;
@@ -290,16 +298,14 @@ async fn one_leader_at_a_time() {
 async fn state_with(backend: &str) -> AppState {
     let mut settings = test_settings();
     settings.embeddings_backend = backend.into();
-    let db = eunomia_backend::db::connect(&settings).await.unwrap();
-    eunomia_backend::migrate::migrate(&db, &settings).await.unwrap();
-    AppState(Arc::new(AppStateInner { db, settings }))
+    AppState::build(&settings, common::engine_config()).await.unwrap()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn scheduler_enqueues_due_syncs_once_per_window() {
     let state = bare_state().await;
-    let user = models_user::register_user(&state.db, "sched@example.com", common::PASSWORD).await.unwrap();
-    state.db.query("CREATE connector SET owner = $o, kind = 'up_bank', enabled = true").bind(("o", user.id.clone())).await.unwrap().check().unwrap();
+    let user = common::register(&state, "sched@example.com").await;
+    common::org_db(&state, &user).await.test_raw().query("CREATE connector SET owner = $o, kind = 'up_bank', enabled = true").bind(("o", user.id.clone())).await.unwrap().check().unwrap();
 
     leader::tick(&state, 1).await;
     leader::tick(&state, 2).await; // a second tick (or a second leader) must not double-enqueue
@@ -310,7 +316,7 @@ async fn scheduler_enqueues_due_syncs_once_per_window() {
     // and sync_status records the failure and backoff exactly as before.
     let (_w, _stop) = spawn_worker(&state, handlers::registry(), cfg("w"));
     wait_for("sync job done", 20, || async { rows(&state, kind::SYNC).await[0].status == "done" }).await;
-    let mut res = state.db.query("SELECT consecutive_failures AS n FROM sync_status").await.unwrap();
+    let mut res = common::org_db(&state, &user).await.test_raw().query("SELECT consecutive_failures AS n FROM sync_status").await.unwrap();
     assert_eq!(res.take::<Option<i64>>("n").unwrap(), Some(1));
     // inside its backoff window the source is no longer due
     leader::tick(&state, 3).await;
@@ -320,11 +326,12 @@ async fn scheduler_enqueues_due_syncs_once_per_window() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn stale_observation_reconciler_picks_up_work() {
     let state = state_with("openai").await;
-    let user = models_user::register_user(&state.db, "obs@example.com", common::PASSWORD).await.unwrap();
+    let user = common::register(&state, "obs@example.com").await;
     // point this user's LLM at an unroutable local port: "configured", but every call fails fast
     let settings_id = RecordId::from_table_key("app_settings", user.id.key().clone());
-    state
-        .db
+    common::org_db(&state, &user)
+        .await
+        .test_raw()
         .query("UPSERT $id SET owner = $o, openai_base_url = 'http://127.0.0.1:9/v1'")
         .bind(("id", settings_id))
         .bind(("o", user.id.clone()))
@@ -334,12 +341,12 @@ async fn stale_observation_reconciler_picks_up_work() {
         .unwrap();
     let w = |text: &str, ty: &str| {
         let args = json!({"subject_name": "Alice", "subject_kind": "person", "text": text, "type": ty});
-        eunomia_backend::tools::registry::call(&state, &user.id, "memory_write", args)
+        eunomia_backend::tools::registry::call(&state, &user, "memory_write", args)
     };
     w("likes tea", "world").await.unwrap();
     w("Alice likes tea.", "observation").await.unwrap();
     w("works remote", "world").await.unwrap(); // marks the observation stale
-    assert_eq!(count(&state, "SELECT count() AS n FROM memory WHERE type = 'observation' AND status = 'stale' GROUP ALL").await, 1);
+    assert_eq!(org_count(&state, &user, "SELECT count() AS n FROM memory WHERE type = 'observation' AND status = 'stale' GROUP ALL").await, 1);
 
     leader::tick(&state, 1).await;
     leader::tick(&state, 2).await;
@@ -353,29 +360,29 @@ async fn stale_observation_reconciler_picks_up_work() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn embed_reconciler_fills_missing_embeddings() {
     let state = state_with("stub").await;
-    let user = models_user::register_user(&state.db, "emb@example.com", common::PASSWORD).await.unwrap();
+    let user = common::register(&state, "emb@example.com").await;
     let env: eunomia_backend::cache::search::Envelope = serde_json::from_value(json!({
         "id": "demo:note:1", "source": "demo", "type": "note", "external_id": "1", "title": "Hello", "body_text": "A body that needs a vector."
     }))
     .unwrap();
-    eunomia_backend::cache::search::upsert(&state.db, &user.id, &env).await.unwrap();
+    eunomia_backend::cache::search::upsert(&common::org_db(&state, &user).await, &user.id, &env).await.unwrap();
     let missing = "SELECT count() AS n FROM cache_record WHERE embedding IS NONE GROUP ALL";
-    assert_eq!(count(&state, missing).await, 1);
+    assert_eq!(org_count(&state, &user, missing).await, 1);
 
     leader::tick(&state, 0).await; // tick 0 runs the slow probes
     assert_eq!(rows(&state, kind::EMBED).await.len(), 1);
     let (_w, _stop) = spawn_worker(&state, handlers::registry(), cfg("w"));
-    wait_for("embedded", 20, || async { count(&state, missing).await == 0 }).await;
+    wait_for("embedded", 20, || async { org_count(&state, &user, missing).await == 0 }).await;
     wait_for("embed job done", 20, || async { rows(&state, kind::EMBED).await[0].status == "done" }).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn ingest_queues_extraction_and_the_handler_noops_without_a_key() {
     let state = state_with("stub").await; // stub: no LLM
-    let user = models_user::register_user(&state.db, "ing@example.com", common::PASSWORD).await.unwrap();
+    let user = common::register(&state, "ing@example.com").await;
     let raw = vec![json!({"id": "1", "title": "t", "text": "Alice met Bob in Paris and they talked about the project at length."})];
     let src = eunomia_backend::sources::registry::get("example").unwrap();
-    let report = eunomia_backend::sources::registry::ingest(&state.db, &user.id, "example", &raw, src.as_ref()).await;
+    let report = eunomia_backend::sources::registry::ingest(&state.org(&user.org).await.unwrap(), &user.id, "example", &raw, src.as_ref()).await;
     assert_eq!(report.written, 1);
     assert_eq!(rows(&state, kind::EXTRACT).await.len(), 1);
     let (_w, _stop) = spawn_worker(&state, handlers::registry(), cfg("w"));
@@ -398,7 +405,8 @@ async fn job_claim_throughput() {
     for chunk in (0..JOBS).collect::<Vec<_>>().chunks(2_500) {
         let rows: Vec<Value> = chunk.iter().map(|i| json!({"k": format!("s3-{i}"), "o": format!("u{}", i % 8)})).collect();
         state
-            .db
+            .control
+            .test_raw()
             .query("INSERT INTO job (SELECT type::thing('user', o) AS owner, 'spike' AS kind, k AS idempotency_key, 50 AS max_attempts FROM $rows)")
             .bind(("rows", rows))
             .await

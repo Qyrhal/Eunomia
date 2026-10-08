@@ -46,7 +46,7 @@ use crate::rid::RecordIdExt;
 
 use crate::cache::search as cs;
 use crate::config::Settings;
-use crate::db::Db;
+use crate::pool::OrgDb;
 use crate::store;
 use crate::error::AppResult;
 use crate::vaults::service as vaults_service;
@@ -116,7 +116,7 @@ struct EntityRow {
 /// source `cache_record`, and any `cache_record`s `linked_to` that source --
 /// that's the "follow the entity graph" hop the diagram's Graph arm
 /// describes. Mirrors `cache/recall.py`'s `_graph_arm`.
-async fn graph_arm(db: &Db, owner: &RecordId, vault: &RecordId, query: &str, limit: usize) -> AppResult<Vec<String>> {
+async fn graph_arm(db: &OrgDb, owner: &RecordId, vault: &RecordId, query: &str, limit: usize) -> AppResult<Vec<String>> {
     let q_lower = query.to_lowercase();
 
     let mut matches: Vec<(usize, RecordId)> = Vec::new();
@@ -181,7 +181,7 @@ async fn graph_arm(db: &Db, owner: &RecordId, vault: &RecordId, query: &str, lim
 /// what makes a fact an agent wrote with `memory_write` findable by what it
 /// says, not just by its subject's name -- no embeddings required. Works for
 /// any vault the caller can read.
-async fn memory_text_arm(db: &Db, vault: &RecordId, query: &str, limit: usize) -> AppResult<Vec<String>> {
+async fn memory_text_arm(db: &OrgDb, vault: &RecordId, query: &str, limit: usize) -> AppResult<Vec<String>> {
     #[derive(Deserialize, SurrealValue)]
     struct ScoredRow {
         id: RecordId,
@@ -210,7 +210,7 @@ async fn memory_text_arm(db: &Db, vault: &RecordId, query: &str, limit: usize) -
 /// into one list, ranked by recency. Mirrors `cache/recall.py`'s
 /// `_temporal_ids`.
 async fn temporal_ids(
-    db: &Db,
+    db: &OrgDb,
     owner: &RecordId,
     vault: &RecordId,
     time_range: Option<(&str, &str)>,
@@ -267,7 +267,7 @@ struct Hydrated {
     mem_type: String,
 }
 
-async fn hydrate(db: &Db, owner: &RecordId, vault: &RecordId, key: &str) -> AppResult<Option<Hydrated>> {
+async fn hydrate(db: &OrgDb, owner: &RecordId, vault: &RecordId, key: &str) -> AppResult<Option<Hydrated>> {
     let Some((kind, rest)) = key.split_once(':') else {
         return Ok(None);
     };
@@ -310,7 +310,7 @@ async fn hydrate(db: &Db, owner: &RecordId, vault: &RecordId, key: &str) -> AppR
             "world".to_string()
         }
 
-        let row: Option<MemRow> = db.select(rid.clone()).await?;
+        let row: Option<MemRow> = store::get(db, &rid).await?;
         let Some(row) = row else {
             return Ok(None);
         };
@@ -355,7 +355,7 @@ fn boost(arms_hit: usize, occurred_at: Option<DateTime<Utc>>, now: DateTime<Utc>
 
 #[allow(clippy::too_many_arguments)]
 pub async fn recall(
-    db: &Db,
+    db: &OrgDb,
     settings: &Settings,
     owner: &RecordId,
     query: &str,

@@ -28,10 +28,11 @@ use tokio::sync::mpsc;
 
 use crate::config::Settings;
 use crate::connectors::crypto;
-use crate::db::Db;
+use crate::pool::OrgDb;
 use crate::store;
 use crate::error::{AppError, AppResult};
-use crate::state::AppState;
+use crate::models_user::User;
+use crate::state::OrgState;
 use crate::tools::registry;
 
 const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
@@ -103,9 +104,9 @@ struct AppSettingsRow {
     openai_api_key_encrypted: String,
 }
 
-async fn app_settings_row(db: &Db, owner: &RecordId) -> AppResult<AppSettingsRow> {
+async fn app_settings_row(db: &OrgDb, owner: &RecordId) -> AppResult<AppSettingsRow> {
     let rid = RecordId::from_table_key("app_settings", owner.key().clone());
-    let row: Option<AppSettingsRow> = db.select(rid.clone()).await?;
+    let row: Option<AppSettingsRow> = store::get(db, &rid).await?;
     match row {
         Some(r) => Ok(r),
         None => {
@@ -120,7 +121,7 @@ async fn app_settings_row(db: &Db, owner: &RecordId) -> AppResult<AppSettingsRow
     }
 }
 
-async fn resolve_openai(db: &Db, settings: &Settings, owner: &RecordId) -> AppResult<(String, String)> {
+async fn resolve_openai(db: &OrgDb, settings: &Settings, owner: &RecordId) -> AppResult<(String, String)> {
     let row = app_settings_row(db, owner).await?;
     let base_url =
         if row.openai_base_url.is_empty() { DEFAULT_OPENAI_BASE_URL.to_string() } else { row.openai_base_url };
@@ -140,7 +141,7 @@ fn openai_configured(base_url: &str, api_key: &str) -> bool {
 /// `owner` -- called up front by the router (so a misconfigured chat fails
 /// as a clean 400 before a streaming response is started) and again inside
 /// `send_stream` (so direct callers get the same guarantee).
-pub async fn ensure_configured(db: &Db, settings: &Settings, owner: &RecordId) -> Result<(), ChatNotConfigured> {
+pub async fn ensure_configured(db: &OrgDb, settings: &Settings, owner: &RecordId) -> Result<(), ChatNotConfigured> {
     if settings.embeddings_backend == "stub" {
         return Err(ChatNotConfigured("OpenAI API key not configured -- add one in Settings".to_string()));
     }
@@ -198,7 +199,7 @@ pub fn derive_title(user_message: &str) -> String {
     }
 }
 
-pub async fn create_thread(db: &Db, owner: &RecordId, title: Option<&str>) -> AppResult<ThreadOut> {
+pub async fn create_thread(db: &OrgDb, owner: &RecordId, title: Option<&str>) -> AppResult<ThreadOut> {
     let title = title.map(str::trim).filter(|t| !t.is_empty()).unwrap_or(DEFAULT_THREAD_TITLE);
     let mut res = store::app::CHAT_THREAD_CREATE
         .on(db)
@@ -210,7 +211,7 @@ pub async fn create_thread(db: &Db, owner: &RecordId, title: Option<&str>) -> Ap
     Ok(thread_out(row))
 }
 
-pub async fn list_threads(db: &Db, owner: &RecordId) -> AppResult<Vec<ThreadOut>> {
+pub async fn list_threads(db: &OrgDb, owner: &RecordId) -> AppResult<Vec<ThreadOut>> {
     let mut res = store::app::CHAT_THREAD_LIST
         .on(db)
         .bind(("owner", owner.clone()))
@@ -219,26 +220,26 @@ pub async fn list_threads(db: &Db, owner: &RecordId) -> AppResult<Vec<ThreadOut>
     Ok(rows.into_iter().map(thread_out).collect())
 }
 
-async fn select_thread_row(db: &Db, owner: &RecordId, thread_id: &RecordId) -> AppResult<Option<ThreadRow>> {
-    let row: Option<ThreadRow> = db.select(thread_id.clone()).await?;
+async fn select_thread_row(db: &OrgDb, owner: &RecordId, thread_id: &RecordId) -> AppResult<Option<ThreadRow>> {
+    let row: Option<ThreadRow> = store::get(db, thread_id).await?;
     Ok(row.filter(|r| &r.owner == owner))
 }
 
 /// The thread's row, or `None` if it doesn't exist / isn't owned by
 /// `owner` -- used by the router both for `GET` and to validate ownership
 /// before starting a streaming `send_stream`.
-pub async fn get_thread(db: &Db, owner: &RecordId, thread_id: &RecordId) -> AppResult<Option<ThreadOut>> {
+pub async fn get_thread(db: &OrgDb, owner: &RecordId, thread_id: &RecordId) -> AppResult<Option<ThreadOut>> {
     Ok(select_thread_row(db, owner, thread_id).await?.map(thread_out))
 }
 
-pub async fn delete_thread(db: &Db, owner: &RecordId, thread_id: &RecordId) -> AppResult<bool> {
+pub async fn delete_thread(db: &OrgDb, owner: &RecordId, thread_id: &RecordId) -> AppResult<bool> {
     let Some(row) = select_thread_row(db, owner, thread_id).await? else { return Ok(false) };
     store::app::CHAT_THREAD_MESSAGES_DELETE.on(db).bind(("tid", row.id.clone())).await?;
     store::app::CHAT_THREAD_DELETE.on(db).bind(("id", row.id)).await?;
     Ok(true)
 }
 
-async fn touch_thread(db: &Db, thread_id: &RecordId, title: Option<&str>) -> AppResult<()> {
+async fn touch_thread(db: &OrgDb, thread_id: &RecordId, title: Option<&str>) -> AppResult<()> {
     match title {
         Some(t) => {
             store::app::CHAT_THREAD_RETITLE
@@ -310,7 +311,7 @@ fn row_to_api_message(row: &MessageRow) -> Value {
     msg
 }
 
-async fn rows_for_thread(db: &Db, owner: &RecordId, thread_id: &RecordId) -> AppResult<Vec<MessageRow>> {
+async fn rows_for_thread(db: &OrgDb, owner: &RecordId, thread_id: &RecordId) -> AppResult<Vec<MessageRow>> {
     let mut res = store::app::CHAT_MESSAGES_FOR_THREAD
         .on(db)
         .bind(("owner", owner.clone()))
@@ -320,7 +321,7 @@ async fn rows_for_thread(db: &Db, owner: &RecordId, thread_id: &RecordId) -> App
 }
 
 /// `None` if the thread doesn't exist / isn't owned by `owner`.
-pub async fn history(db: &Db, owner: &RecordId, thread_id: &RecordId) -> AppResult<Option<Vec<MessageOut>>> {
+pub async fn history(db: &OrgDb, owner: &RecordId, thread_id: &RecordId) -> AppResult<Option<Vec<MessageOut>>> {
     if select_thread_row(db, owner, thread_id).await?.is_none() {
         return Ok(None);
     }
@@ -331,7 +332,7 @@ pub async fn history(db: &Db, owner: &RecordId, thread_id: &RecordId) -> AppResu
 /// Every chat message across all of `owner`'s threads, oldest first -- used
 /// only by the data export, which wants the whole chat history in one
 /// document rather than one thread at a time.
-pub async fn history_all(db: &Db, owner: &RecordId) -> AppResult<Vec<MessageOut>> {
+pub async fn history_all(db: &OrgDb, owner: &RecordId) -> AppResult<Vec<MessageOut>> {
     let mut res =
         store::app::CHAT_MESSAGES_FOR_OWNER.on(db).bind(("owner", owner.clone())).await?;
     let rows: Vec<MessageRow> = res.take(0)?;
@@ -340,7 +341,7 @@ pub async fn history_all(db: &Db, owner: &RecordId) -> AppResult<Vec<MessageOut>
 
 #[allow(clippy::too_many_arguments)]
 async fn persist(
-    db: &Db,
+    db: &OrgDb,
     owner: &RecordId,
     thread_id: &RecordId,
     role: &str,
@@ -363,7 +364,7 @@ async fn persist(
 
 /// Deletes every message in the thread (keeps the thread itself, now
 /// empty) -- `false` if the thread doesn't exist / isn't owned by `owner`.
-pub async fn clear(db: &Db, owner: &RecordId, thread_id: &RecordId) -> AppResult<bool> {
+pub async fn clear(db: &OrgDb, owner: &RecordId, thread_id: &RecordId) -> AppResult<bool> {
     let Some(row) = select_thread_row(db, owner, thread_id).await? else { return Ok(false) };
     store::app::CHAT_MESSAGES_CLEAR
         .on(db)
@@ -489,24 +490,25 @@ fn parse_sse_payloads(buf: &str) -> Vec<&str> {
 /// Assumes the caller (the router) has already validated that `thread_id`
 /// exists and is owned by `owner`; this does not re-check.
 pub async fn send_stream(
-    state: AppState,
-    owner: RecordId,
+    state: OrgState,
+    user: User,
     thread_id: RecordId,
     user_message: String,
     tx: mpsc::Sender<ChatEvent>,
 ) {
-    if let Err(message) = run_send(&state, &owner, &thread_id, &user_message, &tx).await {
+    if let Err(message) = run_send(&state, &user, &thread_id, &user_message, &tx).await {
         let _ = tx.send(ChatEvent::Error { message }).await;
     }
 }
 
 async fn run_send(
-    state: &AppState,
-    owner: &RecordId,
+    state: &OrgState,
+    user: &User,
     thread_id: &RecordId,
     user_message: &str,
     tx: &mpsc::Sender<ChatEvent>,
 ) -> Result<(), String> {
+    let owner = &user.id;
     let db = &state.db;
     let settings = &state.settings;
 
@@ -602,7 +604,7 @@ async fn run_send(
             let _ = tx.send(ChatEvent::ToolCall { name: name.clone() }).await;
 
             let args: Value = serde_json::from_str(&tc.arguments).unwrap_or_else(|_| json!({}));
-            let result = match registry::call(state, owner, &name, args).await {
+            let result = match registry::call(&state.app, user, &name, args).await {
                 Ok(v) => v,
                 Err(e) => json!({ "error": e.message }),
             };

@@ -97,7 +97,7 @@ async fn bearer_user(state: &AppState, headers: &HeaderMap) -> Option<(User, Opt
         let (user, scopes) = crate::oauth::verify_access_token(state, token).await?;
         (user, Some(scopes))
     } else {
-        (models_user::verify_api_token(&state.db, token).await.ok().flatten()?, None)
+        (models_user::verify_api_token(&state.control, token).await.ok().flatten()?, None)
     };
     crate::telemetry::record_user(&user.id.to_string());
     Some((user, scopes))
@@ -145,7 +145,10 @@ async fn handle_message(state: &AppState, user: &User, message: &Value) -> Optio
     Some(match method {
         "initialize" => {
             // the user's memory skill rides along, so edits in the UI reach every client on connect
-            let skill = crate::routers::settings::memory_skill(&state.db, &user.id).await.unwrap_or_default();
+            let skill = match state.org(&user.org).await {
+                Ok(s) => crate::routers::settings::memory_skill(&s.db, &user.id).await.unwrap_or_default(),
+                Err(_) => String::new(),
+            };
             result_response(id, initialize_result(&params, &skill))
         }
         "ping" => result_response(id, json!({})),
@@ -208,7 +211,7 @@ async fn call_tool(state: &AppState, user: &User, id: Value, params: &Value) -> 
 
     // Tool failures are results the model should see (isError), not
     // protocol errors. The value carries `error`, `code` and `trace_id`.
-    let (value, is_error) = match registry::call(state, &user.id, name, args).await {
+    let (value, is_error) = match registry::call(state, user, name, args).await {
         Ok(v) => {
             let is_error = v.get("error").is_some();
             (v, is_error)
@@ -291,16 +294,15 @@ mod tests {
     // -- protocol-level tests: no database needed, `Surreal::init()` is an
     // unconnected handle, and none of these paths query it. --------------
 
-    fn test_state() -> AppState {
+    async fn test_state() -> AppState {
         use crate::config::Settings;
-        use crate::state::AppStateInner;
         let settings = Settings {
             jwt_secret: "t".into(),
-            surreal_url: String::new(),
-            surreal_user: String::new(),
-            surreal_pass: String::new(),
-            surreal_ns: String::new(),
-            surreal_db: String::new(),
+            surreal_url: "mem://".into(),
+            surreal_user: "root".into(),
+            surreal_pass: "root".into(),
+            surreal_ns: "mcp_unit".into(),
+            surreal_db: "legacy".into(),
             openai_api_key: None,
             openai_base_url: "https://api.openai.com/v1".into(),
             encryption_key: "k".into(),
@@ -311,15 +313,15 @@ mod tests {
             bind_addr: String::new(),
             public_url: "http://localhost:8001".into(),
         };
-        AppState(std::sync::Arc::new(AppStateInner { db: crate::db::Db::init(), settings }))
+        AppState::build(&settings, surrealdb::opt::Config::new()).await.unwrap()
     }
 
     fn user() -> User {
-        User { id: crate::rid::parse("user:abc").unwrap(), email: "a@example.com".into() }
+        User { id: crate::rid::parse("user:abc").unwrap(), email: "a@example.com".into(), org: crate::pool::OrgId::new() }
     }
 
     async fn rpc(message: Value) -> Option<Value> {
-        handle_message(&test_state(), &user(), &message).await
+        handle_message(&test_state().await, &user(), &message).await
     }
 
     #[tokio::test]
@@ -360,7 +362,7 @@ mod tests {
         for (k, v) in headers {
             req = req.header(*k, *v);
         }
-        let app = router().with_state(test_state());
+        let app = router().with_state(test_state().await);
         app.oneshot(req.body(axum::body::Body::from(body.to_string())).unwrap()).await.unwrap().status()
     }
 

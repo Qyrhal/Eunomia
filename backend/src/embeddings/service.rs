@@ -27,7 +27,7 @@ use surrealdb::types::RecordId;
 use crate::rid::RecordIdExt;
 
 use crate::config::Settings;
-use crate::db::Db;
+use crate::pool::OrgDb;
 use crate::store;
 use crate::error::{AppError, AppResult};
 
@@ -130,13 +130,13 @@ struct AppSettingsOpenaiRow {
 
 /// Resolve `(base_url, api_key)` for `owner`'s OpenAI-compatible backend.
 pub(crate) async fn resolve_openai_for_owner(
-    db: &Db,
+    db: &OrgDb,
     owner: &RecordId,
     env_api_key: &Option<String>,
     encryption_key: &str,
 ) -> AppResult<(String, String)> {
     let rid = RecordId::from_table_key("app_settings", owner.key().clone());
-    let row: Option<AppSettingsOpenaiRow> = db.select(rid).await?;
+    let row: Option<AppSettingsOpenaiRow> = store::get(db, &rid).await?;
     let row = row.unwrap_or_default();
 
     let base_url = if row.openai_base_url.is_empty() { DEFAULT_OPENAI_BASE_URL.to_string() } else { row.openai_base_url };
@@ -159,7 +159,7 @@ pub fn endpoint_configured(base_url: &str, api_key: &str) -> bool {
 /// semantic arm of search/recall is skipped and the connected MCP agent is
 /// the model: keyword + graph + temporal retrieval still work, and the agent
 /// does any synthesis itself.
-pub async fn available(db: &Db, settings: &Settings, owner: &RecordId) -> bool {
+pub async fn available(db: &OrgDb, settings: &Settings, owner: &RecordId) -> bool {
     if settings.embeddings_backend != "openai" {
         return true; // "stub": hermetic tests
     }
@@ -171,7 +171,7 @@ pub async fn available(db: &Db, settings: &Settings, owner: &RecordId) -> bool {
 
 /// Whether the server can run its own chat completions for `owner`
 /// (reflect / observation consolidation); if not, the MCP agent does it.
-pub async fn chat_available(db: &Db, settings: &Settings, owner: &RecordId) -> bool {
+pub async fn chat_available(db: &OrgDb, settings: &Settings, owner: &RecordId) -> bool {
     settings.embeddings_backend == "openai" && available(db, settings, owner).await
 }
 
@@ -188,7 +188,7 @@ struct EmbedCacheRow {
 /// override of the env-level default) -- omit it only for owner-less call
 /// sites, which fall back to the env settings exactly as before. Mirrors
 /// `embeddings/service.py`'s `embed`.
-pub async fn embed(db: &Db, settings: &Settings, texts: &[String], owner: Option<&RecordId>) -> AppResult<Vec<Vec<f32>>> {
+pub async fn embed(db: &OrgDb, settings: &Settings, texts: &[String], owner: Option<&RecordId>) -> AppResult<Vec<Vec<f32>>> {
     if texts.is_empty() {
         return Ok(Vec::new());
     }

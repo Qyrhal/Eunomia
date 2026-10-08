@@ -21,7 +21,7 @@ use surrealdb::types::RecordId;
 
 use crate::cache::search::{self, Envelope};
 use crate::config::Settings;
-use crate::db::Db;
+use crate::pool::OrgDb;
 use crate::error::AppResult;
 
 #[derive(Debug, Clone, Serialize)]
@@ -51,7 +51,7 @@ impl IngestReport {
     }
 }
 
-async fn embed_record(db: &Db, settings: &Settings, owner: &RecordId, rec: &search::CacheRecord) -> AppResult<()> {
+async fn embed_record(db: &OrgDb, settings: &Settings, owner: &RecordId, rec: &search::CacheRecord) -> AppResult<()> {
     let text = format!("{}\n{}", rec.title, rec.body_text).trim().to_string();
     if text.is_empty() {
         return Ok(());
@@ -69,13 +69,13 @@ async fn embed_record(db: &Db, settings: &Settings, owner: &RecordId, rec: &sear
 /// skip it, or `Err(message)` on a mapping failure (mirrors a raised
 /// exception from the Python mapper).
 pub async fn ingest(
-    db: &Db,
-    settings: &Settings,
+    state: &crate::state::OrgState,
     owner: &RecordId,
     source_key: &str,
     raw_records: &[Value],
     map_fn: impl Fn(&Value) -> Result<Option<Envelope>, String>,
 ) -> AppResult<IngestReport> {
+    let (db, settings) = (&state.db, &state.settings);
     let mut report = IngestReport::new(source_key);
 
     for raw in raw_records {
@@ -111,7 +111,7 @@ pub async fn ingest(
                         && let Err(e) = embed_record(db, settings, owner, &rec).await {
                             report.errors.push(format!("embed {}: {}", rec.id, e.message));
                         }
-                    crate::jobs::handlers::enqueue_extract(db, owner, &rec.id, &rec.content_hash).await;
+                    crate::jobs::handlers::enqueue_extract(state, owner, &rec.id, &rec.content_hash).await;
                 }
             }
             Err(e) => {

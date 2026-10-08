@@ -27,7 +27,8 @@ use serde::{Deserialize, Serialize};
 use surrealdb::types::{Datetime, RecordId};
 use crate::rid::RecordIdExt;
 
-use crate::db::Db;
+use crate::pool::{ControlDb, OrgDb};
+use crate::store;
 use crate::error::{AppError, AppResult, ErrorCode};
 use crate::store::entities as q;
 use crate::tx::{lock, with_retry};
@@ -290,7 +291,7 @@ pub struct WriteMemoryOut {
 
 /// `vault_id`, membership-checked, or `owner`'s personal vault when omitted --
 /// the one place every public function in this module resolves its scope.
-async fn resolve_vault(db: &Db, owner: &RecordId, vault_id: Option<&RecordId>, action: Action) -> AppResult<RecordId> {
+async fn resolve_vault(db: &OrgDb, owner: &RecordId, vault_id: Option<&RecordId>, action: Action) -> AppResult<RecordId> {
     match vault_id {
         None => vaults_service::default_vault_id(db, owner).await,
         Some(v) => Ok(authz::authorize(db, owner, action, v).await?.vault().clone()),
@@ -299,7 +300,7 @@ async fn resolve_vault(db: &Db, owner: &RecordId, vault_id: Option<&RecordId>, a
 
 /// Whether `owner` may read/write a row in `vault` -- member of its vault.
 /// Not-a-member is treated the same as not-found everywhere in this module.
-async fn accessible(db: &Db, owner: &RecordId, vault: &RecordId, action: Action) -> AppResult<bool> {
+async fn accessible(db: &OrgDb, owner: &RecordId, vault: &RecordId, action: Action) -> AppResult<bool> {
     match authz::authorize(db, owner, action, vault).await {
         Ok(_) => Ok(true),
         Err(e) if e.code == ErrorCode::VaultForbidden => Ok(false),
@@ -309,7 +310,7 @@ async fn accessible(db: &Db, owner: &RecordId, vault: &RecordId, action: Action)
 
 /// Batch-resolve `user` RecordIds to emails, for attributing who wrote what
 /// in a shared vault -- one query per call site rather than N+1 lookups.
-async fn emails_for(db: &Db, user_ids: Vec<Option<RecordId>>) -> AppResult<HashMap<String, String>> {
+async fn emails_for(db: &ControlDb, user_ids: Vec<Option<RecordId>>) -> AppResult<HashMap<String, String>> {
     let ids: Vec<RecordId> = {
         #[allow(clippy::mutable_key_type)] // RecordId hashes by value; the interior mutability is never touched
         let mut seen = HashSet::new();
@@ -332,8 +333,8 @@ async fn emails_for(db: &Db, user_ids: Vec<Option<RecordId>>) -> AppResult<HashM
     Ok(rows.into_iter().map(|r| (r.id.to_string(), r.email)).collect())
 }
 
-async fn select_entity(db: &Db, rid: &RecordId) -> AppResult<Option<EntityRow>> {
-    let row: Option<EntityRow> = db.select(rid.clone()).await?;
+async fn select_entity(db: &OrgDb, rid: &RecordId) -> AppResult<Option<EntityRow>> {
+    let row: Option<EntityRow> = store::get(db, rid).await?;
     Ok(row)
 }
 
@@ -345,7 +346,7 @@ async fn select_entity(db: &Db, rid: &RecordId) -> AppResult<Option<EntityRow>> 
 /// case-insensitively against existing `name`/`aliases`. New aliases are
 /// merged onto a match rather than creating a duplicate row.
 pub async fn upsert_entity(
-    db: &Db,
+    db: &OrgDb,
     owner: &RecordId,
     kind: &str,
     name: &str,
@@ -413,7 +414,7 @@ pub async fn upsert_entity(
 /// rather than only in `write_memory` so the auto-extraction path also
 /// triggers it.
 pub async fn add_memory(
-    db: &Db,
+    db: &OrgDb,
     owner: &RecordId,
     subject_id: &RecordId,
     text: &str,
@@ -479,7 +480,7 @@ pub fn observation_rid(subject: &RecordId) -> RecordId {
 #[allow(clippy::too_many_arguments)] // public signature, grouping args would change callers
 /// records the memory against it.
 pub async fn write_memory(
-    db: &Db,
+    db: &OrgDb,
     owner: &RecordId,
     subject_name: &str,
     subject_kind: &str,
@@ -500,7 +501,7 @@ pub async fn write_memory(
 /// endpoints must be in vaults `owner` belongs to (they may be different
 /// vaults, as long as `owner` is a member of both).
 pub async fn add_relation(
-    db: &Db,
+    db: &OrgDb,
     owner: &RecordId,
     from_id: &RecordId,
     to_id: &RecordId,
@@ -556,7 +557,7 @@ pub async fn add_relation(
     }
 }
 
-async fn find_relation(db: &Db, from_id: &RecordId, to_id: &RecordId, label: &str) -> AppResult<Option<RelationRow>> {
+async fn find_relation(db: &OrgDb, from_id: &RecordId, to_id: &RecordId, label: &str) -> AppResult<Option<RelationRow>> {
     let mut res = q::FIND_RELATION
         .on(db)
         .bind(("in", from_id.clone()))
@@ -570,8 +571,8 @@ async fn find_relation(db: &Db, from_id: &RecordId, to_id: &RecordId, label: &st
 /// Delete one `memory` row, vault-scoped. Returns `false` (no-op) if it
 /// doesn't exist or `owner` isn't a member of its vault, rather than
 /// erroring -- mirrors `get_entity`'s not-found-is-None convention.
-pub async fn delete_memory(db: &Db, owner: &RecordId, memory_id: &RecordId) -> AppResult<bool> {
-    let row: Option<MemoryRow> = db.select(memory_id.clone()).await?;
+pub async fn delete_memory(db: &OrgDb, owner: &RecordId, memory_id: &RecordId) -> AppResult<bool> {
+    let row: Option<MemoryRow> = store::get(db, memory_id).await?;
     let Some(row) = row else { return Ok(false) };
     if !accessible(db, owner, &row.vault, Action::WriteMemories).await? {
         return Ok(false);
@@ -606,13 +607,13 @@ fn check_memory_edit(current_type: &str, text: Option<&str>, new_type: Option<&s
 /// not-found-is-None like `get_entity`. Bumps `version`. Editing a raw fact
 /// marks its subject's observation stale, same as writing a new one.
 pub async fn update_memory(
-    db: &Db,
+    db: &OrgDb,
     owner: &RecordId,
     memory_id: &RecordId,
     text: Option<&str>,
     new_type: Option<&str>,
 ) -> AppResult<Option<MemoryOut>> {
-    let row: Option<MemoryRow> = db.select(memory_id.clone()).await?;
+    let row: Option<MemoryRow> = store::get(db, memory_id).await?;
     let Some(row) = row else { return Ok(None) };
     if !accessible(db, owner, &row.vault, Action::WriteMemories).await? {
         return Ok(None);
@@ -647,7 +648,7 @@ pub async fn update_memory(
 /// not-found-is-None convention as `get_entity`. Only the fields passed
 /// (`Some`) are updated.
 pub async fn update_entity(
-    db: &Db,
+    db: &OrgDb,
     owner: &RecordId,
     entity_id: &RecordId,
     name: Option<&str>,
@@ -693,7 +694,7 @@ pub async fn update_entity(
 /// Delete an entity and everything hanging off it: its `memory` rows and its
 /// `relates_to` edges in both directions. Vault-scoped, same
 /// not-found-is-false convention as `delete_memory`.
-pub async fn delete_entity(db: &Db, owner: &RecordId, entity_id: &RecordId) -> AppResult<bool> {
+pub async fn delete_entity(db: &OrgDb, owner: &RecordId, entity_id: &RecordId) -> AppResult<bool> {
     let Some(row) = select_entity(db, entity_id).await? else { return Ok(false) };
     if !accessible(db, owner, &row.vault, Action::WriteMemories).await? {
         return Ok(false);
@@ -718,7 +719,7 @@ pub async fn delete_entity(db: &Db, owner: &RecordId, entity_id: &RecordId) -> A
 /// Errors (400) if the two ids are the same, of different kinds, or not
 /// found / `owner` isn't a member of either one's vault.
 pub async fn merge_entities(
-    db: &Db,
+    db: &OrgDb,
     owner: &RecordId,
     winner_id: &RecordId,
     loser_id: &RecordId,
@@ -815,7 +816,7 @@ pub async fn merge_entities(
 /// directions, or `None` if it doesn't exist / `owner` isn't a member of its
 /// vault. Every row carries `owner_email` -- who wrote it -- since in a
 /// shared vault that's no longer implied by who's asking.
-pub async fn get_entity(db: &Db, owner: &RecordId, entity_id: &RecordId) -> AppResult<Option<EntityDetail>> {
+pub async fn get_entity(db: &OrgDb, control: &ControlDb, owner: &RecordId, entity_id: &RecordId) -> AppResult<Option<EntityDetail>> {
     let Some(row) = select_entity(db, entity_id).await? else { return Ok(None) };
     if !accessible(db, owner, &row.vault, Action::ReadMemories).await? {
         return Ok(None);
@@ -836,7 +837,7 @@ pub async fn get_entity(db: &Db, owner: &RecordId, entity_id: &RecordId) -> AppR
     owner_ids.extend(memories.iter().map(|m| m.owner.clone()));
     owner_ids.extend(outgoing.iter().map(|r| r.owner.clone()));
     owner_ids.extend(incoming.iter().map(|r| r.owner.clone()));
-    let emails = emails_for(db, owner_ids).await?;
+    let emails = emails_for(control, owner_ids).await?;
 
     let memory_out_rows: Vec<MemoryOut> = memories
         .iter()
@@ -869,7 +870,7 @@ pub async fn get_entity(db: &Db, owner: &RecordId, entity_id: &RecordId) -> AppR
 /// result -- `limit=None` returns everything from `offset` onward. Returns
 /// `{results, total, has_more}`.
 pub async fn list_entities(
-    db: &Db,
+    db: &OrgDb,
     owner: &RecordId,
     kind: Option<&str>,
     vault_id: Option<&RecordId>,
@@ -908,7 +909,8 @@ pub async fn list_entities(
 /// v1 limitation, accepted as-is (matches the Python version): an edge is
 /// only included when BOTH endpoints are in the requested kind set.
 pub async fn graph(
-    db: &Db,
+    db: &OrgDb,
+    control: &ControlDb,
     owner: &RecordId,
     kinds: Option<&[String]>,
     vault_id: Option<&RecordId>,
@@ -933,7 +935,7 @@ pub async fn graph(
         rows_by_kind.extend(rows.into_iter().map(|r| (*k, r)));
     }
 
-    let emails = emails_for(db, rows_by_kind.iter().map(|(_, r)| r.owner.clone()).collect()).await?;
+    let emails = emails_for(control, rows_by_kind.iter().map(|(_, r)| r.owner.clone()).collect()).await?;
     let nodes: Vec<GraphNode> = rows_by_kind
         .iter()
         .map(|(k, r)| GraphNode {
@@ -954,7 +956,7 @@ pub async fn graph(
             .bind(("ids", ids))
             .await?;
         let rows: Vec<RelationRow> = res.take(0)?;
-        let edge_emails = emails_for(db, rows.iter().map(|r| r.owner.clone()).collect()).await?;
+        let edge_emails = emails_for(control, rows.iter().map(|r| r.owner.clone()).collect()).await?;
         edges = rows
             .iter()
             .map(|r| GraphEdge {
@@ -989,7 +991,7 @@ fn parent_label(kind: &str, parent_kind: &str) -> &'static str {
 /// agent-facing API, so a mismatched pairing isn't an error -- it just falls
 /// back to the generic "part_of" label rather than hard-failing.
 pub async fn upsert_code_entity(
-    db: &Db,
+    db: &OrgDb,
     owner: &RecordId,
     kind: &str,
     name: &str,

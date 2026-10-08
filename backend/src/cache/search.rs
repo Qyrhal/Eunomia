@@ -15,7 +15,7 @@ use sha2::{Digest, Sha256};
 use surrealdb::types::{Datetime, RecordId};
 use crate::rid::RecordIdExt;
 
-use crate::db::Db;
+use crate::pool::OrgDb;
 use crate::store;
 use crate::embeddings::service::DIM;
 use crate::error::{AppError, AppResult};
@@ -182,7 +182,7 @@ fn hash_envelope(env: &Envelope) -> String {
     format!("{:x}", hasher.finalize())
 }
 
-async fn reconcile_links(db: &Db, owner: &RecordId, record_rid: &RecordId, links_spec: &[LinkSpec]) -> AppResult<()> {
+async fn reconcile_links(db: &OrgDb, owner: &RecordId, record_rid: &RecordId, links_spec: &[LinkSpec]) -> AppResult<()> {
     store::cache::DELETE_SYNC_LINKS.on(db).bind(("id", record_rid.clone())).await?;
     for link in links_spec {
         // (in, out, rel) has a unique index -- an error here means the edge
@@ -200,11 +200,11 @@ async fn reconcile_links(db: &Db, owner: &RecordId, record_rid: &RecordId, links
 
 /// Insert or update one envelope, scoped to `owner`. Returns `(record,
 /// changed)`.
-pub async fn upsert(db: &Db, owner: &RecordId, env: &Envelope) -> AppResult<(CacheRecord, bool)> {
+pub async fn upsert(db: &OrgDb, owner: &RecordId, env: &Envelope) -> AppResult<(CacheRecord, bool)> {
     let record_rid = rid(owner, &env.id);
     let h = hash_envelope(env);
 
-    let existing: Option<Row> = db.select(record_rid.clone()).await?;
+    let existing: Option<Row> = store::get(db, &record_rid).await?;
     if let Some(existing) = existing
         && existing.content_hash == h && !existing.deleted {
             store::cache::TOUCH_INGESTED.on(db).bind(("id", record_rid.clone())).await?;
@@ -239,7 +239,7 @@ pub async fn upsert(db: &Db, owner: &RecordId, env: &Envelope) -> AppResult<(Cac
     Ok((rec, true))
 }
 
-pub async fn set_embedding(db: &Db, owner: &RecordId, record_id: &str, vector: Vec<f32>) -> AppResult<()> {
+pub async fn set_embedding(db: &OrgDb, owner: &RecordId, record_id: &str, vector: Vec<f32>) -> AppResult<()> {
     if vector.len() != DIM {
         return Err(AppError::bad_request(format!("embedding dim {} != {DIM}", vector.len())));
     }
@@ -298,7 +298,7 @@ pub(crate) fn rank_term_hits(per_term: Vec<Vec<(String, f64)>>, limit: usize) ->
 /// `title` and `body_text` each have their own FULLTEXT index (a two-field index only resolves
 /// the first field). Per search term: the title index (BM25-scored, +1 so a title hit beats a
 /// body-only one) plus the body index (flat score); fused by [`rank_term_hits`].
-pub(crate) async fn keyword_ids(db: &Db, owner: &RecordId, q: &str, limit: usize) -> AppResult<Vec<String>> {
+pub(crate) async fn keyword_ids(db: &OrgDb, owner: &RecordId, q: &str, limit: usize) -> AppResult<Vec<String>> {
     #[derive(Deserialize, SurrealValue)]
     struct ScoredRow {
         id: RecordId,
@@ -330,7 +330,7 @@ pub(crate) async fn keyword_ids(db: &Db, owner: &RecordId, q: &str, limit: usize
 
 /// Mirrors `cache/search.py`'s `_semantic_ids`: embed the query, then [`nearest_ids`].
 pub(crate) async fn semantic_ids(
-    db: &Db,
+    db: &OrgDb,
     settings: &crate::config::Settings,
     owner: &RecordId,
     q: &str,
@@ -349,7 +349,7 @@ pub(crate) async fn semantic_ids(
 /// owner and the owner filter is not part of the ANN walk, so a small owner among big ones can get
 /// fewer than `limit` rows back; then an exact cosine scan over just this owner's records is the
 /// answer (it is ground truth, and cheap exactly when the owner is small).
-pub async fn nearest_ids(db: &Db, owner: &RecordId, vec: Vec<f32>, limit: usize) -> AppResult<Vec<String>> {
+pub async fn nearest_ids(db: &OrgDb, owner: &RecordId, vec: Vec<f32>, limit: usize) -> AppResult<Vec<String>> {
     #[derive(Deserialize, SurrealValue)]
     struct IdRow {
         id: RecordId,
@@ -420,7 +420,7 @@ impl SearchParams {
 }
 
 pub async fn search(
-    db: &Db,
+    db: &OrgDb,
     settings: &crate::config::Settings,
     owner: &RecordId,
     q: &str,
@@ -482,8 +482,8 @@ pub async fn search(
     Ok(recs.into_iter().skip(params.offset).take(params.limit).collect())
 }
 
-pub async fn get(db: &Db, owner: &RecordId, record_id: &str) -> AppResult<Option<CacheRecord>> {
-    let row: Option<Row> = db.select(rid(owner, record_id)).await?;
+pub async fn get(db: &OrgDb, owner: &RecordId, record_id: &str) -> AppResult<Option<CacheRecord>> {
+    let row: Option<Row> = store::get(db, &rid(owner, record_id)).await?;
     Ok(row.map(row_to_record))
 }
 
@@ -524,7 +524,7 @@ fn apply_filters(conditions: &mut Vec<String>, params: &HashMap<String, Value>, 
     }
 }
 
-pub async fn list_records(db: &Db, owner: &RecordId, params: &ListParams) -> AppResult<Vec<CacheRecord>> {
+pub async fn list_records(db: &OrgDb, owner: &RecordId, params: &ListParams) -> AppResult<Vec<CacheRecord>> {
     let mut conditions = vec!["owner = $owner".to_string(), "deleted = false".to_string()];
     let mut bound: HashMap<String, Value> = HashMap::new();
     if let Some(t) = &params.type_ {
@@ -555,7 +555,7 @@ pub async fn list_records(db: &Db, owner: &RecordId, params: &ListParams) -> App
 
 /// Total `cache_record` rows matching `list_records`'s same `type`/`filters`
 /// conditions, ignoring `limit`/`offset`.
-pub async fn count_records(db: &Db, owner: &RecordId, type_: Option<&str>, filters: &HashMap<String, Value>) -> AppResult<i64> {
+pub async fn count_records(db: &OrgDb, owner: &RecordId, type_: Option<&str>, filters: &HashMap<String, Value>) -> AppResult<i64> {
     let mut conditions = vec!["owner = $owner".to_string(), "deleted = false".to_string()];
     let mut bound: HashMap<String, Value> = HashMap::new();
     if let Some(t) = type_ {
@@ -586,7 +586,7 @@ pub struct LinkEntry {
     pub target_id: String,
 }
 
-pub async fn links(db: &Db, owner: &RecordId, record_id: &str, rel: Option<&str>) -> AppResult<Vec<LinkEntry>> {
+pub async fn links(db: &OrgDb, owner: &RecordId, record_id: &str, rel: Option<&str>) -> AppResult<Vec<LinkEntry>> {
     let record_rid = rid(owner, record_id);
     let mut out = Vec::new();
 

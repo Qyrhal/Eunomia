@@ -110,7 +110,7 @@ pub fn is_access_token(token: &str) -> bool {
 /// still present, and issued for this server's MCP URL. Returns the user and
 /// the scopes they granted.
 pub async fn verify_access_token(state: &AppState, token: &str) -> Option<(User, Vec<String>)> {
-    let row = server::token_row(&state.db, token).await?;
+    let row = server::token_row(&state.control, token).await?;
     if row.kind != "access" || row.expired || row.resource.as_deref() != Some(mcp_url(&state.settings).as_str()) {
         return None;
     }
@@ -120,9 +120,10 @@ pub async fn verify_access_token(state: &AppState, token: &str) -> Option<(User,
         id: surrealdb::types::RecordId,
         email: String,
     }
-    let user: UserRow = state.db.select(owner).await.ok()??;
-    let _ = crate::store::app::OAUTH_GRANT_TOUCH.on(&state.db).bind(("id", row.family)).await;
-    Some((User { id: user.id, email: user.email }, row.scope.unwrap_or_default()))
+    let user: UserRow = crate::store::get_control(&state.control, &owner).await.ok()??;
+    let _ = crate::store::control::OAUTH_GRANT_TOUCH.on(&state.control).bind(("id", row.family)).await;
+    let user = crate::models_user::load_user(&state.control, user.id, user.email).await.ok()?;
+    Some((user, row.scope.unwrap_or_default()))
 }
 
 /// 403 `insufficient_scope` when a `tools/call` in `message` (single or batch)
@@ -174,8 +175,8 @@ pub async fn issue_tokens(state: &AppState, family: &surrealdb::types::RecordId)
     let refresh = format!("{REFRESH_PREFIX}{}", generate_token());
     let ttl = format!("{ACCESS_TTL_SECS}s");
     for (kind, tok, ttl) in [("access", &access, ttl.as_str()), ("refresh", &refresh, REFRESH_TTL)] {
-        crate::store::app::OAUTH_TOKEN_CREATE
-            .on(&state.db)
+        crate::store::control::OAUTH_TOKEN_CREATE
+            .on(&state.control)
             .bind(("kind", kind))
             .bind(("token_hash", hash_token(tok)))
             .bind(("family", family.clone()))
@@ -184,6 +185,6 @@ pub async fn issue_tokens(state: &AppState, family: &surrealdb::types::RecordId)
             .check()?;
     }
     // ponytail: pruning rides on issuance, so an idle server never accumulates garbage it did not create
-    let _ = crate::store::app::OAUTH_PRUNE.on(&state.db).await;
+    let _ = crate::store::control::OAUTH_PRUNE.on(&state.control).await;
     Ok(IssuedTokens { access, refresh })
 }

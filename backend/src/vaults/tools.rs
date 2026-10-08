@@ -8,7 +8,7 @@
 use serde_json::{json, Value};
 use surrealdb::types::RecordId;
 
-use crate::db::Db;
+use crate::pool::{ControlDb, OrgDb};
 use crate::vaults::service;
 
 /// Mirrors Python's `@safe` decorator: a tool must never raise on bad agent
@@ -23,70 +23,70 @@ fn err_app(tool_name: &str, e: &crate::error::AppError) -> Value {
     v
 }
 
-pub async fn vault_create(db: &Db, owner: &RecordId, name: &str, kind: &str) -> Value {
+pub async fn vault_create(db: &OrgDb, owner: &RecordId, name: &str, kind: &str) -> Value {
     match service::create_vault(db, owner, name, kind).await {
         Ok(v) => serde_json::to_value(v).unwrap_or_else(|e| err("vault_create", &e.to_string())),
         Err(e) => err_app("vault_create", &e),
     }
 }
 
-pub async fn vault_list(db: &Db, owner: &RecordId) -> Value {
+pub async fn vault_list(db: &OrgDb, owner: &RecordId) -> Value {
     match service::list_my_vaults(db, owner).await {
         Ok(v) => json!({ "results": v }),
         Err(e) => err_app("vault_list", &e),
     }
 }
 
-pub async fn vault_clone(db: &Db, owner: &RecordId, vault_id: &RecordId, name: Option<&str>, kind: &str) -> Value {
+pub async fn vault_clone(db: &OrgDb, owner: &RecordId, vault_id: &RecordId, name: Option<&str>, kind: &str) -> Value {
     match service::clone_vault(db, owner, vault_id, name, kind).await {
         Ok(v) => serde_json::to_value(v).unwrap_or_else(|e| err("vault_clone", &e.to_string())),
         Err(e) => err_app("vault_clone", &e),
     }
 }
 
-pub async fn vault_merge(db: &Db, owner: &RecordId, a: &RecordId, b: &RecordId, name: Option<&str>, kind: &str) -> Value {
+pub async fn vault_merge(db: &OrgDb, owner: &RecordId, a: &RecordId, b: &RecordId, name: Option<&str>, kind: &str) -> Value {
     match service::merge_vaults(db, owner, a, b, name, kind).await {
         Ok(v) => serde_json::to_value(v).unwrap_or_else(|e| err("vault_merge", &e.to_string())),
         Err(e) => err_app("vault_merge", &e),
     }
 }
 
-pub async fn vault_invite(db: &Db, owner: &RecordId, vault_id: &RecordId, email: &str, role: &str) -> Value {
-    match service::invite_member(db, owner, vault_id, email, role).await {
+pub async fn vault_invite(db: &OrgDb, control: &ControlDb, owner: &RecordId, vault_id: &RecordId, email: &str, role: &str) -> Value {
+    match service::invite_member(db, control, owner, vault_id, email, role).await {
         Ok(v) => serde_json::to_value(v).unwrap_or_else(|e| err("vault_invite", &e.to_string())),
         Err(e) => err_app("vault_invite", &e),
     }
 }
 
-pub async fn vault_members(db: &Db, owner: &RecordId, vault_id: &RecordId) -> Value {
-    match service::list_members(db, owner, vault_id).await {
+pub async fn vault_members(db: &OrgDb, control: &ControlDb, owner: &RecordId, vault_id: &RecordId) -> Value {
+    match service::list_members(db, control, owner, vault_id).await {
         Ok(v) => json!({ "results": v }),
         Err(e) => err_app("vault_members", &e),
     }
 }
 
-pub async fn vault_remove_member(db: &Db, owner: &RecordId, vault_id: &RecordId, email: &str) -> Value {
-    match service::remove_member(db, owner, vault_id, email).await {
+pub async fn vault_remove_member(db: &OrgDb, control: &ControlDb, owner: &RecordId, vault_id: &RecordId, email: &str) -> Value {
+    match service::remove_member(db, control, owner, vault_id, email).await {
         Ok(()) => json!({ "removed": true }),
         Err(e) => err_app("vault_remove_member", &e),
     }
 }
 
-pub async fn vault_leave(db: &Db, owner: &RecordId, vault_id: &RecordId) -> Value {
+pub async fn vault_leave(db: &OrgDb, owner: &RecordId, vault_id: &RecordId) -> Value {
     match service::leave_vault(db, owner, vault_id).await {
         Ok(()) => json!({ "left": true }),
         Err(e) => err_app("vault_leave", &e),
     }
 }
 
-pub async fn vault_rename(db: &Db, owner: &RecordId, vault_id: &RecordId, name: &str) -> Value {
+pub async fn vault_rename(db: &OrgDb, owner: &RecordId, vault_id: &RecordId, name: &str) -> Value {
     match service::rename_vault(db, owner, vault_id, name).await {
         Ok(v) => serde_json::to_value(v).unwrap_or_else(|e| err("vault_rename", &e.to_string())),
         Err(e) => err_app("vault_rename", &e),
     }
 }
 
-pub async fn vault_delete(db: &Db, owner: &RecordId, vault_id: &RecordId) -> Value {
+pub async fn vault_delete(db: &OrgDb, owner: &RecordId, vault_id: &RecordId) -> Value {
     match service::delete_vault(db, owner, vault_id).await {
         Ok(()) => json!({ "deleted": true }),
         Err(e) => err_app("vault_delete", &e),

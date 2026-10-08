@@ -18,7 +18,7 @@ use surrealdb::types::RecordId;
 use crate::rid::RecordIdExt;
 
 use crate::auth::Authn;
-use crate::db::Db;
+use crate::pool::ControlDb;
 use crate::error::{AppResult, ErrorCode};
 use crate::models_user::User;
 use crate::state::AppState;
@@ -58,9 +58,15 @@ pub struct Capsule {
     /// True when `args` was cut to fit the size cap (not replayable).
     pub truncated: bool,
     pub created_at: String,
+    /// Whose request failed. Not part of the API shape: `GET /api/debug/capsules/{id}` checks it.
+    #[serde(skip)]
+    #[schema(ignore)]
+    pub org: Option<String>,
 }
 
 pub struct Failure {
+    /// The org key of the failing request, if it was authenticated.
+    pub org: Option<String>,
     pub kind: &'static str,
     pub name: String,
     pub user: Option<String>,
@@ -115,7 +121,7 @@ fn cut(s: &str, max: usize) -> &str {
 }
 
 /// Stores a capsule for the current trace. Never fails the caller: a capsule that cannot be written is logged.
-pub async fn record(db: &Db, f: Failure) {
+pub async fn record(db: &ControlDb, f: Failure) {
     let trace_id = crate::telemetry::current_trace_id();
     let source: String = scrub(&f.source).chars().take(MAX_SOURCE_CHARS).collect();
     let version = crate::config::APP_VERSION;
@@ -128,6 +134,7 @@ pub async fn record(db: &Db, f: Failure) {
         store::capsules::INSERT
         .on(db)
         .bind(("id", RecordId::from_table_key("failure_capsule", trace_id.clone())))
+        .bind(("org", f.org))
         .bind(("trace_id", trace_id))
         .bind(("kind", f.kind))
         .bind(("name", f.name))
@@ -152,6 +159,7 @@ pub async fn record(db: &Db, f: Failure) {
 
 #[derive(Deserialize, SurrealValue)]
 struct Row {
+    org: Option<String>,
     trace_id: String,
     kind: String,
     name: String,
@@ -165,7 +173,7 @@ struct Row {
     created_at: String,
 }
 
-pub async fn get(db: &Db, trace_id: &str) -> AppResult<Option<Capsule>> {
+pub async fn get(db: &ControlDb, trace_id: &str) -> AppResult<Option<Capsule>> {
     let mut res = store::capsules::GET.on(db).bind(("trace_id", trace_id.to_string())).await?;
     let rows: Vec<Row> = res.take(0)?;
     Ok(rows.into_iter().next().map(|r| Capsule {
@@ -180,23 +188,24 @@ pub async fn get(db: &Db, trace_id: &str) -> AppResult<Option<Capsule>> {
         version: r.version,
         truncated: r.truncated,
         created_at: r.created_at,
+        org: r.org,
     }))
 }
 
 /// Deletes capsules older than `age` (a SurrealQL duration such as `7d`), then all but the `max` newest.
-pub async fn prune(db: &Db, age: &str, max: i64) -> AppResult<()> {
+pub async fn prune(db: &ControlDb, age: &str, max: i64) -> AppResult<()> {
     store::capsules::PRUNE_OLD.on(db).bind(("age", age.to_string())).await?.check()?;
     store::capsules::PRUNE_EXCESS.on(db).bind(("max", max)).await?.check()?;
     Ok(())
 }
 
 /// The retention the `prune_capsules` job applies: 7 days or 1000 rows.
-pub async fn prune_default(db: &Db) -> AppResult<()> {
+pub async fn prune_default(db: &ControlDb) -> AppResult<()> {
     prune(db, KEEP_DAYS, KEEP_ROWS).await
 }
 
 /// The instance's first user, who owns the `prune_capsules` job rows.
-pub async fn first_user(db: &Db) -> AppResult<Option<RecordId>> {
+pub async fn first_user(db: &ControlDb) -> AppResult<Option<RecordId>> {
     #[derive(Deserialize, SurrealValue)]
     struct R {
         id: RecordId,
@@ -205,13 +214,17 @@ pub async fn first_user(db: &Db) -> AppResult<Option<RecordId>> {
     Ok(res.take::<Vec<R>>(0)?.into_iter().next().map(|r| r.id))
 }
 
-/// Admin = the instance's first user, or an email listed in `EUNOMIA_ADMIN_EMAILS` (comma separated).
-pub async fn is_admin(db: &Db, user: &User) -> AppResult<bool> {
-    let listed = std::env::var("EUNOMIA_ADMIN_EMAILS")
+/// An email listed in `EUNOMIA_ADMIN_EMAILS` (comma separated): an operator of the whole instance.
+pub fn is_operator(user: &User) -> bool {
+    std::env::var("EUNOMIA_ADMIN_EMAILS")
         .unwrap_or_default()
         .split(',')
-        .any(|e| !e.trim().is_empty() && e.trim().eq_ignore_ascii_case(&user.email));
-    Ok(listed || first_user(db).await?.as_ref() == Some(&user.id))
+        .any(|e| !e.trim().is_empty() && e.trim().eq_ignore_ascii_case(&user.email))
+}
+
+/// Admin = the instance's first user, or an operator.
+pub async fn is_admin(db: &ControlDb, user: &User) -> AppResult<bool> {
+    Ok(is_operator(user) || first_user(db).await?.as_ref() == Some(&user.id))
 }
 
 /// Records a capsule for every 5xx response. Sits inside the gate (so the caller is known) and
@@ -221,6 +234,7 @@ pub async fn capture(State(state): State<AppState>, req: Request, next: Next) ->
     let uri = req.uri().to_string();
     let route = req.extensions().get::<MatchedPath>().map_or_else(|| req.uri().path().to_string(), |m| m.as_str().to_string());
     let user = req.extensions().get::<Authn>().map(|a| a.user.id.to_string());
+    let org = req.extensions().get::<Authn>().map(|a| a.user.org.key());
     let small = req
         .headers()
         .get(axum::http::header::CONTENT_LENGTH)
@@ -244,8 +258,9 @@ pub async fn capture(State(state): State<AppState>, req: Request, next: Next) ->
         let info = resp.extensions().get::<FailureInfo>().cloned();
         let (code, source) = info.map_or((ErrorCode::Internal, String::new()), |i| (i.code, i.source));
         record(
-            &state.db,
+            &state.control,
             Failure {
+                org,
                 kind: "route",
                 name: format!("{method} {route}"),
                 user,

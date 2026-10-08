@@ -15,13 +15,13 @@ async fn concurrent_memory_writes_keep_exact_counts() {
     let mut tasks = Vec::new();
     for t in 0..2 {
         let state = app.state.clone();
-        let owner = app.user.id.clone();
+        let user = app.user.clone();
         tasks.push(tokio::spawn(async move {
             let mut errors = Vec::new();
             for i in 0..PER_TASK {
                 for (kind, text) in [("world", format!("fact {t}-{i}")), ("observation", format!("belief {t}-{i}"))] {
                     let args = json!({"subject_name":"Alice","subject_kind":"person","text":text,"type":kind});
-                    let out = registry::call(&state, &owner, "memory_write", args).await;
+                    let out = registry::call(&state, &user, "memory_write", args).await;
                     match out {
                         Ok(v) if v.get("error").is_none() => {}
                         other => errors.push(format!("{other:?}")),
@@ -37,10 +37,11 @@ async fn concurrent_memory_writes_keep_exact_counts() {
     }
     assert!(errors.is_empty(), "{} writes failed, first: {:?}", errors.len(), errors.first());
 
+    let db = app.db().await;
     let count = |q: &'static str| {
-        let db = app.state.db.clone();
+        let db = db.clone();
         async move {
-            let mut res = db.query(q).await.unwrap();
+            let mut res = db.test_raw().query(q).await.unwrap();
             let n: Option<i64> = res.take("n").unwrap();
             n.unwrap_or(0)
         }

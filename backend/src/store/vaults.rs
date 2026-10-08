@@ -48,9 +48,6 @@ pub const DELETE_VAULT: Stmt = Stmt::new(
     "BEGIN TRANSACTION; DELETE vault_member WHERE vault = $vault; DELETE $vault; COMMIT TRANSACTION;",
 );
 
-pub const USER_ID_BY_EMAIL: Stmt =
-    Stmt::new("vaults.user_id_by_email", "SELECT id FROM user WHERE string::lowercase(email) = $email LIMIT 1");
-
 pub const INVITE: Stmt = Stmt::new(
     "vaults.invite",
     r#"CREATE vault_member SET vault = $vault, user = $user, role = $role, status = "pending" RETURN AFTER"#,
@@ -58,7 +55,7 @@ pub const INVITE: Stmt = Stmt::new(
 
 pub const LIST_MEMBERS: Stmt = Stmt::new(
     "vaults.list_members",
-    r#"SELECT user.email AS email, role FROM vault_member WHERE vault = $vault AND status = "active""#,
+    r#"SELECT user, role FROM vault_member WHERE vault = $vault AND status = "active""#,
 );
 
 pub const LIST_INVITATIONS: Stmt = Stmt::new(
@@ -144,7 +141,6 @@ pub const ALL: &[&Stmt] = &[
     &LIST_MINE,
     &RENAME,
     &DELETE_VAULT,
-    &USER_ID_BY_EMAIL,
     &INVITE,
     &LIST_MEMBERS,
     &LIST_INVITATIONS,

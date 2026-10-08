@@ -33,7 +33,8 @@ use surrealdb::types::RecordId;
 use crate::rid::RecordIdExt;
 
 use crate::config::Settings;
-use crate::db::Db;
+use crate::pool::OrgDb;
+use crate::store;
 use crate::error::{AppError, AppResult};
 use crate::store::entities as q;
 
@@ -122,9 +123,9 @@ pub(super) struct AppSettingsRow {
 /// The `app_settings:<owner_id>` row, creating it with (schema-)defaults if
 /// missing. Shared by `resolve_openai` (below) and `consolidate.rs`'s
 /// mission lookup.
-pub(super) async fn app_settings_row(db: &Db, owner: &RecordId) -> AppResult<AppSettingsRow> {
+pub(super) async fn app_settings_row(db: &OrgDb, owner: &RecordId) -> AppResult<AppSettingsRow> {
     let rid = RecordId::from_table_key("app_settings", owner.key().clone());
-    let row: Option<AppSettingsRow> = db.select(rid.clone()).await?;
+    let row: Option<AppSettingsRow> = store::get(db, &rid).await?;
     match row {
         Some(r) => Ok(r),
         None => {
@@ -142,7 +143,7 @@ pub(super) async fn app_settings_row(db: &Db, owner: &RecordId) -> AppResult<App
 /// The per-user `app_settings` row overrides the env-level
 /// `settings.openai_api_key` default for the key; `base_url` is per-user
 /// only. Mirrors `connectors/service.py::resolve_openai`.
-pub(super) async fn resolve_openai(db: &Db, settings: &Settings, owner: &RecordId) -> AppResult<(String, String)> {
+pub(super) async fn resolve_openai(db: &OrgDb, settings: &Settings, owner: &RecordId) -> AppResult<(String, String)> {
     let row = app_settings_row(db, owner).await?;
     let base_url = if row.openai_base_url.is_empty() { DEFAULT_OPENAI_BASE_URL.to_string() } else { row.openai_base_url };
     let decrypted = crate::connectors::crypto::decrypt_or_plaintext(&settings.encryption_key, &row.openai_api_key_encrypted);
@@ -150,7 +151,7 @@ pub(super) async fn resolve_openai(db: &Db, settings: &Settings, owner: &RecordI
     Ok((base_url, key))
 }
 
-async fn call_llm(db: &Db, settings: &Settings, owner: &RecordId, text: &str) -> AppResult<ExtractionData> {
+async fn call_llm(db: &OrgDb, settings: &Settings, owner: &RecordId, text: &str) -> AppResult<ExtractionData> {
     let (base_url, api_key) = resolve_openai(db, settings, owner).await?;
     let key = if api_key.is_empty() { "not-needed".to_string() } else { api_key };
 
@@ -183,7 +184,7 @@ async fn call_llm(db: &Db, settings: &Settings, owner: &RecordId, text: &str) ->
 /// strings) that got a new raw `memory` row -- used by the ingest pipeline
 /// to know which entities need re-consolidation.
 async fn apply_extraction(
-    db: &Db,
+    db: &OrgDb,
     owner: &RecordId,
     source_record_id: &str,
     data: &ExtractionData,
@@ -192,7 +193,7 @@ async fn apply_extraction(
     let mut touched: HashSet<String> = HashSet::new();
 
     async fn ensure(
-        db: &Db,
+        db: &OrgDb,
         owner: &RecordId,
         entity_ids: &mut HashMap<String, (RecordId, String)>,
         name: &str,
@@ -251,7 +252,7 @@ async fn apply_extraction(
 /// fails the caller. Returns the set of subject ids (as strings) that got a
 /// new raw memory (empty on no-op/failure) -- a future ingest pipeline would
 /// use this to batch-trigger `consolidate.rs` per unique subject touched.
-pub async fn extract_entities(db: &Db, settings: &Settings, owner: &RecordId, record: &ExtractRecord) -> HashSet<String> {
+pub async fn extract_entities(db: &OrgDb, settings: &Settings, owner: &RecordId, record: &ExtractRecord) -> HashSet<String> {
     let body = record.body_text.trim();
     if !should_extract(body, &settings.embeddings_backend) {
         return HashSet::new();

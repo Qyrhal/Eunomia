@@ -18,7 +18,7 @@ use surrealdb::types::RecordId;
 use crate::rid::RecordIdExt;
 
 use crate::config::Settings;
-use crate::db::Db;
+use crate::pool::{ControlDb, OrgDb};
 use crate::error::AppResult;
 
 use super::{consolidate, service};
@@ -34,7 +34,7 @@ fn matches_search(name: &str, aliases: &[String], needle: &str) -> bool {
 }
 
 pub async fn entities_search(
-    db: &Db,
+    db: &OrgDb,
     owner: &RecordId,
     query: &str,
     kind: Option<&str>,
@@ -52,21 +52,22 @@ pub async fn entities_search(
     Ok(service::ListEntitiesOut { results: sliced, total, has_more })
 }
 
-pub async fn entities_get(db: &Db, owner: &RecordId, id: &RecordId) -> AppResult<Option<service::EntityDetail>> {
-    service::get_entity(db, owner, id).await
+pub async fn entities_get(db: &OrgDb, control: &ControlDb, owner: &RecordId, id: &RecordId) -> AppResult<Option<service::EntityDetail>> {
+    service::get_entity(db, control, owner, id).await
 }
 
 pub async fn entities_graph(
-    db: &Db,
+    db: &OrgDb,
+    control: &ControlDb,
     owner: &RecordId,
     kinds: Option<&[String]>,
     vault_id: Option<&RecordId>,
 ) -> AppResult<service::GraphOut> {
-    service::graph(db, owner, kinds, vault_id).await
+    service::graph(db, control, owner, kinds, vault_id).await
 }
 
 pub async fn code_entity_upsert(
-    db: &Db,
+    db: &OrgDb,
     owner: &RecordId,
     kind: &str,
     name: &str,
@@ -81,7 +82,7 @@ pub async fn code_entity_upsert(
 /// implementation, just exposed directly as a tool (unlike `add_relation`,
 /// which is otherwise only called internally).
 pub async fn code_relate(
-    db: &Db,
+    db: &OrgDb,
     owner: &RecordId,
     from_id: &RecordId,
     to_id: &RecordId,
@@ -93,7 +94,7 @@ pub async fn code_relate(
 
 #[allow(clippy::too_many_arguments)]
 pub async fn memory_write(
-    db: &Db,
+    db: &OrgDb,
     owner: &RecordId,
     subject_name: &str,
     subject_kind: &str,
@@ -106,7 +107,7 @@ pub async fn memory_write(
 }
 
 pub async fn memory_update(
-    db: &Db,
+    db: &OrgDb,
     owner: &RecordId,
     memory_id: &RecordId,
     text: Option<&str>,
@@ -116,7 +117,7 @@ pub async fn memory_update(
 }
 
 pub async fn entity_update(
-    db: &Db,
+    db: &OrgDb,
     owner: &RecordId,
     entity_id: &RecordId,
     name: Option<&str>,
@@ -126,16 +127,16 @@ pub async fn entity_update(
     service::update_entity(db, owner, entity_id, name, aliases, summary).await
 }
 
-pub async fn memory_delete(db: &Db, owner: &RecordId, memory_id: &RecordId) -> AppResult<bool> {
+pub async fn memory_delete(db: &OrgDb, owner: &RecordId, memory_id: &RecordId) -> AppResult<bool> {
     service::delete_memory(db, owner, memory_id).await
 }
 
-pub async fn entity_delete(db: &Db, owner: &RecordId, entity_id: &RecordId) -> AppResult<bool> {
+pub async fn entity_delete(db: &OrgDb, owner: &RecordId, entity_id: &RecordId) -> AppResult<bool> {
     service::delete_entity(db, owner, entity_id).await
 }
 
 pub async fn entity_merge(
-    db: &Db,
+    db: &OrgDb,
     owner: &RecordId,
     winner_id: &RecordId,
     loser_id: &RecordId,
@@ -159,7 +160,7 @@ entity with `entities_get`, then record the updated belief with `memory_write` (
 /// given), or every entity for `owner` that has new unconsolidated raw facts
 /// (omitted).
 pub async fn consolidate_observations(
-    db: &Db,
+    db: &OrgDb,
     settings: &Settings,
     owner: &RecordId,
     subject_id: Option<&RecordId>,

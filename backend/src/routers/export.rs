@@ -24,7 +24,7 @@ use serde_json::{json, Value};
 use surrealdb::types::{Datetime, RecordId};
 use crate::rid::RecordIdExt;
 
-use crate::db::Db;
+use crate::pool::{ControlDb, OrgDb};
 use crate::store;
 use crate::error::{AppError, AppResult};
 use crate::models_user::User;
@@ -111,7 +111,7 @@ struct UserEmailRow {
 
 /// `owner`'s personal vault -- the implicit scope for an export, matching
 /// `vaults/service.py::default_vault_id`.
-pub(crate) async fn resolve_personal_vault(db: &Db, owner: &RecordId) -> AppResult<RecordId> {
+pub(crate) async fn resolve_personal_vault(db: &OrgDb, owner: &RecordId) -> AppResult<RecordId> {
     let mut res = store::app::EXPORT_PERSONAL_VAULT
         .on(db)
         .bind(("user", owner.clone()))
@@ -123,7 +123,7 @@ pub(crate) async fn resolve_personal_vault(db: &Db, owner: &RecordId) -> AppResu
         .ok_or_else(|| AppError::internal("user has no personal vault"))
 }
 
-async fn fetch_emails(db: &Db, ids: &[RecordId]) -> AppResult<HashMap<String, String>> {
+async fn fetch_emails(db: &ControlDb, ids: &[RecordId]) -> AppResult<HashMap<String, String>> {
     if ids.is_empty() {
         return Ok(HashMap::new());
     }
@@ -133,7 +133,7 @@ async fn fetch_emails(db: &Db, ids: &[RecordId]) -> AppResult<HashMap<String, St
             dedup.push(id.clone());
         }
     }
-    let mut res = store::app::EXPORT_USER_EMAILS
+    let mut res = store::control::EXPORT_USER_EMAILS
         .on(db)
         .bind(("ids", dedup))
         .await?;
@@ -156,7 +156,8 @@ fn datetime_str(d: &Option<Datetime>) -> Value {
     security(("cookie" = []), ("bearer" = [])),
 )]
 async fn export_data(State(state): State<AppState>, user: User) -> AppResult<Response> {
-    let document = build_export(&state.db, &user).await?;
+    let state = state.org(&user.org).await?;
+    let document = build_export(&state.db, &state.control, &user).await?;
     let body = serde_json::to_string_pretty(&document).map_err(|e| AppError::internal(e.to_string()))?;
 
     Ok((
@@ -171,7 +172,7 @@ async fn export_data(State(state): State<AppState>, user: User) -> AppResult<Res
 }
 
 /// The export document for `user`'s personal vault. Shared with `eunomia replay`.
-pub async fn build_export(db: &Db, user: &User) -> AppResult<Value> {
+pub async fn build_export(db: &OrgDb, control: &ControlDb, user: &User) -> AppResult<Value> {
     let vault = resolve_personal_vault(db, &user.id).await?;
 
     // Pass 1: gather every entity + its memory/relations, collecting the
@@ -231,7 +232,7 @@ pub async fn build_export(db: &Db, user: &User) -> AppResult<Value> {
         }
     }
 
-    let emails = fetch_emails(db, &owner_ids).await?;
+    let emails = fetch_emails(control, &owner_ids).await?;
     let email_for = |id: &Option<RecordId>| -> Value {
         id.as_ref()
             .and_then(|i| emails.get(&i.to_string()))

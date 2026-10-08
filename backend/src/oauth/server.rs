@@ -16,12 +16,12 @@ use surrealdb::types::{Datetime, RecordId};
 use crate::rid::RecordIdExt;
 
 use super::{ACCESS_TTL_SECS, cimd, frontend_url, issue_tokens, mcp_url};
-use crate::db::Db;
+use crate::pool::ControlDb;
 use crate::error::AppError;
 use crate::models_user::{User, generate_token, hash_token};
 use crate::scopes;
 use crate::state::AppState;
-use crate::store::app as q;
+use crate::store::control as q;
 
 // -- errors (RFC 6749 section 5.2 shape, not problem+json) -----------------
 
@@ -73,13 +73,13 @@ pub struct Client {
     expires_at: Option<Datetime>,
 }
 
-async fn find_client(db: &Db, client_id: &str) -> Result<Option<Client>, String> {
+async fn find_client(db: &ControlDb, client_id: &str) -> Result<Option<Client>, String> {
     let mut res = q::OAUTH_CLIENT_GET.on(db).bind(("client_id", client_id.to_string())).await.map_err(|e| e.to_string())?;
     let rows: Vec<Client> = res.take(0).map_err(|e| e.to_string())?;
     Ok(rows.into_iter().next())
 }
 
-async fn save_client(db: &Db, client_id: &str, meta: &cimd::ClientMeta, kind: &str, ttl: Option<std::time::Duration>) -> Result<(), String> {
+async fn save_client(db: &ControlDb, client_id: &str, meta: &cimd::ClientMeta, kind: &str, ttl: Option<std::time::Duration>) -> Result<(), String> {
     let expires_at = ttl.map(|t| Datetime::from(chrono::Utc::now() + t));
     q::OAUTH_CLIENT_UPSERT
         .on(db)
@@ -100,14 +100,14 @@ async fn save_client(db: &Db, client_id: &str, meta: &cimd::ClientMeta, kind: &s
 
 /// Find a registered client, or fetch (and cache) its Client ID Metadata Document.
 pub async fn resolve_client(state: &AppState, client_id: &str) -> Result<Client, String> {
-    let cached = find_client(&state.db, client_id).await?;
+    let cached = find_client(&state.control, client_id).await?;
     if cimd::is_cimd_client_id(client_id) {
         if let Some(c) = cached.filter(|c| c.expires_at.as_ref().is_some_and(|e| e.into_inner() > chrono::Utc::now())) {
             return Ok(c);
         }
         let (meta, ttl) = cimd::fetch(client_id).await?;
-        save_client(&state.db, client_id, &meta, "cimd", Some(ttl)).await?;
-        return find_client(&state.db, client_id).await?.ok_or_else(|| "client vanished".into());
+        save_client(&state.control, client_id, &meta, "cimd", Some(ttl)).await?;
+        return find_client(&state.control, client_id).await?.ok_or_else(|| "client vanished".into());
     }
     cached.ok_or_else(|| "unknown client_id".into())
 }
@@ -243,7 +243,7 @@ pub fn fail_redirect(state: &AppState, p: &AuthzParams, error: &str, description
 pub async fn create_code(state: &AppState, v: &Validated, owner: &RecordId) -> Result<String, AppError> {
     let code = generate_token();
     q::OAUTH_CODE_CREATE
-        .on(&state.db)
+        .on(&state.control)
         .bind(("code_hash", hash_token(&code)))
         .bind(("owner", owner.clone()))
         .bind(("client_id", v.client.client_id.clone()))
@@ -318,7 +318,7 @@ pub struct Gone {
     id: RecordId,
 }
 
-pub async fn token_row(db: &Db, token: &str) -> Option<TokenRow> {
+pub async fn token_row(db: &ControlDb, token: &str) -> Option<TokenRow> {
     let mut res = q::OAUTH_TOKEN_BY_HASH.on(db).bind(("token_hash", hash_token(token))).await.ok()?;
     res.take::<Vec<TokenRow>>(0).ok()?.into_iter().next()
 }
@@ -327,7 +327,7 @@ fn required<'a>(v: &'a Option<String>, name: &str) -> Result<&'a str, OAuthError
     v.as_deref().filter(|s| !s.is_empty()).ok_or_else(|| OAuthError::bad("invalid_request", format!("{name} is required")))
 }
 
-async fn revoke_family(db: &Db, family: &RecordId, owner: &RecordId) -> Result<(), OAuthError> {
+async fn revoke_family(db: &ControlDb, family: &RecordId, owner: &RecordId) -> Result<(), OAuthError> {
     q::OAUTH_GRANT_DELETE.on(db).bind(("id", family.clone())).bind(("owner", owner.clone())).await.map_err(OAuthError::server)?;
     q::OAUTH_TOKENS_DELETE_FAMILY.on(db).bind(("family", family.clone())).await.map_err(OAuthError::server)?;
     Ok(())
@@ -388,7 +388,7 @@ async fn exchange_code(state: &AppState, f: &TokenForm) -> Result<Response, OAut
 
     // Taking the code marks it redeemed, so a second redemption finds nothing here.
     let code_hash = hash_token(code);
-    let mut res = q::OAUTH_CODE_TAKE.on(&state.db).bind(("code_hash", code_hash.clone())).await.map_err(OAuthError::server)?;
+    let mut res = q::OAUTH_CODE_TAKE.on(&state.control).bind(("code_hash", code_hash.clone())).await.map_err(OAuthError::server)?;
     let Some(row) = res.take::<Vec<CodeRow>>(0).map_err(OAuthError::server)?.into_iter().next() else {
         // RFC 6749 4.1.2: a replayed code means the first redeemer may be an attacker, so revoke what it produced.
         #[derive(Deserialize, SurrealValue)]
@@ -396,11 +396,11 @@ async fn exchange_code(state: &AppState, f: &TokenForm) -> Result<Response, OAut
             owner: RecordId,
             grant_id: Option<RecordId>,
         }
-        let mut res = q::OAUTH_CODE_REDEEMED.on(&state.db).bind(("code_hash", code_hash)).await.map_err(OAuthError::server)?;
+        let mut res = q::OAUTH_CODE_REDEEMED.on(&state.control).bind(("code_hash", code_hash)).await.map_err(OAuthError::server)?;
         if let Some(m) = res.take::<Vec<Marker>>(0).map_err(OAuthError::server)?.into_iter().next()
             && let Some(grant) = m.grant_id
         {
-            revoke_family(&state.db, &grant, &m.owner).await?;
+            revoke_family(&state.control, &grant, &m.owner).await?;
         }
         return Err(OAuthError::grant("unknown or already used authorization code"));
     };
@@ -423,7 +423,7 @@ async fn exchange_code(state: &AppState, f: &TokenForm) -> Result<Response, OAut
     }
 
     let mut res = q::OAUTH_GRANT_CREATE
-        .on(&state.db)
+        .on(&state.control)
         .bind(("owner", row.owner))
         .bind(("client_id", client.client_id))
         .bind(("client_name", client.name))
@@ -433,7 +433,7 @@ async fn exchange_code(state: &AppState, f: &TokenForm) -> Result<Response, OAut
         .await
         .map_err(OAuthError::server)?;
     let grant: IdRow = res.take::<Vec<IdRow>>(0).map_err(OAuthError::server)?.into_iter().next().ok_or_else(|| OAuthError::server("grant not created"))?;
-    q::OAUTH_CODE_LINK_GRANT.on(&state.db).bind(("code_hash", code_hash)).bind(("grant_id", grant.id.clone())).await.map_err(OAuthError::server)?;
+    q::OAUTH_CODE_LINK_GRANT.on(&state.control).bind(("code_hash", code_hash)).bind(("grant_id", grant.id.clone())).await.map_err(OAuthError::server)?;
     let tokens = issue_tokens(state, &grant.id).await.map_err(OAuthError::server)?;
     Ok(token_response(tokens, &row.scope))
 }
@@ -441,7 +441,7 @@ async fn exchange_code(state: &AppState, f: &TokenForm) -> Result<Response, OAut
 async fn refresh(state: &AppState, f: &TokenForm) -> Result<Response, OAuthError> {
     let client_id = required(&f.client_id, "client_id")?;
     let presented = required(&f.refresh_token, "refresh_token")?;
-    let row = token_row(&state.db, presented)
+    let row = token_row(&state.control, presented)
         .await
         .filter(|r| r.kind == "refresh")
         .ok_or_else(|| OAuthError::grant("unknown refresh token"))?;
@@ -453,7 +453,7 @@ async fn refresh(state: &AppState, f: &TokenForm) -> Result<Response, OAuthError
     }
     // A spent token coming back means two parties hold it: kill the whole grant.
     if row.used_at.is_some() {
-        revoke_family(&state.db, &row.family, &owner).await?;
+        revoke_family(&state.control, &row.family, &owner).await?;
         return Err(OAuthError::grant("refresh token reuse detected; the grant was revoked"));
     }
     if row.expired {
@@ -466,9 +466,9 @@ async fn refresh(state: &AppState, f: &TokenForm) -> Result<Response, OAuthError
     {
         return Err(OAuthError::bad("invalid_scope", "requested scope exceeds the original grant"));
     }
-    let mut res = q::OAUTH_TOKEN_SPEND.on(&state.db).bind(("id", row.id)).await.map_err(OAuthError::server)?;
+    let mut res = q::OAUTH_TOKEN_SPEND.on(&state.control).bind(("id", row.id)).await.map_err(OAuthError::server)?;
     if res.take::<Vec<Gone>>(0).map_err(OAuthError::server)?.is_empty() {
-        revoke_family(&state.db, &row.family, &owner).await?;
+        revoke_family(&state.control, &row.family, &owner).await?;
         return Err(OAuthError::grant("refresh token reuse detected; the grant was revoked"));
     }
     let tokens = issue_tokens(state, &row.family).await.map_err(OAuthError::server)?;
@@ -486,15 +486,15 @@ pub struct RevokeForm {
 pub async fn revoke(State(state): State<AppState>, Form(f): Form<RevokeForm>) -> Result<Response, OAuthError> {
     let token = required(&f.token, "token")?;
     // Unknown tokens, and tokens of another client, are not an error (RFC 7009 section 2.2).
-    if let Some(row) = token_row(&state.db, token).await
+    if let Some(row) = token_row(&state.control, token).await
         && f.client_id.as_deref().is_none_or(|c| row.client_id.as_deref() == Some(c))
     {
         if row.kind == "refresh" {
             if let Some(owner) = &row.owner {
-                revoke_family(&state.db, &row.family, owner).await?;
+                revoke_family(&state.control, &row.family, owner).await?;
             }
         } else {
-            q::OAUTH_TOKEN_DELETE.on(&state.db).bind(("id", row.id)).await.map_err(OAuthError::server)?;
+            q::OAUTH_TOKEN_DELETE.on(&state.control).bind(("id", row.id)).await.map_err(OAuthError::server)?;
         }
     }
     Ok(StatusCode::OK.into_response())
@@ -518,9 +518,9 @@ pub async fn register(State(state): State<AppState>, Json(body): Json<Value>) ->
         client_uri: cimd::https_only(body.get("client_uri")),
         redirect_uris,
     };
-    let _ = q::OAUTH_CLIENT_PRUNE.on(&state.db).await;
+    let _ = q::OAUTH_CLIENT_PRUNE.on(&state.control).await;
     let client_id = format!("eunomia_{}", uuid::Uuid::new_v4().simple());
-    if let Err(e) = save_client(&state.db, &client_id, &meta, "dcr", None).await {
+    if let Err(e) = save_client(&state.control, &client_id, &meta, "dcr", None).await {
         return OAuthError::server(e).into_response();
     }
     let mut res = (

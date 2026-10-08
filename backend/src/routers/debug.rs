@@ -26,11 +26,13 @@ pub fn router() -> Router<AppState> {
     security(("cookie" = []), ("bearer" = [])),
 )]
 async fn get_capsule(State(state): State<AppState>, user: User, Path(trace_id): Path<String>) -> AppResult<Json<Capsule>> {
-    if !capsules::is_admin(&state.db, &user).await? {
+    if !capsules::is_admin(&state.control, &user).await? {
         return Err(AppError::coded(ErrorCode::AuthForbidden, "Only an instance admin can read failure capsules."));
     }
-    capsules::get(&state.db, &trace_id)
+    capsules::get(&state.control, &trace_id)
         .await?
+        // another org's capsule does not exist as far as this admin can tell (instance operators see all)
+        .filter(|c| capsules::is_operator(&user) || c.org.as_deref().is_none_or(|o| o == user.org.key()))
         .map(Json)
         .ok_or_else(|| AppError::not_found(format!("No failure capsule for trace {trace_id}.")))
 }

@@ -22,7 +22,7 @@ use serde_json::{json, Value};
 use surrealdb::types::{Datetime, RecordId, RecordIdKey};
 use crate::rid::RecordIdExt;
 
-use crate::db::Db;
+use crate::pool::OrgDb;
 use crate::store;
 use crate::error::AppResult;
 
@@ -123,7 +123,7 @@ fn hit(rec: &CacheRecord) -> Value {
     })
 }
 
-async fn full(db: &Db, owner: &RecordId, rec: CacheRecord) -> AppResult<Value> {
+async fn full(db: &OrgDb, owner: &RecordId, rec: CacheRecord) -> AppResult<Value> {
     let links_result = links(db, owner, &rec.id, None).await?;
     Ok(json!({
         "id": rec.id,
@@ -160,7 +160,7 @@ fn rrf(ranked_lists: &[Vec<String>]) -> Vec<String> {
 
 #[allow(clippy::too_many_arguments)]
 pub async fn search(
-    db: &Db,
+    db: &OrgDb,
     settings: &crate::config::Settings,
     owner: &RecordId,
     query: &str,
@@ -254,8 +254,8 @@ pub async fn search(
     Ok(json!({ "results": page, "has_more": has_more }))
 }
 
-pub async fn get(db: &Db, owner: &RecordId, id: &str) -> AppResult<Value> {
-    let row: Option<Row> = db.select(scoped_rid(owner, id)).await?;
+pub async fn get(db: &OrgDb, owner: &RecordId, id: &str) -> AppResult<Value> {
+    let row: Option<Row> = store::get(db, &scoped_rid(owner, id)).await?;
     match row {
         Some(row) => full(db, owner, row_to_record(row)).await,
         None => Ok(json!({ "error": "not found" })),
@@ -263,7 +263,7 @@ pub async fn get(db: &Db, owner: &RecordId, id: &str) -> AppResult<Value> {
 }
 
 pub async fn list(
-    db: &Db,
+    db: &OrgDb,
     owner: &RecordId,
     type_: Option<&str>,
     filters: Option<&serde_json::Map<String, Value>>,
@@ -353,7 +353,7 @@ pub async fn list(
     Ok(json!({ "results": results, "total": total, "has_more": has_more }))
 }
 
-pub async fn links(db: &Db, owner: &RecordId, id: &str, rel: Option<&str>) -> AppResult<Value> {
+pub async fn links(db: &OrgDb, owner: &RecordId, id: &str, rel: Option<&str>) -> AppResult<Value> {
     #[derive(serde::Deserialize, SurrealValue)]
     struct FwdRow {
         rel: String,

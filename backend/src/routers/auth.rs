@@ -91,7 +91,7 @@ async fn onboarded(state: &AppState, user: &User) -> AppResult<bool> {
     struct Row {
         onboarded_at: Option<Datetime>,
     }
-    let row: Option<Row> = state.db.select(user.id.clone()).await?;
+    let row: Option<Row> = store::get_control(&state.control, &user.id).await?;
     Ok(row.map(|r| r.onboarded_at.is_some()).unwrap_or(false))
 }
 
@@ -114,7 +114,7 @@ async fn register(
     headers: HeaderMap,
     Json(body): Json<Credentials>,
 ) -> AppResult<Response> {
-    let user = models_user::register_user(&state.db, &body.email, &body.password)
+    let user = models_user::register_user(&state, &body.email, &body.password)
         .await
         .map_err(|e| {
             if e.code == ErrorCode::DbDuplicate {
@@ -124,9 +124,9 @@ async fn register(
             }
         })?;
 
-    let token = auth::start_session(&state.db, &state.settings.jwt_secret, &user, user_agent_from(&headers).as_deref())
+    let token = auth::start_session(&state.control, &state.settings.jwt_secret, &user, user_agent_from(&headers).as_deref())
         .await?;
-    audit::record_as_caller(&state.db, &user.id, "auth.register", "", "ok").await;
+    audit::record_as_caller(&state.control, &user.id, "auth.register", "", "ok").await;
 
     let body = AuthOut { id: user.id.to_string(), email: user.email, onboarded: false };
     Ok((
@@ -152,7 +152,7 @@ async fn login(
     headers: HeaderMap,
     Json(body): Json<Credentials>,
 ) -> AppResult<Response> {
-    let Some(user) = models_user::authenticate(&state.db, &body.email, &body.password).await? else {
+    let Some(user) = models_user::authenticate(&state.control, &body.email, &body.password).await? else {
         let email = models_user::normalize_email(&body.email);
         let event = Event {
             user: None,
@@ -162,13 +162,13 @@ async fn login(
             outcome: ErrorCode::AuthUnauthorized.as_str(),
             detail: &email,
         };
-        audit::record(&state.db, event).await;
+        audit::record(&state.control, event).await;
         return Err(AppError::unauthorized("Invalid email or password."));
     };
 
-    let token = auth::start_session(&state.db, &state.settings.jwt_secret, &user, user_agent_from(&headers).as_deref())
+    let token = auth::start_session(&state.control, &state.settings.jwt_secret, &user, user_agent_from(&headers).as_deref())
         .await?;
-    audit::record_as_caller(&state.db, &user.id, "auth.login", "", "ok").await;
+    audit::record_as_caller(&state.control, &user.id, "auth.login", "", "ok").await;
     let onboarded = onboarded(&state, &user).await?;
 
     let body = AuthOut { id: user.id.to_string(), email: user.email, onboarded };
@@ -195,7 +195,7 @@ async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Response {
             let p = p.trim();
             p.strip_prefix(&format!("{SESSION_COOKIE}=")).map(str::to_string)
         }) {
-            auth::revoke_session_by_jwt(&state.db, &state.settings.jwt_secret, &token).await;
+            auth::revoke_session_by_jwt(&state.control, &state.settings.jwt_secret, &token).await;
         }
     let expired = format!("{SESSION_COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0");
     (StatusCode::OK, [(header::SET_COOKIE, expired)], Json(json!({ "ok": true }))).into_response()
@@ -257,7 +257,7 @@ async fn create_token(
                 .ok()
                 .filter(|r: &RecordId| r.table() == "vault")
                 .ok_or_else(|| AppError::coded(ErrorCode::VaultNotFound, "Vault not found."))?;
-            authz::ensure_member(&state.db, &user.id, &rid).await?;
+            authz::ensure_member(&state.org(&user.org).await?.db, &user.id, &rid).await?;
             Some(rid)
         }
     };
@@ -273,8 +273,8 @@ async fn create_token(
             Some(Datetime::from(at))
         }
     };
-    let result = models_user::create_api_token_with(&state.db, &user.id, &name, &scopes, vault.as_ref(), expires_at).await?;
-    audit::record_as_caller(&state.db, &user.id, "auth.token_create", &result.id.to_string(), "ok").await;
+    let result = models_user::create_api_token_with(&state.control, &user.id, &name, &scopes, vault.as_ref(), expires_at).await?;
+    audit::record_as_caller(&state.control, &user.id, "auth.token_create", &result.id.to_string(), "ok").await;
     Ok(Json(TokenCreated {
         id: result.id.to_string(),
         name: result.name,
@@ -310,7 +310,7 @@ struct TokenOut {
     security(("cookie" = []), ("bearer" = [])),
 )]
 async fn get_tokens(State(state): State<AppState>, user: User) -> AppResult<Json<Vec<TokenOut>>> {
-    let rows = models_user::list_api_tokens(&state.db, &user.id).await?;
+    let rows = models_user::list_api_tokens(&state.control, &user.id).await?;
     Ok(Json(
         rows.into_iter()
             .map(|r| TokenOut {
@@ -342,11 +342,11 @@ async fn delete_token(
     Path(token_id): Path<String>,
 ) -> AppResult<Json<serde_json::Value>> {
     let rid: RecordId = crate::rid::parse(&token_id).map_err(|_| AppError::coded(ErrorCode::AuthNotFound, "Token not found."))?;
-    let ok = models_user::revoke_api_token(&state.db, &user.id, &rid).await?;
+    let ok = models_user::revoke_api_token(&state.control, &user.id, &rid).await?;
     if !ok {
         return Err(AppError::coded(ErrorCode::AuthNotFound, "Token not found."));
     }
-    audit::record_as_caller(&state.db, &user.id, "auth.token_revoke", &rid.to_string(), "ok").await;
+    audit::record_as_caller(&state.control, &user.id, "auth.token_revoke", &rid.to_string(), "ok").await;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -380,8 +380,8 @@ struct SessionOut {
     security(("cookie" = []), ("bearer" = [])),
 )]
 async fn get_sessions(State(state): State<AppState>, user: User) -> AppResult<Json<Vec<SessionOut>>> {
-    let mut res = store::app::AUTH_SESSION_LIST
-        .on(&state.db)
+    let mut res = store::control::AUTH_SESSION_LIST
+        .on(&state.control)
         .bind(("owner", user.id.clone()))
         .await?;
     let rows: Vec<SessionRow> = res.take(0)?;
@@ -417,12 +417,12 @@ async fn revoke_session_route(
         owner: RecordId,
     }
     let rid: RecordId = crate::rid::parse(&session_id).map_err(|_| AppError::coded(ErrorCode::AuthNotFound, "Session not found."))?;
-    let row: Option<Row> = state.db.select(rid.clone()).await?;
+    let row: Option<Row> = store::get_control(&state.control, &rid).await?;
     match row {
         Some(r) if r.owner == user.id => {}
         _ => return Err(AppError::coded(ErrorCode::AuthNotFound, "Session not found.")),
     }
-    store::app::AUTH_SESSION_REVOKE.on(&state.db).bind(("id", rid)).await?;
+    store::control::AUTH_SESSION_REVOKE.on(&state.control).bind(("id", rid)).await?;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -440,7 +440,7 @@ async fn bootstrap(State(state): State<AppState>) -> AppResult<Json<BootstrapOut
     struct CountRow {
         count: i64,
     }
-    let mut res = store::app::AUTH_USER_COUNT.on(&state.db).await?;
+    let mut res = store::control::AUTH_USER_COUNT.on(&state.control).await?;
     let rows: Vec<CountRow> = res.take(0)?;
     let has_users = rows.first().map(|r| r.count > 0).unwrap_or(false);
     Ok(Json(BootstrapOut { has_users }))

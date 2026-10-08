@@ -101,6 +101,7 @@ fn parse_vault_id(vault_id: &str) -> AppResult<RecordId> {
     security(("cookie" = []), ("bearer" = [])),
 )]
 async fn list_vaults(State(state): State<AppState>, user: User) -> AppResult<Json<VaultList>> {
+    let state = state.org(&user.org).await?;
     let results = service::list_my_vaults(&state.db, &user.id).await?;
     Ok(Json(VaultList { results }))
 }
@@ -120,6 +121,7 @@ async fn create_vault(
     user: User,
     Json(body): Json<VaultCreate>,
 ) -> AppResult<Json<service::VaultOut>> {
+    let state = state.org(&user.org).await?;
     if !valid_vault_kind(&body.kind) {
         return Err(AppError::bad_request("kind must be 'org' or 'personal'"));
     }
@@ -143,6 +145,7 @@ async fn clone_vault(
     Path(vault_id): Path<String>,
     Json(body): Json<VaultClone>,
 ) -> AppResult<Json<service::CloneOut>> {
+    let state = state.org(&user.org).await?;
     if !valid_vault_kind(&body.kind) {
         return Err(AppError::bad_request("kind must be 'org' or 'personal'"));
     }
@@ -174,6 +177,7 @@ async fn merge_vaults(
     user: User,
     Json(body): Json<VaultMerge>,
 ) -> AppResult<Json<service::MergeOut>> {
+    let state = state.org(&user.org).await?;
     if !valid_vault_kind(&body.kind) {
         return Err(AppError::bad_request("kind must be 'org' or 'personal'"));
     }
@@ -199,6 +203,7 @@ async fn rename_vault(
     Path(vault_id): Path<String>,
     Json(body): Json<VaultRename>,
 ) -> AppResult<Json<service::VaultOut>> {
+    let state = state.org(&user.org).await?;
     let rid = parse_vault_id(&vault_id)?;
     Ok(Json(service::rename_vault(&state.db, &user.id, &rid, &body.name).await?))
 }
@@ -218,6 +223,7 @@ async fn delete_vault(
     user: User,
     Path(vault_id): Path<String>,
 ) -> AppResult<Json<Value>> {
+    let state = state.org(&user.org).await?;
     let rid = parse_vault_id(&vault_id)?;
     service::delete_vault(&state.db, &user.id, &rid).await?;
     Ok(Json(json!({ "deleted": true })))
@@ -238,8 +244,9 @@ async fn list_members(
     user: User,
     Path(vault_id): Path<String>,
 ) -> AppResult<Json<MemberList>> {
+    let state = state.org(&user.org).await?;
     let rid = parse_vault_id(&vault_id)?;
-    let results = service::list_members(&state.db, &user.id, &rid).await?;
+    let results = service::list_members(&state.db, &state.control, &user.id, &rid).await?;
     Ok(Json(MemberList { results }))
 }
 
@@ -260,8 +267,9 @@ async fn invite_member(
     Path(vault_id): Path<String>,
     Json(body): Json<InviteRequest>,
 ) -> AppResult<Json<service::InviteOut>> {
+    let state = state.org(&user.org).await?;
     let rid = parse_vault_id(&vault_id)?;
-    Ok(Json(service::invite_member(&state.db, &user.id, &rid, &body.email, &body.role).await?))
+    Ok(Json(service::invite_member(&state.db, &state.control, &user.id, &rid, &body.email, &body.role).await?))
 }
 
 #[utoipa::path(
@@ -279,8 +287,9 @@ async fn remove_member(
     user: User,
     Path((vault_id, email)): Path<(String, String)>,
 ) -> AppResult<Json<Value>> {
+    let state = state.org(&user.org).await?;
     let rid = parse_vault_id(&vault_id)?;
-    service::remove_member(&state.db, &user.id, &rid, &email).await?;
+    service::remove_member(&state.db, &state.control, &user.id, &rid, &email).await?;
     Ok(Json(json!({ "removed": true })))
 }
 
@@ -299,6 +308,7 @@ async fn leave_vault(
     user: User,
     Path(vault_id): Path<String>,
 ) -> AppResult<Json<Value>> {
+    let state = state.org(&user.org).await?;
     let rid = parse_vault_id(&vault_id)?;
     service::leave_vault(&state.db, &user.id, &rid).await?;
     Ok(Json(json!({ "left": true })))
@@ -314,6 +324,7 @@ async fn leave_vault(
     security(("cookie" = []), ("bearer" = [])),
 )]
 async fn list_invitations(State(state): State<AppState>, user: User) -> AppResult<Json<InvitationList>> {
+    let state = state.org(&user.org).await?;
     let results = service::list_my_invitations(&state.db, &user.id).await?;
     Ok(Json(InvitationList { results }))
 }
@@ -333,6 +344,7 @@ async fn accept_invitation(
     user: User,
     Path(vault_id): Path<String>,
 ) -> AppResult<Json<service::VaultWithRole>> {
+    let state = state.org(&user.org).await?;
     let rid = parse_vault_id(&vault_id)?;
     Ok(Json(service::accept_invitation(&state.db, &user.id, &rid).await?))
 }
@@ -352,6 +364,7 @@ async fn decline_invitation(
     user: User,
     Path(vault_id): Path<String>,
 ) -> AppResult<Json<Value>> {
+    let state = state.org(&user.org).await?;
     let rid = parse_vault_id(&vault_id)?;
     service::decline_invitation(&state.db, &user.id, &rid).await?;
     Ok(Json(json!({ "declined": true })))

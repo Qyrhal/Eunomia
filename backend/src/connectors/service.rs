@@ -14,7 +14,7 @@ use serde_json::Value;
 use surrealdb::types::{Datetime, RecordId};
 
 use crate::connectors::crypto;
-use crate::db::Db;
+use crate::pool::OrgDb;
 use crate::store;
 use crate::tx::with_retry;
 use crate::error::{AppError, AppResult};
@@ -55,7 +55,7 @@ pub struct Connector {
     pub updated_at: Datetime,
 }
 
-pub async fn get_connector(db: &Db, owner: &RecordId, kind: &str) -> AppResult<Option<Connector>> {
+pub async fn get_connector(db: &OrgDb, owner: &RecordId, kind: &str) -> AppResult<Option<Connector>> {
     let mut res = store::app::CONNECTOR_BY_KIND
         .on(db)
         .bind(("owner", owner.clone()))
@@ -65,7 +65,7 @@ pub async fn get_connector(db: &Db, owner: &RecordId, kind: &str) -> AppResult<O
     Ok(rows.into_iter().next())
 }
 
-pub async fn get_or_create_connector(db: &Db, owner: &RecordId, kind: &str) -> AppResult<Connector> {
+pub async fn get_or_create_connector(db: &OrgDb, owner: &RecordId, kind: &str) -> AppResult<Connector> {
     // Unique (owner, kind): a racing creator fails the insert and the retry's re-read finds its row.
     let row = with_retry(|| async {
         let mut res = store::app::CONNECTOR_BY_KIND
@@ -89,7 +89,7 @@ pub async fn get_or_create_connector(db: &Db, owner: &RecordId, kind: &str) -> A
     row.ok_or_else(|| AppError::internal("connector insert returned no row"))
 }
 
-pub async fn list_connectors(db: &Db, owner: &RecordId) -> AppResult<Vec<Connector>> {
+pub async fn list_connectors(db: &OrgDb, owner: &RecordId) -> AppResult<Vec<Connector>> {
     let mut out = Vec::with_capacity(CONNECTOR_KINDS.len());
     for kind in CONNECTOR_KINDS {
         out.push(get_or_create_connector(db, owner, kind).await?);
@@ -102,7 +102,7 @@ pub async fn list_connectors(db: &Db, owner: &RecordId) -> AppResult<Vec<Connect
 /// mirroring the old Django serializer -- saving one refreshed secret must
 /// not drop the others.
 pub async fn upsert_connector(
-    db: &Db,
+    db: &OrgDb,
     encryption_key: &str,
     owner: &RecordId,
     kind: &str,
@@ -165,7 +165,7 @@ pub async fn upsert_connector(
     rows.into_iter().next().ok_or_else(|| AppError::internal("connector update returned no row"))
 }
 
-pub async fn credentials_for(db: &Db, encryption_key: &str, owner: &RecordId, kind: &str) -> AppResult<Value> {
+pub async fn credentials_for(db: &OrgDb, encryption_key: &str, owner: &RecordId, kind: &str) -> AppResult<Value> {
     let Some(row) = get_connector(db, owner, kind).await? else {
         return Ok(Value::Object(Default::default()));
     };

@@ -8,15 +8,18 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use surrealdb::types::{Datetime, RecordId};
 
-use crate::db::Db;
+use crate::pool::{ControlDb, OrgId};
+use crate::state::AppState;
 use crate::store;
-use crate::error::{AppError, AppResult};
+use crate::error::{AppError, AppResult, ErrorCode};
 use crate::scopes;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct User {
     pub id: RecordId,
     pub email: String,
+    /// The org whose database this user's requests run against: their oldest membership.
+    pub org: OrgId,
 }
 
 #[derive(Debug, Deserialize, SurrealValue)]
@@ -58,13 +61,81 @@ pub fn validate_credentials(email: &str, password: &str) -> AppResult<()> {
     Ok(())
 }
 
-pub async fn register_user(db: &Db, email: &str, password: &str) -> AppResult<User> {
+/// The user's home org (their oldest membership).
+pub async fn org_of(control: &ControlDb, user: &RecordId) -> AppResult<OrgId> {
+    #[derive(Deserialize, SurrealValue)]
+    struct Row {
+        org: RecordId,
+    }
+    let mut res = store::control::ORG_OF_USER.on(control).bind(("user", user.clone())).await?;
+    let row: Option<Row> = res.take::<Vec<Row>>(0)?.into_iter().next();
+    row.and_then(|r| crate::rid::key_string(&r.org.key).and_then(|k| OrgId::parse(&k)))
+        .ok_or_else(|| AppError::coded(ErrorCode::TenantNotFound, "This account does not belong to an organisation."))
+}
+
+/// Fills in a user's org for a credential that resolved to `id` and `email`.
+pub async fn load_user(control: &ControlDb, id: RecordId, email: String) -> AppResult<User> {
+    let org = org_of(control, &id).await?;
+    Ok(User { id, email, org })
+}
+
+/// `EUNOMIA_SIGNUP_ORG`: `join` (default) puts a new user in the install's one org, as a member;
+/// `personal` gives every signup an org of their own. The first user of a fresh install always
+/// creates the instance's org (`Default`) and owns it.
+fn signup_personal() -> bool {
+    std::env::var("EUNOMIA_SIGNUP_ORG").is_ok_and(|v| v.eq_ignore_ascii_case("personal"))
+}
+
+#[derive(Deserialize, SurrealValue)]
+struct TenantListRow {
+    org: RecordId,
+    status: String,
+}
+
+async fn assign_org(state: &AppState, user: &RecordId, email: &str, personal: bool) -> AppResult<OrgId> {
+    // ponytail: one signup at a time per process; org creation is rare and the lock keeps "first user creates the org" true.
+    let _one_at_a_time = crate::tx::lock("org.signup").await;
+    let mut res = store::tenant::LIST.on(&state.control).await?;
+    let rows: Vec<TenantListRow> = res.take(0)?;
+    let existing = rows
+        .into_iter()
+        .filter(|r| r.status == "ready")
+        .find_map(|r| crate::rid::key_string(&r.org.key).and_then(|k| OrgId::parse(&k)));
+    let (org, role) = match existing {
+        Some(org) if !personal => (org, "member"),
+        found => {
+            let Some(p) = &state.provisioner else {
+                return Err(AppError::coded(ErrorCode::TenantProvisioningDisabled, "This server cannot create organisations."));
+            };
+            let org = OrgId::new();
+            p.provision_org(&state.control, org, if found.is_none() { "Default" } else { email }).await?;
+            (org, "owner")
+        }
+    };
+    store::control::MEMBERSHIP_ADD
+        .on(&state.control)
+        .bind(("user", user.clone()))
+        .bind(("org", org.record()))
+        .bind(("role", role))
+        .await?
+        .check()?;
+    Ok(org)
+}
+
+pub async fn register_user(state: &AppState, email: &str, password: &str) -> AppResult<User> {
+    register_user_with(state, email, password, signup_personal()).await
+}
+
+/// [`register_user`] with the org choice explicit: `personal` gives the user an org of their own,
+/// otherwise they join the install's org.
+pub async fn register_user_with(state: &AppState, email: &str, password: &str, personal: bool) -> AppResult<User> {
+    let db = &state.control;
     let email = &normalize_email(email);
     validate_credentials(email, password)?;
 
     // Accounts created before emails were normalized may be mixed-case; the
     // unique index alone wouldn't catch "Alice@x.com" vs "alice@x.com".
-    let mut res = store::app::AUTH_USER_ID_BY_EMAIL
+    let mut res = store::control::AUTH_USER_ID_BY_EMAIL
         .on(db)
         .bind(("email", email.to_string()))
         .await?;
@@ -81,7 +152,7 @@ pub async fn register_user(db: &Db, email: &str, password: &str) -> AppResult<Us
     let password_hash = bcrypt::hash(password, bcrypt::DEFAULT_COST)
         .map_err(|e| AppError::internal(e.to_string()))?;
 
-    let mut res = store::app::AUTH_USER_CREATE
+    let mut res = store::control::AUTH_USER_CREATE
         .on(db)
         .bind(("email", email.to_string()))
         .bind(("password_hash", password_hash))
@@ -98,14 +169,26 @@ pub async fn register_user(db: &Db, email: &str, password: &str) -> AppResult<Us
     let rows: Vec<UserRow> = res.take(0)?;
     let row = rows.into_iter().next().ok_or_else(|| AppError::internal("insert returned no row"))?;
 
-    crate::vaults::service::create_personal_vault(db, &row.id).await?;
-
-    Ok(User { id: row.id, email: row.email })
+    let setup = async {
+        let org = assign_org(state, &row.id, email, personal).await?;
+        let orgdb = state.pool.for_org(&org).await?;
+        crate::vaults::service::create_personal_vault(&orgdb, &row.id).await?;
+        AppResult::Ok(org)
+    }
+    .await;
+    match setup {
+        Ok(org) => Ok(User { id: row.id, email: row.email, org }),
+        Err(e) => {
+            // do not leave an account that cannot log in
+            let _ = store::control::AUTH_USER_DELETE.on(db).bind(("id", row.id.clone())).await;
+            Err(e)
+        }
+    }
 }
 
-pub async fn authenticate(db: &Db, email: &str, password: &str) -> AppResult<Option<User>> {
+pub async fn authenticate(db: &ControlDb, email: &str, password: &str) -> AppResult<Option<User>> {
     // ponytail: string::lowercase() scan, no index -- add a normalized-email index if user counts get large
-    let mut res = store::app::AUTH_USER_BY_EMAIL
+    let mut res = store::control::AUTH_USER_BY_EMAIL
         .on(db)
         .bind(("email", normalize_email(email)))
         .await?;
@@ -116,7 +199,7 @@ pub async fn authenticate(db: &Db, email: &str, password: &str) -> AppResult<Opt
     if !ok {
         return Ok(None);
     }
-    Ok(Some(User { id: row.id, email: row.email }))
+    Ok(Some(load_user(db, row.id, row.email).await?))
 }
 
 #[derive(Debug, Serialize)]
@@ -136,12 +219,12 @@ struct ApiTokenRow {
 }
 
 /// A full-scope, non-expiring token, as every token was before scopes existed.
-pub async fn create_api_token(db: &Db, owner: &RecordId, name: &str) -> AppResult<ApiTokenCreated> {
+pub async fn create_api_token(db: &ControlDb, owner: &RecordId, name: &str) -> AppResult<ApiTokenCreated> {
     create_api_token_with(db, owner, name, &all_scope_names(), None, None).await
 }
 
 pub async fn create_api_token_with(
-    db: &Db,
+    db: &ControlDb,
     owner: &RecordId,
     name: &str,
     scopes: &[String],
@@ -151,7 +234,7 @@ pub async fn create_api_token_with(
     let token = generate_token();
     let hash = hash_token(&token);
 
-    let mut res = store::app::AUTH_TOKEN_CREATE
+    let mut res = store::control::AUTH_TOKEN_CREATE
         .on(db)
         .bind(("owner", owner.clone()))
         .bind(("name", name.to_string()))
@@ -184,26 +267,26 @@ pub struct ApiTokenSummary {
     pub expires_at: Option<Datetime>,
 }
 
-pub async fn list_api_tokens(db: &Db, owner: &RecordId) -> AppResult<Vec<ApiTokenSummary>> {
-    let mut res = store::app::AUTH_TOKEN_LIST
+pub async fn list_api_tokens(db: &ControlDb, owner: &RecordId) -> AppResult<Vec<ApiTokenSummary>> {
+    let mut res = store::control::AUTH_TOKEN_LIST
         .on(db)
         .bind(("owner", owner.clone()))
         .await?;
     Ok(res.take(0)?)
 }
 
-pub async fn revoke_api_token(db: &Db, owner: &RecordId, token_id: &RecordId) -> AppResult<bool> {
+pub async fn revoke_api_token(db: &ControlDb, owner: &RecordId, token_id: &RecordId) -> AppResult<bool> {
+    let mut res = store::control::AUTH_TOKEN_DELETE
+        .on(db)
+        .bind(("id", token_id.clone()))
+        .bind(("owner", owner.clone()))
+        .await?;
     #[derive(Deserialize, SurrealValue)]
-    struct Row {
-        owner: RecordId,
+    struct Gone {
+        #[allow(dead_code)]
+        id: RecordId,
     }
-    let row: Option<Row> = db.select(token_id.clone()).await?;
-    let Some(row) = row else { return Ok(false) };
-    if &row.owner != owner {
-        return Ok(false);
-    }
-    let _: Option<Row> = db.delete(token_id.clone()).await?;
-    Ok(true)
+    Ok(!res.take::<Vec<Gone>>(0)?.is_empty())
 }
 
 /// A token that exists, has not expired and belongs to a live user.
@@ -220,7 +303,7 @@ pub enum TokenCheck {
     Valid(Box<VerifiedToken>),
 }
 
-pub async fn check_api_token(db: &Db, token: &str) -> AppResult<TokenCheck> {
+pub async fn check_api_token(db: &ControlDb, token: &str) -> AppResult<TokenCheck> {
     #[derive(Deserialize, SurrealValue)]
     struct TokenRow {
         id: RecordId,
@@ -236,7 +319,7 @@ pub async fn check_api_token(db: &Db, token: &str) -> AppResult<TokenCheck> {
         expired: bool,
     }
     let hash = hash_token(token);
-    let mut res = store::app::AUTH_TOKEN_BY_HASH
+    let mut res = store::control::AUTH_TOKEN_BY_HASH
         .on(db)
         .bind(("hash", hash))
         .await?;
@@ -248,15 +331,15 @@ pub async fn check_api_token(db: &Db, token: &str) -> AppResult<TokenCheck> {
     }
 
     // Best-effort bump; failure here must not block auth.
-    let _ = store::app::AUTH_TOKEN_TOUCH
+    let _ = store::control::AUTH_TOKEN_TOUCH
         .on(db)
         .bind(("id", row.id.clone()))
         .await;
 
-    let owner_row: Option<UserRow> = db.select(row.owner).await?;
+    let owner_row: Option<UserRow> = store::get_control(db, &row.owner).await?;
     Ok(match owner_row {
         Some(r) => TokenCheck::Valid(Box::new(VerifiedToken {
-            user: User { id: r.id, email: r.email },
+            user: load_user(db, r.id, r.email).await?,
             token_id: row.id,
             scopes: row.scopes.into_iter().filter(|s| scopes::is_known(s)).collect(),
             vault: row.vault,
@@ -267,7 +350,7 @@ pub async fn check_api_token(db: &Db, token: &str) -> AppResult<TokenCheck> {
 
 /// The token's user, or `None` if it is unknown or expired. Callers that need
 /// the scopes or the expiry error use [`check_api_token`].
-pub async fn verify_api_token(db: &Db, token: &str) -> AppResult<Option<User>> {
+pub async fn verify_api_token(db: &ControlDb, token: &str) -> AppResult<Option<User>> {
     Ok(match check_api_token(db, token).await? {
         TokenCheck::Valid(v) => Some(v.user),
         _ => None,

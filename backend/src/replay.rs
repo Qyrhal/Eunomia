@@ -3,8 +3,6 @@
 //! (docs/debugging.md). The real database is only read.
 
 use surrealdb::types::SurrealValue;
-use std::sync::Arc;
-
 use axum::body::Body;
 use axum::http::{header, Request};
 use http_body_util::BodyExt;
@@ -14,10 +12,10 @@ use tower::ServiceExt;
 
 use crate::capsules::{self, Capsule};
 use crate::config::Settings;
-use crate::db::{self, Db};
 use crate::error::{AppError, AppResult, ErrorCode};
 use crate::models_user::{self, User};
-use crate::state::{AppState, AppStateInner};
+use crate::pool::OrgDb;
+use crate::state::AppState;
 use crate::store;
 use crate::tools::registry;
 
@@ -37,19 +35,17 @@ pub struct Report {
 }
 
 /// Loads the capsule from `src`, rebuilds the caller's data in a scratch database and re-runs the call.
-pub async fn replay(src: &Db, settings: &Settings, trace_id: &str) -> AppResult<Report> {
-    let capsule = capsules::get(src, trace_id).await?.ok_or_else(|| AppError::not_found(format!("No failure capsule for trace {trace_id}.")))?;
+pub async fn replay(src: &AppState, settings: &Settings, trace_id: &str) -> AppResult<Report> {
+    let capsule = capsules::get(&src.control, trace_id).await?.ok_or_else(|| AppError::not_found(format!("No failure capsule for trace {trace_id}.")))?;
     if capsule.truncated {
         return Err(AppError::bad_request("The capsule was cut to fit the size cap, so it cannot be replayed."));
     }
 
     let scratch_settings = Settings { surreal_url: "mem://".into(), surreal_ns: "replay".into(), surreal_db: "replay".into(), ..settings.clone() };
-    let scratch = db::connect(&scratch_settings).await?;
-    crate::migrate::migrate(&scratch, &scratch_settings).await?;
-    let state = AppState(Arc::new(AppStateInner { db: scratch, settings: scratch_settings }));
+    let state = AppState::build(&scratch_settings, surrealdb::opt::Config::new()).await?;
 
     let user = match &capsule.user {
-        Some(id) => Some(seed(src, &state.db, id).await?),
+        Some(id) => Some(seed(src, &state, id).await?),
         None => None,
     };
     let replayed = crate::telemetry::with_trace_id(capsule.trace_id.clone(), run(&state, &capsule, user.as_ref())).await?;
@@ -58,19 +54,20 @@ pub async fn replay(src: &Db, settings: &Settings, trace_id: &str) -> AppResult<
 }
 
 /// Copies the capsule user's personal-vault data into `scratch` under a fresh user with the same email and the same record ids.
-async fn seed(src: &Db, scratch: &Db, user_id: &str) -> AppResult<User> {
+async fn seed(src: &AppState, scratch: &AppState, user_id: &str) -> AppResult<User> {
     #[derive(serde::Deserialize, SurrealValue)]
     struct Email {
         email: String,
     }
     let id: RecordId = crate::rid::parse(user_id).map_err(|_| AppError::bad_request("The capsule has a malformed user id."))?;
-    let mut res = store::entities::EMAILS_FOR.on(src).bind(("ids", vec![id.clone()])).await?;
+    let mut res = store::entities::EMAILS_FOR.on(&src.control).bind(("ids", vec![id.clone()])).await?;
     let email = res.take::<Vec<Email>>(0)?.into_iter().next().ok_or_else(|| AppError::not_found("The capsule's user no longer exists."))?.email;
 
-    let original = User { id, email: email.clone() };
-    let doc = crate::routers::export::build_export(src, &original).await?;
+    let original = models_user::load_user(&src.control, id, email.clone()).await?;
+    let from = src.pool.for_org(&original.org).await?;
+    let doc = crate::routers::export::build_export(&from, &src.control, &original).await?;
     let user = models_user::register_user(scratch, &email, &uuid::Uuid::new_v4().simple().to_string()).await?;
-    import(scratch, &user, &doc).await?;
+    import(&scratch.pool.for_org(&user.org).await?, &user, &doc).await?;
     Ok(user)
 }
 
@@ -79,7 +76,7 @@ fn rid(v: &Value) -> AppResult<RecordId> {
 }
 
 /// Loads an export document into `user`'s personal vault, keeping record ids.
-async fn import(db: &Db, user: &User, doc: &Value) -> AppResult<()> {
+async fn import(db: &OrgDb, user: &User, doc: &Value) -> AppResult<()> {
     let vault = crate::routers::export::resolve_personal_vault(db, &user.id).await?;
     let mut seen_relations = std::collections::HashSet::new();
     for e in doc["entities"].as_array().into_iter().flatten() {
@@ -136,7 +133,7 @@ async fn import(db: &Db, user: &User, doc: &Value) -> AppResult<()> {
 async fn run(state: &AppState, capsule: &Capsule, user: Option<&User>) -> AppResult<Outcome> {
     if capsule.kind == "tool" {
         let user = user.ok_or_else(|| AppError::bad_request("A tool capsule has no user."))?;
-        let outcome = match registry::call(state, &user.id, &capsule.name, capsule.args.clone()).await {
+        let outcome = match registry::call(state, user, &capsule.name, capsule.args.clone()).await {
             Ok(v) if v.get("error").is_some() => Outcome { code: v["code"].as_str().unwrap_or("error").to_string(), status: None, body: v },
             Ok(v) => Outcome { code: "ok".into(), status: None, body: v },
             Err(e) => Outcome { code: e.code.as_str().into(), status: Some(e.status.as_u16()), body: json!({ "error": e.message }) },
@@ -147,7 +144,7 @@ async fn run(state: &AppState, capsule: &Capsule, user: Option<&User>) -> AppRes
     let a = &capsule.args;
     let mut req = Request::builder().method(a["method"].as_str().unwrap_or("GET")).uri(a["uri"].as_str().unwrap_or("/"));
     if let Some(u) = user {
-        let token = models_user::create_api_token(&state.db, &u.id, "replay").await?.token;
+        let token = models_user::create_api_token(&state.control, &u.id, "replay").await?.token;
         req = req.header(header::AUTHORIZATION, format!("Bearer {token}"));
     }
     let body = match &a["body"] {
@@ -173,7 +170,7 @@ pub fn emit_test(c: &Capsule) -> String {
     let args = serde_json::to_string_pretty(&c.args).unwrap_or_default();
     let (call, check) = if c.kind == "tool" {
         (
-            format!("    let out = registry::call(&app.state, &app.user.id, {:?}, json!({args})).await;\n    let code = match &out {{\n        Ok(v) => v.get(\"code\").and_then(|c| c.as_str()).unwrap_or(\"ok\").to_string(),\n        Err(e) => e.code.as_str().to_string(),\n    }};", c.name),
+            format!("    let out = registry::call(&app.state, &app.user, {:?}, json!({args})).await;\n    let code = match &out {{\n        Ok(v) => v.get(\"code\").and_then(|c| c.as_str()).unwrap_or(\"ok\").to_string(),\n        Err(e) => e.code.as_str().to_string(),\n    }};", c.name),
             "code",
         )
     } else {
@@ -210,9 +207,9 @@ pub async fn cli(args: &[String], settings: &Settings) -> i32 {
         eprintln!("usage: eunomia replay <trace_id> [--emit-test]");
         return 2;
     };
-    let src = match db::connect(settings).await {
+    let src = match AppState::attach(settings, surrealdb::opt::Config::new()).await {
         Ok(d) => d,
-        Err(e) => return fail(format!("cannot connect to the database: {e}")),
+        Err(e) => return fail(format!("cannot connect to the database: {}", e.source.unwrap_or(e.message))),
     };
     match replay(&src, settings, trace_id).await {
         Err(e) => fail(format!("{}: {}", e.code.as_str(), e.source.unwrap_or(e.message))),

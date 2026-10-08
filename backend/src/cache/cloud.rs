@@ -20,7 +20,7 @@ use crate::rid::RecordIdExt;
 
 use crate::cache::search as cs;
 use crate::config::Settings;
-use crate::db::Db;
+use crate::pool::OrgDb;
 use crate::store;
 use crate::embeddings::service as embeddings;
 use crate::error::AppResult;
@@ -144,7 +144,7 @@ fn label(text: &str) -> String {
     }
 }
 
-async fn layer_items(db: &Db, owner: &RecordId, vault: &RecordId, personal: bool) -> AppResult<Vec<Item>> {
+async fn layer_items(db: &OrgDb, owner: &RecordId, vault: &RecordId, personal: bool) -> AppResult<Vec<Item>> {
     #[derive(Deserialize, SurrealValue)]
     struct Mem {
         id: RecordId,
@@ -200,7 +200,7 @@ async fn layer_items(db: &Db, owner: &RecordId, vault: &RecordId, personal: bool
 
 /// The cloud for `vault_ids` (default: the caller's personal vault). Every
 /// vault must be one the caller belongs to.
-pub async fn cloud(db: &Db, settings: &Settings, owner: &RecordId, vault_ids: &[RecordId]) -> AppResult<Cloud> {
+pub async fn cloud(db: &OrgDb, settings: &Settings, owner: &RecordId, vault_ids: &[RecordId]) -> AppResult<Cloud> {
     let personal = vaults_service::personal_vault_id(db, owner).await?;
     let vaults: Vec<RecordId> =
         if vault_ids.is_empty() { vec![vaults_service::default_vault_id(db, owner).await?] } else { vault_ids.to_vec() };

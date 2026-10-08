@@ -19,7 +19,7 @@ use serde_json::Value;
 use surrealdb::types::RecordId;
 use crate::rid::RecordIdExt;
 
-use crate::db::Db;
+use crate::pool::OrgDb;
 use crate::error::AppResult;
 
 /// Raw records fetched from an origin, plus the opaque cursor to feed back
@@ -35,7 +35,7 @@ pub struct SyncResult {
 /// list. Mirrors the Python source modules importing `app.db.db` /
 /// `sources.registry.credentials_for` directly inside each method body.
 pub struct SourceCtx<'a> {
-    pub db: &'a Db,
+    pub db: &'a OrgDb,
     pub encryption_key: &'a str,
     pub owner: &'a RecordId,
 }

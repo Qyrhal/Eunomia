@@ -9,7 +9,8 @@ use tokio::sync::watch;
 use super::{kind, NewJob, WorkerConfig};
 use crate::error::AppResult;
 use crate::sources::scheduler;
-use crate::state::AppState;
+use crate::pool::OrgId;
+use crate::state::{AppState, OrgState};
 use crate::store;
 
 /// Embedding and stale-observation probes run every this many ticks (they scan more than they return).
@@ -24,7 +25,7 @@ pub async fn run(state: AppState, cfg: WorkerConfig, mut shutdown: watch::Receiv
     let mut ticks = 0u64;
     let mut leading = false;
     while !*shutdown.borrow() {
-        match super::acquire_leader(&state.db, &cfg.id, ttl).await {
+        match super::acquire_leader(&state.control, &cfg.id, ttl).await {
             Ok(true) => {
                 if !leading {
                     tracing::info!(worker = %cfg.id, "became scheduler leader");
@@ -42,25 +43,72 @@ pub async fn run(state: AppState, cfg: WorkerConfig, mut shutdown: watch::Receiv
         }
     }
     if leading {
-        let _ = super::release_leader(&state.db, &cfg.id).await; // else the lease just expires
+        let _ = super::release_leader(&state.control, &cfg.id).await; // else the lease just expires
     }
 }
 
 /// One scheduler pass. `n` counts the passes this leader has made.
 pub async fn tick(state: &AppState, n: u64) {
-    let db = &state.db;
-    reconcile_syncs(state).await;
-    reconcile_observations(state).await;
-    if n.is_multiple_of(SLOW_EVERY) {
-        reconcile_embeddings(state).await;
-        if let Err(e) = housekeeping(db).await {
-            tracing::warn!(error = %e.message, "job housekeeping failed");
+    reconcile_tenant_migrations(state).await;
+    for org in ready_orgs(state).await {
+        let Ok(org_state) = state.org(&org).await else { continue }; // not ready or behind: the migration job handles it
+        reconcile_syncs(&org_state).await;
+        reconcile_observations(&org_state).await;
+        if n.is_multiple_of(SLOW_EVERY) {
+            reconcile_embeddings(&org_state).await;
+        }
+    }
+    if n.is_multiple_of(SLOW_EVERY)
+        && let Err(e) = housekeeping(&state.control).await
+    {
+        tracing::warn!(error = %e.message, "job housekeeping failed");
+    }
+}
+
+#[derive(serde::Deserialize, SurrealValue)]
+struct TenantRow {
+    org: surrealdb::types::RecordId,
+    schema_version: i64,
+    status: String,
+}
+
+async fn tenants(state: &AppState) -> Vec<TenantRow> {
+    match store::tenant::LIST.on(&state.control).await.and_then(|mut r| r.take(0)) {
+        Ok(rows) => rows,
+        Err(e) => {
+            tracing::warn!(error = %e, "listing orgs failed");
+            Vec::new()
         }
     }
 }
 
+fn org_id(r: &surrealdb::types::RecordId) -> Option<OrgId> {
+    crate::rid::key_string(&r.key).and_then(|k| OrgId::parse(&k))
+}
+
+async fn ready_orgs(state: &AppState) -> Vec<OrgId> {
+    tenants(state).await.iter().filter(|t| t.status == "ready").filter_map(|t| org_id(&t.org)).collect()
+}
+
+/// One `migrate_tenant` job per org whose database is behind the schema this code writes. The key
+/// carries the target version, so a retry or a second leader does not queue it twice.
+pub async fn reconcile_tenant_migrations(state: &AppState) {
+    let latest = crate::migrate::LATEST_TENANT as i64;
+    for t in tenants(state).await.iter().filter(|t| t.status == "ready" && t.schema_version < latest) {
+        let Some(org) = org_id(&t.org) else { continue };
+        let Ok(mut res) = store::control::ORG_FIRST_OWNER.on(&state.control).bind(("org", org.record())).await else { continue };
+        #[derive(serde::Deserialize, SurrealValue)]
+        struct Owner {
+            user: surrealdb::types::RecordId,
+        }
+        let Some(owner) = res.take::<Vec<Owner>>(0).ok().and_then(|o| o.into_iter().next()) else { continue };
+        let key = format!("{}:{}:{latest}", kind::MIGRATE_TENANT, org.key());
+        super::enqueue_lossy(&state.control, NewJob::new(kind::MIGRATE_TENANT, owner.user, key).in_org(org)).await;
+    }
+}
+
 /// Dead-letter crash-looping jobs and prune old done ones.
-async fn housekeeping(db: &crate::db::Db) -> AppResult<()> {
+async fn housekeeping(db: &crate::pool::ControlDb) -> AppResult<()> {
     store::jobs::REAP_POISONED.on(db).await?.check()?;
     store::jobs::PRUNE_DONE.on(db).bind(("age", KEEP_DONE)).await?.check()?;
     if let Some(owner) = crate::capsules::first_user(db).await? {
@@ -70,21 +118,21 @@ async fn housekeeping(db: &crate::db::Db) -> AppResult<()> {
     Ok(())
 }
 
-/// Connector sync for every source whose interval and backoff have elapsed.
-pub async fn reconcile_syncs(state: &AppState) {
-    let due = match scheduler::due_syncs(&state.db).await {
+/// Connector sync for every source in the org whose interval and backoff have elapsed.
+pub async fn reconcile_syncs(state: &OrgState) {
+    let due = match scheduler::due_syncs(state).await {
         Ok(d) => d,
         Err(e) => return tracing::warn!(error = %e.message, "listing due syncs failed"),
     };
     for d in due {
         let key = format!("{}:{}:{}:{}", kind::SYNC, crate::sources::base::owner_key_str(&d.owner), d.source, super::window(d.period));
-        let job = NewJob::new(kind::SYNC, d.owner, key).payload(serde_json::json!({ "source": d.source }));
-        super::enqueue_lossy(&state.db, job).await;
+        let job = NewJob::new(kind::SYNC, d.owner, key).in_org(state.db.org()).payload(serde_json::json!({ "source": d.source }));
+        super::enqueue_lossy(&state.control, job).await;
     }
 }
 
 /// Cache records still missing an embedding, for owners that can embed.
-pub async fn reconcile_embeddings(state: &AppState) {
+pub async fn reconcile_embeddings(state: &OrgState) {
     let Ok(owners) = owners(state).await else { return };
     for owner in owners {
         if !crate::embeddings::service::available(&state.db, &state.settings, &owner).await {
@@ -92,12 +140,12 @@ pub async fn reconcile_embeddings(state: &AppState) {
         }
         if has_embed_backlog(&state.db, &owner).await.unwrap_or(false) {
             let key = super::periodic_key(kind::EMBED, &owner, 300);
-            super::enqueue_lossy(&state.db, NewJob::new(kind::EMBED, owner, key)).await;
+            super::enqueue_lossy(&state.control, NewJob::new(kind::EMBED, owner, key).in_org(state.db.org())).await;
         }
     }
 }
 
-async fn has_embed_backlog(db: &crate::db::Db, owner: &surrealdb::types::RecordId) -> AppResult<bool> {
+async fn has_embed_backlog(db: &crate::pool::OrgDb, owner: &surrealdb::types::RecordId) -> AppResult<bool> {
     let mut res = store::jobs::EMBED_BACKLOG.on(db).bind(("owner", owner.clone())).bind(("limit", 1)).await?;
     Ok(!res.take::<Vec<surrealdb::types::RecordId>>("id")?.is_empty())
 }
@@ -108,13 +156,13 @@ struct StaleRow {
     subject: surrealdb::types::RecordId,
 }
 
-async fn stale_observations(db: &crate::db::Db) -> AppResult<Vec<StaleRow>> {
+async fn stale_observations(db: &crate::pool::OrgDb) -> AppResult<Vec<StaleRow>> {
     let mut res = store::jobs::STALE_OBSERVATIONS.on(db).bind(("limit", STALE_BATCH)).await?;
     Ok(res.take(0)?)
 }
 
 /// Entities whose observation was marked stale by a fact write.
-pub async fn reconcile_observations(state: &AppState) {
+pub async fn reconcile_observations(state: &OrgState) {
     let rows = match stale_observations(&state.db).await {
         Ok(r) => r,
         Err(e) => return tracing::warn!(error = %e.message, "listing stale observations failed"),
@@ -130,25 +178,26 @@ pub async fn reconcile_observations(state: &AppState) {
             }
         };
         if ok {
-            super::enqueue_lossy(&state.db, consolidate_job(&row.owner, &row.subject)).await;
+            super::enqueue_lossy(&state.control, consolidate_job(state.db.org(), &row.owner, &row.subject)).await;
         }
     }
 }
 
 /// `consolidate:<subject>:<10 minute window>`: one consolidation per entity per window.
-pub fn consolidate_job(owner: &surrealdb::types::RecordId, subject: &surrealdb::types::RecordId) -> NewJob {
+pub fn consolidate_job(org: OrgId, owner: &surrealdb::types::RecordId, subject: &surrealdb::types::RecordId) -> NewJob {
     let key = format!("{}:{}:{}", kind::CONSOLIDATE, subject.to_string(), super::window(600));
-    NewJob::new(kind::CONSOLIDATE, owner.clone(), key).payload(serde_json::json!({ "subject": subject.to_string() }))
+    NewJob::new(kind::CONSOLIDATE, owner.clone(), key).in_org(org).payload(serde_json::json!({ "subject": subject.to_string() }))
 }
 
-async fn owners(state: &AppState) -> Result<Vec<surrealdb::types::RecordId>, ()> {
+/// The org's users: the owners reconcilers check for work.
+async fn owners(state: &OrgState) -> Result<Vec<surrealdb::types::RecordId>, ()> {
     #[derive(serde::Deserialize, SurrealValue)]
     struct Row {
         id: surrealdb::types::RecordId,
     }
-    async fn list(db: &crate::db::Db) -> AppResult<Vec<Row>> {
-        let mut res = store::app::SOURCES_USER_IDS.on(db).await?;
+    async fn list(state: &OrgState) -> AppResult<Vec<Row>> {
+        let mut res = store::control::ORG_MEMBERS.on(&state.control).bind(("org", state.db.org().record())).await?;
         Ok(res.take(0)?)
     }
-    list(&state.db).await.map(|r| r.into_iter().map(|u| u.id).collect()).map_err(|e| tracing::warn!(error = %e.message, "listing users failed"))
+    list(state).await.map(|r| r.into_iter().map(|u| u.id).collect()).map_err(|e| tracing::warn!(error = %e.message, "listing users failed"))
 }

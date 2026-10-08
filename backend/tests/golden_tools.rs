@@ -11,7 +11,6 @@ mod common;
 use std::collections::BTreeSet;
 
 use common::{Normalizer, TestApp};
-use eunomia_backend::models_user;
 use eunomia_backend::sources::registry as sources;
 use eunomia_backend::tools::registry;
 use serde_json::{json, Value};
@@ -59,7 +58,7 @@ fn s(v: &Value, ptr: &str) -> String {
 #[tokio::test]
 async fn every_registered_tool_has_a_golden() {
     let mut g = Golden { app: TestApp::new().await, norm: Normalizer::default(), covered: BTreeSet::new() };
-    let bob = models_user::register_user(&g.app.state.db, "bob@example.com", common::PASSWORD).await.unwrap();
+    let bob = common::register(&g.app.state, "bob@example.com").await;
 
     // Deterministic offline records through the demo source's own mapper + the real ingest path.
     let demo = sources::get("demo").unwrap();
@@ -73,7 +72,7 @@ async fn every_registered_tool_has_a_golden() {
         json!({"_kind":"txn","id":id,"account":"Spending","description":d,"category":c,"amount_cents":amt,"created_at":at})
     })
     .collect();
-    let report = sources::ingest(&g.app.state.db, &g.app.user.id, "demo", &raws, demo.as_ref()).await;
+    let report = sources::ingest(&g.app.state.org(&g.app.user.org).await.unwrap(), &g.app.user.id, "demo", &raws, demo.as_ref()).await;
     assert_eq!(report.written, 3, "{:?}", report.errors);
 
     // -- docs, generic cache tools --

@@ -156,7 +156,7 @@ async fn list_grants(State(state): State<AppState>, user: User) -> AppResult<Jso
         created_at: surrealdb::types::Datetime,
         last_used_at: Option<surrealdb::types::Datetime>,
     }
-    let mut res = crate::store::app::OAUTH_GRANT_LIST.on(&state.db).bind(("owner", user.id)).await?;
+    let mut res = crate::store::control::OAUTH_GRANT_LIST.on(&state.control).bind(("owner", user.id)).await?;
     let rows: Vec<Row> = res.take(0)?;
     Ok(Json(
         rows.into_iter()
@@ -185,11 +185,11 @@ async fn list_grants(State(state): State<AppState>, user: User) -> AppResult<Jso
 )]
 async fn revoke_grant(State(state): State<AppState>, user: User, Path(grant_id): Path<String>) -> AppResult<Json<crate::openapi::DeletedBody>> {
     let id = RecordId::from_table_key("oauth_grant", grant_id);
-    let mut res = crate::store::app::OAUTH_GRANT_DELETE.on(&state.db).bind(("id", id.clone())).bind(("owner", user.id)).await?;
+    let mut res = crate::store::control::OAUTH_GRANT_DELETE.on(&state.control).bind(("id", id.clone())).bind(("owner", user.id)).await?;
     let removed: Vec<server::Gone> = res.take(0)?;
     if removed.is_empty() {
         return Err(AppError::coded(ErrorCode::ResourceNotFound, "No such connected app."));
     }
-    crate::store::app::OAUTH_TOKENS_DELETE_FAMILY.on(&state.db).bind(("family", id)).await?.check()?;
+    crate::store::control::OAUTH_TOKENS_DELETE_FAMILY.on(&state.control).bind(("family", id)).await?.check()?;
     Ok(Json(crate::openapi::DeletedBody { deleted: true }))
 }

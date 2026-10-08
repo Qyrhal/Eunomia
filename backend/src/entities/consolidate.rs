@@ -29,7 +29,8 @@ use surrealdb::types::RecordId;
 use crate::rid::RecordIdExt;
 
 use crate::config::Settings;
-use crate::db::Db;
+use crate::pool::OrgDb;
+use crate::store;
 use crate::error::{AppError, AppResult};
 use crate::store::entities as q;
 use crate::tx::with_retry;
@@ -98,7 +99,7 @@ fn new_facts<'a>(raw_ids: &'a [(String, String)], already_consolidated: &HashSet
 }
 
 async fn call_llm(
-    db: &Db,
+    db: &OrgDb,
     settings: &Settings,
     owner: &RecordId,
     mission: &str,
@@ -142,7 +143,7 @@ async fn call_llm(
 /// The configured observations mission for `owner`, or `DEFAULT_MISSION` if
 /// unset -- mirrors `tools.py::consolidate_observations` reading
 /// `app_settings.observations_mission`.
-pub async fn observations_mission(db: &Db, owner: &RecordId) -> AppResult<String> {
+pub async fn observations_mission(db: &OrgDb, owner: &RecordId) -> AppResult<String> {
     let row = app_settings_row(db, owner).await?;
     Ok(if row.observations_mission.is_empty() { DEFAULT_MISSION.to_string() } else { row.observations_mission })
 }
@@ -154,13 +155,13 @@ pub async fn observations_mission(db: &Db, owner: &RecordId) -> AppResult<String
 /// call failed / isn't available (stub backend).
 #[allow(clippy::result_large_err)] // surrealdb::Error is large; boxing it would change the error type
 pub async fn consolidate_subject(
-    db: &Db,
+    db: &OrgDb,
     settings: &Settings,
     owner: &RecordId,
     subject_id: &RecordId,
     mission: Option<&str>,
 ) -> AppResult<Option<ConsolidatedObservation>> {
-    let subject_row: Option<SubjectRow> = db.select(subject_id.clone()).await?;
+    let subject_row: Option<SubjectRow> = store::get(db, subject_id).await?;
     let Some(subject_row) = subject_row else { return Ok(None) };
 
     let mut raw_res = q::RAW_MEMORIES

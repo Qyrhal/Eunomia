@@ -18,7 +18,7 @@ use serde::Deserialize;
 use surrealdb::types::RecordId;
 use crate::rid::RecordIdExt;
 
-use crate::db::Db;
+use crate::pool::OrgDb;
 use crate::error::{AppError, AppResult, ErrorCode};
 use crate::scopes;
 use crate::store;
@@ -191,7 +191,7 @@ struct RoleRow {
     role: String,
 }
 
-async fn role_of(db: &Db, user: &RecordId, vault: &RecordId) -> AppResult<Option<Role>> {
+async fn role_of(db: &OrgDb, user: &RecordId, vault: &RecordId) -> AppResult<Option<Role>> {
     let mut res = store::vaults::MEMBERSHIP_ACTIVE
         .on(db)
         .bind(("vault", vault.clone()))
@@ -203,7 +203,7 @@ async fn role_of(db: &Db, user: &RecordId, vault: &RecordId) -> AppResult<Option
 
 /// 403 unless `user` is an active member of `vault`. Not an authorization of
 /// any action: only for resolving a restricted token's own vault.
-pub async fn ensure_member(db: &Db, user: &RecordId, vault: &RecordId) -> AppResult<()> {
+pub async fn ensure_member(db: &OrgDb, user: &RecordId, vault: &RecordId) -> AppResult<()> {
     match role_of(db, user, vault).await? {
         Some(_) => Ok(()),
         None => Err(AppError::coded(ErrorCode::VaultForbidden, format!("not a member of vault {}", vault.to_string()))),
@@ -212,7 +212,7 @@ pub async fn ensure_member(db: &Db, user: &RecordId, vault: &RecordId) -> AppRes
 
 /// The one gate for acting on a vault: the credential's scope and vault
 /// restriction, then the user's active role against the matrix.
-pub async fn authorize(db: &Db, user: &RecordId, action: Action, vault: &RecordId) -> AppResult<VaultScope> {
+pub async fn authorize(db: &OrgDb, user: &RecordId, action: Action, vault: &RecordId) -> AppResult<VaultScope> {
     require_scope(action.scope())?;
     check_vault(vault)?;
     match role_of(db, user, vault).await? {

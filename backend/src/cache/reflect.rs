@@ -13,7 +13,7 @@ use surrealdb::types::RecordId;
 
 use crate::cache::recall::{self, RecallItem};
 use crate::config::Settings;
-use crate::db::Db;
+use crate::pool::OrgDb;
 use crate::error::{AppError, AppResult};
 use crate::embeddings::service::{endpoint_configured, resolve_openai_for_owner};
 
@@ -89,7 +89,7 @@ cite them by index like [1], and say so plainly if they don't contain enough to 
 }
 
 pub async fn reflect(
-    db: &Db,
+    db: &OrgDb,
     settings: &Settings,
     owner: &RecordId,
     query: &str,

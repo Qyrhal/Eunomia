@@ -144,6 +144,7 @@ async fn vector_cloud(
     user: User,
     Query(q): Query<CloudQuery>,
 ) -> AppResult<Json<crate::cache::cloud::Cloud>> {
+    let state = state.org(&user.org).await?;
     let ids = q
         .vault_ids
         .unwrap_or_default()
@@ -181,6 +182,7 @@ async fn list_entities(
     user: User,
     Query(q): Query<ListQuery>,
 ) -> AppResult<Json<service::ListEntitiesOut>> {
+    let state = state.org(&user.org).await?;
     if let Some(k) = &q.kind {
         known_kind_or_400(k)?;
     }
@@ -207,6 +209,7 @@ async fn entity_graph(
     Query(q): Query<GraphQuery>,
     RawQuery(raw): RawQuery,
 ) -> AppResult<Json<service::GraphOut>> {
+    let state = state.org(&user.org).await?;
     let kinds_vec = parse_kinds(raw.as_deref());
     let kinds: Option<Vec<String>> = if kinds_vec.is_empty() { None } else { Some(kinds_vec) };
     if let Some(ks) = &kinds {
@@ -216,7 +219,7 @@ async fn entity_graph(
         }
     }
     let vault_rid = q.vault_id.as_deref().map(parse_record_id).transpose()?;
-    Ok(Json(service::graph(&state.db, &user.id, kinds.as_deref(), vault_rid.as_ref()).await?))
+    Ok(Json(service::graph(&state.db, &state.control, &user.id, kinds.as_deref(), vault_rid.as_ref()).await?))
 }
 
 #[utoipa::path(
@@ -234,6 +237,7 @@ async fn create_entity(
     user: User,
     Json(body): Json<EntityCreate>,
 ) -> AppResult<Json<service::EntityOut>> {
+    let state = state.org(&user.org).await?;
     known_kind_or_400(&body.kind)?;
     let vault_rid = body.vault_id.as_deref().map(parse_record_id).transpose()?;
     Ok(Json(
@@ -266,6 +270,7 @@ async fn update_memory(
     Path(memory_id): Path<String>,
     Json(body): Json<MemoryUpdate>,
 ) -> AppResult<Json<service::MemoryOut>> {
+    let state = state.org(&user.org).await?;
     let rid = parse_record_id(&memory_id)?;
     let memory = service::update_memory(&state.db, &user.id, &rid, body.text.as_deref(), body.mem_type.as_deref()).await?;
     memory.map(Json).ok_or_else(|| AppError::coded(ErrorCode::MemoryNotFound, "not found"))
@@ -286,6 +291,7 @@ async fn delete_memory(
     user: User,
     Path(memory_id): Path<String>,
 ) -> AppResult<Json<Value>> {
+    let state = state.org(&user.org).await?;
     let rid = parse_record_id(&memory_id)?;
     let deleted = service::delete_memory(&state.db, &user.id, &rid).await?;
     if !deleted {
@@ -309,8 +315,9 @@ async fn get_entity(
     user: User,
     Path(entity_id): Path<String>,
 ) -> AppResult<Json<service::EntityDetail>> {
+    let state = state.org(&user.org).await?;
     let rid = parse_record_id(&entity_id)?;
-    let entity = service::get_entity(&state.db, &user.id, &rid).await?;
+    let entity = service::get_entity(&state.db, &state.control, &user.id, &rid).await?;
     entity.map(Json).ok_or_else(|| AppError::coded(ErrorCode::EntityNotFound, "not found"))
 }
 
@@ -331,6 +338,7 @@ async fn update_entity(
     Path(entity_id): Path<String>,
     Json(body): Json<EntityUpdate>,
 ) -> AppResult<Json<service::EntityOut>> {
+    let state = state.org(&user.org).await?;
     let rid = parse_record_id(&entity_id)?;
     let entity =
         service::update_entity(&state.db, &user.id, &rid, body.name.as_deref(), body.aliases, body.summary.as_deref())
@@ -353,6 +361,7 @@ async fn delete_entity(
     user: User,
     Path(entity_id): Path<String>,
 ) -> AppResult<Json<Value>> {
+    let state = state.org(&user.org).await?;
     let rid = parse_record_id(&entity_id)?;
     let deleted = service::delete_entity(&state.db, &user.id, &rid).await?;
     if !deleted {
@@ -378,8 +387,9 @@ async fn add_memory(
     Path(entity_id): Path<String>,
     Json(body): Json<MemoryCreate>,
 ) -> AppResult<Json<service::MemoryOut>> {
+    let state = state.org(&user.org).await?;
     let rid = parse_record_id(&entity_id)?;
-    if service::get_entity(&state.db, &user.id, &rid).await?.is_none() {
+    if service::get_entity(&state.db, &state.control, &user.id, &rid).await?.is_none() {
         return Err(AppError::coded(ErrorCode::EntityNotFound, "not found"));
     }
     Ok(Json(service::add_memory(&state.db, &user.id, &rid, &body.text, None, &body.mem_type).await?))
@@ -402,12 +412,13 @@ async fn add_relation(
     Path(entity_id): Path<String>,
     Json(body): Json<RelationCreate>,
 ) -> AppResult<Json<service::RelationOut>> {
+    let state = state.org(&user.org).await?;
     let rid = parse_record_id(&entity_id)?;
-    if service::get_entity(&state.db, &user.id, &rid).await?.is_none() {
+    if service::get_entity(&state.db, &state.control, &user.id, &rid).await?.is_none() {
         return Err(AppError::coded(ErrorCode::EntityNotFound, "not found"));
     }
     let to_rid = parse_record_id(&body.to_id)?;
-    if service::get_entity(&state.db, &user.id, &to_rid).await?.is_none() {
+    if service::get_entity(&state.db, &state.control, &user.id, &to_rid).await?.is_none() {
         return Err(AppError::coded(ErrorCode::EntityNotFound, "target entity not found"));
     }
     Ok(Json(service::add_relation(&state.db, &user.id, &rid, &to_rid, &body.label, None).await?))
@@ -430,6 +441,7 @@ async fn merge_entities(
     Path(entity_id): Path<String>,
     Json(body): Json<MergeRequest>,
 ) -> AppResult<Json<service::EntityOut>> {
+    let state = state.org(&user.org).await?;
     let rid = parse_record_id(&entity_id)?;
     let loser_rid = parse_record_id(&body.loser_id)?;
     Ok(Json(service::merge_entities(&state.db, &user.id, &rid, &loser_rid).await?))
