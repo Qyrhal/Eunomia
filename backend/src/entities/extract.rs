@@ -15,13 +15,8 @@
 //! "no real network calls in tests" -- when set, `extract_entities` is a
 //! no-op (skips straight through, creates nothing).
 //!
-//! Ported from `entities/extract.py`. `connectors/service.py`'s
-//! `resolve_openai`/`get_app_settings` haven't been ported into
-//! `connectors::service` yet (that module's own docstring defers the
-//! `app_settings` half to "a different phase of the port"), so this module
-//! inlines a minimal equivalent (`resolve_openai` below) rather than reach
-//! into a sibling module that doesn't have it -- refactor to call the real
-//! thing once it exists.
+//! Ported from `entities/extract.py`. Which endpoint and key the LLM call
+//! uses comes from `embeddings::provider`, shared by every model caller.
 
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
@@ -32,6 +27,7 @@ use surrealdb::RecordId;
 
 use crate::config::Settings;
 use crate::db::Db;
+use crate::embeddings::provider;
 use crate::error::{AppError, AppResult};
 
 use super::service;
@@ -39,8 +35,6 @@ use super::service;
 /// Text shorter than this has nothing worth extracting -- skip the LLM call
 /// entirely rather than spend tokens on "ok", "thanks", etc.
 const MIN_BODY_LEN: usize = 40;
-
-const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 
 /// One ingested record's fields relevant to extraction -- mirrors the `id`/
 /// `title`/`body_text` subset of a `cache_record` row that `cache/ingest.py`
@@ -106,16 +100,11 @@ fn should_extract(body: &str, embeddings_backend: &str) -> bool {
 #[derive(Debug, Deserialize, Default)]
 pub(super) struct AppSettingsRow {
     #[serde(default)]
-    pub openai_base_url: String,
-    #[serde(default)]
-    pub openai_api_key_encrypted: String,
-    #[serde(default)]
     pub observations_mission: String,
 }
 
 /// The `app_settings:<owner_id>` row, creating it with (schema-)defaults if
-/// missing. Shared by `resolve_openai` (below) and `consolidate.rs`'s
-/// mission lookup.
+/// missing. Used by `consolidate.rs`'s mission lookup.
 pub(super) async fn app_settings_row(db: &Db, owner: &RecordId) -> AppResult<AppSettingsRow> {
     let rid = RecordId::from_table_key("app_settings", owner.key().clone());
     let row: Option<AppSettingsRow> = db.select(rid.clone()).await?;
@@ -123,30 +112,21 @@ pub(super) async fn app_settings_row(db: &Db, owner: &RecordId) -> AppResult<App
         Some(r) => Ok(r),
         None => {
             // Relies on the `app_settings` table's own field DEFAULTs (see
-            // `db.rs`'s SCHEMA_STATEMENTS) for everything but `owner`.
-            let mut res =
-                db.query("UPSERT $id SET owner = $owner RETURN AFTER").bind(("id", rid)).bind(("owner", owner.clone())).await?;
+            // `db.rs`'s SCHEMA_STATEMENTS) for everything but `owner`, and
+            // the base URL: "" = the server's (see `embeddings::provider`).
+            let mut res = db
+                .query("UPSERT $id SET owner = $owner, openai_base_url = \"\" RETURN AFTER")
+                .bind(("id", rid))
+                .bind(("owner", owner.clone()))
+                .await?;
             let rows: Vec<AppSettingsRow> = res.take(0)?;
             Ok(rows.into_iter().next().unwrap_or_default())
         }
     }
 }
 
-/// Resolve `(base_url, api_key)` for `owner`'s OpenAI-compatible backend.
-/// The per-user `app_settings` row overrides the env-level
-/// `settings.openai_api_key` default for the key; `base_url` is per-user
-/// only. Mirrors `connectors/service.py::resolve_openai`.
-pub(super) async fn resolve_openai(db: &Db, settings: &Settings, owner: &RecordId) -> AppResult<(String, String)> {
-    let row = app_settings_row(db, owner).await?;
-    let base_url = if row.openai_base_url.is_empty() { DEFAULT_OPENAI_BASE_URL.to_string() } else { row.openai_base_url };
-    let decrypted = crate::connectors::crypto::decrypt_or_plaintext(&settings.encryption_key, &row.openai_api_key_encrypted);
-    let key = if !decrypted.is_empty() { decrypted } else { settings.openai_api_key.clone().unwrap_or_default() };
-    Ok((base_url, key))
-}
-
 async fn call_llm(db: &Db, settings: &Settings, owner: &RecordId, text: &str) -> AppResult<ExtractionData> {
-    let (base_url, api_key) = resolve_openai(db, settings, owner).await?;
-    let key = if api_key.is_empty() { "not-needed".to_string() } else { api_key };
+    let p = provider::resolve(db, settings, owner).await?;
 
     let body = json!({
         "model": "gpt-4o-mini",
@@ -154,9 +134,9 @@ async fn call_llm(db: &Db, settings: &Settings, owner: &RecordId, text: &str) ->
         "messages": [{"role": "user", "content": build_prompt(text)}],
     });
 
-    let resp = reqwest::Client::new()
-        .post(format!("{}/chat/completions", base_url.trim_end_matches('/')))
-        .bearer_auth(key)
+    let resp = provider::client()
+        .post(p.url("chat/completions"))
+        .bearer_auth(p.bearer())
         .json(&body)
         .timeout(Duration::from_secs(30))
         .send()

@@ -60,11 +60,18 @@ their local-dev defaults in production:
 | Var | Local default | Production |
 |---|---|---|
 | `JWT_SECRET` | random per-process if unset | a fixed secret (`openssl rand -base64 32`) — sessions won't survive a restart otherwise, and every process must agree on one value |
-| `ENCRYPTION_KEY` | a static fallback key | `openssl rand -base64 32` — the fallback is non-secret and ships in this repo |
+| `ENCRYPTION_KEY` | none: the backend refuses to start without one (min. 16 characters) | `openssl rand -base64 32` (the installer generates one) |
 | `SURREAL_PASS` | `root` | a real password |
-| `OPENAI_API_KEY` | blank (settable per-user instead) | set it server-wide, or rely on each user setting their own in Settings |
+| `OPENAI_API_KEY` | blank (settable per-user instead) | set it server-wide, or rely on each user setting their own in Settings. It is only ever sent to `OPENAI_BASE_URL`; a user who points Settings at another endpoint uses their own key there |
 | `CORS_ALLOWED_ORIGINS` | `http://localhost:3000` | only needed for browsers calling the backend port directly; the bundled frontend goes through its own `/api` proxy |
 | `FRONTEND_URL` | `http://localhost:3000` | same as above (this is what `CORS_ALLOWED_ORIGINS` defaults from in `docker-compose.yml`) |
+
+Saved credentials are stored as `enc:v1:…` ciphertext; older rows without
+the prefix still decrypt. If a value can't be decrypted (a changed
+`ENCRYPTION_KEY`, corrupted data, or a deployment that used to run without
+a key), it is never sent anywhere: the feature reports an error and the
+credential has to be entered again in Settings or Connectors. Keep
+`ENCRYPTION_KEY` with your backups.
 
 ## 3. The browser only ever talks to the frontend
 
