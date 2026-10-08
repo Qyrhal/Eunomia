@@ -547,6 +547,11 @@ html[data-theme-wipe]::view-transition-new(root) {
   scrollbar-color: var(--border-strong) transparent;
 }
 
+/* Native datalist arrow: off, it clashes with the themed controls. */
+input[list]::-webkit-calendar-picker-indicator {
+  display: none !important;
+}
+
 a {
   text-underline-offset: 3px;
   text-decoration-thickness: 1px;

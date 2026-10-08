@@ -120,7 +120,7 @@ export default function SkillPage() {
                   >
                     Edit
                   </button>
-                  <CopyButton value={skill} label="Copy SKILL.md" size="sm" className="btn-primary [&_svg]:text-current" />
+                  <CopyButton value={skill} label="Copy SKILL.md" size="sm" className="btn-primary" />
                 </>
               ))}
             </div>

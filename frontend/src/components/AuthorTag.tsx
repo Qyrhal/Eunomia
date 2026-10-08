@@ -43,10 +43,13 @@ export default function AuthorTag({ name, cursor = false, title }: { name: strin
     </span>
   );
   if (!cursor) return tag;
+  // Cursor pinned to the tag's top-left corner, like a Figma name tag.
   return (
-    <span className="inline-flex items-start gap-0.5">
-      <CursorGlyph color={color} size={18} />
-      <span className="mt-3">{tag}</span>
+    <span className="relative inline-flex">
+      <span className="absolute -left-2 -top-3 pointer-events-none">
+        <CursorGlyph color={color} size={16} />
+      </span>
+      {tag}
     </span>
   );
 }

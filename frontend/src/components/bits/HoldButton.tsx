@@ -12,6 +12,9 @@ type Props = Omit<React.ButtonHTMLAttributes<HTMLButtonElement>, "onClick"> & {
   onClick?: () => void;
 };
 
+// Matches the fill's transition-delay in bits.css, so an ordinary click never flashes red.
+const HOLD_DELAY_MS = 150;
+
 export default function HoldButton({ holdMs = 900, onConfirm, onClick, className = "", style, children, ...rest }: Props) {
   const [holding, setHolding] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -40,7 +43,7 @@ export default function HoldButton({ holdMs = 900, onConfirm, onClick, className
           fired.current = true;
           setHolding(false);
           onConfirm();
-        }, holdMs);
+        }, holdMs + HOLD_DELAY_MS);
       }}
       onPointerUp={release}
       onPointerLeave={() => {

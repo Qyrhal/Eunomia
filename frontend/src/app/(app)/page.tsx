@@ -9,7 +9,6 @@ import CopyButton from "@/components/bits/CopyButton";
 import DecryptReveal from "@/components/bits/DecryptReveal";
 import DigitRoll from "@/components/bits/DigitRoll";
 import SyncMark, { type SyncStatus } from "@/components/bits/SyncMark";
-import { spark } from "@/components/bits/Spark";
 import { prefersReducedMotion } from "@/components/bits/motion";
 import { kindForSource } from "@/lib/connectorMeta";
 import { FAILURE_ALERT_THRESHOLD, isLiveSource, isStubSource, sourceHealth, sourceLabel } from "@/lib/sourceState";
@@ -83,16 +82,11 @@ function McpCard({ onCreated }: { onCreated: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  async function generate(e: React.MouseEvent<HTMLButtonElement>) {
-    // Read before the await: React may have recycled the event by then.
-    const button = e.currentTarget;
-    const pointer = e.detail > 0;
+  async function generate() {
     setBusy(true);
     setError(null);
     try {
       const res = await auth.tokens.create("MCP");
-      // Fired before the button unmounts, so the lines leave from where it stood.
-      if (pointer) spark(button, { count: 8 });
       setToken(res.token);
       onCreated();
     } catch (err) {
@@ -422,12 +416,9 @@ function Inspector({ row }: { row: LiveRow }) {
     <aside aria-label="Selected memory" className="panel frame-selected p-4 flex flex-col gap-4">
       {/* Re-keyed per row so the content settles in with a short fade, the panel itself stays put. */}
       <div key={row.id} className="fade-in flex flex-col gap-4">
-        <div className="flex flex-col gap-1.5">
-          <span className="label">Memory</span>
-          <p className="text-[14px] leading-snug" style={{ color: "var(--ink)" }}>
-            {row.text}
-          </p>
-        </div>
+        <h2 className="text-[15px] font-medium leading-snug" style={{ color: "var(--ink)" }}>
+          {row.text}
+        </h2>
         <dl className="grid gap-y-2.5 gap-x-3 text-[13px]" style={{ gridTemplateColumns: "72px minmax(0, 1fr)" }}>
           {fields.filter((f) => f.show !== false).map(({ label, value }) => (
             <div key={label} className="contents">

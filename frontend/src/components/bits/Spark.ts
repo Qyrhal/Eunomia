@@ -33,7 +33,7 @@ export function spark(el: Element | null | undefined, { count = 8, radius = 18, 
         { transform: `rotate(${angle}deg) translateY(${-start}px) scaleY(1)`, opacity: 1 },
         { transform: `rotate(${angle}deg) translateY(${-(start + radius)}px) scaleY(0.2)`, opacity: 0 },
       ],
-      { duration: 420, easing, fill: "forwards" },
+      { duration: 280, easing, fill: "forwards" },
     ).finished.finally(() => s.remove());
   }
 }

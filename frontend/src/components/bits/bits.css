@@ -105,10 +105,10 @@
 }
 .bits-decrypt-overlay {
   position: absolute;
-  left: 0;
-  top: 0;
+  inset: 0;
   white-space: pre;
   overflow: hidden;
+  text-overflow: ellipsis;
   pointer-events: none;
 }
 .bits-decrypt-noise {
@@ -130,9 +130,10 @@
   transition: clip-path 200ms var(--ease-out);
   pointer-events: none;
 }
+/* A short delay so an ordinary click never flashes the red fill. */
 .bits-hold[data-holding] .bits-hold-fill {
   clip-path: inset(0 0 0 0);
-  transition: clip-path var(--hold-ms, 900ms) linear;
+  transition: clip-path var(--hold-ms, 900ms) linear 150ms;
 }
 
 /* ---- Spark: short lines thrown from a point ---- */

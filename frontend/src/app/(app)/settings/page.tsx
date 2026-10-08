@@ -15,9 +15,9 @@ import {
 } from "@/lib/api";
 import CopyButton from "@/components/bits/CopyButton";
 import DecryptReveal from "@/components/bits/DecryptReveal";
+import Tooltip from "@/components/bits/Tooltip";
 import HoldButton from "@/components/bits/HoldButton";
 import SyncMark from "@/components/bits/SyncMark";
-import { spark } from "@/components/bits/Spark";
 
 const ICON = { size: 14, strokeWidth: 1.75 } as const;
 
@@ -89,19 +89,20 @@ function RevokeButton({ label, onRevoke }: { label: string; onRevoke: () => Prom
   }
   if (!armed)
     return (
+      <Tooltip label={`Revoke ${label}. Hold to revoke now`}>
       <HoldButton
         holdMs={650}
         onClick={() => setArmed(true)}
         onConfirm={confirm}
         disabled={busy}
         aria-label="Revoke"
-        title={`Revoke ${label} (hold to revoke at once)`}
         className="btn-sm btn-icon"
         // Quiet at rest like the ghost icon it replaces; the critical fill shows while held.
         style={{ borderColor: "transparent", color: "var(--ink-dim)" }}
       >
         <Trash2 {...ICON} />
       </HoldButton>
+      </Tooltip>
     );
   return (
     <span className="inline-flex items-center gap-1">
@@ -141,9 +142,6 @@ function TokensSection() {
   const [minted, setMinted] = useState<{ name: string; token: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const createBtn = useRef<HTMLButtonElement>(null);
-  // detail is 0 for Enter in the field or on the button: sparks only follow a pointer click.
-  const pointer = useRef(false);
 
   const load = () => auth.tokens.list().then(setTokens).catch(() => setTokens([]));
   useEffect(() => {
@@ -156,7 +154,6 @@ function TokensSection() {
     try {
       const res = await auth.tokens.create(name.trim() || "API token");
       setMinted({ name: res.name, token: res.token });
-      if (pointer.current) spark(createBtn.current);
       setName("");
       await load();
     } catch (e) {
@@ -201,7 +198,7 @@ function TokensSection() {
             value={name}
             onChange={(e) => setName(e.target.value)}
           />
-          <button ref={createBtn} type="submit" disabled={busy} onClick={(e) => (pointer.current = e.detail > 0)} className="btn btn-primary">
+          <button type="submit" disabled={busy} className="btn btn-primary">
             <KeyRound {...ICON} />
             {busy ? "Creating…" : "Create"}
           </button>

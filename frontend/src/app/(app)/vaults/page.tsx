@@ -27,6 +27,7 @@ import {
 import HoldButton from "@/components/bits/HoldButton";
 import SyncMark from "@/components/bits/SyncMark";
 import { spark } from "@/components/bits/Spark";
+import Tooltip from "@/components/bits/Tooltip";
 import { cssVar, prefersReducedMotion } from "@/components/bits/motion";
 
 const ICON = { size: 14, strokeWidth: 1.75 } as const;
@@ -485,6 +486,7 @@ function VaultInspector({
             )}
             {isOrg && isOwner && (
               // Click still opens the confirm step; holding 900ms is the accelerator.
+              <Tooltip label="Hold to delete now">
               <HoldButton
                 holdMs={900}
                 onClick={() => setConfirm("delete")}
@@ -497,11 +499,11 @@ function VaultInspector({
                 }
                 className="btn-sm"
                 aria-label="Delete vault"
-                title="Click to confirm, or hold to delete"
               >
                 <Trash2 {...ICON} />
                 Delete
               </HoldButton>
+              </Tooltip>
             )}
           </div>
         )}

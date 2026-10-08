@@ -339,8 +339,7 @@ export default function ConnectorWorkspacePage({ params }: { params: Promise<{ k
                 <Settings2 size={14} strokeWidth={1.75} aria-hidden /> Settings
               </Link>
             )}
-            {/* The mark's green check would vanish on the green primary fill, so it takes the button's ink. */}
-            <button type="button" onClick={sync} disabled={syncing} className="btn btn-primary [&_path]:stroke-current" aria-live="polite">
+            <button type="button" onClick={sync} disabled={syncing} className="btn btn-primary" aria-live="polite">
               <SyncMark status={syncStatus} />
               {syncing ? "Syncing…" : "Sync now"}
             </button>
