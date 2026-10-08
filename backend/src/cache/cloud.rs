@@ -19,6 +19,7 @@ use surrealdb::RecordId;
 use crate::cache::search as cs;
 use crate::config::Settings;
 use crate::db::Db;
+use crate::store;
 use crate::embeddings::service as embeddings;
 use crate::error::AppResult;
 use crate::vaults::service as vaults_service;
@@ -150,8 +151,8 @@ async fn layer_items(db: &Db, owner: &RecordId, vault: &RecordId, personal: bool
         #[serde(rename = "type", default)]
         mem_type: String,
     }
-    let mut res = db
-        .query("SELECT id, text, type FROM memory WHERE vault = $vault LIMIT $limit")
+    let mut res = store::cache::MEMORY_FOR_EMBED
+        .on(db)
         .bind(("vault", vault.clone()))
         .bind(("limit", MAX_PER_LAYER as i64))
         .await?;
@@ -173,8 +174,8 @@ async fn layer_items(db: &Db, owner: &RecordId, vault: &RecordId, personal: bool
             #[serde(default)]
             embedding: Option<Vec<f32>>,
         }
-        let mut res = db
-            .query("SELECT id, title, body_text, embedding FROM cache_record WHERE owner = $owner AND deleted = false LIMIT $limit")
+        let mut res = store::cache::RECORDS_FOR_EMBED
+            .on(db)
             .bind(("owner", owner.clone()))
             .bind(("limit", (MAX_PER_LAYER - items.len()) as i64))
             .await?;
