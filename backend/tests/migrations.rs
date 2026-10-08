@@ -2,7 +2,7 @@
 mod common;
 
 use common::test_settings;
-use eunomia_backend::db::{self, Db};
+use eunomia_backend::db::Db;
 use eunomia_backend::migrate;
 use serde_json::Value;
 
