@@ -228,10 +228,10 @@ impl RateLimiter {
     }
 }
 
-/// Failed sign-in attempts per account (or per OAuth client), counted in a fixed window and independent
-/// of the client address: a client that reaches the backend with its own `X-Forwarded-For`, or one
-/// address shared by everyone behind the frontend, cannot dodge it. Per process, like [`RateLimiter`].
-// ponytail: a locked account stays locked for the window even for the owner; per-process, so N replicas allow N times the budget.
+/// Failed sign-in attempts per key (account plus address, account alone as a looser ceiling, or OAuth
+/// client plus address), counted in a fixed window. Per process, like [`RateLimiter`]. The map holds at
+/// most `FAIL_MAX_KEYS` keys: past that, expired windows go first, then the oldest tenth.
+// ponytail: per-process, so N replicas allow N times the budget.
 #[derive(Default)]
 pub struct FailThrottle {
     map: Mutex<HashMap<String, (u32, Instant)>>,
@@ -240,6 +240,9 @@ pub struct FailThrottle {
 /// Failures allowed per key before attempts are refused.
 pub const LOGIN_FAILS: u32 = 10;
 pub const OAUTH_CLIENT_FAILS: u32 = 30;
+/// Failures per account across all addresses (distributed guessing), looser than `LOGIN_FAILS`.
+pub const LOGIN_ACCOUNT_FAILS: u32 = 100;
+const FAIL_MAX_KEYS: usize = 50_000;
 const FAIL_WINDOW: Duration = Duration::from_secs(15 * 60);
 
 impl FailThrottle {
@@ -258,10 +261,20 @@ impl FailThrottle {
     }
 
     pub fn fail(&self, key: &str) {
+        self.fail_capped(key, FAIL_MAX_KEYS);
+    }
+
+    fn fail_capped(&self, key: &str, cap: usize) {
         let now = Instant::now();
         let mut map = self.map.lock().unwrap_or_else(|e| e.into_inner());
-        if map.len() > PRUNE_AT {
+        if map.len() >= cap {
             map.retain(|_, (_, start)| now.duration_since(*start) < FAIL_WINDOW);
+        }
+        if map.len() >= cap {
+            let mut starts: Vec<Instant> = map.values().map(|(_, s)| *s).collect();
+            starts.sort_unstable();
+            let cut = starts[(cap / 10).max(1) - 1];
+            map.retain(|_, (_, start)| *start > cut);
         }
         let e = map.entry(Self::key(key)).or_insert((0, now));
         if now.duration_since(e.1) >= FAIL_WINDOW {
@@ -290,6 +303,19 @@ mod tests {
         assert!(t.check("b", 3).is_ok());
         t.clear("a");
         assert!(t.check("a", 3).is_ok());
+    }
+
+    #[test]
+    fn fail_throttle_is_capped_and_drops_the_oldest_first() {
+        let t = FailThrottle::default();
+        for i in 0..100 {
+            t.fail_capped(&format!("k{i}"), 100);
+        }
+        t.fail_capped("new", 100);
+        let len = t.map.lock().unwrap().len();
+        assert!((85..=100).contains(&len), "{len}");
+        assert!(t.map.lock().unwrap().contains_key("new"));
+        assert!(!t.map.lock().unwrap().contains_key("k0"));
     }
 
     #[test]

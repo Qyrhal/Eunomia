@@ -28,9 +28,9 @@ async fn login(app: &TestApp, email: &str, password: &str, xff: &str) -> (Status
 }
 
 #[tokio::test]
-async fn failed_logins_are_throttled_per_account_whatever_the_address() {
+async fn failed_logins_are_throttled_per_account_and_peer_despite_spoofed_headers() {
     let app = TestApp::new().await;
-    // a different spoofed address every time: the per-address limit never sees the same client twice
+    // a different spoofed header every time (the peer is the same, so the lockout key is too: the header is not trusted)
     for i in 0..10 {
         let (status, _) = login(&app, "Tester@Example.com", "wrong-password", &format!("198.51.100.{i}")).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED, "attempt {i}");
