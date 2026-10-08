@@ -18,14 +18,23 @@ import {
   X,
 } from "lucide-react";
 import AuthorTag from "@/components/AuthorTag";
+import type { Vault, VaultMember, VaultRole } from "@/lib/types";
+import { useMe } from "@/lib/queries/auth";
 import {
-  auth,
-  vaults as vaultsApi,
-  type Vault,
-  type VaultInvitation,
-  type VaultMember,
-  type VaultRole,
-} from "@/lib/api";
+  useAcceptInvitation,
+  useCloneVault,
+  useCreateVault,
+  useDeclineInvitation,
+  useDeleteVault,
+  useInvitations,
+  useInviteMember,
+  useLeaveVault,
+  useMergeVaults,
+  useRefreshVaults,
+  useRemoveMember,
+  useVaultMembers,
+  useVaults,
+} from "@/lib/queries/vaults";
 import HoldButton from "@/components/bits/HoldButton";
 import SyncMark from "@/components/bits/SyncMark";
 import { spark } from "@/components/bits/Spark";
@@ -99,19 +108,21 @@ function MemberStack({ members }: { members: VaultMember[] | null }) {
 function VaultInspector({
   vault,
   me,
-  rev,
   inline = false,
-  onMembersChanged,
   onVaultsChanged,
 }: {
   vault: Vault;
   me: string | null;
-  rev: number;
   inline?: boolean;
-  onMembersChanged: () => void;
   onVaultsChanged: () => void;
 }) {
-  const [members, setMembers] = useState<VaultMember[] | null>(null);
+  const membersQuery = useVaultMembers(vault.id);
+  const members = membersQuery.data ?? (membersQuery.isError ? [] : null);
+  const inviteMember = useInviteMember();
+  const removeMember = useRemoveMember();
+  const deleteVault = useDeleteVault();
+  const leaveVault = useLeaveVault();
+  const cloneVault = useCloneVault();
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<VaultRole>("member");
   const [touched, setTouched] = useState(false);
@@ -124,13 +135,6 @@ function VaultInspector({
   const [cloneBusy, setCloneBusy] = useState(false);
   const [sent, setSent] = useState<string | null>(null);
   const [cloned, setCloned] = useState(false);
-
-  useEffect(() => {
-    vaultsApi
-      .members(vault.id)
-      .then((r) => setMembers(r.results))
-      .catch(() => setMembers([]));
-  }, [vault.id, rev]);
 
   useEffect(() => {
     if (!cloned) return;
@@ -154,13 +158,12 @@ function VaultInspector({
     setError(null);
     setSent(null);
     try {
-      await vaultsApi.invite(vault.id, trimmed, role);
+      await inviteMember.mutateAsync({ id: vault.id, email: trimmed, role });
       setSent(
         `Invite sent. It shows up on their Vaults page until they join or decline.`,
       );
       setEmail("");
       setTouched(false);
-      onMembersChanged();
     } catch (e) {
       setError(failure(e, "Could not send that invite.", " Check the address and try again."));
     } finally {
@@ -186,7 +189,7 @@ function VaultInspector({
     setCloneBusy(true);
     setError(null);
     try {
-      await vaultsApi.clone(vault.id, cloneName.trim() || undefined);
+      await cloneVault.mutateAsync({ id: vault.id, name: cloneName.trim() || undefined });
       setCloning(false);
       setCloned(true);
       onVaultsChanged();
@@ -261,12 +264,9 @@ function VaultInspector({
                     <button
                       onClick={() =>
                         run(
-                          () => vaultsApi.removeMember(vault.id, m.email),
+                          () => removeMember.mutateAsync({ id: vault.id, email: m.email }),
                           "Could not remove that member. Reload and try again.",
-                          () => {
-                            setRemoving(null);
-                            onMembersChanged();
-                          },
+                          () => setRemoving(null),
                         )
                       }
                       className="btn btn-danger btn-sm"
@@ -426,12 +426,12 @@ function VaultInspector({
                 onClick={() =>
                   confirm === "delete"
                     ? run(
-                        () => vaultsApi.delete(vault.id),
+                        () => deleteVault.mutateAsync(vault.id),
                         "Could not delete this vault. Reload and try again.",
                         onVaultsChanged,
                       )
                     : run(
-                        () => vaultsApi.leave(vault.id),
+                        () => leaveVault.mutateAsync(vault.id),
                         "Could not leave this vault. It needs an owner, so make someone else owner first.",
                         onVaultsChanged,
                       )
@@ -477,7 +477,7 @@ function VaultInspector({
                 onClick={() => setConfirm("delete")}
                 onConfirm={() =>
                   run(
-                    () => vaultsApi.delete(vault.id),
+                    () => deleteVault.mutateAsync(vault.id),
                     "Could not delete this vault. Reload and try again.",
                     onVaultsChanged,
                   )
@@ -498,35 +498,26 @@ function VaultInspector({
   );
 }
 
-function InvitationsPanel({ onChanged }: { onChanged: () => void }) {
-  const [invitations, setInvitations] = useState<VaultInvitation[] | null>(
-    null,
-  );
+function InvitationsPanel() {
+  const invitationsQuery = useInvitations();
+  const invitations = invitationsQuery.data ?? (invitationsQuery.isError ? [] : null);
+  const acceptInvitation = useAcceptInvitation();
+  const declineInvitation = useDeclineInvitation();
+  const refreshVaults = useRefreshVaults();
   const [busyId, setBusyId] = useState<string | null>(null);
   const [joined, setJoined] = useState<string | null>(null);
   const [error, setError] = useState<Failure | null>(null);
-
-  const load = () =>
-    vaultsApi
-      .invitations()
-      .then((r) => setInvitations(r.results))
-      .catch(() => setInvitations([]));
-
-  useEffect(() => {
-    load();
-  }, []);
 
   async function accept(vaultId: string, button: HTMLElement, pointer: boolean) {
     setBusyId(vaultId);
     setError(null);
     try {
-      await vaultsApi.acceptInvitation(vaultId);
+      await acceptInvitation.mutateAsync(vaultId);
       if (pointer) spark(button);
       // The dashed invite turns solid with a soft flash, then the vault row arrives in the list.
       setJoined(vaultId);
       if (!prefersReducedMotion()) await new Promise((r) => setTimeout(r, 180));
-      onChanged();
-      await load();
+      await refreshVaults();
     } catch (e) {
       setError(
         failure(
@@ -544,8 +535,7 @@ function InvitationsPanel({ onChanged }: { onChanged: () => void }) {
     setBusyId(vaultId);
     setError(null);
     try {
-      await vaultsApi.declineInvitation(vaultId);
-      await load();
+      await declineInvitation.mutateAsync(vaultId);
     } catch (e) {
       setError(
         failure(e, "Could not decline this invitation. Reload and try again."),
@@ -625,23 +615,15 @@ function JoinFlash() {
 
 function VaultRow({
   vault,
-  rev,
   selected,
   onSelect,
 }: {
   vault: Vault;
-  rev: number;
   selected: boolean;
   onSelect: () => void;
 }) {
-  const [members, setMembers] = useState<VaultMember[] | null>(null);
-
-  useEffect(() => {
-    vaultsApi
-      .members(vault.id)
-      .then((r) => setMembers(r.results))
-      .catch(() => setMembers([]));
-  }, [vault.id, rev]);
+  const membersQuery = useVaultMembers(vault.id);
+  const members = membersQuery.data ?? (membersQuery.isError ? [] : null);
 
   return (
     <button
@@ -685,6 +667,7 @@ function CreateVaultForm({
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<Failure | null>(null);
+  const createVault = useCreateVault();
 
   async function create() {
     const trimmed = name.trim();
@@ -692,7 +675,7 @@ function CreateVaultForm({
     setBusy(true);
     setError(null);
     try {
-      await vaultsApi.create(trimmed, "org");
+      await createVault.mutateAsync({ name: trimmed });
       setName("");
       onCreated();
     } catch (e) {
@@ -750,11 +733,10 @@ const vaultLabel = (v: Vault) => (v.kind === "personal" ? "Personal" : v.name);
 
 function MergeVaultsCard({
   vaults,
-  onMerged,
 }: {
   vaults: Vault[];
-  onMerged: () => void;
 }) {
+  const mergeVaults = useMergeVaults();
   const [a, setA] = useState(vaults[0]?.id ?? "");
   const [b, setB] = useState(vaults[1]?.id ?? "");
   const [name, setName] = useState("");
@@ -771,11 +753,10 @@ function MergeVaultsCard({
     const label = (id: string) => vaults.find((v) => v.id === id);
     const from: [string, string] = [vaultLabel(label(a)!), vaultLabel(label(b)!)];
     try {
-      const merged = await vaultsApi.merge(a, b, name.trim());
+      const merged = await mergeVaults.mutateAsync({ a, b, name: name.trim() });
       setResult(`Created “${merged.name}” with ${merged.entities} entities.`);
       setChips({ from, to: merged.name, id: Date.now() });
       setName("");
-      onMerged();
     } catch (e) {
       setError(
         failure(
@@ -963,33 +944,22 @@ function useWide() {
 }
 
 export default function VaultsPage() {
-  const [vaults, setVaults] = useState<Vault[] | null>(null);
-  const [me, setMe] = useState<string | null>(null);
+  const vaultsQuery = useVaults();
+  const vaults = vaultsQuery.data ?? (vaultsQuery.isError ? [] : null);
+  const me = useMe().data?.email ?? null;
   const [creating, setCreating] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [rev, setRev] = useState(0);
   // Ids from the previous load, so rows that appear later (join, create, clone, merge) can settle in.
   const known = useRef<Set<string> | null>(null);
   const [fresh, setFresh] = useState<Set<string>>(new Set());
 
-  const load = () =>
-    vaultsApi
-      .list()
-      .then((r) => {
-        const prev = known.current;
-        if (prev) setFresh(new Set(r.results.filter((v) => !prev.has(v.id)).map((v) => v.id)));
-        known.current = new Set(r.results.map((v) => v.id));
-        setVaults(r.results);
-      })
-      .catch(() => setVaults([]));
-
+  const vaultList = vaultsQuery.data;
   useEffect(() => {
-    load();
-    auth
-      .me()
-      .then((m) => setMe(m.email))
-      .catch(() => {});
-  }, []);
+    if (!vaultList) return;
+    const prev = known.current;
+    if (prev) setFresh(new Set(vaultList.filter((v) => !prev.has(v.id)).map((v) => v.id)));
+    known.current = new Set(vaultList.map((v) => v.id));
+  }, [vaultList]);
 
   const personal = vaults?.filter((v) => v.kind === "personal") ?? [];
   const org = vaults?.filter((v) => v.kind !== "personal") ?? [];
@@ -1005,12 +975,7 @@ export default function VaultsPage() {
         inline={inline}
         vault={selected}
         me={me}
-        rev={rev}
-        onMembersChanged={() => setRev((r) => r + 1)}
-        onVaultsChanged={() => {
-          setSelectedId(null);
-          load();
-        }}
+        onVaultsChanged={() => setSelectedId(null)}
       />
     );
 
@@ -1020,7 +985,6 @@ export default function VaultsPage() {
         <div key={v.id} ref={fresh.has(v.id) ? arrive : undefined}>
           <VaultRow
             vault={v}
-            rev={rev}
             selected={selected?.id === v.id}
             onSelect={() => setSelectedId(v.id)}
           />
@@ -1056,7 +1020,7 @@ export default function VaultsPage() {
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_380px] items-start">
         <div className="flex flex-col gap-9 min-w-0">
-          <InvitationsPanel onChanged={load} />
+          <InvitationsPanel />
 
           <section
             className="flex flex-col gap-2.5"
@@ -1077,10 +1041,7 @@ export default function VaultsPage() {
             {creating && (
               <CreateVaultForm
                 onCancel={() => setCreating(false)}
-                onCreated={() => {
-                  setCreating(false);
-                  load();
-                }}
+                onCreated={() => setCreating(false)}
               />
             )}
             {!vaults ? (
@@ -1128,7 +1089,7 @@ export default function VaultsPage() {
           </section>
 
           {vaults && vaults.length > 1 && (
-            <MergeVaultsCard vaults={vaults} onMerged={load} />
+            <MergeVaultsCard vaults={vaults} />
           )}
         </div>
 

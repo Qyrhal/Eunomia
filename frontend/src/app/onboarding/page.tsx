@@ -4,7 +4,8 @@ import ErrorLine, { failure, type Failure } from "@/components/ErrorLine";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, Loader2, X } from "lucide-react";
-import { auth, settings, type Me, type AppSettings } from "@/lib/api";
+import { useMe } from "@/lib/queries/auth";
+import { useCompleteOnboarding, useSettings, useUpdateSettings } from "@/lib/queries/settings";
 import EunomiaMark from "@/components/EunomiaMark";
 import ThemeToggle from "@/components/ThemeToggle";
 import BlurWords from "@/components/bits/BlurWords";
@@ -16,35 +17,26 @@ const STEP_LABELS = ["Welcome", "OpenAI key"];
 
 export default function OnboardingPage() {
   const router = useRouter();
-  const [me, setMe] = useState<Me | null>(null);
-  const [appSettings, setAppSettings] = useState<AppSettings | null>(null);
+  const meQuery = useMe();
+  const me = meQuery.data && !meQuery.data.onboarded ? meQuery.data : null;
+  const appSettings = useSettings().data ?? null;
+  const completeOnboarding = useCompleteOnboarding();
+  const updateSettings = useUpdateSettings();
   const [step, setStep] = useState(0);
-  const [baseUrlInput, setBaseUrlInput] = useState("");
+  // null until typed in: the field then shows the saved base URL.
+  const [typedBaseUrl, setBaseUrlInput] = useState<string | null>(null);
+  const baseUrlInput = typedBaseUrl ?? appSettings?.openai_base_url ?? "";
   const [apiKeyInput, setApiKeyInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<Failure | null>(null);
   // The welcome moment plays once; coming Back shows it at rest.
   const [welcomed, setWelcomed] = useState(false);
 
+  const { isError, data } = meQuery;
   useEffect(() => {
-    auth
-      .me()
-      .then((m) => {
-        if (m.onboarded) {
-          router.replace("/");
-          return;
-        }
-        setMe(m);
-      })
-      .catch(() => router.replace("/login"));
-    settings
-      .get()
-      .then((s) => {
-        setAppSettings(s);
-        setBaseUrlInput(s.openai_base_url);
-      })
-      .catch(() => {});
-  }, [router]);
+    if (isError) router.replace("/login");
+    else if (data?.onboarded) router.replace("/");
+  }, [isError, data, router]);
 
   // The 2nd step is pointless if an OpenAI key is already configured
   // server-wide (env var) or was already set earlier by this user.
@@ -53,7 +45,7 @@ export default function OnboardingPage() {
 
   /** `from` is the button a pointer click started this from; it sparks on success. Navigation is never delayed. */
   async function finish(from?: Element | null) {
-    await settings.completeOnboarding();
+    await completeOnboarding.mutateAsync();
     spark(from, { count: 8 });
     router.replace("/");
   }
@@ -67,7 +59,7 @@ export default function OnboardingPage() {
       const changes: Record<string, string> = {};
       if (url && url !== appSettings?.openai_base_url) changes.openai_base_url = url;
       if (apiKeyInput) changes.openai_api_key = apiKeyInput;
-      if (Object.keys(changes).length) await settings.update(changes);
+      if (Object.keys(changes).length) await updateSettings.mutateAsync(changes);
       await finish(from);
     } catch (err) {
       setError(failure(err, "Could not save the key. Check the URL and key, or skip for now."));

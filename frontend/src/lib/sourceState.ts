@@ -1,4 +1,4 @@
-import type { SourceRow } from "@/lib/api";
+import type { SourceRow } from "@/lib/types";
 import { CONNECTOR_META, kindForSource } from "@/lib/connectorMeta";
 
 /** Failures in a row before a source counts as failing rather than retrying.

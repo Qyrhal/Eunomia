@@ -1,10 +1,17 @@
 "use client";
 
 import ErrorLine, { failure, type Failure } from "@/components/ErrorLine";
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { AlertTriangle, ArrowRight } from "lucide-react";
-import { auth, entities, sources, type ApiToken, type EntityKind, type EntityMemory, type SourceRow } from "@/lib/api";
+import type { ApiToken } from "@/lib/api";
+import type { EntityDetail, EntityKind, EntityMemory, SourceRow } from "@/lib/types";
+import { useCreateToken, useTokens } from "@/lib/queries/auth";
+import { entityKeys, type EntityList } from "@/lib/queries/entities";
+import { call } from "@/lib/queries/client";
+import { useSources, useSyncSource } from "@/lib/queries/sources";
+import { getEntity, listEntities } from "@/lib/gen";
 import AuthorTag, { authorColor, CursorGlyph } from "@/components/AuthorTag";
 import CopyButton from "@/components/bits/CopyButton";
 import DecryptReveal from "@/components/bits/DecryptReveal";
@@ -77,19 +84,19 @@ function CopyField({ value, children }: { value: string; children?: React.ReactN
   );
 }
 
-function McpCard({ onCreated }: { onCreated: () => void }) {
+function McpCard() {
   const mcpUrl = useMcpUrl();
   const [token, setToken] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<Failure | null>(null);
+  const createToken = useCreateToken();
 
   async function generate() {
     setBusy(true);
     setError(null);
     try {
-      const res = await auth.tokens.create("MCP");
+      const res = await createToken.mutateAsync("MCP");
       setToken(res.token);
-      onCreated();
     } catch (err) {
       setError(failure(err, "Could not generate a token."));
     } finally {
@@ -207,8 +214,10 @@ const ENTITY_CAP = 24;
 const ROW_LIMIT = 12;
 
 async function loadLiveMemory(): Promise<{ rows: LiveRow[]; total: number }> {
-  const list = await entities.list();
-  const details = await Promise.all(list.results.slice(0, ENTITY_CAP).map((e) => entities.get(e.id).catch(() => null)));
+  const list = (await call(listEntities())) as EntityList;
+  const details = await Promise.all(
+    list.results.slice(0, ENTITY_CAP).map((e) => call(getEntity({ path: { entity_id: e.id } })).catch(() => null) as Promise<EntityDetail | null>),
+  );
   const rows = details
     .flatMap((d) => (d ? (d.memory as Memory[]).map((m) => ({ ...m, entityName: d.name, entityKind: d.kind })) : []))
     .sort((a, b) => (b.created_at ?? "").localeCompare(a.created_at ?? ""))
@@ -529,9 +538,13 @@ function Agents({ tokens }: { tokens: ApiToken[] | null | "error" }) {
 }
 
 export default function DashboardPage() {
-  const [rows, setRows] = useState<SourceRow[] | null>(null);
-  const [entityCount, setEntityCount] = useState<number | null>(null);
-  const [live, setLive] = useState<LiveRow[] | null>(null);
+  // Live: rows and counts refresh in place on fixed layouts, nothing jumps.
+  const sourcesQuery = useSources({ refetchInterval: 60_000 });
+  const rows = sourcesQuery.data ?? (sourcesQuery.isError ? [] : null);
+  const liveQuery = useQuery({ queryKey: entityKeys.live(), queryFn: loadLiveMemory, refetchInterval: 60_000 });
+  const live = liveQuery.data?.rows ?? (liveQuery.isError ? [] : null);
+  const entityCount = liveQuery.data?.total ?? (liveQuery.isError ? 0 : null);
+  const syncSource = useSyncSource();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // One sync mark at a time: running, then done or failed held for SYNC_HOLD_MS.
   const [syncMark, setSyncMark] = useState<{ key: string; status: SyncStatus } | null>(null);
@@ -539,53 +552,39 @@ export default function DashboardPage() {
   const [arrived, setArrived] = useState<string[]>([]);
   const knownIds = useRef<Set<string> | null>(null);
   const [dismissedFailures, setDismissedFailures] = useState<Set<string>>(new Set());
-  const [tokens, setTokens] = useState<ApiToken[] | null | "error">(null);
+  const tokensQuery = useTokens();
+  const tokens: ApiToken[] | null | "error" = tokensQuery.data ?? (tokensQuery.isError ? "error" : null);
 
-  const load = useCallback(() => sources.list().then(setRows).catch(() => setRows([])), []);
-  const loadTokens = useCallback(() => auth.tokens.list().then(setTokens).catch(() => setTokens((prev) => (Array.isArray(prev) ? prev : "error"))), []);
+  const arrivalTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const liveRows = liveQuery.data?.rows;
   useEffect(() => {
-    let arrivalTimer: ReturnType<typeof setTimeout> | undefined;
-    const refresh = () => {
-      load();
-      loadLiveMemory()
-        .then(({ rows: next, total }) => {
-          setEntityCount(total);
-          // Never on first load: only rows unseen by an earlier poll count as arrivals.
-          const known = knownIds.current;
-          if (known) {
-            const fresh = next.filter((m) => !known.has(m.id)).map((m) => m.id);
-            if (fresh.length) {
-              setArrived(fresh);
-              clearTimeout(arrivalTimer);
-              arrivalTimer = setTimeout(() => setArrived([]), ARRIVAL_MS);
-            }
-          }
-          knownIds.current = new Set([...(known ?? []), ...next.map((m) => m.id)]);
-          setLive(next);
-        })
-        .catch(() => {
-          setLive((prev) => prev ?? []);
-          setEntityCount((prev) => prev ?? 0);
-        });
-      loadTokens();
-    };
-    refresh();
-    // Live: rows and counts refresh in place on fixed layouts, nothing jumps.
-    const timer = setInterval(refresh, 60_000);
-    return () => {
-      clearInterval(timer);
-      clearTimeout(arrivalTimer);
-    };
-  }, [load, loadTokens]);
-  useEffect(() => () => clearTimeout(syncHold.current), []);
+    if (!liveRows) return;
+    // Never on first load: only rows unseen by an earlier poll count as arrivals.
+    const known = knownIds.current;
+    if (known) {
+      const fresh = liveRows.filter((m) => !known.has(m.id)).map((m) => m.id);
+      if (fresh.length) {
+        setArrived(fresh);
+        clearTimeout(arrivalTimer.current);
+        arrivalTimer.current = setTimeout(() => setArrived([]), ARRIVAL_MS);
+      }
+    }
+    knownIds.current = new Set([...(known ?? []), ...liveRows.map((m) => m.id)]);
+  }, [liveRows]);
+  useEffect(
+    () => () => {
+      clearTimeout(arrivalTimer.current);
+      clearTimeout(syncHold.current);
+    },
+    [],
+  );
 
   async function sync(key: string) {
     clearTimeout(syncHold.current);
     setSyncMark({ key, status: "running" });
     let status: SyncStatus = "done";
     try {
-      await sources.sync(key);
-      await load();
+      await syncSource.mutateAsync(key);
     } catch {
       status = "failed";
     }
@@ -642,7 +641,7 @@ export default function DashboardPage() {
 
         <div className="flex flex-col gap-6 min-w-0 lg:col-start-2 lg:row-start-1 lg:row-span-2 lg:sticky lg:top-8">
           {selected && <Inspector row={selected} />}
-          <McpCard onCreated={loadTokens} />
+          <McpCard />
         </div>
 
         <div className="flex flex-col gap-8 min-w-0 lg:col-start-1 lg:row-start-2">

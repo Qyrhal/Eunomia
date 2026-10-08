@@ -2,12 +2,12 @@
 
 import ErrorLine, { failure, type Failure } from "@/components/ErrorLine";
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import Markdown from "@/components/Markdown";
 import CopyButton from "@/components/bits/CopyButton";
 import SyncMark from "@/components/bits/SyncMark";
 import Tooltip from "@/components/bits/Tooltip";
-import { settings as settingsApi } from "@/lib/api";
+import { useSettings, useUpdateSettings } from "@/lib/queries/settings";
 
 const FRONTMATTER = /^---\n([\s\S]*?)\n---\n/;
 const REFRESH = "./scripts/connect-agents.sh --token <token>";
@@ -23,31 +23,23 @@ const ROUTES = [
 // Sent to every MCP client as connection instructions, injected into Claude
 // Code each session by its hook, and written as SKILL.md by connect-agents.sh.
 export default function SkillPage() {
-  const [skill, setSkill] = useState<string | null>(null);
-  const [custom, setCustom] = useState(false);
+  const settingsQuery = useSettings();
+  const updateSettings = useUpdateSettings();
+  const skill = settingsQuery.data?.memory_skill ?? null;
+  const custom = settingsQuery.data?.memory_skill_custom ?? false;
   const [draft, setDraft] = useState("");
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
-  const [error, setError] = useState<Failure | null>(null);
-
-  useEffect(() => {
-    settingsApi
-      .get()
-      .then((s) => {
-        setSkill(s.memory_skill);
-        setCustom(s.memory_skill_custom);
-      })
-      .catch((e) => setError(failure(e, "Could not load the skill.", " Check that the backend is running, then reload.")));
-  }, []);
+  const [saveError, setError] = useState<Failure | null>(null);
+  const loadError = settingsQuery.isError ? failure(settingsQuery.error, "Could not load the skill.", " Check that the backend is running, then reload.") : null;
+  const error = saveError ?? loadError;
 
   async function save(text: string) {
     setBusy(true);
     setError(null);
     try {
-      const s = await settingsApi.update({ memory_skill: text });
-      setSkill(s.memory_skill);
-      setCustom(s.memory_skill_custom);
+      await updateSettings.mutateAsync({ memory_skill: text });
       setEditing(false);
       setSaved(true);
       setTimeout(() => setSaved(false), 1800);
