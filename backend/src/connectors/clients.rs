@@ -58,8 +58,15 @@ fn with_query(url: &str, query: &[(&str, String)]) -> String {
     u.into()
 }
 
+/// The client for every connector call: same address rules as model calls (`llm_net`), so a user-set
+/// base URL (heypocket, Open Connector) cannot reach metadata or the database, no redirects are followed,
+/// and `ALLOW_PRIVATE_LLM_URL=0` also blocks private ranges. Fixed vendor hosts pass through it unchanged.
+async fn guarded(url: &str) -> AppResult<reqwest::Client> {
+    crate::llm_net::client(url).await
+}
+
 async fn get_status(url: &str, headers: HeaderMap, query: &[(&str, String)], timeout_secs: u64) -> AppResult<bool> {
-    let resp = reqwest::Client::new()
+    let resp = guarded(url).await?
         .get(with_query(url, query))
         .headers(headers)
         .timeout(Duration::from_secs(timeout_secs))
@@ -70,7 +77,7 @@ async fn get_status(url: &str, headers: HeaderMap, query: &[(&str, String)], tim
 }
 
 async fn get_json(url: &str, headers: HeaderMap, query: &[(&str, String)], timeout_secs: u64) -> AppResult<Value> {
-    let resp = reqwest::Client::new()
+    let resp = guarded(url).await?
         .get(with_query(url, query))
         .headers(headers)
         .timeout(Duration::from_secs(timeout_secs))
@@ -83,7 +90,7 @@ async fn get_json(url: &str, headers: HeaderMap, query: &[(&str, String)], timeo
 }
 
 async fn post_status(url: &str, headers: HeaderMap, body: &Value, timeout_secs: u64) -> AppResult<bool> {
-    let resp = reqwest::Client::new()
+    let resp = guarded(url).await?
         .post(url)
         .headers(headers)
         .json(body)
@@ -95,7 +102,7 @@ async fn post_status(url: &str, headers: HeaderMap, body: &Value, timeout_secs: 
 }
 
 async fn post_json(url: &str, headers: HeaderMap, body: &Value, timeout_secs: u64) -> AppResult<Value> {
-    let resp = reqwest::Client::new()
+    let resp = guarded(url).await?
         .post(url)
         .headers(headers)
         .json(body)

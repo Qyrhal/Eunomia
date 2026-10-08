@@ -305,24 +305,22 @@ async fn openai_models(State(state): State<AppState>, user: User) -> AppResult<J
     let url = format!("{}/models", base_url.trim_end_matches('/'));
     let auth_key = if api_key.is_empty() { "not-needed" } else { api_key.as_str() };
 
-    let client = reqwest::Client::new();
-    let resp = match client.get(&url).bearer_auth(auth_key).send().await {
-        Ok(r) => r,
-        Err(e) => return Ok(Json(ModelsOut { models: vec![], error: Some(e.to_string()) })),
+    // Generic codes only: upstream error or status text would let a caller probe internal hosts and ports.
+    let fail = |code: &str| Json(ModelsOut { models: vec![], error: Some(code.to_string()) });
+    let Ok(client) = crate::llm_net::client(&base_url).await else { return Ok(fail("base_url_not_allowed")) };
+    let Ok(resp) = client.get(&url).bearer_auth(auth_key).timeout(std::time::Duration::from_secs(15)).send().await else {
+        return Ok(fail("unreachable"));
     };
-
     if !resp.status().is_success() {
-        let status = resp.status();
-        return Ok(Json(ModelsOut { models: vec![], error: Some(format!("HTTP {status}")) }));
+        return Ok(fail("upstream_error"));
     }
-
     match resp.json::<ModelsListResponse>().await {
         Ok(body) => {
             let mut ids: Vec<String> = body.data.into_iter().map(|m| m.id).collect();
             ids.sort();
             Ok(Json(ModelsOut { models: ids, error: None }))
         }
-        Err(e) => Ok(Json(ModelsOut { models: vec![], error: Some(e.to_string()) })),
+        Err(_) => Ok(fail("bad_response")),
     }
 }
 

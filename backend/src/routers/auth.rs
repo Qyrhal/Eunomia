@@ -192,16 +192,21 @@ async fn register(
 async fn login(
     State(state): State<AppState>,
     https: Option<Extension<ForwardedHttps>>,
+    ip: Option<Extension<crate::gate::ClientIp>>,
     headers: HeaderMap,
     Json(body): Json<Credentials>,
 ) -> AppResult<Response> {
-    // per account, whatever the client address: checked before the bcrypt work, only failures count
-    let fail_key = format!("login-fail:{}", models_user::normalize_email(&body.email));
-    if let Err(wait) = state.fail_throttle.check(&fail_key, crate::ratelimit::LOGIN_FAILS) {
+    // checked before the bcrypt work, only failures count. Lockout is per account and address, so a stranger
+    // cannot lock a known email out; a looser per-account ceiling still stops guessing spread over addresses.
+    let account_key = format!("login-fail:{}", models_user::normalize_email(&body.email));
+    let fail_key = format!("{account_key}:{}", ip.as_ref().map_or("", |i| i.0 .0.as_str()));
+    let throttled = state.fail_throttle.check(&fail_key, crate::ratelimit::LOGIN_FAILS).and_then(|()| state.fail_throttle.check(&account_key, crate::ratelimit::LOGIN_ACCOUNT_FAILS));
+    if let Err(wait) = throttled {
         return Ok(crate::gate::rate_limited(wait));
     }
     let Some(user) = models_user::authenticate(&state.control, &body.email, &body.password).await? else {
         state.fail_throttle.fail(&fail_key);
+        state.fail_throttle.fail(&account_key);
         let email = models_user::normalize_email(&body.email);
         let event = Event {
             user: None,
@@ -216,6 +221,7 @@ async fn login(
     };
 
     state.fail_throttle.clear(&fail_key);
+    state.fail_throttle.clear(&account_key);
     let token = auth::start_session(&state.control, &state.settings.jwt_secret, &user, user_agent_from(&headers).as_deref())
         .await?;
     audit::record_as_caller(&state.control, &user.id, "auth.login", "", "ok").await;
