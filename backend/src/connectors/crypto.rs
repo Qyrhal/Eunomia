@@ -11,14 +11,18 @@
 //! that is a data migration (decrypt with Python, re-encrypt with this
 //! module) and is explicitly out of scope here.
 //!
-//! Like the Python version, an empty encryption key degrades to a static
-//! fallback (here, an all-zero key) rather than failing outright -- reachable
-//! only in test harnesses or local-dev setups that skipped `ENCRYPTION_KEY`.
+//! An empty key derives the all-zero AES key. The backend refuses to boot on it
+//! (see [`guard_key`]) unless `EUNOMIA_ALLOW_EMPTY_ENCRYPTION_KEY=1` is set or the
+//! install already holds data written that way. An install that ran with an empty
+//! key and then gets a real one sets `ENCRYPTION_KEY_LEGACY_EMPTY=1`: [`decrypt`]
+//! then also tries the zero key, so old values keep working while every new write
+//! uses the real key (see docs/deployment.md, "Rotating ENCRYPTION_KEY").
 
 use aes_gcm::aead::Aead;
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use rand::RngCore;
+use surrealdb::types::SurrealValue;
 use sha2::{Digest, Sha256};
 
 use crate::error::{AppError, AppResult};
@@ -72,6 +76,24 @@ pub fn encrypt(key: &str, value: &str) -> String {
 /// Decrypts a value produced by [`encrypt`]. Mirrors the Python `decrypt()`:
 /// an empty input round-trips to an empty string.
 pub fn decrypt(key: &str, value: &str) -> AppResult<String> {
+    decrypt_with(key, value, legacy_empty_fallback())
+}
+
+pub fn legacy_empty_fallback() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("ENCRYPTION_KEY_LEGACY_EMPTY").is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true")))
+}
+
+fn decrypt_with(key: &str, value: &str, legacy_empty: bool) -> AppResult<String> {
+    match decrypt_exact(key, value) {
+        Err(_) if legacy_empty && !key.is_empty() => decrypt_exact("", value).inspect(|_| {
+            tracing::warn!("decrypted a value written with the empty ENCRYPTION_KEY; re-save it (or rotate) to move it to the current key");
+        }),
+        other => other,
+    }
+}
+
+pub fn decrypt_exact(key: &str, value: &str) -> AppResult<String> {
     if value.is_empty() {
         return Ok(String::new());
     }
@@ -90,6 +112,74 @@ pub fn decrypt(key: &str, value: &str) -> AppResult<String> {
         .decrypt(nonce, ciphertext)
         .map_err(|_| AppError::internal("decryption failed"))?;
     String::from_utf8(plaintext).map_err(|e| AppError::internal(format!("decrypted value is not valid utf-8: {e}")))
+}
+
+/// With `ENCRYPTION_KEY_LEGACY_EMPTY` on and a real key set, re-encrypt every org database password
+/// that is still under the empty key, so the fallback is no longer needed for them. Idempotent.
+pub async fn rotate_tenant_passwords(settings: &crate::config::Settings, control: &crate::pool::ControlDb) -> AppResult<usize> {
+    rotate_tenant_passwords_with(settings, control, legacy_empty_fallback()).await
+}
+
+pub async fn rotate_tenant_passwords_with(settings: &crate::config::Settings, control: &crate::pool::ControlDb, legacy: bool) -> AppResult<usize> {
+    if settings.encryption_key.is_empty() || !legacy {
+        return Ok(0);
+    }
+    #[derive(serde::Deserialize, SurrealValue)]
+    struct Row {
+        id: surrealdb::types::RecordId,
+        db_pass_enc: String,
+    }
+    let mut res = crate::store::tenant::PASS_ALL.on(control).await?;
+    let mut moved = 0;
+    for row in res.take::<Vec<Row>>(0)? {
+        if decrypt_exact(&settings.encryption_key, &row.db_pass_enc).is_ok() {
+            continue;
+        }
+        let Ok(pass) = decrypt_exact("", &row.db_pass_enc) else { continue };
+        crate::store::tenant::SET_PASS
+            .on(control)
+            .bind(("id", row.id))
+            .bind(("db_pass_enc", encrypt(&settings.encryption_key, &pass)))
+            .await?
+            .check()?;
+        moved += 1;
+    }
+    if moved > 0 {
+        tracing::warn!(moved, "re-encrypted org database passwords from the empty ENCRYPTION_KEY to the current one");
+    }
+    Ok(moved)
+}
+
+/// Boot check, run once the control database is up. A real key passes. An empty one is allowed only
+/// when `EUNOMIA_ALLOW_EMPTY_ENCRYPTION_KEY=1` (dev, tests), or when the install already has orgs: they
+/// were provisioned under the empty key, and refusing would lock the owner out of their own data.
+/// That case boots with a loud warning.
+pub async fn guard_key(settings: &crate::config::Settings, control: &crate::pool::ControlDb) -> AppResult<()> {
+    if !settings.encryption_key.is_empty() {
+        return Ok(());
+    }
+    if std::env::var("EUNOMIA_ALLOW_EMPTY_ENCRYPTION_KEY").is_ok_and(|v| v == "1") {
+        tracing::warn!("ENCRYPTION_KEY is empty and EUNOMIA_ALLOW_EMPTY_ENCRYPTION_KEY=1: stored credentials use a public key. Dev only.");
+        return Ok(());
+    }
+    let mut res = crate::store::tenant::ORG_COUNT.on(control).await?;
+    #[derive(serde::Deserialize, SurrealValue)]
+    struct Count {
+        count: i64,
+    }
+    let existing = res.take::<Vec<Count>>(0)?.first().is_some_and(|c| c.count > 0);
+    if existing {
+        tracing::error!(
+            "ENCRYPTION_KEY is empty: this install's database passwords and connector credentials are protected by a PUBLIC key. \
+             Booting anyway so the data stays reachable. Set ENCRYPTION_KEY (openssl rand -base64 32) together with \
+             ENCRYPTION_KEY_LEGACY_EMPTY=1 to move to a real key; see docs/deployment.md, \"Rotating ENCRYPTION_KEY\"."
+        );
+        return Ok(());
+    }
+    Err(AppError::internal(
+        "ENCRYPTION_KEY is not set. Generate one with `openssl rand -base64 32` and put it in .env \
+         (for local development only, EUNOMIA_ALLOW_EMPTY_ENCRYPTION_KEY=1 skips this check).",
+    ))
 }
 
 /// Keys saved before the settings router started encrypting them are stored
@@ -116,6 +206,15 @@ mod tests {
         let ciphertext = encrypt(key, "super-secret-token");
         assert_ne!(ciphertext, "super-secret-token");
         assert_eq!(decrypt(key, &ciphertext).unwrap(), "super-secret-token");
+    }
+
+    #[test]
+    fn legacy_empty_key_values_decrypt_only_with_the_fallback_on() {
+        let old = encrypt("", "old-secret");
+        assert!(decrypt_with("new-key", &old, false).is_err());
+        assert_eq!(decrypt_with("new-key", &old, true).unwrap(), "old-secret");
+        // values under the new key never need the fallback
+        assert_eq!(decrypt_with("new-key", &encrypt("new-key", "x"), true).unwrap(), "x");
     }
 
     #[test]

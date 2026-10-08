@@ -60,6 +60,9 @@ check "checked out the new release" test "$(cat "$TMP/repo/compose.yml")" = two
 check ".env is pinned to the new release" grep -q '^EUNOMIA_IMAGE_TAG=v1.1.0$' "$TMP/repo/.env"
 check ".env keeps its other settings" grep -q '^JWT_SECRET=x$' "$TMP/repo/.env"
 check ".env gains a backup key" grep -Eq '^BACKUP_ENCRYPTION_KEY=.{20,}$' "$TMP/repo/.env"
+check ".env gains an encryption key" grep -Eq '^ENCRYPTION_KEY=.{20,}$' "$TMP/repo/.env"
+check ".env marks the old empty-key data readable" grep -q '^ENCRYPTION_KEY_LEGACY_EMPTY=1$' "$TMP/repo/.env"
+KEY_AFTER_FIRST="$(sed -n 's/^ENCRYPTION_KEY=//p' "$TMP/repo/.env")"
 check "images were pulled" grep -q 'compose pull backend frontend' "$TMP/docker.log"
 check "stack was restarted" grep -q 'compose up -d' "$TMP/docker.log"
 check "the updater service is left out of the restart" bash -c "! grep -q 'up -d --remove-orphans.*updater' '$TMP/docker.log'"
@@ -103,6 +106,14 @@ echo surrealdb/surrealdb:v3.3.0 > "$TMP/running"
 check "already on 3.x: no upgrade" bash -c "! grep -q UPGRADE '$TMP/docker.log'"
 check "already on 3.x: still updates" test "$(cat "$TMP/repo/compose.yml")" = five
 rm -f "$TMP/images" "$TMP/running"
+
+# 4c. an existing key survives every later update, and a blank one is replaced
+check "later updates keep the encryption key" test "$(sed -n 's/^ENCRYPTION_KEY=//p' "$TMP/repo/.env")" = "$KEY_AFTER_FIRST"
+check "later updates add only one key line" test "$(grep -c '^ENCRYPTION_KEY=' "$TMP/repo/.env")" = 1
+sed -i.bak 's/^ENCRYPTION_KEY=.*/ENCRYPTION_KEY=/' "$TMP/repo/.env" && rm -f "$TMP/repo/.env.bak"
+(cd "$TMP/src" && echo six > compose.yml && git_ commit -qam v1.5 && git tag v1.5.0)
+touch "$S/requested"; update
+check "a blank encryption key is replaced" grep -Eq '^ENCRYPTION_KEY=.{20,}$' "$TMP/repo/.env"
 
 # 5. GitHub unreachable is reported
 rm -f "$S/status.json"; (cd "$TMP/repo" && git remote set-url origin "file://$TMP/nowhere")

@@ -83,6 +83,15 @@ main() {
     sed -i.bak '/^BACKUP_ENCRYPTION_KEY=/d' .env && rm -f .env.bak
     echo "BACKUP_ENCRYPTION_KEY=$(head -c 32 /dev/urandom | base64 | tr -d '\n')" >> .env
   fi
+  # Installs from before the key was required ran with an empty ENCRYPTION_KEY, so their stored
+  # credentials and org database passwords were written under it. Give them a real key and let the
+  # backend still read the old values (ENCRYPTION_KEY_LEGACY_EMPTY=1); new writes use the new key.
+  # See docs/deployment.md, "Rotating ENCRYPTION_KEY". An existing key is never replaced.
+  if ! grep -q '^ENCRYPTION_KEY=.' .env; then
+    sed -i.bak -e '/^ENCRYPTION_KEY=/d' -e '/^ENCRYPTION_KEY_LEGACY_EMPTY=/d' .env && rm -f .env.bak
+    echo "ENCRYPTION_KEY=$(head -c 32 /dev/urandom | base64 | tr -d '\n')" >> .env
+    echo "ENCRYPTION_KEY_LEGACY_EMPTY=1" >> .env
+  fi
 
   # A release that pins SurrealDB 3.x over a running 2.x needs its data moved
   # first (export, fresh volume, verify; see docs/upgrading-to-surrealdb-3.md).

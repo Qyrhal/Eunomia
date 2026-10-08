@@ -54,6 +54,8 @@ impl AppState {
         if let Some(p) = &provisioner {
             crate::provisioning::legacy::move_if_needed(p, &control, settings).await?;
         }
+        crate::connectors::crypto::guard_key(settings, &control).await?;
+        crate::connectors::crypto::rotate_tenant_passwords(settings, &control).await?;
         let pool = Pool::new(template, control.clone(), settings);
         Ok(AppState(Arc::new(AppStateInner { control, pool, provisioner, settings: settings.clone() })))
     }

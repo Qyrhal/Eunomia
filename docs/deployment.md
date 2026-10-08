@@ -38,7 +38,7 @@ their local-dev defaults in production:
 | Var | Local default | Production |
 |---|---|---|
 | `JWT_SECRET` | random per-process if unset | a fixed secret (`openssl rand -base64 32`) — sessions won't survive a restart otherwise, and every process must agree on one value |
-| `ENCRYPTION_KEY` | a static fallback key | `openssl rand -base64 32` — the fallback is non-secret and ships in this repo |
+| `ENCRYPTION_KEY` | none: the backend refuses to boot without one | `openssl rand -base64 32`. It encrypts stored connector credentials and OpenAI keys, protects the per-org database passwords and derives the control database password. Keep a copy off the machine. `EUNOMIA_ALLOW_EMPTY_ENCRYPTION_KEY=1` skips the check for local development only (an empty key is a public, all-zero AES key). An install that already holds data written under an empty key still boots with a loud error in the log; see "Rotating ENCRYPTION_KEY" below. |
 | `SURREAL_PASS` | `root` | a real password |
 | `OPENAI_API_KEY` | blank (settable per-user instead) | set it server-wide, or rely on each user setting their own in Settings |
 | `CORS_ALLOWED_ORIGINS` | `http://localhost:3000` | only needed for browsers calling the backend port directly; the bundled frontend goes through its own `/api` proxy |
@@ -47,7 +47,9 @@ their local-dev defaults in production:
 | `RATE_LIMIT_USER_PER_MIN` | `1200` | Requests per minute per signed-in user. `0` turns the limit off. Over the limit the API answers 429 `rate.limited` with `Retry-After`. |
 | `RATE_LIMIT_TOKEN_PER_MIN` | `600` | Requests per minute per API token (a user's limit applies as well). |
 | `RATE_LIMIT_AUTH_PER_MIN` | `20` | Login, signup, OAuth token and failed-credential attempts per minute per client address (read from `X-Forwarded-For`, but only when the connecting peer is in `TRUSTED_PROXIES`). |
-| `TRUSTED_PROXIES` | loopback and private ranges (`127.0.0.0/8`, `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `::1/128`, `fc00::/7`) | Comma-separated CIDRs of proxies whose `X-Forwarded-For` is believed; the right-most address that is not itself trusted is the client. The default covers the compose network (the Next.js frontend proxies to the backend there). If the backend port is reachable directly from the internet, narrow it to your proxy's address; `none` trusts nobody (every client is its peer address). |
+| `RATE_LIMIT_WEBHOOK_PER_MIN` | `120` | Source webhook deliveries per minute per client address. |
+| `MAX_REQUEST_BODY_BYTES` | `1048576` | Largest request body any route accepts (413 over it). Raise it only if a route you use needs more. |
+| `TRUSTED_PROXIES` | loopback only (`127.0.0.0/8`, `::1/128`); `docker-compose.yml` sets the frontend's pinned address `172.30.77.10` | Comma-separated CIDRs of proxies whose `X-Forwarded-For` is believed; the right-most address that is not itself trusted is the client. A LAN or bridge peer that is not listed cannot spoof its address. Compose gives the network a fixed subnet (`172.30.77.0/24`) and the frontend the address `172.30.77.10`; change both if that range clashes with yours. Putting your own reverse proxy in front of the backend: add its address (`TRUSTED_PROXIES=172.30.77.10,203.0.113.5`) or a range. `none` trusts nobody (every client is its peer address). |
 | `PUBLIC_URL` | `http://localhost:8001` | The address MCP clients reach Eunomia at, no trailing slash, e.g. `https://eunomia.example.com`. Used in OAuth discovery documents and as the audience of OAuth tokens, so it must match what clients connect to. |
 | `EUNOMIA_SIGNUP_ORG` | `join` | `join`: a new user joins the install's one org (the first user of a fresh install creates it and owns it). `personal`: every signup gets an org of their own. |
 | `EUNOMIA_ORG_POOL_CAP` | `256` | How many org database sessions one process keeps open (least recently used are dropped and signed in again on demand). |
@@ -97,6 +99,16 @@ data.
 Each org's data lives in its own database, `org_<uuid>`, in the `SURREAL_NS` namespace; accounts, credentials and the job queue live in the `control` database. See [architecture/tenancy.md](architecture/tenancy.md). The first boot of a release with tenancy on an existing install moves the old single database (`SURREAL_DB`, default `eunomia`) into that layout automatically, copying every table in batches and refusing to finish unless the row counts match. Nothing in the old database is changed or deleted; the backend logs the `REMOVE DATABASE` command to use once you have checked the app. If the boot stops with "the data move did not verify", nothing is served from the half-moved org; fix the cause and restart (the move resumes). Take an export first, as the upgrade scripts do.
 
 `ENCRYPTION_KEY` now also protects the per-org database passwords: keep it.
+
+### Rotating ENCRYPTION_KEY
+
+Older installs ran with an empty `ENCRYPTION_KEY`, so their stored connector credentials, OpenAI keys and org database passwords were encrypted under a public all-zero key. The backend does not refuse to boot over that data (it would lock you out of it); it logs an error on every start until you move to a real key:
+
+1. Set `ENCRYPTION_KEY` (`openssl rand -base64 32`) **and** `ENCRYPTION_KEY_LEGACY_EMPTY=1` in `.env`, then restart the backend. "Update now" does both for you when the key is blank. With the flag on, a value that does not decrypt under the new key is tried under the old empty one, and the log notes each time that happens. Every new write uses the new key.
+2. Org database passwords are re-encrypted under the new key automatically at that boot. Connector credentials and OpenAI keys are re-encrypted when you save them again: reconnect each connector (or re-enter its credentials) and re-enter the OpenAI key in Settings.
+3. When the log no longer shows the "decrypted a value written with the empty ENCRYPTION_KEY" line over a few days of normal use, remove `ENCRYPTION_KEY_LEGACY_EMPTY` from `.env`.
+
+Changing a real key later has no such fallback: values written under the old key stop decrypting, so reconnect the connectors, re-enter the OpenAI key, and expect org databases to be unreachable until their users are redefined (see [architecture/tenancy.md](architecture/tenancy.md)). Do not change it casually.
 
 ## Backups
 
