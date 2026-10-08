@@ -265,3 +265,21 @@ async fn two_replicas_creating_the_control_database_both_succeed() {
     }
     assert!(state.pool.control().test_raw().query("SELECT count() FROM user GROUP ALL").await.is_ok());
 }
+
+/// A burst of cold requests for one org signs in once: the rest wait for the first and share its handle.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn twenty_concurrent_cold_for_org_calls_sign_in_once() {
+    let app = TestApp::new().await;
+    let org = app.user.org;
+    app.state.pool.evict(&org);
+    let before = app.state.pool.signins();
+    let calls = (0..20).map(|_| {
+        let pool = app.state.pool.clone();
+        tokio::spawn(async move { pool.for_org(&org).await.map(|_| ()) })
+    });
+    for r in futures::future::join_all(calls).await {
+        r.unwrap().unwrap();
+    }
+    assert_eq!(app.state.pool.signins() - before, 1, "one sign-in for twenty cold calls");
+    assert_eq!(app.state.pool.open_handles(), 1);
+}

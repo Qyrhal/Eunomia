@@ -199,6 +199,10 @@ struct Inner {
     key: String,
     cap: usize,
     cache: Mutex<Cache>,
+    /// One lock per org with a sign-in under way, so a burst of cold requests signs in once.
+    inflight: Mutex<HashMap<OrgId, Arc<tokio::sync::Mutex<()>>>>,
+    /// Sign-ins done on a cache miss (the singleflight test counts them).
+    signins: AtomicU64,
     /// Isolation suite only: every org gets this one database (the "shared database" mode).
     #[cfg(feature = "test-support")]
     shared: Mutex<Option<Route>>,
@@ -228,6 +232,8 @@ impl Pool {
             key: settings.encryption_key.clone(),
             cap,
             cache: Mutex::new(Cache { tick: 0, map: HashMap::new() }),
+            inflight: Mutex::new(HashMap::new()),
+            signins: AtomicU64::new(0),
             #[cfg(feature = "test-support")]
             shared: Mutex::new(None),
         }))
@@ -244,12 +250,33 @@ impl Pool {
         if let Some(db) = self.cached(org) {
             return Ok(db);
         }
-        // ponytail: two tasks missing at once each sign in and the last insert wins; the loser's session just drops.
-        let route = self.route(org).await?;
-        let session = session_for(&self.0.template, &self.0.ns, &route).await?;
-        let db = OrgDb { raw: Arc::new(session), org: *org };
-        self.insert(db.clone());
-        Ok(db)
+        // Singleflight: one task per org does the control read, decrypt and sign-in (the sign-in is a
+        // password hash check, ~200 ms); the rest wait on the org's lock and then find it cached.
+        let gate = self.0.inflight.lock().unwrap().entry(*org).or_default().clone();
+        let _turn = gate.lock().await;
+        let result = async {
+            if let Some(db) = self.cached(org) {
+                return Ok(db);
+            }
+            let route = self.route(org).await?;
+            self.0.signins.fetch_add(1, Ordering::Relaxed);
+            let session = session_for(&self.0.template, &self.0.ns, &route).await?;
+            let db = OrgDb { raw: Arc::new(session), org: *org };
+            self.insert(db.clone());
+            Ok(db)
+        }
+        .await;
+        // drop the map entry so it does not grow with every org ever seen; a task already waiting holds its own Arc
+        let mut inflight = self.0.inflight.lock().unwrap();
+        if inflight.get(org).is_some_and(|g| Arc::ptr_eq(g, &gate)) {
+            inflight.remove(org);
+        }
+        result
+    }
+
+    /// Sign-ins done on a cache miss since the pool was built.
+    pub fn signins(&self) -> u64 {
+        self.0.signins.load(Ordering::Relaxed)
     }
 
     fn cached(&self, org: &OrgId) -> Option<OrgDb> {
