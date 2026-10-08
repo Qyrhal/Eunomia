@@ -4,6 +4,8 @@
 use super::ControlStmt;
 
 pub const ALL: &[&ControlStmt] = &[
+    &READY_PING,
+    &READY_VERSION,
     &AUTH_SESSION_CREATE,
     &AUTH_SESSION_FIND,
     &AUTH_SESSION_TOUCH,
@@ -262,3 +264,9 @@ pub const EMAIL_IN_ORG: ControlStmt = ControlStmt::new(
 
 pub const MEMBERSHIP_ADD: ControlStmt =
     ControlStmt::new("control.membership_add", "CREATE membership SET user = $user, org = $org, role = $role RETURN AFTER");
+
+/// `/readyz`: the control database answers.
+pub const READY_PING: ControlStmt = ControlStmt::new("app.ready_ping", "RETURN 1");
+
+/// `/readyz`: the newest control migration applied.
+pub const READY_VERSION: ControlStmt = ControlStmt::new("app.ready_version", "SELECT version FROM _migration ORDER BY version DESC LIMIT 1");

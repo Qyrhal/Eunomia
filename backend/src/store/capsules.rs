@@ -4,7 +4,7 @@ use super::ControlStmt;
 
 pub const ALL: &[&ControlStmt] = &[&INSERT, &GET, &PRUNE_OLD, &PRUNE_EXCESS, &FIRST_USER];
 
-/// First write wins: one capsule per trace id (a tool failure is recorded before the 5xx it causes).
+/// One row per failure: the id is the trace id plus a counter, so a batch with several failures keeps all of them.
 pub const INSERT: ControlStmt = ControlStmt::new(
     "capsules.insert",
     "INSERT IGNORE INTO failure_capsule { id: $id, org: $org, trace_id: $trace_id, kind: $kind, name: $name, user: $user, \
@@ -14,7 +14,7 @@ pub const INSERT: ControlStmt = ControlStmt::new(
 pub const GET: ControlStmt = ControlStmt::new(
     "capsules.get",
     "SELECT org, trace_id, kind, name, user, args, code, status, source, version, truncated, <string> created_at AS created_at \
-     FROM failure_capsule WHERE trace_id = $trace_id LIMIT 1",
+     FROM failure_capsule WHERE trace_id = $trace_id ORDER BY created_at ASC",
 );
 
 pub const PRUNE_OLD: ControlStmt =

@@ -1189,7 +1189,7 @@
         "tags": [
           "debug"
         ],
-        "summary": "Fetch the redacted failure capsule for a trace id (instance admin only)",
+        "summary": "Fetch the redacted failure capsules for a trace id, oldest first (instance admin only)",
         "operationId": "getFailureCapsule",
         "parameters": [
           {
@@ -1207,7 +1207,10 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Capsule"
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Capsule"
+                  }
                 }
               }
             }
@@ -3486,6 +3489,40 @@
           {
             "bearer": []
           }
+        ]
+      }
+    },
+    "/readyz": {
+      "get": {
+        "tags": [
+          "meta"
+        ],
+        "summary": "Readiness: the control database answers and its schema is current",
+        "operationId": "getReadyz",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Not ready",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {}
         ]
       }
     }

@@ -1,19 +1,14 @@
-//! Generic read-only tools over the cache. Ported from `tools/generic.py`
-//! (which calls into `cache/search.py`) -- rather than depending on a Rust
-//! `cache` module that doesn't exist yet on this side of the port, the
-//! handful of SurrealDB queries these tools need are inlined here directly,
-//! scoped the same way `cache/search.py` scopes them: each `cache_record`'s
+//! Generic read-only tools over the cache. The handful of SurrealDB queries
+//! these tools need are inlined here directly, scoped by owner: each `cache_record`'s
 //! key is `"{owner_key}:{record_id}"`, so a record id is never valid across
 //! owners and a lookup by a bare `record_id` is always owner-scoped.
 //!
 //! All strings may contain `[eunomia:*]` tokens -- callers treat them as
 //! opaque handles.
 //!
-//! Semantic search is NOT ported here: it depends on an `embeddings` module
-//! that hasn't landed in Rust yet. `mode = "semantic"` and the semantic leg
-//! of `mode = "hybrid"` currently contribute no results (see `semantic_ids`);
-//! keyword search still works standalone and hybrid degrades to keyword-only
-//! until embeddings exist.
+//! Semantic search is not done here: `mode = "semantic"` and the semantic leg
+//! of `mode = "hybrid"` contribute no results (see `semantic_ids`); keyword
+//! search works standalone and hybrid degrades to keyword-only.
 
 use surrealdb::types::SurrealValue;
 use std::collections::HashMap;
@@ -463,7 +458,7 @@ mod tests {
     }
 
     #[test]
-    fn allowed_sort_fields_match_python_fields_set() {
+    fn allowed_sort_fields() {
         for f in ["occurred_at", "ingested_at", "updated_at", "title", "type", "source", "id", "external_id"] {
             assert!(FIELDS.contains(&f));
         }

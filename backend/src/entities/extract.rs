@@ -1,7 +1,6 @@
 //! LLM entity-extraction pass, intended to run as a later stage of cache
-//! ingestion (the ingest pipeline itself hasn't been ported yet -- this
-//! module is self-contained and takes the ingested record's fields directly,
-//! same shape `cache/ingest.py` would hand it).
+//! ingestion (this
+//! module is self-contained and takes the ingested record's fields directly).
 //!
 //! Pulls person/organisation/location mentions, facts, and relations out of
 //! a cache record's text via an OpenAI chat completion (JSON mode), then
@@ -15,13 +14,8 @@
 //! "no real network calls in tests" -- when set, `extract_entities` is a
 //! no-op (skips straight through, creates nothing).
 //!
-//! Ported from `entities/extract.py`. `connectors/service.py`'s
-//! `resolve_openai`/`get_app_settings` haven't been ported into
-//! `connectors::service` yet (that module's own docstring defers the
-//! `app_settings` half to "a different phase of the port"), so this module
-//! inlines a minimal equivalent (`resolve_openai` below) rather than reach
-//! into a sibling module that doesn't have it -- refactor to call the real
-//! thing once it exists.
+//! The OpenAI settings lookup (`resolve_openai` below) is inlined here rather than
+//! shared with `connectors::service`.
 
 use surrealdb::types::SurrealValue;
 use std::collections::{HashMap, HashSet};
@@ -47,8 +41,7 @@ const MIN_BODY_LEN: usize = 40;
 const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 
 /// One ingested record's fields relevant to extraction -- mirrors the `id`/
-/// `title`/`body_text` subset of a `cache_record` row that `cache/ingest.py`
-/// passes in on the Python side.
+/// `title`/`body_text` subset of a `cache_record` row.
 #[derive(Debug, Clone)]
 pub struct ExtractRecord {
     pub id: String,
@@ -86,8 +79,7 @@ struct ExtractionData {
     relations: Vec<RelationExtract>,
 }
 
-/// `(section key, memory/entity kind)` pairs -- mirrors `entities/extract.py`'s
-/// `_KIND_MAP`.
+/// `(section key, memory/entity kind)` pairs.
 const KIND_MAP: [(&str, &str); 3] =
     [("people", "person"), ("organisations", "organisation"), ("locations", "location")];
 
@@ -142,7 +134,7 @@ pub(super) async fn app_settings_row(db: &OrgDb, owner: &RecordId) -> AppResult<
 /// Resolve `(base_url, api_key)` for `owner`'s OpenAI-compatible backend.
 /// The per-user `app_settings` row overrides the env-level
 /// `settings.openai_api_key` default for the key; `base_url` is per-user
-/// only. Mirrors `connectors/service.py::resolve_openai`.
+/// only.
 pub(super) async fn resolve_openai(db: &OrgDb, settings: &Settings, owner: &RecordId) -> AppResult<(String, String)> {
     let row = app_settings_row(db, owner).await?;
     let base_url = if row.openai_base_url.is_empty() { DEFAULT_OPENAI_BASE_URL.to_string() } else { row.openai_base_url };

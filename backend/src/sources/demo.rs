@@ -1,14 +1,9 @@
 //! Demo source -- pushes synthetic Up Bank + heypocket data through the
 //! ingest pipeline so the cache and tools all work with no live accounts and
-//! no external API calls. Ported from `sources/demo/source.py`.
+//! no external API calls.
 //!
-//! Deviation from Python (beyond the one already called out in the Python
-//! docstring -- synthetic records generated inline rather than read back from
-//! a seeded `DemoTransaction`/`DemoRecording` table): the fixed seed (42)
-//! drives Rust's `StdRng`, not CPython's Mersenne Twister, so the generated
-//! rows are deterministic *within this backend* but are not byte-for-byte
-//! identical to the Python version's output. Nothing downstream depends on
-//! that output matching across languages.
+//! Synthetic records are generated inline. The fixed seed (42) drives
+//! `StdRng`, so the generated rows are deterministic within this backend.
 
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
@@ -92,7 +87,7 @@ fn gen_recordings(rng: &mut StdRng, now: DateTime<Utc>) -> Vec<Value> {
             let n_tags = rng.gen_range(1..=2);
             let mut tags: Vec<&str> = POCKET_TAGS.to_vec();
             // Fisher-Yates partial shuffle to sample `n_tags` without
-            // replacement, mirroring Python's `rng.sample`.
+            // replacement.
             for i in 0..n_tags {
                 let j = rng.gen_range(i..tags.len());
                 tags.swap(i, j);

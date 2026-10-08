@@ -47,6 +47,7 @@ fn every_registered_route_is_in_the_spec() {
         }
     }
     routes.insert(("get".into(), "/api/openapi.json".into()));
+    routes.insert(("get".into(), "/readyz".into())); // registered in lib.rs, next to /healthz (which is not documented)
     assert!(routes.len() > 50, "route scan found only {} routes", routes.len());
 
     let doc = serde_json::to_value(openapi::spec()).unwrap();

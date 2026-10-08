@@ -14,7 +14,6 @@
 //! comment for the event shapes. `routers::chat` turns these into
 //! Server-Sent Events.
 //!
-//! Ported from `chat/service.py`.
 
 use surrealdb::types::SurrealValue;
 use std::collections::BTreeMap;
@@ -59,8 +58,7 @@ tool when it would help answer the user; otherwise just reply.";
 
 /// OpenAI isn't available for real calls (stub embeddings backend, or no
 /// usable base_url/key combination) -- raised so the router can turn it
-/// into a clear user-facing error instead of a generic failure. Mirrors
-/// `chat/service.py`'s `ChatNotConfigured`.
+/// into a clear user-facing error instead of a generic failure.
 #[derive(Debug, Clone)]
 pub struct ChatNotConfigured(pub String);
 
@@ -71,8 +69,7 @@ impl std::fmt::Display for ChatNotConfigured {
 }
 impl std::error::Error for ChatNotConfigured {}
 
-/// One streamed step of `send_stream` -- serializes as `{"type": ..., ...}`,
-/// matching `chat/service.py`'s event dicts 1:1.
+/// One streamed step of `send_stream` -- serializes as `{"type": ..., ...}`.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "type")]
 pub enum ChatEvent {
@@ -89,9 +86,8 @@ pub enum ChatEvent {
 }
 
 // ---------------------------------------------------------------------------
-// OpenAI config resolution (mirrors `connectors/service.py::resolve_openai`;
-// duplicated rather than shared since `connectors::service` hasn't ported
-// that function yet -- same situation `entities::extract` is already in).
+// OpenAI config resolution (the same logic as `entities::extract::resolve_openai`;
+// duplicated rather than shared).
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Deserialize, SurrealValue, Default)]
@@ -297,7 +293,7 @@ fn message_out(row: MessageRow) -> MessageOut {
 /// Reshapes a persisted `chat_message` row into the OpenAI chat-completion
 /// message format (`{"role", "content", "tool_calls"?, "tool_call_id"?}`) --
 /// split out as a pure function so the history-to-API-format transform is
-/// unit-testable. Mirrors `chat/service.py::_row_to_message`.
+/// unit-testable.
 fn row_to_api_message(row: &MessageRow) -> Value {
     let mut msg = json!({ "role": row.role, "content": row.content });
     if let Some(tool_calls) = &row.tool_calls
@@ -380,7 +376,7 @@ pub async fn clear(db: &OrgDb, owner: &RecordId, thread_id: &RecordId) -> AppRes
 
 /// Converts the registry's JSON-Schema argument schemas into OpenAI's
 /// function-calling `tools` format -- a thin wrapper, not a
-/// reimplementation, same as `chat/service.py::_openai_tools`.
+/// reimplementation.
 fn openai_tools() -> Vec<Value> {
     registry::all_tools()
         .iter()
@@ -441,8 +437,7 @@ struct ToolCallAcc {
 
 /// Folds one streamed delta into the in-progress assistant turn: appends
 /// any text content and accumulates any (possibly partial) tool-call
-/// fragments by their stream index -- mirrors the accumulation
-/// `chat/service.py::send`'s `async for chunk in stream` loop does inline.
+/// fragments by their stream index.
 /// Split out as a pure function so the accumulation logic (and the
 /// loop's termination condition, `tool_calls_acc.is_empty()`) is
 /// unit-testable without a live OpenAI stream.

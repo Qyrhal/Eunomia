@@ -247,7 +247,7 @@ async fn export_and_replay(app: &TestApp) {
         ),
     )
     .await;
-    let r = replay::replay(&app.state, &app.state.settings, &trace_id).await.expect("replay seeds a scratch database");
+    let r = replay::replay(&app.state, &app.state.settings, &trace_id, 0).await.expect("replay seeds a scratch database");
     assert_eq!(r.replayed.code, "ok");
 }
 

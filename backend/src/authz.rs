@@ -121,18 +121,20 @@ pub struct Caller {
     pub scopes: Vec<String>,
     /// A vault-restricted token may only touch this vault.
     pub vault: Option<RecordId>,
+    /// When the credential stops working (a PAT with an expiry); `None` for sessions and tokens that never expire.
+    pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl Caller {
     /// A browser session: every scope, every vault the user belongs to.
     pub fn session(user_id: &RecordId) -> Self {
-        Caller { actor: Actor { kind: "user", id: user_id.to_string() }, scopes: scopes::ALL.iter().map(|s| s.to_string()).collect(), vault: None }
+        Caller { actor: Actor { kind: "user", id: user_id.to_string() }, scopes: scopes::ALL.iter().map(|s| s.to_string()).collect(), vault: None, expires_at: None }
     }
 
     /// Server-initiated work with no request behind it (jobs, boot, replay):
     /// every scope, every vault. Request code never gets this by default.
     pub fn system() -> Self {
-        Caller { actor: Actor { kind: "system", id: "system".into() }, scopes: scopes::ALL.iter().map(|s| s.to_string()).collect(), vault: None }
+        Caller { actor: Actor { kind: "system", id: "system".into() }, scopes: scopes::ALL.iter().map(|s| s.to_string()).collect(), vault: None, expires_at: None }
     }
 
     /// `memory:write` implies `memory:read` (see `scopes::allows`).
@@ -320,6 +322,7 @@ mod tests {
             actor: Actor { kind: "token", id: "api_token:x".into() },
             scopes: vec![scopes::MEMORY_READ.to_string()],
             vault: Some(v1.clone()),
+            expires_at: None,
         };
         with_caller(caller, async {
             assert!(check_vault(&v1).is_ok());

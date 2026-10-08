@@ -1,6 +1,5 @@
 //! Auth routes: register/login issue the session cookie, `me`/`token` require
-//! it (or a Bearer API token, via the `User` extractor). Ported from
-//! `app/routers/auth.py`.
+//! it (or a Bearer API token, via the `User` extractor).
 
 use surrealdb::types::SurrealValue;
 use axum::{
@@ -303,7 +302,7 @@ async fn create_token(
             Some(rid)
         }
     };
-    let expires_at = match body.expires_at.as_deref().filter(|v| !v.is_empty()) {
+    let expires = match body.expires_at.as_deref().filter(|v| !v.is_empty()) {
         None => None,
         Some(v) => {
             let at = chrono::DateTime::parse_from_rfc3339(v)
@@ -312,9 +311,19 @@ async fn create_token(
             if at <= chrono::Utc::now() {
                 return Err(AppError::bad_request("expires_at must be in the future."));
             }
-            Some(Datetime::from(at))
+            Some(at)
         }
     };
+    // a token cannot outlive itself (scopes are checked above; the gate keeps vault-restricted tokens off this route):
+    // only a browser session mints a longer-lived token
+    let me = authz::caller()?;
+    if me.actor.kind == "token"
+        && let Some(own) = me.expires_at
+        && expires.is_none_or(|at| at > own)
+    {
+        return Err(AppError::coded(ErrorCode::AuthScope, "this token expires, so it can only mint tokens that expire no later than it does"));
+    }
+    let expires_at = expires.map(Datetime::from);
     let result = models_user::create_api_token_with(&state.control, &user.id, &name, &scopes, vault.as_ref(), expires_at).await?;
     audit::record_as_caller(&state.control, &user.id, "auth.token_create", &result.id.to_string(), "ok").await;
     Ok(Json(TokenCreated {
@@ -458,7 +467,10 @@ async fn revoke_session_route(
     struct Row {
         owner: RecordId,
     }
-    let rid: RecordId = crate::rid::parse(&session_id).map_err(|_| AppError::coded(ErrorCode::AuthNotFound, "Session not found."))?;
+    let rid: RecordId = crate::rid::parse(&session_id).map_err(|_| AppError::bad_request("Not a session id."))?;
+    if rid.table() != "session" {
+        return Err(AppError::bad_request("Not a session id."));
+    }
     let row: Option<Row> = store::get_control(&state.control, &rid).await?;
     match row {
         Some(r) if r.owner == user.id => {}

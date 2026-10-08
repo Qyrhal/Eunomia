@@ -66,7 +66,7 @@ pub fn explicit_class(method: &Method, path: &str) -> Option<Class> {
     let read = method == Method::GET || method == Method::HEAD;
     let segs: Vec<&str> = path.trim_matches('/').split('/').collect();
     Some(match segs.as_slice() {
-        ["healthz"] => Public,
+        ["healthz" | "readyz"] => Public,
         ["mcp"] => Mcp,
         ["api", "openapi.json"] => Public,
         ["api", "auth", "register" | "login"] => AuthAttempt,
@@ -134,6 +134,7 @@ impl Gate {
 fn client_ip(req: &Request, trusted: &[crate::ratelimit::Cidr]) -> String {
     let peer = req.extensions().get::<ConnectInfo<SocketAddr>>().map(|c| c.0.ip());
     let xff = req.headers().get("x-forwarded-for").and_then(|v| v.to_str().ok());
+    crate::ratelimit::note_untrusted_forwarder(peer, xff, trusted);
     crate::ratelimit::client_addr(peer, xff, trusted)
 }
 
@@ -157,7 +158,7 @@ async fn refresh_bucket(req: Request, ip: &str) -> (Request, Option<String>) {
     (Request::from_parts(parts, axum::body::Body::from(bytes)), key)
 }
 
-fn rate_limited(wait_secs: u64) -> Response {
+pub(crate) fn rate_limited(wait_secs: u64) -> Response {
     let mut resp = AppError::coded(ErrorCode::RateLimited, "Too many requests. Slow down and retry.").into_response();
     if let Ok(v) = HeaderValue::from_str(&wait_secs.to_string()) {
         resp.headers_mut().insert(header::RETRY_AFTER, v);
@@ -267,6 +268,7 @@ pub async fn gate(State(g): State<Gate>, mut req: Request, next: Next) -> Respon
     }
 
     let caller = authn.caller.clone();
+    req.extensions_mut().insert(meter(&g, &authn));
     req.extensions_mut().insert(authn);
     authz::with_caller(caller, next.run(req)).await
 }
@@ -283,6 +285,35 @@ async fn audit_auth_failed(g: &Gate, headers: &axum::http::HeaderMap, target: &s
         Event { user: None, actor: &audit::anonymous(), action: "auth.failed", target, outcome: code.as_str(), detail: "" },
     )
     .await;
+}
+
+/// Lets a handler that carries several messages in one request (an MCP batch) charge the caller's
+/// buckets once per message instead of once per request.
+#[derive(Clone)]
+pub struct Meter {
+    limiter: Arc<RateLimiter>,
+    buckets: Vec<(String, u32)>,
+}
+
+impl Meter {
+    /// Takes `n` more tokens from each bucket the request was already charged to. `Err(seconds)` when one runs dry.
+    pub fn charge(&self, n: usize) -> Result<(), u64> {
+        for _ in 0..n {
+            for (key, per_min) in &self.buckets {
+                self.limiter.check(key, *per_min)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+fn meter(g: &Gate, authn: &Authn) -> Meter {
+    let mut buckets = Vec::new();
+    if authn.caller.actor.kind == "token" {
+        buckets.push((format!("token:{}", authn.caller.actor.id), g.limits.token_per_min));
+    }
+    buckets.push((format!("user:{}", authn.user.id.to_string()), g.limits.user_per_min));
+    Meter { limiter: g.limiter.clone(), buckets }
 }
 
 fn rate_check(g: &Gate, authn: &Authn) -> Result<(), u64> {
@@ -304,6 +335,7 @@ mod tests {
     fn route_classes() {
         use Class::*;
         assert_eq!(class(Method::GET, "/healthz"), Public);
+        assert_eq!(class(Method::GET, "/readyz"), Public);
         assert_eq!(class(Method::POST, "/api/auth/login"), AuthAttempt);
         assert_eq!(class(Method::POST, "/api/auth/tokens"), Account(scopes::VAULTS_ADMIN));
         assert_eq!(class(Method::GET, "/api/entities/graph"), Vault(scopes::MEMORY_READ));

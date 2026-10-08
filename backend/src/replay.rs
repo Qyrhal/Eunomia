@@ -37,14 +37,27 @@ pub struct Report {
 const NO_ARGS: &str = "This capsule has no arguments: the server kept only a hash and shape of them (CAPSULE_ARGS=off, the default). \
 Set CAPSULE_ARGS=redacted on the server to capture them for the next failure, or use `--emit-test` to get a test skeleton with the shape.";
 
-/// Loads the capsule from `src`, rebuilds the caller's data in a scratch database and re-runs the call.
-pub async fn replay(src: &AppState, settings: &Settings, trace_id: &str) -> AppResult<Report> {
-    // an operator command, not a request: it acts as the system
-    crate::authz::as_system(replay_as_system(src, settings, trace_id)).await
+/// The `index`th capsule (oldest first) of a trace; a batch can leave several.
+async fn load(src: &AppState, trace_id: &str, index: usize) -> AppResult<Capsule> {
+    let all = capsules::get_all(&src.control, trace_id).await?;
+    let n = all.len();
+    all.into_iter().nth(index).ok_or_else(|| {
+        if n == 0 {
+            AppError::not_found(format!("No failure capsule for trace {trace_id}."))
+        } else {
+            AppError::not_found(format!("Trace {trace_id} has {n} capsules; --index {index} is out of range (0-based)."))
+        }
+    })
 }
 
-async fn replay_as_system(src: &AppState, settings: &Settings, trace_id: &str) -> AppResult<Report> {
-    let capsule = capsules::get(&src.control, trace_id).await?.ok_or_else(|| AppError::not_found(format!("No failure capsule for trace {trace_id}.")))?;
+/// Loads the capsule from `src`, rebuilds the caller's data in a scratch database and re-runs the call.
+pub async fn replay(src: &AppState, settings: &Settings, trace_id: &str, index: usize) -> AppResult<Report> {
+    // an operator command, not a request: it acts as the system
+    crate::authz::as_system(replay_as_system(src, settings, trace_id, index)).await
+}
+
+async fn replay_as_system(src: &AppState, settings: &Settings, trace_id: &str, index: usize) -> AppResult<Report> {
+    let capsule = load(src, trace_id, index).await?;
     if capsule.truncated {
         return Err(AppError::bad_request("The capsule was cut to fit the size cap, so it cannot be replayed."));
     }
@@ -219,8 +232,16 @@ pub fn emit_test(c: &Capsule) -> String {
 /// The `replay` subcommand. Returns the process exit code: 0 reproduced, 1 not reproduced, 2 usage or load error.
 pub async fn cli(args: &[String], settings: &Settings) -> i32 {
     let emit = args.iter().any(|a| a == "--emit-test");
-    let Some(trace_id) = args.iter().find(|a| !a.starts_with("--")) else {
-        eprintln!("usage: eunomia replay <trace_id> [--emit-test]");
+    let index = match args.iter().position(|a| a == "--index") {
+        None => 0,
+        Some(i) => match args.get(i + 1).and_then(|v| v.parse::<usize>().ok()) {
+            Some(n) => n,
+            None => return fail("--index takes a number (0 is the first failure of the trace)".into()),
+        },
+    };
+    let trace_id = args.iter().enumerate().find(|(i, a)| !(a.starts_with("--") || *i > 0 && args[i - 1] == "--index")).map(|(_, a)| a);
+    let Some(trace_id) = trace_id else {
+        eprintln!("usage: eunomia replay <trace_id> [--index N] [--emit-test]");
         return 2;
     };
     let src = match AppState::attach(settings, surrealdb::opt::Config::new()).await {
@@ -228,14 +249,14 @@ pub async fn cli(args: &[String], settings: &Settings) -> i32 {
         Err(e) => return fail(format!("cannot connect to the database: {}", e.source.unwrap_or(e.message))),
     };
     if emit
-        && let Ok(Some(c)) = capsules::get(&src.control, trace_id).await
+        && let Ok(c) = load(&src, trace_id, index).await
         && !c.args_stored()
     {
         eprintln!("note: {NO_ARGS}");
         print!("{}", emit_test(&c));
         return 0;
     }
-    match replay(&src, settings, trace_id).await {
+    match replay(&src, settings, trace_id, index).await {
         Err(e) => fail(format!("{}: {}", e.code.as_str(), e.source.unwrap_or(e.message))),
         Ok(r) if emit => {
             print!("{}", emit_test(&r.capsule));

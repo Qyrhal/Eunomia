@@ -109,7 +109,7 @@ pub fn app_with(state: AppState, limits: ratelimit::RateConfig) -> axum::Router 
             .layer(cors)
     };
 
-    let open = axum::Router::new().route("/healthz", axum::routing::get(healthz)).merge(routers::mcp::router()).merge(oauth::router());
+    let open = axum::Router::new().route("/healthz", axum::routing::get(healthz)).route("/readyz", axum::routing::get(readyz)).merge(routers::mcp::router()).merge(oauth::router());
     // One ceiling for every request body, ahead of everything else (a handler that reads the body
     // itself, like the webhook, is bounded too). No route needs more today; raise it with the env var.
     let max_body = max_body_bytes();
@@ -127,4 +127,54 @@ pub fn max_body_bytes() -> usize {
 
 async fn healthz() -> axum::Json<serde_json::Value> {
     axum::Json(serde_json::json!({ "status": "ok" }))
+}
+
+/// Readiness: the control database answers and its migrations are current. `/healthz` stays a plain
+/// liveness check (the process is up); this is the one a load balancer should gate traffic on.
+#[utoipa::path(
+    operation_id = "getReadyz",
+    get,
+    path = "/readyz",
+    tag = "meta",
+    summary = "Readiness: the control database answers and its schema is current",
+    responses((status = 200, body = openapi::OkBody), (status = 503, description = "Not ready", body = openapi::Problem, content_type = "application/problem+json")),
+    security(()),
+)]
+pub async fn readyz(axum::extract::State(state): axum::extract::State<state::AppState>) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    use surrealdb::types::SurrealValue;
+    #[derive(serde::Deserialize, SurrealValue)]
+    struct Row {
+        version: i64,
+    }
+    let newest = migrate::CONTROL_MIGRATIONS.iter().map(|m| i64::from(m.0)).max().unwrap_or(0);
+    let problem = match store::control::READY_PING.on(&state.control).await {
+        Err(e) => {
+            tracing::warn!(error = %e, "readyz: control ping failed");
+            Some("The control database did not answer.".to_string())
+        }
+        Ok(_) => match store::control::READY_VERSION.on(&state.control).await.and_then(|mut r| r.take::<Vec<Row>>(0)) {
+            Err(e) => {
+                tracing::warn!(error = %e, "readyz: reading the migration ledger failed");
+                Some("Could not read the control migration ledger.".to_string())
+            }
+            Ok(rows) => {
+                let applied = rows.first().map_or(0, |r| r.version);
+                (applied != newest).then(|| format!("The control database is at migration {applied}, this build expects {newest}."))
+            }
+        },
+    };
+    match problem {
+        None => axum::Json(openapi::OkBody { ok: true }).into_response(),
+        Some(detail) => {
+            tracing::warn!(%detail, "not ready");
+            // built by hand, not through AppError: an `internal` error hides its detail, and a probe polling
+            // a down database should not fill the failure-capsule table
+            let body = serde_json::json!({
+                "type": "about:blank", "title": "Service Unavailable", "status": 503, "detail": detail,
+                "code": error::ErrorCode::Internal.as_str(), "trace_id": telemetry::current_trace_id(),
+            });
+            (axum::http::StatusCode::SERVICE_UNAVAILABLE, [(axum::http::header::CONTENT_TYPE, "application/problem+json")], body.to_string()).into_response()
+        }
+    }
 }

@@ -13,7 +13,6 @@
 //! pipeline only enqueues an `extract` job per changed record, and the extract handler
 //! enqueues consolidation for the entities it touched. A lost enqueue only delays enrichment.
 //!
-//! Ported from `cache/ingest.py`.
 
 use serde::Serialize;
 use serde_json::Value;
@@ -38,7 +37,7 @@ impl IngestReport {
         IngestReport { source: source.to_string(), written: 0, skipped: 0, failed: 0, errors: Vec::new() }
     }
 
-    /// Mirrors `cache/ingest.py::IngestReport.as_dict` -- truncates `errors`
+    /// Truncates `errors`
     /// to the first 20 for the response payload.
     pub fn as_dict(&self) -> Value {
         serde_json::json!({
@@ -64,10 +63,8 @@ async fn embed_record(db: &OrgDb, settings: &Settings, owner: &RecordId, rec: &s
     search::set_embedding(db, owner, &rec.id, vec).await
 }
 
-/// `raw_records` are JSON values (mirrors Python's untyped `dict` raw
-/// records); `map_fn` maps one raw record to `Some(Envelope)`, `None` to
-/// skip it, or `Err(message)` on a mapping failure (mirrors a raised
-/// exception from the Python mapper).
+/// `raw_records` are untyped JSON values; `map_fn` maps one raw record to `Some(Envelope)`, `None` to
+/// skip it, or `Err(message)` on a mapping failure.
 pub async fn ingest(
     state: &crate::state::OrgState,
     owner: &RecordId,

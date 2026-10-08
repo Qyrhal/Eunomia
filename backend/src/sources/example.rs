@@ -1,6 +1,4 @@
-//! Reference source. Ported from `sources/example/source.py` -- copy this
-//! file, rename, and fill in `sync` + `map`. (`tools()` isn't ported here; see
-//! `sources::base`'s module doc for why.)
+//! Reference source: copy this file, rename, and fill in `sync` + `map`.
 
 use async_trait::async_trait;
 use chrono::Utc;

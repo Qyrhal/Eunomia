@@ -5,6 +5,7 @@
 //! answers 5xx. Secrets never reach the table: [`redact`] masks secret-looking keys and
 //! [`scrub`] masks bearer tokens and long token-like strings in any text.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use surrealdb::types::SurrealValue;
 use axum::{
     body::Body,
@@ -26,6 +27,8 @@ use crate::store;
 /// Hard cap on one stored capsule (its text fields together).
 pub const MAX_CAPSULE_BYTES: usize = 16 * 1024;
 const MAX_SOURCE_CHARS: usize = 2000;
+/// Makes each capsule id unique within a trace.
+static SEQ: AtomicU64 = AtomicU64::new(0);
 const KEEP_DAYS: &str = "7d";
 const KEEP_ROWS: i64 = 1000;
 const SECRET_HINTS: &[&str] = &["token", "secret", "password", "key", "authorization", "cookie"];
@@ -146,6 +149,33 @@ pub fn scrub(s: &str) -> String {
     out
 }
 
+/// Masks the text inside quotes. Raw database errors echo record values ("index `x` already contains
+/// ['person', 'Bob']"), and those are tenant content that must not reach the shared control database.
+/// An apostrophe inside a word ("doesn't") is not a quote; an unclosed quote masks the rest.
+pub fn scrub_quoted(s: &str) -> String {
+    let (mut out, mut open, mut prev) = (String::with_capacity(s.len()), None::<char>, ' ');
+    for c in s.chars() {
+        match open {
+            Some(q) if c == q => {
+                open = None;
+                out.push(c);
+            }
+            Some(_) => {}
+            None => {
+                if (c == '\'' || c == '"') && !prev.is_alphanumeric() {
+                    open = Some(c);
+                    out.push(c);
+                    out.push_str("***");
+                } else {
+                    out.push(c);
+                }
+            }
+        }
+        prev = c;
+    }
+    out
+}
+
 fn cut(s: &str, max: usize) -> &str {
     let mut end = max.min(s.len());
     while !s.is_char_boundary(end) {
@@ -157,7 +187,7 @@ fn cut(s: &str, max: usize) -> &str {
 /// Stores a capsule for the current trace. Never fails the caller: a capsule that cannot be written is logged.
 pub async fn record(db: &ControlDb, f: Failure) {
     let trace_id = crate::telemetry::current_trace_id();
-    let source: String = scrub(&f.source).chars().take(MAX_SOURCE_CHARS).collect();
+    let source: String = scrub(&scrub_quoted(&f.source)).chars().take(MAX_SOURCE_CHARS).collect();
     let version = crate::config::APP_VERSION;
     let used = trace_id.len() + f.name.len() + f.user.as_ref().map_or(0, String::len) + source.len() + version.len() + 256;
     let args = capsule_args(&f.args, store_args()).to_string();
@@ -167,7 +197,7 @@ pub async fn record(db: &ControlDb, f: Failure) {
     let res: Result<(), String> = async {
         store::capsules::INSERT
         .on(db)
-        .bind(("id", RecordId::from_table_key("failure_capsule", trace_id.clone())))
+        .bind(("id", RecordId::from_table_key("failure_capsule", format!("{trace_id}:{}", SEQ.fetch_add(1, Ordering::Relaxed)))))
         .bind(("org", f.org))
         .bind(("trace_id", trace_id))
         .bind(("kind", f.kind))
@@ -207,23 +237,32 @@ struct Row {
     created_at: String,
 }
 
-pub async fn get(db: &ControlDb, trace_id: &str) -> AppResult<Option<Capsule>> {
+/// Every capsule recorded under `trace_id`, oldest first (a batch can fail more than once).
+pub async fn get_all(db: &ControlDb, trace_id: &str) -> AppResult<Vec<Capsule>> {
     let mut res = store::capsules::GET.on(db).bind(("trace_id", trace_id.to_string())).await?;
     let rows: Vec<Row> = res.take(0)?;
-    Ok(rows.into_iter().next().map(|r| Capsule {
-        args: serde_json::from_str(&r.args).unwrap_or(Value::Null),
-        trace_id: r.trace_id,
-        kind: r.kind,
-        name: r.name,
-        user: r.user,
-        code: r.code,
-        status: r.status as u16,
-        source: r.source,
-        version: r.version,
-        truncated: r.truncated,
-        created_at: r.created_at,
-        org: r.org,
-    }))
+    Ok(rows
+        .into_iter()
+        .map(|r| Capsule {
+            args: serde_json::from_str(&r.args).unwrap_or(Value::Null),
+            trace_id: r.trace_id,
+            kind: r.kind,
+            name: r.name,
+            user: r.user,
+            code: r.code,
+            status: r.status as u16,
+            source: r.source,
+            version: r.version,
+            truncated: r.truncated,
+            created_at: r.created_at,
+            org: r.org,
+        })
+        .collect())
+}
+
+/// The first capsule recorded under `trace_id`.
+pub async fn get(db: &ControlDb, trace_id: &str) -> AppResult<Option<Capsule>> {
+    Ok(get_all(db, trace_id).await?.into_iter().next())
 }
 
 /// Deletes capsules older than `age` (a SurrealQL duration such as `7d`), then all but the `max` newest.
@@ -274,8 +313,12 @@ pub async fn capture(State(state): State<AppState>, req: Request, next: Next) ->
     };
     let resp = next.run(Request::from_parts(parts, body)).await;
 
-    if resp.status().is_server_error() {
+    if resp.status().is_server_error() && route != "/readyz" {
         let body = saved.map_or(Value::Null, |b| serde_json::from_slice(&b).unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&b).into_owned())));
+        // a tool failure that became this 5xx was recorded already, with its arguments
+        if get(&state.control, &crate::telemetry::current_trace_id()).await.ok().flatten().is_some() {
+            return resp;
+        }
         let info = resp.extensions().get::<FailureInfo>().cloned();
         let (code, source) = info.map_or((ErrorCode::Internal, String::new()), |i| (i.code, i.source));
         record(
@@ -309,6 +352,15 @@ mod tests {
             assert!(!s.contains(leak), "{leak} leaked in {s}");
         }
         assert!(s.contains("\"hi\"") && s.contains("Bearer ***") && s.contains("to host"));
+    }
+
+    #[test]
+    fn scrub_quoted_masks_values_but_keeps_kind_and_code() {
+        let e = "Database index `entity_name` already contains ['person', 'Bob Canary'], with record `entity:abc`, doesn't fit \"x y\"";
+        let out = scrub_quoted(e);
+        assert!(!out.contains("Bob") && !out.contains("Canary") && !out.contains("x y"), "{out}");
+        assert!(out.contains("`entity_name`") && out.contains("`entity:abc`") && out.contains("doesn't"), "{out}");
+        assert!(!scrub_quoted("oops 'unclosed secret").contains("secret"));
     }
 
     #[test]

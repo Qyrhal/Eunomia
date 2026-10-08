@@ -6,8 +6,9 @@
 //! the same tool registry the chat agent uses (`tools::registry`), so every
 //! call is owner-scoped and audit-logged exactly like REST/chat calls.
 //!
-//! Auth is a personal API token (`Authorization: Bearer ...`), never the
-//! browser session cookie -- a page the user visits can't drive tools.
+//! Auth is a personal API token or an OAuth access token (`Authorization: Bearer ...`), never the
+//! browser session cookie -- a page the user visits can't drive tools. A batch is capped at
+//! [`MAX_BATCH`] messages and charged to the rate limit once per message.
 
 use crate::rid::RecordIdExt;
 use axum::{
@@ -25,6 +26,8 @@ use crate::models_user::User;
 use crate::state::AppState;
 use crate::tools::registry;
 
+/// Largest JSON-RPC batch accepted in one request.
+const MAX_BATCH: usize = 32;
 const SUPPORTED_VERSIONS: &[&str] = &["2025-11-25", "2025-06-18", "2025-03-26"];
 const DEFAULT_VERSION: &str = "2025-06-18";
 
@@ -43,7 +46,7 @@ async fn method_not_allowed() -> Response {
     (StatusCode::METHOD_NOT_ALLOWED, [(header::ALLOW, "POST")]).into_response()
 }
 
-async fn handle(State(state): State<AppState>, authn: Option<Extension<Authn>>, headers: HeaderMap, body: String) -> Response {
+async fn handle(State(state): State<AppState>, authn: Option<Extension<Authn>>, meter: Option<Extension<crate::gate::Meter>>, headers: HeaderMap, body: String) -> Response {
     if !origin_allowed(&headers, &state.settings.cors_allowed_origins) {
         return AppError::coded(ErrorCode::AuthForbidden, "origin not allowed").into_response();
     }
@@ -61,7 +64,20 @@ async fn handle(State(state): State<AppState>, authn: Option<Extension<Authn>>, 
         return (StatusCode::BAD_REQUEST, Json(error_response(Value::Null, -32700, ErrorCode::ValidationInvalid, "Parse error"))).into_response();
     };
 
-    // OAuth tokens carry scopes; personal API tokens are unrestricted here.
+    if let Value::Array(batch) = &message {
+        if batch.len() > MAX_BATCH {
+            let msg = format!("Batch too large: at most {MAX_BATCH} messages per request.");
+            return (StatusCode::BAD_REQUEST, Json(error_response(Value::Null, -32600, ErrorCode::ValidationInvalid, &msg))).into_response();
+        }
+        // the gate charged one request; a batch costs one per message
+        if let Some(Extension(m)) = &meter
+            && let Err(wait) = m.charge(batch.len().saturating_sub(1))
+        {
+            return crate::gate::rate_limited(wait);
+        }
+    }
+
+    // OAuth tokens carry scopes; a personal API token is limited by its own scopes (the gate and the registry check them).
     if let Some(granted) = &granted
         && let Some(denied) = crate::oauth::scope_challenge(&state.settings, &message, granted)
     {

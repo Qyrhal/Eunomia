@@ -68,14 +68,14 @@ async fn capsules_are_capped_at_16kb() {
     let c = capsules::get(&app.state.control, &trace(3)).await.unwrap().unwrap();
     assert!(c.truncated);
     assert!(c.args.is_null(), "a cut capsule keeps no half-parsed args");
-    assert!(replay::replay(&app.state, &app.state.settings, &trace(3)).await.is_err(), "a cut capsule is not replayable");
+    assert!(replay::replay(&app.state, &app.state.settings, &trace(3), 0).await.is_err(), "a cut capsule is not replayable");
 }
 
 #[tokio::test]
 async fn replay_reproduces_the_same_error_code_in_a_scratch_database() {
     let app = new_app().await;
     failing_tool(&app, &trace(4)).await;
-    let r = replay::replay(&app.state, &app.state.settings, &trace(4)).await.unwrap();
+    let r = replay::replay(&app.state, &app.state.settings, &trace(4), 0).await.unwrap();
     assert_eq!(r.replayed.code, "entity.not_found");
     assert!(r.reproduced);
     let test = replay::emit_test(&r.capsule);
@@ -107,7 +107,7 @@ async fn replay_seeds_the_scratch_database_with_the_callers_data() {
         ),
     )
     .await;
-    let r = replay::replay(&app.state, &app.state.settings, &trace(5)).await.unwrap();
+    let r = replay::replay(&app.state, &app.state.settings, &trace(5), 0).await.unwrap();
     assert!(!r.reproduced);
     assert_eq!(r.replayed.code, "ok");
     assert!(r.replayed.body.to_string().contains("likes engines"), "{}", r.replayed.body);
@@ -127,7 +127,7 @@ async fn a_5xx_route_records_a_route_capsule_that_replays() {
     assert!(!c.source.is_empty());
     assert!(!serde_json::to_string(&c).unwrap().contains(&app.token));
 
-    let r = replay::replay(&app.state, &app.state.settings, trace_id).await.unwrap();
+    let r = replay::replay(&app.state, &app.state.settings, trace_id, 0).await.unwrap();
     assert_eq!(r.replayed.status, Some(200), "the scratch database has clean data");
     assert!(!r.reproduced);
 }
@@ -163,9 +163,44 @@ async fn capsule_route_is_admin_only() {
 
     let ((status, body), _) = http(&app.router, "GET", &path, None, Some(&app.token), None).await;
     assert_eq!(status, 200);
-    assert_eq!(body["code"], "entity.not_found");
+    assert_eq!(body[0]["code"], "entity.not_found");
     assert!(!body.to_string().contains("SECRET"));
 
     let ((status, _), _) = http(&app.router, "GET", &format!("/api/debug/capsules/{}", trace(99)), None, Some(&app.token), None).await;
     assert_eq!(status, 404);
+}
+
+#[tokio::test]
+async fn a_batch_with_several_failures_keeps_every_capsule() {
+    let app = new_app().await;
+    for _ in 0..3 {
+        failing_tool(&app, &trace(30)).await;
+    }
+    assert_eq!(capsules::get_all(&app.state.control, &trace(30)).await.unwrap().len(), 3);
+
+    let path = format!("/api/debug/capsules/{}", trace(30));
+    let ((status, body), _) = http(&app.router, "GET", &path, None, Some(&app.token), None).await;
+    assert_eq!((status.as_u16(), body.as_array().map(Vec::len)), (200, Some(3)));
+
+    assert!(replay::replay(&app.state, &app.state.settings, &trace(30), 2).await.unwrap().reproduced);
+    let err = replay::replay(&app.state, &app.state.settings, &trace(30), 3).await.unwrap_err();
+    assert!(err.message.contains("3 capsules"), "{}", err.message);
+}
+
+#[tokio::test]
+async fn capsule_source_never_holds_quoted_values() {
+    let app = new_app().await;
+    let c = Failure {
+        org: None,
+        kind: "tool",
+        name: "memory_write".into(),
+        user: None,
+        args: json!({}),
+        code: ErrorCode::Internal,
+        status: 500,
+        source: "Database index `entity_name` already contains ['person', 'CANARY-Bob'], with record `entity:abc`".into(),
+    };
+    with_trace_id(trace(31), capsules::record(&app.state.control, c)).await;
+    let got = capsules::get(&app.state.control, &trace(31)).await.unwrap().unwrap();
+    assert!(!got.source.contains("CANARY") && got.source.contains("entity_name") && got.source.contains("entity:abc"), "{}", got.source);
 }

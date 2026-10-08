@@ -11,10 +11,8 @@
 //!     tests.
 //!
 //! Results are memoized in the `embed_cache` SurrealDB table, keyed by
-//! HMAC(ENCRYPTION_KEY, "backend:model:text") -- ported from
-//! `embeddings/service.py`'s `_hmac`.
+//! HMAC(ENCRYPTION_KEY, "backend:model:text").
 //!
-//! Ported from `embeddings/service.py`.
 
 use surrealdb::types::SurrealValue;
 use std::collections::HashMap;
@@ -37,8 +35,7 @@ const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 
 type HmacSha256 = Hmac<Sha256>;
 
-/// HMAC-SHA256(key, s), hex-encoded. Mirrors `embeddings/service.py`'s
-/// `_hmac` (`hmac.new(key, s.encode(), hashlib.sha256).hexdigest()`).
+/// HMAC-SHA256(key, s), hex-encoded.
 fn hmac_hex(key: &str, s: &str) -> String {
     let mut mac = HmacSha256::new_from_slice(key.as_bytes()).expect("HMAC accepts a key of any length");
     mac.update(s.as_bytes());
@@ -46,8 +43,7 @@ fn hmac_hex(key: &str, s: &str) -> String {
 }
 
 /// Deterministic SHA256-derived vector: repeat the 32-byte digest to fill
-/// `DIM`, then map each byte from `[0, 255]` to `[-1.0, 1.0)`. Mirrors
-/// `embeddings/service.py`'s `_stub_vec`.
+/// `DIM`, then map each byte from `[0, 255]` to `[-1.0, 1.0)`.
 fn stub_vec(text: &str) -> Vec<f32> {
     let digest = Sha256::digest(text.as_bytes());
     let mut raw = Vec::with_capacity(DIM);
@@ -76,7 +72,7 @@ struct EmbeddingsResponse {
 
 /// Calls `{base_url}/embeddings`, batched `BATCH` at a time, re-sorting each
 /// batch's response by `index` (the API doesn't guarantee response order
-/// matches request order). Mirrors `embeddings/service.py`'s `_embed_openai`.
+/// matches request order).
 async fn embed_openai(texts: &[String], base_url: &str, api_key: &str) -> AppResult<Vec<Vec<f32>>> {
     let client = reqwest::Client::new();
     let url = format!("{}/embeddings", base_url.trim_end_matches('/'));
@@ -186,8 +182,7 @@ struct EmbedCacheRow {
 ///
 /// `owner`, if given, resolves that user's OpenAI base_url/key (per-user
 /// override of the env-level default) -- omit it only for owner-less call
-/// sites, which fall back to the env settings exactly as before. Mirrors
-/// `embeddings/service.py`'s `embed`.
+/// sites, which fall back to the env settings exactly as before.
 pub async fn embed(db: &OrgDb, settings: &Settings, texts: &[String], owner: Option<&RecordId>) -> AppResult<Vec<Vec<f32>>> {
     if texts.is_empty() {
         return Ok(Vec::new());

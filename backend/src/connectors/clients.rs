@@ -1,7 +1,4 @@
-//! Thin bearer-token REST clients for the personal connectors. Ported from
-//! `connectors/clients.py` 1:1, using `reqwest` instead of `httpx`. Google was
-//! removed from this codebase before the rewrite started -- no GoogleClient
-//! here.
+//! Thin bearer-token REST clients for the personal connectors, built on `reqwest`.
 //!
 //! Each client's pure response-shaping logic (`compute_*`) is split out from
 //! its HTTP-fetching method so it can be unit tested without a live network
@@ -132,8 +129,7 @@ impl UpBankClient {
 
     /// Exposes the bearer headers for callers (the `sources::up_bank` sync
     /// loop) that need to follow a JSON:API `links.next` pagination URL
-    /// directly -- mirrors the Python source's raw `httpx.AsyncClient().get(nxt,
-    /// headers=client._headers())` pagination walk.
+    /// directly.
     pub fn auth_headers(&self) -> HeaderMap {
         self.headers()
     }

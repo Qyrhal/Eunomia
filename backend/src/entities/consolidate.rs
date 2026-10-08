@@ -3,8 +3,7 @@
 //! statement, stored as that subject's `type="observation"` memory row.
 //!
 //! Modeled on vectorize.io's Hindsight "observations" concept, with
-//! deliberate scope cuts (see `entities/consolidate.py`'s module docstring
-//! for the full rationale): scope is always one entity (`subject`), no
+//! deliberate scope cuts: scope is always one entity (`subject`), no
 //! NLP-based world/experience classification, "update history" is just the
 //! `version` counter, and the mission text is a single configurable string
 //! rather than a full strategy-matching system.
@@ -17,7 +16,6 @@
 //! Best-effort throughout, same safety pattern as `extract.rs`: never fails
 //! the caller, no-ops in stub-backend mode.
 //!
-//! Ported from `entities/consolidate.py`.
 
 use surrealdb::types::SurrealValue;
 use std::collections::HashSet;
@@ -68,8 +66,7 @@ struct ObservationRow {
 }
 
 /// The result of a successful consolidation -- just enough to let callers
-/// (the `consolidate_observations` tool) report what happened; mirrors the
-/// Python version's "truthy dict vs `None`" convention as `Option<..>`.
+/// (the `consolidate_observations` tool) report what happened, as an `Option<..>`.
 #[derive(Debug, Clone)]
 pub struct ConsolidatedObservation {
     pub id: String,
@@ -141,7 +138,7 @@ async fn call_llm(
 }
 
 /// The configured observations mission for `owner`, or `DEFAULT_MISSION` if
-/// unset -- mirrors `tools.py::consolidate_observations` reading
+/// unset, read from
 /// `app_settings.observations_mission`.
 pub async fn observations_mission(db: &OrgDb, owner: &RecordId) -> AppResult<String> {
     let row = app_settings_row(db, owner).await?;
@@ -295,7 +292,7 @@ mod tests {
     }
 
     #[test]
-    fn default_mission_matches_python_default() {
+    fn default_mission_text() {
         assert!(DEFAULT_MISSION.contains("stable facts about people and relationships"));
     }
 }

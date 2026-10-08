@@ -1,9 +1,5 @@
-//! Vault-management agent-tool wrappers, ported from `vaults/tools.py`.
-//! These are thin reshapes over `vaults::service` for the MCP agent-tool
-//! surface -- the MCP registration/schema machinery (`register_tool`, the
-//! JSON-schema literals) has no Rust equivalent yet in this codebase and is
-//! intentionally not ported: there's no portable logic in it, just wiring
-//! into a registry module that doesn't exist on this side yet.
+//! Vault-management agent-tool wrappers: thin reshapes over `vaults::service` for the MCP
+//! agent-tool surface (registration and schemas live in `tools::registry`).
 
 use serde_json::{json, Value};
 use surrealdb::types::RecordId;
@@ -11,7 +7,7 @@ use surrealdb::types::RecordId;
 use crate::pool::{ControlDb, OrgDb};
 use crate::vaults::service;
 
-/// Mirrors Python's `@safe` decorator: a tool must never raise on bad agent
+/// A tool must never raise on bad agent
 /// input, it returns `{"error": "<tool_name>: <message>"}` instead.
 fn err(tool_name: &str, message: &str) -> Value {
     json!({ "error": format!("{tool_name}: {message}") })
@@ -98,7 +94,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn err_formats_like_python_safe_decorator() {
+    fn err_formats_as_tool_name_and_message() {
         let v = err("vault_create", "boom");
         assert_eq!(v, json!({ "error": "vault_create: boom" }));
     }

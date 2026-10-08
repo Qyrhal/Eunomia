@@ -1,14 +1,12 @@
 //! Sources dashboard data: the registered sources, each one's sync health,
-//! and whether the caller has an enabled connector backing it. Ported from
-//! `app/routers/sources.py`.
+//! and whether the caller has an enabled connector backing it.
 //!
 //! Also the webhook intake route ([`webhook_router`]) -- deliberately a
 //! *separate* router with no `User` extractor, since an external provider
 //! can't send our session cookie or bearer token. Owner is resolved from the
 //! URL itself (`{owner_id}`, a `user:...` record id) and the request is only
 //! trusted once `Source::webhook()` verifies it against that owner's stored
-//! connector credentials -- mirrors the Python module's `webhook_router` and
-//! its docstring on why the owner id lives in the URL. Matches
+//! connector credentials, which is why the owner id lives in the URL. Matches
 //! `routers::connectors`'s dual-router pattern (`router()` + a second
 //! function the caller mounts separately).
 
@@ -72,8 +70,7 @@ async fn sync_status_rows(state: &OrgState, owner: &RecordId) -> AppResult<std::
         .into_iter()
         .map(|r| {
             // The record key is `{owner_key}:{source_key}`; partition off the
-            // owner-key prefix to recover the source key, same as the Python
-            // router's `row["id"].id.partition(":")`.
+            // owner-key prefix to recover the source key.
             let raw_key = crate::rid::key_string(r.id.key()).unwrap_or_default();
             let source_key = raw_key.split_once(':').map(|(_, k)| k.to_string()).unwrap_or(raw_key);
             (source_key, r)
