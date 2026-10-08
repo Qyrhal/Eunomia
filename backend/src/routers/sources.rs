@@ -226,6 +226,9 @@ async fn sync_now(State(state): State<AppState>, user: User, Path(key): Path<Str
     Ok(Json(report))
 }
 
+/// Largest webhook delivery read into memory.
+const MAX_WEBHOOK_BYTES: usize = 1 << 20;
+
 #[utoipa::path(
     operation_id = "receiveSourceWebhook",
     post,
@@ -245,15 +248,21 @@ async fn source_webhook(
         return Err(AppError::coded(ErrorCode::SourceNotFound, format!("no source {key:?}")));
     };
 
-    let owner: RecordId = crate::rid::parse(&owner_id).map_err(|_| AppError::not_found("unknown owner"))?;
-    // the owner's org decides whose database the delivery lands in; an unknown owner has none
-    let org = crate::models_user::org_of(&state.control, &owner).await.map_err(|_| AppError::not_found("unknown owner"))?;
-    let state = state.org(&org).await?;
-
+    // Read the body (bounded) before any database work. An unknown owner answers exactly like a
+    // delivery that does not verify, so the status cannot be used to find out which ids exist. The
+    // signing secret lives in the owner's own database, so that database has to be opened to check it;
+    // the per-address limit in the gate bounds how often that can be provoked.
     let (parts, body) = request.into_parts();
-    let body_bytes = axum::body::to_bytes(body, usize::MAX)
-        .await
-        .map_err(|e| AppError::bad_request(e.to_string()))?;
+    let body_bytes = axum::body::to_bytes(body, MAX_WEBHOOK_BYTES).await.map_err(|e| {
+        let mut err = AppError::bad_request(format!("webhook body not readable or over {MAX_WEBHOOK_BYTES} bytes: {e}"));
+        err.status = axum::http::StatusCode::PAYLOAD_TOO_LARGE;
+        err
+    })?;
+
+    let ignored = || Ok(Json(json!({"status": "ignored"})));
+    let Ok(owner) = crate::rid::parse(&owner_id) else { return ignored() };
+    let Ok(org) = crate::models_user::org_of(&state.control, &owner).await else { return ignored() };
+    let state = state.org(&org).await?;
 
     let ctx = registry::ctx(&state.db, &state.settings.encryption_key, &owner);
     let raw_records = src.webhook(&ctx, &parts.headers, &body_bytes).await?;

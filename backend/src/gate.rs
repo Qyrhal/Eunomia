@@ -39,6 +39,8 @@ pub enum Class {
     Public,
     /// Login and signup: public, but limited per client address.
     AuthAttempt,
+    /// A source's webhook: public (the source signs it), limited per client address.
+    Webhook,
     /// `/mcp`: Bearer only, and the handler does its own protocol-level errors.
     Mcp,
     /// Any authenticated caller (scope is checked per tool, or not at all).
@@ -76,7 +78,7 @@ pub fn explicit_class(method: &Method, path: &str) -> Option<Class> {
         ["api", "entities", ..] => Vault(if read { scopes::MEMORY_READ } else { scopes::MEMORY_WRITE }),
         ["api", "vaults", ..] => Vault(if read { scopes::MEMORY_READ } else { scopes::VAULTS_ADMIN }),
         ["api", "connectors", ..] | ["api", "snapshot"] => Account(scopes::CONNECTORS),
-        ["api", "sources", _, "webhook", _] => Public,
+        ["api", "sources", _, "webhook", _] => Webhook,
         ["api", "sources", ..] => Account(scopes::CONNECTORS),
         ["api", "settings" | "debug" | "export" | "update" | "audit" | "chat" | "oauth", ..] => Account(scopes::VAULTS_ADMIN),
         // OAuth endpoints for MCP clients: public, so limited per client address like login
@@ -128,6 +130,12 @@ pub async fn gate(State(g): State<Gate>, mut req: Request, next: Next) -> Respon
     let class = classify(req.method(), req.uri().path());
     match class {
         Class::Public => return next.run(req).await,
+        Class::Webhook => {
+            if let Err(wait) = g.limiter.check(&format!("webhook:{}", client_ip(&req, &g.limits.trusted_proxies)), g.limits.webhook_per_min) {
+                return rate_limited(wait);
+            }
+            return next.run(req).await;
+        }
         Class::AuthAttempt => {
             if let Err(wait) = g.limiter.check(&format!("auth:{}", client_ip(&req, &g.limits.trusted_proxies)), g.limits.auth_per_min) {
                 return rate_limited(wait);
@@ -138,6 +146,12 @@ pub async fn gate(State(g): State<Gate>, mut req: Request, next: Next) -> Respon
     }
 
     let ip = client_ip(&req, &g.limits.trusted_proxies);
+    // each call may make the server fetch the client's metadata document: limit it like a login
+    if req.uri().path() == "/oauth/authorize"
+        && let Err(wait) = g.limiter.check(&format!("authorize:{ip}"), g.limits.auth_per_min)
+    {
+        return rate_limited(wait);
+    }
     let mcp = class == Class::Mcp;
     let presented = auth::bearer_token(req.headers()).is_some() || (!mcp && auth::session_token(req.headers()).is_some());
     let target = format!("{} {}", req.method(), req.uri().path());
@@ -145,11 +159,11 @@ pub async fn gate(State(g): State<Gate>, mut req: Request, next: Next) -> Respon
     let authn = match auth::authenticate(&g.state, req.headers(), mcp).await {
         Ok(a) => a,
         Err(e) => {
-            audit::record(
-                &g.state.control,
-                Event { user: None, actor: &audit::anonymous(), action: "auth.failed", target: &target, outcome: e.code.as_str(), detail: "" },
-            )
-            .await;
+            // throttle guessing before leaving a trail, and leave one row per credential per minute
+            if let Err(wait) = g.limiter.check(&format!("auth:{ip}"), g.limits.auth_per_min) {
+                return rate_limited(wait);
+            }
+            audit_auth_failed(&g, req.headers(), &target, e.code).await;
             return reject(&g, class, e);
         }
     };
@@ -160,11 +174,7 @@ pub async fn gate(State(g): State<Gate>, mut req: Request, next: Next) -> Respon
             if let Err(wait) = g.limiter.check(&format!("auth:{ip}"), g.limits.auth_per_min) {
                 return rate_limited(wait);
             }
-            audit::record(
-                &g.state.control,
-                Event { user: None, actor: &audit::anonymous(), action: "auth.failed", target: &target, outcome: ErrorCode::AuthUnauthorized.as_str(), detail: "" },
-            )
-            .await;
+            audit_auth_failed(&g, req.headers(), &target, ErrorCode::AuthUnauthorized).await;
         }
         return match class {
             Class::Optional | Class::Mcp => next.run(req).await,
@@ -198,6 +208,20 @@ pub async fn gate(State(g): State<Gate>, mut req: Request, next: Next) -> Respon
     authz::with_caller(caller, next.run(req)).await
 }
 
+/// One `auth.failed` row per presented credential per minute: a client replaying a bad token
+/// cannot turn every request into a database write.
+async fn audit_auth_failed(g: &Gate, headers: &axum::http::HeaderMap, target: &str, code: ErrorCode) {
+    let credential = auth::bearer_token(headers).map(String::from).or_else(|| auth::session_token(headers)).unwrap_or_default();
+    if g.limiter.check(&format!("auditfail:{}", crate::models_user::hash_token(&credential)), 1).is_err() {
+        return;
+    }
+    audit::record(
+        &g.state.control,
+        Event { user: None, actor: &audit::anonymous(), action: "auth.failed", target, outcome: code.as_str(), detail: "" },
+    )
+    .await;
+}
+
 fn rate_check(g: &Gate, authn: &Authn) -> Result<(), u64> {
     if authn.caller.actor.kind == "token" {
         g.limiter.check(&format!("token:{}", authn.caller.actor.id), g.limits.token_per_min)?;
@@ -223,7 +247,7 @@ mod tests {
         assert_eq!(class(Method::PATCH, "/api/entities/memory/memory:x"), Vault(scopes::MEMORY_WRITE));
         assert_eq!(class(Method::GET, "/api/vaults/vault:x/members"), Vault(scopes::MEMORY_READ));
         assert_eq!(class(Method::DELETE, "/api/vaults/vault:x"), Vault(scopes::VAULTS_ADMIN));
-        assert_eq!(class(Method::POST, "/api/sources/github/webhook/user:x"), Public);
+        assert_eq!(class(Method::POST, "/api/sources/github/webhook/user:x"), Webhook);
         assert_eq!(class(Method::POST, "/api/sources/github/sync"), Account(scopes::CONNECTORS));
         assert_eq!(class(Method::GET, "/api/tools"), Public);
         assert_eq!(class(Method::POST, "/api/tools/recall"), Any);

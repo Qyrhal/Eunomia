@@ -32,9 +32,9 @@ async fn send(
         None => req.body(Body::empty()),
     }
     .unwrap();
-    // the socket peer is the frontend proxy on the compose network
+    // the socket peer is a trusted proxy (the default trusts loopback only)
     let mut req = req;
-    req.extensions_mut().insert(axum::extract::ConnectInfo(std::net::SocketAddr::from(([172, 18, 0, 2], 4000))));
+    req.extensions_mut().insert(axum::extract::ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 4000))));
     let resp = router.clone().oneshot(req).await.unwrap();
     let (status, headers) = (resp.status(), resp.headers().clone());
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
@@ -622,4 +622,74 @@ fn every_documented_route_is_classified_and_tools_have_a_scope() {
         }
     }
     assert!(unclassified.is_empty(), "add these routes to gate::explicit_class: {unclassified:?}");
+}
+
+// ------------------------------------------------------ hardening
+
+#[tokio::test]
+async fn a_replayed_bad_credential_leaves_one_audit_row_per_minute_and_is_throttled() {
+    let app = TestApp::new().await;
+    let router = app_with_limits(&app, RateConfig { auth_per_min: 5, ..RateConfig::default() });
+    let past = Datetime::from(chrono::Utc::now() - chrono::Duration::minutes(1));
+    let expired = create_api_token_with(&app.state.control, &app.user.id, "old", &all(), None, Some(past)).await.unwrap().token;
+    let h = |t: &str| vec![("authorization", format!("Bearer {t}")), ("x-forwarded-for", "203.0.113.50".to_string())];
+
+    let mut statuses = Vec::new();
+    for _ in 0..8 {
+        statuses.push(send(&router, "GET", "/api/auth/me", None, &h(&expired)).await.0);
+    }
+    // the first five fail as expired, then the address bucket answers 429 before any audit write
+    assert_eq!(statuses.iter().filter(|s| **s == StatusCode::UNAUTHORIZED).count(), 5, "{statuses:?}");
+    assert_eq!(statuses.iter().filter(|s| **s == StatusCode::TOO_MANY_REQUESTS).count(), 3, "{statuses:?}");
+    // five attempts, one credential: one row
+    assert_eq!(events(&app, "action = 'auth.failed'").await.len(), 1);
+}
+
+#[tokio::test]
+async fn webhooks_are_limited_per_address_and_unknown_owners_look_like_bad_signatures() {
+    let app = TestApp::new().await;
+    let router = app_with_limits(&app, RateConfig { webhook_per_min: 3, ..RateConfig::default() });
+    let from = vec![("x-forwarded-for", "203.0.113.60".to_string())];
+    let real = format!("/api/sources/github/webhook/{}", app.user.id.to_string());
+    let (s1, _, b1) = send(&router, "POST", &real, Some(json!({"zen": "x"})), &from).await;
+    let (s2, _, b2) = send(&router, "POST", "/api/sources/github/webhook/user:nobody", Some(json!({"zen": "x"})), &from).await;
+    let (s3, _, b3) = send(&router, "POST", "/api/sources/github/webhook/not-an-id", Some(json!({"zen": "x"})), &from).await;
+    // no secret is configured for the real user, the others do not exist: all answer alike
+    assert_eq!((s1, s2, s3), (StatusCode::OK, StatusCode::OK, StatusCode::OK));
+    assert_eq!((&b1, &b2), (&b2, &b3));
+    assert_eq!(b1["status"], "ignored");
+    let (s4, _, b4) = send(&router, "POST", &real, Some(json!({})), &from).await;
+    assert_eq!((s4, b4["code"].as_str()), (StatusCode::TOO_MANY_REQUESTS, Some("rate.limited")));
+}
+
+#[tokio::test]
+async fn oversized_bodies_are_refused_before_any_handler_reads_them() {
+    let app = TestApp::new().await;
+    let big = "x".repeat(2 * 1024 * 1024);
+    for path in ["/api/auth/login", "/api/sources/github/webhook/user:nobody"] {
+        let mut req = Request::builder().method("POST").uri(path).header(header::CONTENT_TYPE, "application/json").body(Body::from(big.clone())).unwrap();
+        req.extensions_mut().insert(axum::extract::ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 4000))));
+        let status = app.router.clone().oneshot(req).await.unwrap().status();
+        assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE, "{path}");
+    }
+}
+
+#[tokio::test]
+async fn forwarded_for_from_a_lan_peer_is_not_believed_by_default() {
+    let app = TestApp::new().await;
+    let router = app_with_limits(&app, RateConfig { auth_per_min: 2, ..RateConfig::default() });
+    let creds = json!({"email": "tester@example.com", "password": "wrong-password"});
+    let mut last = StatusCode::OK;
+    for i in 0..3 {
+        let mut req = Request::builder()
+            .method("POST")
+            .uri("/api/auth/login")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header("x-forwarded-for", format!("198.51.100.{i}"))
+            .body(Body::from(creds.to_string()))
+            .unwrap();
+        req.extensions_mut().insert(axum::extract::ConnectInfo(std::net::SocketAddr::from(([192, 168, 1, 20], 4000))));
+        last = router.clone().oneshot(req).await.unwrap().status();
+    }
+    assert_eq!(last, StatusCode::TOO_MANY_REQUESTS);
 }

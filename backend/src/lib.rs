@@ -110,7 +110,19 @@ pub fn app_with(state: AppState, limits: ratelimit::RateConfig) -> axum::Router 
     };
 
     let open = axum::Router::new().route("/healthz", axum::routing::get(healthz)).merge(routers::mcp::router()).merge(oauth::router());
-    guarded(open, open_cors).merge(guarded(axum::Router::new().nest("/api", api), cors)).with_state(state)
+    // One ceiling for every request body, ahead of everything else (a handler that reads the body
+    // itself, like the webhook, is bounded too). No route needs more today; raise it with the env var.
+    let max_body = max_body_bytes();
+    guarded(open, open_cors)
+        .merge(guarded(axum::Router::new().nest("/api", api), cors))
+        .with_state(state)
+        .layer(axum::extract::DefaultBodyLimit::max(max_body))
+        .layer(tower_http::limit::RequestBodyLimitLayer::new(max_body))
+}
+
+/// `MAX_REQUEST_BODY_BYTES`, default 1 MiB.
+pub fn max_body_bytes() -> usize {
+    std::env::var("MAX_REQUEST_BODY_BYTES").ok().and_then(|v| v.trim().parse().ok()).filter(|n| *n > 0).unwrap_or(1 << 20)
 }
 
 async fn healthz() -> axum::Json<serde_json::Value> {

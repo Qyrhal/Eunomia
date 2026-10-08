@@ -56,7 +56,10 @@ services:
       - RATE_LIMIT_USER_PER_MIN=${RATE_LIMIT_USER_PER_MIN:-1200}
       - RATE_LIMIT_TOKEN_PER_MIN=${RATE_LIMIT_TOKEN_PER_MIN:-600}
       - RATE_LIMIT_AUTH_PER_MIN=${RATE_LIMIT_AUTH_PER_MIN:-20}
-      - TRUSTED_PROXIES=${TRUSTED_PROXIES:-}
+      # the frontend's pinned address below: the only peer whose X-Forwarded-For is believed
+      - TRUSTED_PROXIES=${TRUSTED_PROXIES:-172.30.77.10}
+      - RATE_LIMIT_WEBHOOK_PER_MIN=${RATE_LIMIT_WEBHOOK_PER_MIN:-120}
+      - ENCRYPTION_KEY_LEGACY_EMPTY=${ENCRYPTION_KEY_LEGACY_EMPTY:-}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-}
       - OTEL_SERVICE_NAME=eunomia-backend
@@ -78,6 +81,9 @@ services:
     build: ./frontend
     ports:
       - "${FRONTEND_PORT:-3000}:3000"
+    networks:
+      default:
+        ipv4_address: 172.30.77.10
     depends_on:
       backend:
         condition: service_healthy
@@ -113,6 +119,15 @@ services:
     depends_on:
       surrealdb:
         condition: service_healthy
+
+# A fixed subnet so the frontend (the reverse proxy in front of the backend) has a known address
+# for TRUSTED_PROXIES. If 172.30.77.0/24 clashes with a network you use, change both here and in
+# the backend's TRUSTED_PROXIES default above.
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.30.77.0/24
 
 volumes:
   eunomia-surreal-data:

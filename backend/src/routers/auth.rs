@@ -95,8 +95,13 @@ async fn onboarded(state: &AppState, user: &User) -> AppResult<bool> {
     Ok(row.map(|r| r.onboarded_at.is_some()).unwrap_or(false))
 }
 
-fn session_cookie_header(token: &str) -> String {
-    format!("{SESSION_COOKIE}={token}; HttpOnly; SameSite=Lax; Path=/")
+/// `Secure` whenever the public URL is https, so the cookie never travels over plain http.
+fn cookie_flags(public_url: &str) -> &'static str {
+    if public_url.starts_with("https://") { "; Secure" } else { "" }
+}
+
+fn session_cookie_header(token: &str, public_url: &str) -> String {
+    format!("{SESSION_COOKIE}={token}; HttpOnly; SameSite=Lax; Path=/{}", cookie_flags(public_url))
 }
 
 #[utoipa::path(
@@ -131,7 +136,7 @@ async fn register(
     let body = AuthOut { id: user.id.to_string(), email: user.email, onboarded: false };
     Ok((
         StatusCode::OK,
-        [(header::SET_COOKIE, session_cookie_header(&token))],
+        [(header::SET_COOKIE, session_cookie_header(&token, &state.settings.public_url))],
         Json(body),
     )
         .into_response())
@@ -174,7 +179,7 @@ async fn login(
     let body = AuthOut { id: user.id.to_string(), email: user.email, onboarded };
     Ok((
         StatusCode::OK,
-        [(header::SET_COOKIE, session_cookie_header(&token))],
+        [(header::SET_COOKIE, session_cookie_header(&token, &state.settings.public_url))],
         Json(body),
     )
         .into_response())
@@ -197,7 +202,7 @@ async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Response {
         }) {
             auth::revoke_session_by_jwt(&state.control, &state.settings.jwt_secret, &token).await;
         }
-    let expired = format!("{SESSION_COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0");
+    let expired = format!("{SESSION_COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0{}", cookie_flags(&state.settings.public_url));
     (StatusCode::OK, [(header::SET_COOKIE, expired)], Json(json!({ "ok": true }))).into_response()
 }
 
@@ -467,10 +472,12 @@ mod tests {
 
     #[test]
     fn session_cookie_header_includes_name_and_flags() {
-        let header = session_cookie_header("abc.def.ghi");
+        let header = session_cookie_header("abc.def.ghi", "http://localhost:8001");
         assert!(header.starts_with("eunomia_session=abc.def.ghi;"));
         assert!(header.contains("HttpOnly"));
         assert!(header.contains("SameSite=Lax"));
+        assert!(!header.contains("Secure"));
+        assert!(session_cookie_header("t", "https://eunomia.example.com").ends_with("; Secure"));
     }
 
     #[test]

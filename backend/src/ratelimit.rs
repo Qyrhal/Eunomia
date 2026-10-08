@@ -18,6 +18,8 @@ pub struct RateConfig {
     pub token_per_min: u32,
     /// Login, signup and failed-credential attempts per minute per client address.
     pub auth_per_min: u32,
+    /// Source webhook deliveries per minute per client address (`RATE_LIMIT_WEBHOOK_PER_MIN`).
+    pub webhook_per_min: u32,
     /// Peers whose `X-Forwarded-For` is believed (`TRUSTED_PROXIES`).
     pub trusted_proxies: Vec<Cidr>,
 }
@@ -59,8 +61,9 @@ fn bits_of(ip: IpAddr) -> (u128, u32) {
     }
 }
 
-/// Loopback plus the private ranges the Docker bridge networks are carved from.
-const DEFAULT_TRUSTED_PROXIES: &str = "127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,::1/128,fc00::/7";
+/// Loopback only: a LAN or bridge peer cannot vouch for `X-Forwarded-For` unless the operator
+/// lists it. docker-compose.yml pins the frontend's address and passes it in as `TRUSTED_PROXIES`.
+const DEFAULT_TRUSTED_PROXIES: &str = "127.0.0.0/8,::1/128";
 
 fn parse_cidrs(list: &str) -> Vec<Cidr> {
     list.split(',').filter(|s| !s.trim().is_empty()).filter_map(Cidr::parse).collect()
@@ -86,12 +89,12 @@ pub fn client_addr(peer: Option<IpAddr>, forwarded_for: Option<&str>, trusted: &
 
 impl Default for RateConfig {
     fn default() -> Self {
-        RateConfig { user_per_min: 1200, token_per_min: 600, auth_per_min: 20, trusted_proxies: parse_cidrs(DEFAULT_TRUSTED_PROXIES) }
+        RateConfig { user_per_min: 1200, token_per_min: 600, auth_per_min: 20, webhook_per_min: 120, trusted_proxies: parse_cidrs(DEFAULT_TRUSTED_PROXIES) }
     }
 }
 
 impl RateConfig {
-    /// `RATE_LIMIT_USER_PER_MIN`, `RATE_LIMIT_TOKEN_PER_MIN`, `RATE_LIMIT_AUTH_PER_MIN`, `TRUSTED_PROXIES`.
+    /// `RATE_LIMIT_USER_PER_MIN`, `RATE_LIMIT_TOKEN_PER_MIN`, `RATE_LIMIT_AUTH_PER_MIN`, `RATE_LIMIT_WEBHOOK_PER_MIN`, `TRUSTED_PROXIES`.
     pub fn from_env() -> Self {
         let d = RateConfig::default();
         let get = |key: &str, default: u32| std::env::var(key).ok().and_then(|v| v.trim().parse().ok()).unwrap_or(default);
@@ -99,6 +102,7 @@ impl RateConfig {
             user_per_min: get("RATE_LIMIT_USER_PER_MIN", d.user_per_min),
             token_per_min: get("RATE_LIMIT_TOKEN_PER_MIN", d.token_per_min),
             auth_per_min: get("RATE_LIMIT_AUTH_PER_MIN", d.auth_per_min),
+            webhook_per_min: get("RATE_LIMIT_WEBHOOK_PER_MIN", d.webhook_per_min),
             // unset or blank: the defaults; any value with no valid range (say `none`) trusts nobody
             trusted_proxies: match std::env::var("TRUSTED_PROXIES") {
                 Ok(v) if !v.trim().is_empty() => parse_cidrs(&v),
@@ -167,8 +171,18 @@ mod tests {
     }
 
     #[test]
-    fn forwarded_for_is_honoured_only_from_trusted_peers_right_most_untrusted() {
+    fn default_trusts_loopback_only() {
         let trusted = RateConfig::default().trusted_proxies;
+        let ip = |s: &str| Some(s.parse::<IpAddr>().unwrap());
+        // a LAN or bridge peer cannot spoof X-Forwarded-For
+        assert_eq!(client_addr(ip("192.168.1.50"), Some("1.2.3.4"), &trusted), "192.168.1.50");
+        assert_eq!(client_addr(ip("172.18.0.5"), Some("1.2.3.4"), &trusted), "172.18.0.5");
+        assert_eq!(client_addr(ip("127.0.0.1"), Some("1.2.3.4"), &trusted), "1.2.3.4");
+    }
+
+    #[test]
+    fn forwarded_for_is_honoured_only_from_trusted_peers_right_most_untrusted() {
+        let trusted = parse_cidrs("172.16.0.0/12,10.0.0.0/8");
         let ip = |s: &str| Some(s.parse::<IpAddr>().unwrap());
         // a public peer cannot spoof
         assert_eq!(client_addr(ip("8.8.8.8"), Some("1.2.3.4"), &trusted), "8.8.8.8");
