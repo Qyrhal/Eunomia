@@ -1,8 +1,30 @@
 # Eunomia foundation plan
 
-Status: proposed, 2026-10-08. Owner decisions that bind this plan: **Eunomia keeps SurrealDB** and **Eunomia keeps Rust**. Goal: a multi-tenant, stress-tested, well-scaling, bug-free and debuggable product that agents build and agents debug.
+Status: implemented on branch `foundation` (self-host first), 2026-10-09; see "Implementation status" below. Proposed 2026-10-08. Owner decisions that bind this plan: **Eunomia keeps SurrealDB** and **Eunomia keeps Rust**. Goal: a multi-tenant, stress-tested, well-scaling, bug-free and debuggable product that agents build and agents debug.
 
 How this was made: six independent architects (two each on Opus, Fable and Sonnet) read the codebase and researched primary sources; a judge on a different model scored them; the result below is candidate 4 as the base with named grafts from the others. The synthesis note is at the end.
+
+## Implementation status (2026-10-09, branch `foundation`)
+
+Owner decisions since the plan: **self-host first**; embedding dimension stays 1536; self-host upgrades are scripted and automatic but always export first; no restricted vaults.
+
+| Phase | State | Where |
+|---|---|---|
+| 0 Safety net | Done: real-SurrealDB harness, goldens for all 29 tools, axum 0.8, edition 2024, clippy `-D warnings`, CI with e2e and upgrade jobs | `backend/tests/`, `.github/workflows/ci.yml` |
+| 1 Errors and tracing | Done: `ErrorCode` + problem+json, JSON logs, OTel (opt-in), SigNoz profile, trace id in UI, transactions with `with_retry`; concurrent-write test passes | `backend/src/{error,telemetry,tx}.rs`, `docs/errors.md`, `docs/observability.md` |
+| 2 Contracts and store seam | Done: utoipa (all routes typed except 7 open bodies), hey-api client, TanStack Query, every statement named in `store/`, `every_query_executes` | `backend/openapi.json`, `frontend/src/lib/{gen,queries}`, `backend/src/store/` |
+| 3 Versioned schema | Done: migration runner with checksum ledger, control and tenant sets, nightly encrypted backups, restore drill | `backend/migrations/`, `backend/src/migrate.rs`, `backend/scripts/backup/` |
+| 4 SurrealDB 3.3 | Done in code: 3.3.1, HNSW, per-field FULLTEXT, hybrid KNN fallback, hardened `--deny-all` function list, upgrade script with verify and rollback | `docs/upgrading-to-surrealdb-3.md`, `scripts/upgrade-surreal-v3.sh` |
+| 5 Org tenancy | Done in code: control database, database per org with its own user, `OrgDb`/`ControlDb` types, verified self-host move, isolation suite in every mode, mutation check | `docs/architecture/tenancy.md`, `backend/tests/isolation.rs` |
+| 6 Jobs | Done: job table, leases, leader, reconcilers, extraction and consolidation wired | `docs/architecture/jobs.md` |
+| 7 Team auth | Done: `authorize()`, scoped and expiring PATs, session expiry, `audit_event`, rate limits, MCP OAuth 2.1 (PKCE, CIMD, DCR, RFC 8707) | `backend/src/{authz,gate,ratelimit}.rs`, `backend/src/oauth/` |
+| 8 Stress | Tooling done: k6, fuzz targets, chaos script, failure capsules and `eunomia-backend replay` | `docs/testing.md`, `docs/debugging.md` |
+
+Spike results so far (in-memory engine, not RocksDB, so indicative only):
+- S1, 200 org databases: about 7.4 MB RSS per org, cold `for_org` p50 217 ms (password check), first query 0.6 ms, KNN p50 66 ms. Fine for self-host; database per org does **not** yet look viable at 5k to 10k orgs on one node. Revisit before any SaaS launch (fallback in section 3.3).
+- S3, job claims: 50k jobs, 6 workers, 19 kills, zero lost, duplicates only after lease expiry, about 2,000 claims per second. In-process claims use a lock because the in-memory engine misses some write conflicts; multi-process safety on RocksDB is still unproven.
+
+Still to verify on real containers (Docker was unavailable while this was built): the 3.3.1 server end to end with the hardened flags, a real `export --v3` fixture, per-org backups and the restore drill on 3.3, multi-process job claims, two API plus two worker replicas under chaos, k6 and Playwright against a built stack, and spikes S2 (recall quality) and S4 (trace propagation into SurrealDB).
 
 ## 1. The target, in one table
 
