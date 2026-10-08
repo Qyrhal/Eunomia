@@ -18,7 +18,7 @@ use surrealdb::RecordId;
 
 use crate::connectors::service;
 use crate::db::Db;
-use crate::error::{AppError, AppResult};
+use crate::error::{AppError, AppResult, ErrorCode};
 use crate::sources::base::{owner_key_str, Source, SourceCtx};
 use crate::sources::demo::DemoSource;
 use crate::sources::discord::DiscordSource;
@@ -281,7 +281,7 @@ pub async fn run_sync(
     mode: &str,
     cursor: Option<String>,
 ) -> AppResult<(IngestReport, Option<String>)> {
-    let src = get(key).ok_or_else(|| AppError::not_found(format!("no source {key:?}")))?;
+    let src = get(key).ok_or_else(|| AppError::coded(ErrorCode::SourceNotFound, format!("no source {key:?}")))?;
     let source_ctx = ctx(db, encryption_key, owner);
     let result = src.sync(&source_ctx, mode, cursor).await?;
     let report = ingest(db, owner, key, &result.records, src.as_ref()).await;

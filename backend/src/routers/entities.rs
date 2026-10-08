@@ -24,7 +24,7 @@ use serde_json::{json, Value};
 use surrealdb::RecordId;
 
 use crate::entities::service;
-use crate::error::{AppError, AppResult};
+use crate::error::{AppError, AppResult, ErrorCode};
 use crate::models_user::User;
 use crate::state::AppState;
 
@@ -214,7 +214,7 @@ async fn update_memory(
 ) -> AppResult<Json<service::MemoryOut>> {
     let rid = parse_record_id(&memory_id)?;
     let memory = service::update_memory(&state.db, &user.id, &rid, body.text.as_deref(), body.mem_type.as_deref()).await?;
-    memory.map(Json).ok_or_else(|| AppError::not_found("not found"))
+    memory.map(Json).ok_or_else(|| AppError::coded(ErrorCode::MemoryNotFound, "not found"))
 }
 
 async fn delete_memory(
@@ -225,7 +225,7 @@ async fn delete_memory(
     let rid = parse_record_id(&memory_id)?;
     let deleted = service::delete_memory(&state.db, &user.id, &rid).await?;
     if !deleted {
-        return Err(AppError::not_found("not found"));
+        return Err(AppError::coded(ErrorCode::MemoryNotFound, "not found"));
     }
     Ok(Json(json!({ "deleted": true })))
 }
@@ -237,7 +237,7 @@ async fn get_entity(
 ) -> AppResult<Json<service::EntityDetail>> {
     let rid = parse_record_id(&entity_id)?;
     let entity = service::get_entity(&state.db, &user.id, &rid).await?;
-    entity.map(Json).ok_or_else(|| AppError::not_found("not found"))
+    entity.map(Json).ok_or_else(|| AppError::coded(ErrorCode::EntityNotFound, "not found"))
 }
 
 async fn update_entity(
@@ -250,7 +250,7 @@ async fn update_entity(
     let entity =
         service::update_entity(&state.db, &user.id, &rid, body.name.as_deref(), body.aliases, body.summary.as_deref())
             .await?;
-    entity.map(Json).ok_or_else(|| AppError::not_found("not found"))
+    entity.map(Json).ok_or_else(|| AppError::coded(ErrorCode::EntityNotFound, "not found"))
 }
 
 async fn delete_entity(
@@ -261,7 +261,7 @@ async fn delete_entity(
     let rid = parse_record_id(&entity_id)?;
     let deleted = service::delete_entity(&state.db, &user.id, &rid).await?;
     if !deleted {
-        return Err(AppError::not_found("not found"));
+        return Err(AppError::coded(ErrorCode::EntityNotFound, "not found"));
     }
     Ok(Json(json!({ "deleted": true })))
 }
@@ -274,7 +274,7 @@ async fn add_memory(
 ) -> AppResult<Json<service::MemoryOut>> {
     let rid = parse_record_id(&entity_id)?;
     if service::get_entity(&state.db, &user.id, &rid).await?.is_none() {
-        return Err(AppError::not_found("not found"));
+        return Err(AppError::coded(ErrorCode::EntityNotFound, "not found"));
     }
     Ok(Json(service::add_memory(&state.db, &user.id, &rid, &body.text, None, &body.mem_type).await?))
 }
@@ -287,11 +287,11 @@ async fn add_relation(
 ) -> AppResult<Json<service::RelationOut>> {
     let rid = parse_record_id(&entity_id)?;
     if service::get_entity(&state.db, &user.id, &rid).await?.is_none() {
-        return Err(AppError::not_found("not found"));
+        return Err(AppError::coded(ErrorCode::EntityNotFound, "not found"));
     }
     let to_rid = parse_record_id(&body.to_id)?;
     if service::get_entity(&state.db, &user.id, &to_rid).await?.is_none() {
-        return Err(AppError::not_found("target entity not found"));
+        return Err(AppError::coded(ErrorCode::EntityNotFound, "target entity not found"));
     }
     Ok(Json(service::add_relation(&state.db, &user.id, &rid, &to_rid, &body.label, None).await?))
 }

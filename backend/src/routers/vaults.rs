@@ -10,7 +10,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use surrealdb::RecordId;
 
-use crate::error::{AppError, AppResult};
+use crate::error::{AppError, AppResult, ErrorCode};
 use crate::models_user::User;
 use crate::state::AppState;
 use crate::vaults::service;
@@ -73,7 +73,7 @@ fn valid_vault_kind(kind: &str) -> bool {
 /// str`); parse here, same convention as `routers/auth.rs`'s token/session
 /// id parsing.
 fn parse_vault_id(vault_id: &str) -> AppResult<RecordId> {
-    vault_id.parse().map_err(|_| AppError::not_found("Vault not found."))
+    vault_id.parse().map_err(|_| AppError::coded(ErrorCode::VaultNotFound, "Vault not found."))
 }
 
 async fn list_vaults(State(state): State<AppState>, user: User) -> AppResult<Json<Value>> {

@@ -40,7 +40,7 @@ async fn invoke(
     body: Option<Json<Value>>,
 ) -> AppResult<Json<Value>> {
     if !registry::all_tools().contains_key(name.as_str()) {
-        return Err(crate::error::AppError::not_found(format!("unknown tool {name:?}")));
+        return Err(crate::error::AppError::coded(crate::error::ErrorCode::ToolNotFound, format!("unknown tool {name:?}")));
     }
     let args = body.map(|Json(v)| v).unwrap_or(Value::Object(serde_json::Map::new()));
     let result = registry::call(&state, &user.id, &name, args).await?;

@@ -120,6 +120,8 @@ impl Normalizer {
         let mut s = v.to_string();
         s = ts.replace_all(&s, "<ts>").into_owned();
         s = hash.replace_all(&s, "<hash>").into_owned();
+        // trace ids are random per request
+        s = Regex::new(r"\b[0-9a-f]{32}\b").unwrap().replace_all(&s, "<trace>").into_owned();
         let found: Vec<String> = rid.find_iter(&s).map(|m| m.as_str().to_string()).collect();
         for id in found {
             let n = self.ids.len() + 1;

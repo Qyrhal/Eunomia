@@ -25,5 +25,7 @@ expression: stable
       "topic": "deployment",
       "title": "Deployment"
     }
-  ]
+  ],
+  "code": "validation.invalid",
+  "trace_id": "<trace>"
 }

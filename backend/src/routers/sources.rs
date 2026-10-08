@@ -21,7 +21,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use surrealdb::RecordId;
 
-use crate::error::{AppError, AppResult};
+use crate::error::{AppError, AppResult, ErrorCode};
 use crate::models_user::User;
 use crate::sources::registry;
 use crate::sources::scheduler::sync_source;
@@ -136,7 +136,7 @@ async fn sources_status(State(state): State<AppState>, user: User) -> AppResult<
 
 async fn sync_now(State(state): State<AppState>, user: User, Path(key): Path<String>) -> AppResult<Json<Value>> {
     if registry::get(&key).is_none() {
-        return Err(AppError::not_found(format!("no source {key:?}")));
+        return Err(AppError::coded(ErrorCode::SourceNotFound, format!("no source {key:?}")));
     }
     let report = sync_source(&state.db, &state.settings.encryption_key, &user.id, &key, "poll").await;
     Ok(Json(report))
@@ -148,7 +148,7 @@ async fn source_webhook(
     request: axum::extract::Request,
 ) -> AppResult<Json<Value>> {
     let Some(src) = registry::get(&key) else {
-        return Err(AppError::not_found(format!("no source {key:?}")));
+        return Err(AppError::coded(ErrorCode::SourceNotFound, format!("no source {key:?}")));
     };
 
     let owner: RecordId = owner_id.parse().map_err(|_| AppError::not_found("unknown owner"))?;
