@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use surrealdb::RecordId;
 
 use crate::db::Db;
+use crate::store;
 use crate::error::AppError;
 use crate::models_user::{self, User};
 use crate::state::AppState;
@@ -46,7 +47,7 @@ pub async fn start_session(
 ) -> Result<String, AppError> {
     let sid = models_user::generate_token();
     let ua: String = user_agent.unwrap_or("").chars().take(300).collect();
-    db.query("CREATE session SET owner = $owner, sid = $sid, user_agent = $user_agent")
+    store::app::AUTH_SESSION_CREATE.on(db)
         .bind(("owner", user.id.clone()))
         .bind(("sid", sid.clone()))
         .bind(("user_agent", ua))
@@ -68,8 +69,8 @@ async fn user_from_jwt(db: &Db, secret: &str, token: &str) -> Option<User> {
     struct SessionRow {
         id: RecordId,
     }
-    let mut res = db
-        .query("SELECT * FROM session WHERE sid = $sid AND owner = $owner AND revoked = false LIMIT 1")
+    let mut res = store::app::AUTH_SESSION_FIND
+        .on(db)
         .bind(("sid", claims.sid.clone()))
         .bind(("owner", rid.clone()))
         .await
@@ -77,8 +78,8 @@ async fn user_from_jwt(db: &Db, secret: &str, token: &str) -> Option<User> {
     let rows: Vec<SessionRow> = res.take(0).ok()?;
     let row = rows.into_iter().next()?;
 
-    let _ = db
-        .query("UPDATE $id SET last_seen_at = time::now()")
+    let _ = store::app::AUTH_SESSION_TOUCH
+        .on(db)
         .bind(("id", row.id))
         .await;
 
@@ -93,8 +94,8 @@ pub async fn revoke_session_by_jwt(db: &Db, secret: &str, token: &str) {
     ) else {
         return;
     };
-    let _ = db
-        .query("UPDATE session SET revoked = true WHERE sid = $sid")
+    let _ = store::app::AUTH_SESSION_REVOKE_BY_SID
+        .on(db)
         .bind(("sid", data.claims.sid))
         .await;
 }

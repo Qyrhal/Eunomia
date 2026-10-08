@@ -27,6 +27,7 @@ use tokio::sync::mpsc;
 use crate::config::Settings;
 use crate::connectors::crypto;
 use crate::db::Db;
+use crate::store;
 use crate::error::{AppError, AppResult};
 use crate::state::AppState;
 use crate::tools::registry;
@@ -104,8 +105,8 @@ async fn app_settings_row(db: &Db, owner: &RecordId) -> AppResult<AppSettingsRow
     match row {
         Some(r) => Ok(r),
         None => {
-            let mut res = db
-                .query("UPSERT $id SET owner = $owner RETURN AFTER")
+            let mut res = store::app::CHAT_SETTINGS_UPSERT
+                .on(db)
                 .bind(("id", rid))
                 .bind(("owner", owner.clone()))
                 .await?;
@@ -194,8 +195,8 @@ pub fn derive_title(user_message: &str) -> String {
 
 pub async fn create_thread(db: &Db, owner: &RecordId, title: Option<&str>) -> AppResult<ThreadOut> {
     let title = title.map(str::trim).filter(|t| !t.is_empty()).unwrap_or(DEFAULT_THREAD_TITLE);
-    let mut res = db
-        .query("CREATE chat_thread SET owner = $owner, title = $title RETURN AFTER")
+    let mut res = store::app::CHAT_THREAD_CREATE
+        .on(db)
         .bind(("owner", owner.clone()))
         .bind(("title", title.to_string()))
         .await?;
@@ -205,8 +206,8 @@ pub async fn create_thread(db: &Db, owner: &RecordId, title: Option<&str>) -> Ap
 }
 
 pub async fn list_threads(db: &Db, owner: &RecordId) -> AppResult<Vec<ThreadOut>> {
-    let mut res = db
-        .query("SELECT * FROM chat_thread WHERE owner = $owner ORDER BY updated_at DESC")
+    let mut res = store::app::CHAT_THREAD_LIST
+        .on(db)
         .bind(("owner", owner.clone()))
         .await?;
     let rows: Vec<ThreadRow> = res.take(0)?;
@@ -227,21 +228,22 @@ pub async fn get_thread(db: &Db, owner: &RecordId, thread_id: &RecordId) -> AppR
 
 pub async fn delete_thread(db: &Db, owner: &RecordId, thread_id: &RecordId) -> AppResult<bool> {
     let Some(row) = select_thread_row(db, owner, thread_id).await? else { return Ok(false) };
-    db.query("DELETE chat_message WHERE thread_id = $tid").bind(("tid", row.id.clone())).await?;
-    db.query("DELETE $id").bind(("id", row.id)).await?;
+    store::app::CHAT_THREAD_MESSAGES_DELETE.on(db).bind(("tid", row.id.clone())).await?;
+    store::app::CHAT_THREAD_DELETE.on(db).bind(("id", row.id)).await?;
     Ok(true)
 }
 
 async fn touch_thread(db: &Db, thread_id: &RecordId, title: Option<&str>) -> AppResult<()> {
     match title {
         Some(t) => {
-            db.query("UPDATE $id SET title = $title, updated_at = time::now()")
+            store::app::CHAT_THREAD_RETITLE
+                .on(db)
                 .bind(("id", thread_id.clone()))
                 .bind(("title", t.to_string()))
                 .await?;
         }
         None => {
-            db.query("UPDATE $id SET updated_at = time::now()").bind(("id", thread_id.clone())).await?;
+            store::app::CHAT_THREAD_TOUCH.on(db).bind(("id", thread_id.clone())).await?;
         }
     }
     Ok(())
@@ -302,8 +304,8 @@ fn row_to_api_message(row: &MessageRow) -> Value {
 }
 
 async fn rows_for_thread(db: &Db, owner: &RecordId, thread_id: &RecordId) -> AppResult<Vec<MessageRow>> {
-    let mut res = db
-        .query("SELECT * FROM chat_message WHERE owner = $owner AND thread_id = $thread_id ORDER BY created_at")
+    let mut res = store::app::CHAT_MESSAGES_FOR_THREAD
+        .on(db)
         .bind(("owner", owner.clone()))
         .bind(("thread_id", thread_id.clone()))
         .await?;
@@ -324,7 +326,7 @@ pub async fn history(db: &Db, owner: &RecordId, thread_id: &RecordId) -> AppResu
 /// document rather than one thread at a time.
 pub async fn history_all(db: &Db, owner: &RecordId) -> AppResult<Vec<MessageOut>> {
     let mut res =
-        db.query("SELECT * FROM chat_message WHERE owner = $owner ORDER BY created_at").bind(("owner", owner.clone())).await?;
+        store::app::CHAT_MESSAGES_FOR_OWNER.on(db).bind(("owner", owner.clone())).await?;
     let rows: Vec<MessageRow> = res.take(0)?;
     Ok(rows.into_iter().map(message_out).collect())
 }
@@ -339,11 +341,8 @@ async fn persist(
     tool_calls: Option<Vec<Value>>,
     tool_call_id: Option<&str>,
 ) -> AppResult<MessageRow> {
-    let mut res = db
-        .query(
-            "CREATE chat_message SET owner = $owner, thread_id = $thread_id, role = $role, content = $content, \
-             tool_calls = $tool_calls, tool_call_id = $tool_call_id RETURN AFTER",
-        )
+    let mut res = store::app::CHAT_MESSAGE_CREATE
+        .on(db)
         .bind(("owner", owner.clone()))
         .bind(("thread_id", thread_id.clone()))
         .bind(("role", role.to_string()))
@@ -359,7 +358,8 @@ async fn persist(
 /// empty) -- `false` if the thread doesn't exist / isn't owned by `owner`.
 pub async fn clear(db: &Db, owner: &RecordId, thread_id: &RecordId) -> AppResult<bool> {
     let Some(row) = select_thread_row(db, owner, thread_id).await? else { return Ok(false) };
-    db.query("DELETE chat_message WHERE owner = $owner AND thread_id = $thread_id")
+    store::app::CHAT_MESSAGES_CLEAR
+        .on(db)
         .bind(("owner", owner.clone()))
         .bind(("thread_id", row.id))
         .await?;

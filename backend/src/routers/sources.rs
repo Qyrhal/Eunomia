@@ -26,6 +26,7 @@ use crate::models_user::User;
 use crate::sources::registry;
 use crate::sources::scheduler::sync_source;
 use crate::state::AppState;
+use crate::store;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -55,9 +56,8 @@ struct SyncStatusRow {
 }
 
 async fn sync_status_rows(state: &AppState, owner: &RecordId) -> AppResult<std::collections::HashMap<String, SyncStatusRow>> {
-    let mut res = state
-        .db
-        .query("SELECT * FROM sync_status WHERE owner = $owner")
+    let mut res = store::app::SOURCES_SYNC_STATUS_LIST
+        .on(&state.db)
         .bind(("owner", owner.clone()))
         .await?;
     let rows: Vec<SyncStatusRow> = res.take(0)?;
@@ -82,9 +82,8 @@ async fn record_counts(state: &AppState, owner: &RecordId) -> AppResult<std::col
         source: String,
         count: i64,
     }
-    let mut res = state
-        .db
-        .query("SELECT source, count() AS count FROM cache_record WHERE owner = $owner AND deleted = false GROUP BY source")
+    let mut res = store::app::SOURCES_RECORD_COUNTS
+        .on(&state.db)
         .bind(("owner", owner.clone()))
         .await?;
     let rows: Vec<Row> = res.take(0)?;

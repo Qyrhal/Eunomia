@@ -14,6 +14,7 @@ use surrealdb::{Datetime, RecordId};
 
 use crate::connectors::crypto;
 use crate::db::Db;
+use crate::store;
 use crate::tx::with_retry;
 use crate::error::{AppError, AppResult};
 
@@ -51,8 +52,8 @@ pub struct Connector {
 }
 
 pub async fn get_connector(db: &Db, owner: &RecordId, kind: &str) -> AppResult<Option<Connector>> {
-    let mut res = db
-        .query("SELECT * FROM connector WHERE owner = $owner AND kind = $kind LIMIT 1")
+    let mut res = store::app::CONNECTOR_BY_KIND
+        .on(db)
         .bind(("owner", owner.clone()))
         .bind(("kind", kind.to_string()))
         .await?;
@@ -63,8 +64,8 @@ pub async fn get_connector(db: &Db, owner: &RecordId, kind: &str) -> AppResult<O
 pub async fn get_or_create_connector(db: &Db, owner: &RecordId, kind: &str) -> AppResult<Connector> {
     // Unique (owner, kind): a racing creator fails the insert and the retry's re-read finds its row.
     let row = with_retry(|| async {
-        let mut res = db
-            .query("SELECT * FROM connector WHERE owner = $owner AND kind = $kind LIMIT 1")
+        let mut res = store::app::CONNECTOR_BY_KIND
+            .on(db)
             .bind(("owner", owner.clone()))
             .bind(("kind", kind.to_string()))
             .await?
@@ -72,8 +73,8 @@ pub async fn get_or_create_connector(db: &Db, owner: &RecordId, kind: &str) -> A
         if let Some(row) = res.take::<Vec<Connector>>(0)?.into_iter().next() {
             return Ok(Some(row));
         }
-        let mut res = db
-            .query("CREATE connector SET owner = $owner, kind = $kind RETURN AFTER")
+        let mut res = store::app::CONNECTOR_CREATE
+            .on(db)
             .bind(("owner", owner.clone()))
             .bind(("kind", kind.to_string()))
             .await?
@@ -144,7 +145,8 @@ pub async fn upsert_connector(
     set_clauses.push("updated_at = time::now()");
     let query = format!("UPDATE $id SET {} RETURN AFTER", set_clauses.join(", "));
 
-    let mut q = db.query(query).bind(("id", row.id.clone()));
+    // dynamic: the SET clause list depends on which fields are present
+    let mut q = store::dynamic(db, "app.connector_update", query).bind(("id", row.id.clone()));
     if let Some(v) = enabled {
         q = q.bind(("enabled", v));
     }

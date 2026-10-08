@@ -18,6 +18,7 @@ use surrealdb::RecordId;
 
 use crate::connectors::service;
 use crate::db::Db;
+use crate::store;
 use crate::error::{AppError, AppResult, ErrorCode};
 use crate::sources::base::{owner_key_str, Source, SourceCtx};
 use crate::sources::demo::DemoSource;
@@ -83,8 +84,8 @@ struct ConnectorKindRow {
 /// as "not demo mode", filtered in Rust rather than the query, same as the
 /// Python version's comment explains).
 pub async fn enabled(db: &Db, owner: &RecordId) -> AppResult<Vec<Arc<dyn Source>>> {
-    let mut res = db
-        .query("SELECT kind, config FROM connector WHERE owner = $owner AND enabled = true")
+    let mut res = store::app::CONNECTOR_ENABLED
+        .on(db)
         .bind(("owner", owner.clone()))
         .await?;
     let rows: Vec<ConnectorKindRow> = res.take(0)?;
@@ -192,7 +193,8 @@ async fn upsert_one(db: &Db, owner: &RecordId, env: &Value) -> AppResult<bool> {
     let now = chrono::Utc::now();
     if let Some(existing) = &existing
         && existing.content_hash == h && !existing.deleted {
-            db.query("UPDATE $id SET ingested_at = $now")
+            store::app::SOURCES_RECORD_TOUCH
+                .on(db)
                 .bind(("id", rid))
                 .bind(("now", surrealdb::Datetime::from(now)))
                 .await?;
@@ -205,12 +207,8 @@ async fn upsert_one(db: &Db, owner: &RecordId, env: &Value) -> AppResult<bool> {
         .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
         .map(|dt| surrealdb::Datetime::from(dt.with_timezone(&chrono::Utc)));
 
-    db.query(
-        "UPSERT $id SET owner = $owner, source = $source, type = $type, external_id = $external_id, \
-         title = $title, body_text = $body_text, occurred_at = $occurred_at, url = $url, \
-         payload = $payload, content_hash = $content_hash, ingested_at = $now, \
-         updated_at = $now, deleted = $deleted",
-    )
+    store::app::SOURCES_RECORD_UPSERT
+    .on(db)
     .bind(("id", rid))
     .bind(("owner", owner.clone()))
     .bind(("source", str_field(env, "source")))

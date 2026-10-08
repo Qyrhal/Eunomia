@@ -15,6 +15,7 @@ use serde_json::{json, Value};
 use surrealdb::RecordId;
 
 use crate::db::Db;
+use crate::store;
 use crate::error::{AppError, AppResult};
 use crate::models_user::User;
 use crate::state::AppState;
@@ -90,13 +91,8 @@ async fn get_app_settings(db: &Db, owner: &RecordId) -> AppResult<AppSettingsRow
         return Ok(row);
     }
 
-    let mut res = db
-        .query(
-            "UPSERT $id SET owner = $owner, embedding_model = $embedding_model, \
-             sync_intervals = $sync_intervals, theme = $theme, \
-             observations_mission = $observations_mission, openai_base_url = $openai_base_url, \
-             updated_at = time::now() RETURN AFTER",
-        )
+    let mut res = store::app::SETTINGS_UPSERT_DEFAULTS
+        .on(db)
         .bind(("id", rid))
         .bind(("owner", owner.clone()))
         .bind(("embedding_model", "text-embedding-3-small"))
@@ -145,7 +141,8 @@ async fn update_app_settings(db: &Db, owner: &RecordId, body: &SettingsUpdate, e
 
     let query_str = format!("UPDATE $id SET {}, updated_at = time::now() RETURN AFTER", set_parts.join(", "));
     let rid = app_settings_id(owner);
-    let mut q = db.query(query_str).bind(("id", rid));
+    // dynamic: the SET clause list depends on which fields the patch carries
+    let mut q = store::dynamic(db, "app.settings_update", query_str).bind(("id", rid));
     if let Some(v) = &body.embedding_model {
         q = q.bind(("embedding_model", v.clone()));
     }
@@ -235,9 +232,8 @@ async fn patch_settings(
     security(("cookie" = []), ("bearer" = [])),
 )]
 async fn complete_onboarding(State(state): State<AppState>, user: User) -> AppResult<Json<Value>> {
-    state
-        .db
-        .query("UPDATE $id SET onboarded_at = time::now()")
+    store::app::AUTH_USER_ONBOARDED
+        .on(&state.db)
         .bind(("id", user.id.clone()))
         .await?;
     Ok(Json(json!({ "ok": true })))

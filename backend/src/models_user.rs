@@ -8,6 +8,7 @@ use sha2::{Digest, Sha256};
 use surrealdb::RecordId;
 
 use crate::db::Db;
+use crate::store;
 use crate::error::{AppError, AppResult};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -61,8 +62,8 @@ pub async fn register_user(db: &Db, email: &str, password: &str) -> AppResult<Us
 
     // Accounts created before emails were normalized may be mixed-case; the
     // unique index alone wouldn't catch "Alice@x.com" vs "alice@x.com".
-    let mut res = db
-        .query("SELECT id FROM user WHERE string::lowercase(email) = $email LIMIT 1")
+    let mut res = store::app::AUTH_USER_ID_BY_EMAIL
+        .on(db)
         .bind(("email", email.to_string()))
         .await?;
     #[derive(Deserialize)]
@@ -78,8 +79,8 @@ pub async fn register_user(db: &Db, email: &str, password: &str) -> AppResult<Us
     let password_hash = bcrypt::hash(password, bcrypt::DEFAULT_COST)
         .map_err(|e| AppError::internal(e.to_string()))?;
 
-    let mut res = db
-        .query("CREATE user SET email = $email, password_hash = $password_hash RETURN AFTER")
+    let mut res = store::app::AUTH_USER_CREATE
+        .on(db)
         .bind(("email", email.to_string()))
         .bind(("password_hash", password_hash))
         .await?
@@ -102,8 +103,8 @@ pub async fn register_user(db: &Db, email: &str, password: &str) -> AppResult<Us
 
 pub async fn authenticate(db: &Db, email: &str, password: &str) -> AppResult<Option<User>> {
     // ponytail: string::lowercase() scan, no index -- add a normalized-email index if user counts get large
-    let mut res = db
-        .query("SELECT * FROM user WHERE string::lowercase(email) = $email LIMIT 1")
+    let mut res = store::app::AUTH_USER_BY_EMAIL
+        .on(db)
         .bind(("email", normalize_email(email)))
         .await?;
     let rows: Vec<UserRow> = res.take(0)?;
@@ -133,8 +134,8 @@ pub async fn create_api_token(db: &Db, owner: &RecordId, name: &str) -> AppResul
     let token = generate_token();
     let hash = hash_token(&token);
 
-    let mut res = db
-        .query("CREATE api_token SET owner = $owner, name = $name, token_hash = $hash RETURN AFTER")
+    let mut res = store::app::AUTH_TOKEN_CREATE
+        .on(db)
         .bind(("owner", owner.clone()))
         .bind(("name", name.to_string()))
         .bind(("hash", hash))
@@ -154,11 +155,8 @@ pub struct ApiTokenSummary {
 }
 
 pub async fn list_api_tokens(db: &Db, owner: &RecordId) -> AppResult<Vec<ApiTokenSummary>> {
-    let mut res = db
-        .query(
-            "SELECT id, name, created_at, last_used_at FROM api_token \
-             WHERE owner = $owner ORDER BY created_at DESC",
-        )
+    let mut res = store::app::AUTH_TOKEN_LIST
+        .on(db)
         .bind(("owner", owner.clone()))
         .await?;
     Ok(res.take(0)?)
@@ -185,16 +183,16 @@ pub async fn verify_api_token(db: &Db, token: &str) -> AppResult<Option<User>> {
         owner: RecordId,
     }
     let hash = hash_token(token);
-    let mut res = db
-        .query("SELECT * FROM api_token WHERE token_hash = $hash LIMIT 1")
+    let mut res = store::app::AUTH_TOKEN_BY_HASH
+        .on(db)
         .bind(("hash", hash))
         .await?;
     let rows: Vec<TokenRow> = res.take(0)?;
     let Some(row) = rows.into_iter().next() else { return Ok(None) };
 
     // Best-effort bump; failure here must not block auth.
-    let _ = db
-        .query("UPDATE $id SET last_used_at = time::now()")
+    let _ = store::app::AUTH_TOKEN_TOUCH
+        .on(db)
         .bind(("id", row.id))
         .await;
 

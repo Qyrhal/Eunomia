@@ -10,6 +10,7 @@ use serde_json::{json, Value};
 use surrealdb::{Datetime, RecordId};
 
 use crate::error::AppResult;
+use crate::store;
 use crate::models_user::User;
 use crate::state::AppState;
 
@@ -66,18 +67,16 @@ async fn get_audit(
     user: User,
     Query(q): Query<AuditQuery>,
 ) -> AppResult<Json<Value>> {
-    let mut res = state
-        .db
-        .query("SELECT * FROM audit_log WHERE owner = $owner ORDER BY created_at DESC LIMIT $limit START $offset")
+    let mut res = store::app::AUDIT_LIST
+        .on(&state.db)
         .bind(("owner", user.id.clone()))
         .bind(("limit", q.limit))
         .bind(("offset", q.offset))
         .await?;
     let rows: Vec<AuditRow> = res.take(0)?;
 
-    let mut count_res = state
-        .db
-        .query("SELECT count() FROM audit_log WHERE owner = $owner GROUP ALL")
+    let mut count_res = store::app::AUDIT_COUNT
+        .on(&state.db)
         .bind(("owner", user.id.clone()))
         .await?;
     let counts: Vec<CountRow> = count_res.take(0)?;
