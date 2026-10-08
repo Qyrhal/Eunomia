@@ -2,7 +2,6 @@
 //! resolving to the same [`User`]. Ported from `app/auth.py`.
 
 use axum::{
-    async_trait,
     extract::{FromRef, FromRequestParts},
     http::request::Parts,
 };
@@ -102,7 +101,6 @@ pub async fn revoke_session_by_jwt(db: &Db, secret: &str, token: &str) {
 
 /// Axum extractor: resolves the authenticated user from a Bearer API token or
 /// the session cookie. Rejects with 401 if neither is present/valid.
-#[async_trait]
 impl<S> FromRequestParts<S> for User
 where
     AppState: FromRef<S>,
@@ -113,27 +111,21 @@ where
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         let app_state = AppState::from_ref(state);
 
-        if let Some(auth_header) = parts.headers.get(axum::http::header::AUTHORIZATION) {
-            if let Ok(value) = auth_header.to_str() {
-                if let Some(token) = value.strip_prefix("Bearer ").or_else(|| value.strip_prefix("bearer ")) {
-                    if let Some(user) = models_user::verify_api_token(&app_state.db, token).await? {
+        if let Some(auth_header) = parts.headers.get(axum::http::header::AUTHORIZATION)
+            && let Ok(value) = auth_header.to_str()
+                && let Some(token) = value.strip_prefix("Bearer ").or_else(|| value.strip_prefix("bearer "))
+                    && let Some(user) = models_user::verify_api_token(&app_state.db, token).await? {
                         return Ok(user);
                     }
-                }
-            }
-        }
 
-        if let Some(cookie_header) = parts.headers.get(axum::http::header::COOKIE) {
-            if let Ok(cookie_str) = cookie_header.to_str() {
-                if let Some(session_token) = extract_cookie(cookie_str, SESSION_COOKIE) {
-                    if let Some(user) =
+        if let Some(cookie_header) = parts.headers.get(axum::http::header::COOKIE)
+            && let Ok(cookie_str) = cookie_header.to_str()
+                && let Some(session_token) = extract_cookie(cookie_str, SESSION_COOKIE)
+                    && let Some(user) =
                         user_from_jwt(&app_state.db, &app_state.settings.jwt_secret, &session_token).await
                     {
                         return Ok(user);
                     }
-                }
-            }
-        }
 
         Err(AppError::unauthorized("Not authenticated."))
     }

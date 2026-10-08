@@ -131,7 +131,7 @@ async fn graph_arm(db: &Db, owner: &RecordId, vault: &RecordId, query: &str, lim
             }
         }
     }
-    matches.sort_by(|a, b| b.0.cmp(&a.0));
+    matches.sort_by_key(|m| std::cmp::Reverse(m.0));
 
     #[derive(Deserialize)]
     struct MemRow {
@@ -409,14 +409,13 @@ pub async fn recall(
         let Some(item) = hydrate(db, owner, &vault, key).await? else {
             continue;
         };
-        if let Some(types) = types {
-            if item.kind == "memory" {
+        if let Some(types) = types
+            && item.kind == "memory" {
                 let allowed = types.iter().any(|t| t.as_str() == item.mem_type);
                 if !allowed {
                     continue;
                 }
             }
-        }
         let arms_hit = arms.iter().filter(|arm| arm.contains(key)).count();
         let b = boost(arms_hit, item.occurred_at, now);
         scored.push(RecallItem {

@@ -187,14 +187,13 @@ pub async fn upsert(db: &Db, owner: &RecordId, env: &Envelope) -> AppResult<(Cac
     let h = hash_envelope(env);
 
     let existing: Option<Row> = db.select(record_rid.clone()).await?;
-    if let Some(existing) = existing {
-        if existing.content_hash == h && !existing.deleted {
+    if let Some(existing) = existing
+        && existing.content_hash == h && !existing.deleted {
             db.query("UPDATE $id SET ingested_at = time::now()").bind(("id", record_rid.clone())).await?;
             let mut rec = row_to_record(existing);
             rec.ingested_at = Some(Datetime::from(chrono::Utc::now()));
             return Ok((rec, false));
         }
-    }
 
     let mut res = db
         .query(

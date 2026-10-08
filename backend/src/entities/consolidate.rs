@@ -141,6 +141,7 @@ pub async fn observations_mission(db: &Db, owner: &RecordId) -> AppResult<String
 /// Returns the updated/created observation, or `None` if there was nothing
 /// to do (no new raw facts beyond what's already consolidated) or the LLM
 /// call failed / isn't available (stub backend).
+#[allow(clippy::result_large_err)] // surrealdb::Error is large; boxing it would change the error type
 pub async fn consolidate_subject(
     db: &Db,
     settings: &Settings,

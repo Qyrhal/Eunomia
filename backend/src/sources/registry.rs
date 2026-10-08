@@ -190,15 +190,14 @@ async fn upsert_one(db: &Db, owner: &RecordId, env: &Value) -> AppResult<bool> {
 
     let existing: Option<ExistingRecord> = db.select(rid.clone()).await?;
     let now = chrono::Utc::now();
-    if let Some(existing) = &existing {
-        if existing.content_hash == h && !existing.deleted {
+    if let Some(existing) = &existing
+        && existing.content_hash == h && !existing.deleted {
             db.query("UPDATE $id SET ingested_at = $now")
                 .bind(("id", rid))
                 .bind(("now", surrealdb::Datetime::from(now)))
                 .await?;
             return Ok(false);
         }
-    }
 
     let occurred_at: Option<surrealdb::Datetime> = env
         .get("occurred_at")
@@ -243,11 +242,10 @@ pub async fn ingest(db: &Db, owner: &RecordId, source_key: &str, raw_records: &[
             report.skipped += 1;
             continue;
         };
-        if env.get("source").is_none() {
-            if let Some(obj) = env.as_object_mut() {
+        if env.get("source").is_none()
+            && let Some(obj) = env.as_object_mut() {
                 obj.insert("source".to_string(), Value::String(source_key.to_string()));
             }
-        }
 
         match upsert_one(db, owner, &env).await {
             Ok(true) => report.written += 1,

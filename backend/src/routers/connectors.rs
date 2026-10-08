@@ -34,9 +34,9 @@ pub fn router() -> Router<AppState> {
         .route("/connectors/pocketai/summary", get(pocketai_summary))
         .route("/connectors/pocketai/all", get(pocketai_all))
         .route("/connectors/pocketai/search", get(pocketai_search))
-        .route("/connectors/pocketai/detail/:recording_id", get(pocketai_detail))
-        .route("/connectors/:kind", get(get_one).put(put_one))
-        .route("/connectors/:kind/test", axum::routing::post(test_one))
+        .route("/connectors/pocketai/detail/{recording_id}", get(pocketai_detail))
+        .route("/connectors/{kind}", get(get_one).put(put_one))
+        .route("/connectors/{kind}/test", axum::routing::post(test_one))
 }
 
 pub fn snapshot_router() -> Router<AppState> {
@@ -270,11 +270,10 @@ async fn snapshot(State(state): State<AppState>, user: User) -> AppResult<Json<V
         service::credentials_for(&state.db, &state.settings.encryption_key, &user.id, "up_bank").await?;
     let has_token =
         up_bank_creds.get("personal_access_token").and_then(|v| v.as_str()).map(|s| !s.is_empty()).unwrap_or(false);
-    if up_bank.enabled && has_token {
-        if let Ok(summary) = UpBankClient::new(&up_bank_creds).week_summary(&week_start.to_rfc3339()).await {
+    if up_bank.enabled && has_token
+        && let Ok(summary) = UpBankClient::new(&up_bank_creds).week_summary(&week_start.to_rfc3339()).await {
             result["up_bank"] = summary;
         }
-    }
 
     let pocketai = service::get_or_create_connector(&state.db, &user.id, "pocketai").await?;
     let pocketai_creds =

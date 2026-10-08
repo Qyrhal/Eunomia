@@ -25,9 +25,9 @@ pub fn router() -> Router<AppState> {
         .route("/auth/logout", post(logout))
         .route("/auth/me", get(me))
         .route("/auth/tokens", post(create_token).get(get_tokens))
-        .route("/auth/tokens/:token_id", delete(delete_token))
+        .route("/auth/tokens/{token_id}", delete(delete_token))
         .route("/auth/sessions", get(get_sessions))
-        .route("/auth/sessions/:session_id", delete(revoke_session_route))
+        .route("/auth/sessions/{session_id}", delete(revoke_session_route))
         .route("/auth/bootstrap", get(bootstrap))
 }
 
@@ -109,14 +109,13 @@ async fn login(
 }
 
 async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    if let Some(cookie_header) = headers.get(header::COOKIE).and_then(|v| v.to_str().ok()) {
-        if let Some(token) = cookie_header.split(';').find_map(|p| {
+    if let Some(cookie_header) = headers.get(header::COOKIE).and_then(|v| v.to_str().ok())
+        && let Some(token) = cookie_header.split(';').find_map(|p| {
             let p = p.trim();
             p.strip_prefix(&format!("{SESSION_COOKIE}=")).map(str::to_string)
         }) {
             auth::revoke_session_by_jwt(&state.db, &state.settings.jwt_secret, &token).await;
         }
-    }
     let expired = format!("{SESSION_COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0");
     (StatusCode::OK, [(header::SET_COOKIE, expired)], Json(json!({ "ok": true }))).into_response()
 }

@@ -20,11 +20,10 @@ pub struct NotionSource;
 fn extract_title(raw: &Value) -> String {
     let Some(props) = raw.get("properties").and_then(|v| v.as_object()) else { return String::new() };
     for prop in props.values() {
-        if prop.get("type").and_then(|v| v.as_str()) == Some("title") {
-            if let Some(parts) = prop.get("title").and_then(|v| v.as_array()) {
+        if prop.get("type").and_then(|v| v.as_str()) == Some("title")
+            && let Some(parts) = prop.get("title").and_then(|v| v.as_array()) {
                 return parts.iter().filter_map(|p| p.get("plain_text").and_then(|v| v.as_str())).collect::<String>();
             }
-        }
     }
     String::new()
 }

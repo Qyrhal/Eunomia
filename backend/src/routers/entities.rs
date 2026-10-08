@@ -33,11 +33,11 @@ pub fn router() -> Router<AppState> {
         .route("/entities", get(list_entities).post(create_entity))
         .route("/entities/graph", get(entity_graph))
         .route("/entities/cloud", get(vector_cloud))
-        .route("/entities/memory/:memory_id", axum::routing::patch(update_memory).delete(delete_memory))
-        .route("/entities/:entity_id", get(get_entity).patch(update_entity).delete(delete_entity))
-        .route("/entities/:entity_id/memory", post(add_memory))
-        .route("/entities/:entity_id/relations", post(add_relation))
-        .route("/entities/:entity_id/merge", post(merge_entities))
+        .route("/entities/memory/{memory_id}", axum::routing::patch(update_memory).delete(delete_memory))
+        .route("/entities/{entity_id}", get(get_entity).patch(update_entity).delete(delete_entity))
+        .route("/entities/{entity_id}/memory", post(add_memory))
+        .route("/entities/{entity_id}/relations", post(add_relation))
+        .route("/entities/{entity_id}/merge", post(merge_entities))
 }
 
 fn default_memory_type() -> String {

@@ -35,8 +35,8 @@ const EVENT_CHANNEL_CAPACITY: usize = 64;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/chat/threads", get(list_threads).post(create_thread))
-        .route("/chat/threads/:thread_id", delete(delete_thread_route).post(send_message))
-        .route("/chat/threads/:thread_id/history", get(thread_history))
+        .route("/chat/threads/{thread_id}", delete(delete_thread_route).post(send_message))
+        .route("/chat/threads/{thread_id}/history", get(thread_history))
 }
 
 #[derive(Deserialize)]

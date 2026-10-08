@@ -498,6 +498,7 @@ async fn fold_into_existing_memory(db: &Db, subject: &RecordId, mem: &MemoryRow)
 /// (case-insensitive) name with one already in `dest` are folded into it
 /// instead of duplicated.
 async fn copy_into(db: &Db, user_id: &RecordId, src: &RecordId, dest: &RecordId, merge_duplicates: bool) -> AppResult<usize> {
+    #[allow(clippy::mutable_key_type)] // RecordId hashes by value; the interior mutability is never touched
     let mut id_map: HashMap<RecordId, RecordId> = HashMap::new();
     for entity_kind in ENTITY_KINDS {
         let mut res = db
@@ -506,8 +507,8 @@ async fn copy_into(db: &Db, user_id: &RecordId, src: &RecordId, dest: &RecordId,
             .await?;
         let rows: Vec<EntityRow> = res.take(0)?;
         for row in rows {
-            if merge_duplicates {
-                if let Some(existing) = find_by_name(db, entity_kind, dest, &row.name).await? {
+            if merge_duplicates
+                && let Some(existing) = find_by_name(db, entity_kind, dest, &row.name).await? {
                     let mut aliases = existing.aliases.clone();
                     for alias in row.aliases.iter().cloned() {
                         if !aliases.iter().any(|a| a.eq_ignore_ascii_case(&alias)) {
@@ -523,7 +524,6 @@ async fn copy_into(db: &Db, user_id: &RecordId, src: &RecordId, dest: &RecordId,
                     id_map.insert(row.id, existing.id);
                     continue;
                 }
-            }
             let mut created = db
                 .query(format!(
                     "CREATE {entity_kind} SET owner = $owner, vault = $vault, name = $name, \
@@ -566,6 +566,7 @@ async fn copy_into(db: &Db, user_id: &RecordId, src: &RecordId, dest: &RecordId,
         }
     }
 
+    #[allow(clippy::mutable_key_type)] // RecordId hashes by value; the interior mutability is never touched
     let mut seen_edges: HashSet<(RecordId, RecordId, String)> = HashSet::new();
     for (old_id, new_id) in id_map.clone() {
         let mut res = db.query("SELECT * FROM relates_to WHERE in = $id").bind(("id", old_id.clone())).await?;
