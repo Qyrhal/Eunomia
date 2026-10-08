@@ -1,154 +1,481 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { Check, ChevronDown, ChevronRight, Combine, Copy, LogOut, Mail, Plus, Trash2, UserPlus, Users, X } from "lucide-react";
-import { vaults as vaultsApi, type Vault, type VaultInvitation, type VaultMember, type VaultRole } from "@/lib/api";
+import { useEffect, useState, useSyncExternalStore } from "react";
+import {
+  Check,
+  ChevronRight,
+  Combine,
+  Copy,
+  Lock,
+  LogOut,
+  Mail,
+  Plus,
+  Trash2,
+  UserPlus,
+  Users,
+  X,
+} from "lucide-react";
+import AuthorTag from "@/components/AuthorTag";
+import {
+  auth,
+  vaults as vaultsApi,
+  type Vault,
+  type VaultInvitation,
+  type VaultMember,
+  type VaultRole,
+} from "@/lib/api";
 
-function Badge({ children, tone = "dim" }: { children: React.ReactNode; tone?: "dim" | "accent" }) {
+const ICON = { size: 14, strokeWidth: 1.75 } as const;
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function errText(e: unknown, fallback: string) {
+  return e instanceof Error && e.message ? e.message : fallback;
+}
+
+function ago(iso: string | null): string | null {
+  if (!iso) return null;
+  const mins = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.round(hours / 24)}d ago`;
+}
+
+function RoleChip({ role }: { role: VaultRole }) {
   return (
     <span
-      className="text-[11px] px-2 py-0.5 rounded-full font-medium"
+      className="inline-flex items-center h-5 px-1.5 rounded-[4px] text-[11.5px] font-medium shrink-0"
       style={{
-        background: tone === "accent" ? "var(--surface-raised)" : "transparent",
-        color: tone === "accent" ? "var(--ink)" : "var(--ink-faint)",
-        border: "1px solid var(--border)",
+        border: "var(--hair) solid var(--border-strong)",
+        color: role === "owner" ? "var(--ink)" : "var(--ink-dim)",
       }}
     >
-      {children}
+      {role === "owner" ? "Owner" : "Member"}
     </span>
   );
 }
 
-function MembersPanel({ vault, onChanged }: { vault: Vault; onChanged: () => void }) {
+function ErrorLine({ children }: { children: React.ReactNode }) {
+  return (
+    <p
+      role="alert"
+      className="text-[12.5px] px-3 py-2 rounded-[7px]"
+      style={{ color: "var(--critical)", background: "var(--critical-soft)" }}
+    >
+      {children}
+    </p>
+  );
+}
+
+/* Overlapping identity tags, Figma-cursor style. Real member emails only. */
+function MemberStack({ members }: { members: VaultMember[] | null }) {
+  if (!members)
+    return <span className="skeleton hidden sm:block h-5 w-20" aria-hidden />;
+  const shown = members.slice(0, 3);
+  const rest = members.length - shown.length;
+  return (
+    <span className="hidden sm:flex items-center gap-1 min-w-0" aria-hidden>
+      {shown.map((m) => (
+        <span key={m.email} className="max-w-[110px] min-w-0 flex">
+          <AuthorTag name={m.email} />
+        </span>
+      ))}
+      {rest > 0 && <span className="label font-mono">+{rest}</span>}
+    </span>
+  );
+}
+
+/* The inspector: everything you can do to one vault, Figma-style on the right. */
+function VaultInspector({
+  vault,
+  me,
+  rev,
+  inline = false,
+  onMembersChanged,
+  onVaultsChanged,
+}: {
+  vault: Vault;
+  me: string | null;
+  rev: number;
+  inline?: boolean;
+  onMembersChanged: () => void;
+  onVaultsChanged: () => void;
+}) {
   const [members, setMembers] = useState<VaultMember[] | null>(null);
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<VaultRole>("member");
+  const [touched, setTouched] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [removing, setRemoving] = useState<string | null>(null);
+  const [confirm, setConfirm] = useState<"leave" | "delete" | null>(null);
+  const [cloning, setCloning] = useState(false);
+  const [cloneName, setCloneName] = useState(`${vault.name} (copy)`);
+  const [cloneBusy, setCloneBusy] = useState(false);
+  const [sent, setSent] = useState<string | null>(null);
 
-  const isOwner = vault.role === "owner";
-
-  const load = () =>
+  useEffect(() => {
     vaultsApi
       .members(vault.id)
       .then((r) => setMembers(r.results))
       .catch(() => setMembers([]));
+  }, [vault.id, rev]);
 
-  useEffect(() => {
-    load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [vault.id]);
+  const isOwner = vault.role === "owner";
+  const isOrg = vault.kind !== "personal";
+  const trimmed = email.trim();
+  const invalid = touched && trimmed !== "" && !EMAIL_RE.test(trimmed);
+  const already = members?.some(
+    (m) => m.email.toLowerCase() === trimmed.toLowerCase(),
+  );
+  const created = ago(vault.created_at);
 
   async function invite() {
-    const trimmed = email.trim();
-    if (!trimmed) return;
+    setTouched(true);
+    if (!trimmed || !EMAIL_RE.test(trimmed)) return;
     setBusy(true);
     setError(null);
+    setSent(null);
     try {
       await vaultsApi.invite(vault.id, trimmed, role);
+      setSent(
+        `Invite sent. It shows up on their Vaults page until they join or decline.`,
+      );
       setEmail("");
-      await load();
+      setTouched(false);
+      onMembersChanged();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not invite that person.");
+      setError(
+        `${errText(e, "Could not send that invite.")} Check the address and try again.`,
+      );
     } finally {
       setBusy(false);
     }
   }
 
-  async function remove(targetEmail: string) {
+  async function run(
+    action: () => Promise<unknown>,
+    fallback: string,
+    after: () => void,
+  ) {
     setError(null);
     try {
-      await vaultsApi.removeMember(vault.id, targetEmail);
-      await load();
+      await action();
+      after();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not remove that member.");
+      setError(errText(e, fallback));
     }
   }
 
-  async function leave() {
+  async function doClone() {
+    setCloneBusy(true);
     setError(null);
     try {
-      await vaultsApi.leave(vault.id);
-      onChanged();
+      await vaultsApi.clone(vault.id, cloneName.trim() || undefined);
+      setCloning(false);
+      onVaultsChanged();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not leave this vault.");
+      setError(errText(e, "Could not clone this vault. Try a different name."));
+    } finally {
+      setCloneBusy(false);
     }
   }
 
   return (
-    <div className="px-5 pb-5 flex flex-col gap-3" style={{ borderTop: "1px solid var(--border)" }}>
-      <div className="flex flex-col gap-2 pt-4">
-        {members === null && (
-          <div className="text-[12px]" style={{ color: "var(--ink-faint)" }}>
-            Loading…
-          </div>
-        )}
-        {members?.map((m) => (
-          <div key={m.email} className="field flex items-center justify-between px-3 py-2">
-            <div className="flex items-center gap-2">
-              <span className="text-[13px]">{m.email}</span>
-              <Badge tone={m.role === "owner" ? "accent" : "dim"}>{m.role}</Badge>
+    <aside
+      className={inline ? "flex flex-col" : "panel flex flex-col"}
+      style={
+        inline ? { borderTop: "var(--hair) solid var(--border)" } : undefined
+      }
+      aria-label={`${vault.name} details`}
+    >
+      <div className="px-5 pt-4 pb-4 flex flex-col gap-1">
+        <span className="label">{isOrg ? "Org vault" : "Personal vault"}</span>
+        <div className="flex items-center gap-2 min-w-0">
+          <h2 className="text-[17px] font-semibold tracking-[-0.015em] truncate">
+            {vault.name}
+          </h2>
+          <RoleChip role={vault.role} />
+        </div>
+        <span className="label">
+          {isOrg
+            ? "Shared with every member below"
+            : "Private to you. Nobody else can be added."}
+          {created ? ` · created ${created}` : ""}
+        </span>
+      </div>
+
+      <div
+        className="px-5 pb-4 flex flex-col gap-2"
+        style={{ borderTop: "var(--hair) solid var(--border)" }}
+      >
+        <h3 className="label pt-4 flex items-center gap-1.5">
+          Members
+          {members && <span className="font-mono">{members.length}</span>}
+        </h3>
+        <ul className="hairline-rows">
+          {members === null &&
+            [0, 1].map((i) => (
+              <li key={i} className="flex items-center gap-2 h-10">
+                <span className="skeleton h-5 w-16" />
+                <span className="skeleton h-4 flex-1" />
+              </li>
+            ))}
+          {members?.map((m) => {
+            const isMe =
+              me !== null && m.email.toLowerCase() === me.toLowerCase();
+            return (
+              <li
+                key={m.email}
+                className="flex items-center gap-2 min-h-10 py-1.5"
+              >
+                <span className="flex max-w-[96px] min-w-0 shrink-0">
+                  <AuthorTag name={m.email} />
+                </span>
+                <span
+                  className="flex-1 min-w-0 truncate text-[12.5px]"
+                  style={{ color: "var(--ink-dim)" }}
+                >
+                  {m.email}
+                  {isMe && (
+                    <span style={{ color: "var(--ink-faint)" }}> (you)</span>
+                  )}
+                </span>
+                {removing === m.email ? (
+                  <span className="inline-flex items-center gap-1 shrink-0">
+                    <button
+                      onClick={() =>
+                        run(
+                          () => vaultsApi.removeMember(vault.id, m.email),
+                          "Could not remove that member. Reload and try again.",
+                          () => {
+                            setRemoving(null);
+                            onMembersChanged();
+                          },
+                        )
+                      }
+                      className="btn btn-danger btn-sm"
+                    >
+                      Remove
+                    </button>
+                    <button
+                      onClick={() => setRemoving(null)}
+                      className="btn btn-ghost btn-sm btn-icon"
+                      aria-label="Keep member"
+                    >
+                      <X {...ICON} />
+                    </button>
+                  </span>
+                ) : (
+                  <>
+                    <RoleChip role={m.role} />
+                    {isOwner && !isMe && (
+                      <button
+                        onClick={() => setRemoving(m.email)}
+                        aria-label="Remove member"
+                        title={`Remove ${m.email}`}
+                        className="btn btn-ghost btn-sm btn-icon shrink-0"
+                      >
+                        <Trash2 {...ICON} />
+                      </button>
+                    )}
+                  </>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+
+        {isOwner && isOrg && (
+          <form
+            className="flex flex-col gap-1.5 pt-2"
+            onSubmit={(e) => {
+              e.preventDefault();
+              invite();
+            }}
+            noValidate
+          >
+            <label htmlFor={`invite-${vault.id}`} className="label">
+              Invite by email
+            </label>
+            <div className="flex items-center gap-1.5">
+              <input
+                id={`invite-${vault.id}`}
+                type="email"
+                className="field h-8 px-3 text-[13px] flex-1 min-w-0"
+                placeholder="person@example.com"
+                value={email}
+                aria-invalid={invalid || undefined}
+                aria-describedby={`invite-help-${vault.id}`}
+                onChange={(e) => {
+                  setEmail(e.target.value);
+                  setSent(null);
+                }}
+                onBlur={() => setTouched(true)}
+                style={invalid ? { borderColor: "var(--critical)" } : undefined}
+              />
+              <select
+                className="field h-8 px-1.5 text-[12.5px]"
+                value={role}
+                aria-label="Role for invite"
+                onChange={(e) => setRole(e.target.value as VaultRole)}
+              >
+                <option value="member">Member</option>
+                <option value="owner">Owner</option>
+              </select>
             </div>
-            {isOwner && (
-              <button onClick={() => remove(m.email)} aria-label="Remove member" style={{ color: "var(--critical)" }}>
-                <Trash2 size={13} />
+            <div className="flex items-start justify-between gap-2">
+              <span
+                id={`invite-help-${vault.id}`}
+                className="text-[12px] pt-1.5"
+                style={{
+                  color: invalid ? "var(--critical)" : "var(--ink-faint)",
+                }}
+              >
+                {invalid
+                  ? "That isn't an email address. Use name@company.com."
+                  : already
+                    ? "Already a member."
+                    : (sent ??
+                      "They join once they accept. Owners can invite and remove.")}
+              </span>
+              <button
+                type="submit"
+                disabled={busy || !trimmed}
+                className="btn btn-sm shrink-0"
+              >
+                <UserPlus {...ICON} />
+                {busy ? "Inviting…" : "Invite"}
+              </button>
+            </div>
+          </form>
+        )}
+      </div>
+
+      <div
+        className="px-5 py-4 flex flex-col gap-2"
+        style={{ borderTop: "var(--hair) solid var(--border)" }}
+      >
+        {cloning ? (
+          <form
+            className="flex flex-col gap-1.5"
+            onSubmit={(e) => {
+              e.preventDefault();
+              doClone();
+            }}
+          >
+            <label htmlFor={`clone-${vault.id}`} className="label">
+              Name for the copy. {vault.name} stays exactly as it is.
+            </label>
+            <input
+              id={`clone-${vault.id}`}
+              autoFocus
+              className="field h-8 px-3 text-[13px]"
+              value={cloneName}
+              onChange={(e) => setCloneName(e.target.value)}
+              onKeyDown={(e) => e.key === "Escape" && setCloning(false)}
+            />
+            <div className="flex justify-end gap-1.5">
+              <button
+                type="button"
+                onClick={() => setCloning(false)}
+                className="btn btn-ghost btn-sm"
+              >
+                Cancel
+              </button>
+              <button type="submit" disabled={cloneBusy} className="btn btn-sm">
+                {cloneBusy ? "Cloning…" : "Clone"}
+              </button>
+            </div>
+          </form>
+        ) : confirm ? (
+          <div
+            className="flex flex-col gap-2 rounded-[7px] p-3"
+            style={{ background: "var(--critical-soft)" }}
+          >
+            <p className="text-[12.5px]" style={{ color: "var(--ink)" }}>
+              {confirm === "delete"
+                ? `Delete ${vault.name}? Its entities and memory are removed for every member. This can't be undone.`
+                : `Leave ${vault.name}? You lose access until an owner invites you again.`}
+            </p>
+            <div className="flex justify-end gap-1.5">
+              <button
+                onClick={() => setConfirm(null)}
+                className="btn btn-ghost btn-sm"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() =>
+                  confirm === "delete"
+                    ? run(
+                        () => vaultsApi.delete(vault.id),
+                        "Could not delete this vault. Reload and try again.",
+                        onVaultsChanged,
+                      )
+                    : run(
+                        () => vaultsApi.leave(vault.id),
+                        "Could not leave this vault. It needs an owner, so make someone else owner first.",
+                        onVaultsChanged,
+                      )
+                }
+                className="btn btn-danger btn-sm"
+              >
+                {confirm === "delete" ? (
+                  <Trash2 {...ICON} />
+                ) : (
+                  <LogOut {...ICON} />
+                )}
+                {confirm === "delete" ? "Delete vault" : "Leave"}
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="flex flex-wrap items-center gap-1.5">
+            <button
+              onClick={() => {
+                setCloneName(`${vault.name} (copy)`);
+                setCloning(true);
+              }}
+              className="btn btn-sm"
+              title="Clone into a new vault"
+            >
+              <Copy {...ICON} />
+              Clone vault
+            </button>
+            <span className="flex-1" />
+            {isOrg && (
+              <button
+                onClick={() => setConfirm("leave")}
+                className="btn btn-ghost btn-sm"
+              >
+                <LogOut {...ICON} />
+                Leave this vault
+              </button>
+            )}
+            {isOrg && isOwner && (
+              <button
+                onClick={() => setConfirm("delete")}
+                className="btn btn-danger btn-sm"
+                aria-label="Delete vault"
+              >
+                <Trash2 {...ICON} />
+                Delete
               </button>
             )}
           </div>
-        ))}
+        )}
+        {error && <ErrorLine>{error}</ErrorLine>}
       </div>
-
-      {isOwner && (
-        <div className="flex items-center gap-2">
-          <input
-            className="field flex-1 px-3 py-2 text-[13px]"
-            placeholder="person@example.com"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && invite()}
-          />
-          <select
-            className="field px-2 py-2 text-[12.5px]"
-            value={role}
-            onChange={(e) => setRole(e.target.value as VaultRole)}
-          >
-            <option value="member">member</option>
-            <option value="owner">owner</option>
-          </select>
-          <button
-            onClick={invite}
-            disabled={busy || !email.trim()}
-            className="px-3 py-2 text-[13px] font-medium rounded-xl disabled:opacity-50 flex items-center gap-1.5"
-            style={{ background: "var(--felt)", color: "var(--canvas)" }}
-          >
-            <UserPlus size={13} />
-            Invite
-          </button>
-        </div>
-      )}
-
-      {error && (
-        <p className="text-[12px]" style={{ color: "var(--critical)" }}>
-          {error}
-        </p>
-      )}
-
-      {vault.kind !== "personal" && (
-        <button
-          onClick={leave}
-          className="self-start text-[12px] flex items-center gap-1.5"
-          style={{ color: "var(--ink-faint)" }}
-        >
-          <LogOut size={12} />
-          Leave this vault
-        </button>
-      )}
-    </div>
+    </aside>
   );
 }
 
 function InvitationsPanel({ onChanged }: { onChanged: () => void }) {
-  const [invitations, setInvitations] = useState<VaultInvitation[] | null>(null);
+  const [invitations, setInvitations] = useState<VaultInvitation[] | null>(
+    null,
+  );
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -170,7 +497,12 @@ function InvitationsPanel({ onChanged }: { onChanged: () => void }) {
       await load();
       onChanged();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not accept this invitation.");
+      setError(
+        errText(
+          e,
+          "Could not accept this invitation. It may have been withdrawn, so reload to check.",
+        ),
+      );
     } finally {
       setBusyId(null);
     }
@@ -183,7 +515,9 @@ function InvitationsPanel({ onChanged }: { onChanged: () => void }) {
       await vaultsApi.declineInvitation(vaultId);
       await load();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not decline this invitation.");
+      setError(
+        errText(e, "Could not decline this invitation. Reload and try again."),
+      );
     } finally {
       setBusyId(null);
     }
@@ -192,228 +526,186 @@ function InvitationsPanel({ onChanged }: { onChanged: () => void }) {
   if (!invitations || invitations.length === 0) return null;
 
   return (
-    <section className="flex flex-col gap-3">
-      <div className="eyebrow flex items-center gap-1.5">
-        <Mail size={12} /> Invitations
-      </div>
+    <section className="flex flex-col gap-2.5" aria-labelledby="invites-title">
+      <h2 id="invites-title" className="section-title flex items-center gap-2">
+        <Mail {...ICON} aria-hidden style={{ color: "var(--ink-faint)" }} />
+        Pending invitations
+        <span className="label font-mono">{invitations.length}</span>
+      </h2>
       {invitations.map((inv) => (
-        <div key={inv.vault_id} className="ledger flex items-center justify-between px-5 py-4">
-          <div className="flex items-center gap-2">
-            <span className="text-[14px] font-medium">{inv.vault_name}</span>
-            <Badge tone="accent">{inv.vault_kind}</Badge>
-            <Badge>{inv.role}</Badge>
+        <div
+          key={inv.vault_id}
+          className="ledger flex flex-wrap items-center gap-3 px-4 py-3"
+          style={{ borderStyle: "dashed", borderColor: "var(--border-strong)" }}
+        >
+          <div className="flex-1 min-w-[160px]">
+            <div className="text-[13.5px] font-medium truncate">
+              {inv.vault_name}
+            </div>
+            <div className="label mt-0.5">
+              Invited as {inv.role === "owner" ? "an owner" : "a member"}
+              {inv.vault_kind === "org" ? " of an org vault" : ""}
+              {ago(inv.created_at) ? ` · ${ago(inv.created_at)}` : ""}
+            </div>
           </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => accept(inv.vault_id)}
-              disabled={busyId === inv.vault_id}
-              className="px-3 py-1.5 text-[12.5px] font-medium rounded-xl disabled:opacity-50 flex items-center gap-1.5"
-              style={{ background: "var(--felt)", color: "var(--canvas)" }}
-            >
-              <Check size={13} />
-              Join
-            </button>
+          <div className="flex items-center gap-1.5">
             <button
               onClick={() => decline(inv.vault_id)}
               disabled={busyId === inv.vault_id}
               aria-label="Decline invitation"
-              className="px-3 py-1.5 text-[12.5px] rounded-xl disabled:opacity-50 flex items-center gap-1.5"
-              style={{ color: "var(--ink-faint)", border: "1px solid var(--border)" }}
+              className="btn btn-ghost btn-sm"
             >
-              <X size={13} />
+              <X {...ICON} />
               Decline
+            </button>
+            <button
+              onClick={() => accept(inv.vault_id)}
+              disabled={busyId === inv.vault_id}
+              className="btn btn-primary btn-sm"
+            >
+              <Check {...ICON} />
+              Join
             </button>
           </div>
         </div>
       ))}
-      {error && (
-        <p className="text-[12px]" style={{ color: "var(--critical)" }}>
-          {error}
-        </p>
-      )}
+      {error && <ErrorLine>{error}</ErrorLine>}
     </section>
   );
 }
 
-function VaultCard({ vault, onChanged }: { vault: Vault; onChanged: () => void }) {
-  const [open, setOpen] = useState(false);
-  const [confirmingDelete, setConfirmingDelete] = useState(false);
-  const [cloning, setCloning] = useState(false);
-  const [cloneName, setCloneName] = useState(`${vault.name} (copy)`);
-  const [cloneBusy, setCloneBusy] = useState(false);
-  const [cloneError, setCloneError] = useState<string | null>(null);
+function VaultRow({
+  vault,
+  rev,
+  selected,
+  onSelect,
+}: {
+  vault: Vault;
+  rev: number;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  const [members, setMembers] = useState<VaultMember[] | null>(null);
 
-  async function doDelete() {
-    await vaultsApi.delete(vault.id);
-    onChanged();
-  }
-
-  async function doClone() {
-    setCloneBusy(true);
-    setCloneError(null);
-    try {
-      await vaultsApi.clone(vault.id, cloneName.trim() || undefined);
-      setCloning(false);
-      onChanged();
-    } catch (e) {
-      setCloneError(e instanceof Error ? e.message : "Could not clone this vault.");
-    } finally {
-      setCloneBusy(false);
-    }
-  }
+  useEffect(() => {
+    vaultsApi
+      .members(vault.id)
+      .then((r) => setMembers(r.results))
+      .catch(() => setMembers([]));
+  }, [vault.id, rev]);
 
   return (
-    <div className="ledger overflow-hidden">
-      <button
-        onClick={() => setOpen((o) => !o)}
-        className="w-full flex items-center gap-3 px-5 py-4 text-left"
-      >
-        {open ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
-        <div className="flex-1">
-          <div className="flex items-center gap-2">
-            <span className="text-[14px] font-medium">{vault.name}</span>
-            <Badge tone="accent">{vault.kind}</Badge>
-            <Badge>{vault.role}</Badge>
-          </div>
-        </div>
-        {!confirmingDelete && !cloning && (
-          <span
-            role="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              setCloneName(`${vault.name} (copy)`);
-              setCloning(true);
-            }}
-            aria-label="Clone vault"
-            title="Clone into a new vault"
-            style={{ color: "var(--ink-faint)" }}
-          >
-            <Copy size={14} />
+    <button
+      onClick={onSelect}
+      aria-current={selected || undefined}
+      className={`w-full first:rounded-t-[10px] last:rounded-b-[10px] flex items-center gap-3 px-4 py-3 text-left transition-[background-color,transform] duration-[120ms] active:scale-[0.995] hover:bg-[var(--surface-raised)] ${selected ? "frame-selected" : ""}`}
+      style={selected ? { background: "var(--accent-soft)" } : undefined}
+    >
+      <span className="flex-1 min-w-0">
+        <span className="flex items-center gap-2 min-w-0">
+          <span className="text-[13.5px] font-medium truncate">
+            {vault.name}
           </span>
-        )}
-        {vault.kind === "org" && vault.role === "owner" && !confirmingDelete && !cloning && (
-          <span
-            role="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              setConfirmingDelete(true);
-            }}
-            aria-label="Delete vault"
-            style={{ color: "var(--ink-faint)" }}
-          >
-            <Trash2 size={14} />
-          </span>
-        )}
-        {confirmingDelete && (
-          <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
-            <span className="text-[12px]" style={{ color: "var(--critical)" }}>
-              Delete {vault.name}?
-            </span>
-            <button
-              onClick={doDelete}
-              className="text-[12px] font-medium px-2 py-1 rounded-lg"
-              style={{ background: "var(--critical)", color: "var(--canvas)" }}
-            >
-              Confirm
-            </button>
-            <button onClick={() => setConfirmingDelete(false)} className="text-[12px]" style={{ color: "var(--ink-faint)" }}>
-              Cancel
-            </button>
-          </div>
-        )}
-      </button>
-      {cloning && (
-        <div className="px-5 pb-4 flex items-center gap-2" style={{ borderTop: "1px solid var(--border)" }}>
-          <input
-            autoFocus
-            className="field flex-1 px-3 py-2 text-[13px] mt-4"
-            value={cloneName}
-            onChange={(e) => setCloneName(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && doClone()}
-          />
-          <button
-            onClick={doClone}
-            disabled={cloneBusy}
-            className="mt-4 px-4 py-2 text-[13px] font-medium rounded-xl disabled:opacity-50"
-            style={{ background: "var(--felt)", color: "var(--canvas)" }}
-          >
-            {cloneBusy ? "Cloning…" : "Clone"}
-          </button>
-          <button onClick={() => setCloning(false)} className="mt-4 text-[12.5px]" style={{ color: "var(--ink-faint)" }}>
-            Cancel
-          </button>
-          {cloneError && (
-            <p className="text-[12px] mt-4" style={{ color: "var(--critical)" }}>
-              {cloneError}
-            </p>
-          )}
-        </div>
-      )}
-      {open && <MembersPanel vault={vault} onChanged={onChanged} />}
-    </div>
+          <RoleChip role={vault.role} />
+        </span>
+        <span className="label block mt-0.5 truncate">
+          {vault.kind === "personal" ? "Private to you" : "Org vault"}
+          {members
+            ? ` · ${members.length} ${members.length === 1 ? "member" : "members"}`
+            : ""}
+        </span>
+      </span>
+      <MemberStack members={members} />
+      <ChevronRight
+        {...ICON}
+        aria-hidden
+        className="shrink-0"
+        style={{ color: selected ? "var(--accent-text)" : "var(--ink-faint)" }}
+      />
+    </button>
   );
 }
 
-function CreateVaultCard({ onCreated }: { onCreated: () => void }) {
-  const [open, setOpen] = useState(false);
+function CreateVaultForm({
+  onCreated,
+  onCancel,
+}: {
+  onCreated: () => void;
+  onCancel: () => void;
+}) {
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   async function create() {
     const trimmed = name.trim();
     if (!trimmed) return;
     setBusy(true);
+    setError(null);
     try {
       await vaultsApi.create(trimmed, "org");
       setName("");
-      setOpen(false);
       onCreated();
+    } catch (e) {
+      setError(
+        errText(e, "Could not create that vault. Try a different name."),
+      );
     } finally {
       setBusy(false);
     }
   }
 
-  if (!open) {
-    return (
-      <button
-        onClick={() => setOpen(true)}
-        className="ledger px-5 py-4 flex items-center gap-2.5 text-[13.5px] font-medium"
-        style={{ color: "var(--ink-dim)" }}
-      >
-        <Plus size={15} />
-        New org vault
-      </button>
-    );
-  }
-
   return (
-    <div className="ledger px-5 py-4 flex items-center gap-2">
-      <input
-        autoFocus
-        className="field flex-1 px-3 py-2 text-[13px]"
-        placeholder="Vault name (e.g. Acme Team)"
-        value={name}
-        onChange={(e) => setName(e.target.value)}
-        onKeyDown={(e) => e.key === "Enter" && create()}
-      />
-      <button
-        onClick={create}
-        disabled={busy || !name.trim()}
-        className="px-4 py-2 text-[13px] font-medium rounded-xl disabled:opacity-50"
-        style={{ background: "var(--felt)", color: "var(--canvas)" }}
-      >
-        Create
-      </button>
-      <button onClick={() => setOpen(false)} className="text-[12.5px]" style={{ color: "var(--ink-faint)" }}>
-        Cancel
-      </button>
-    </div>
+    <form
+      className="ledger pop-in flex flex-col gap-1.5 px-4 py-3"
+      style={{ transformOrigin: "top right" }}
+      onSubmit={(e) => {
+        e.preventDefault();
+        create();
+      }}
+    >
+      <label htmlFor="new-vault-name" className="label">
+        Name the vault. You become its owner and can invite people next.
+      </label>
+      <div className="flex flex-wrap items-center gap-2">
+        <input
+          id="new-vault-name"
+          autoFocus
+          className="field h-8 px-3 text-[13px] flex-1 min-w-[180px]"
+          placeholder="Vault name (e.g. Acme Team)"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          onKeyDown={(e) => e.key === "Escape" && onCancel()}
+        />
+        <button
+          type="button"
+          onClick={onCancel}
+          className="btn btn-ghost btn-sm"
+        >
+          Cancel
+        </button>
+        <button
+          type="submit"
+          disabled={busy || !name.trim()}
+          className="btn btn-sm"
+        >
+          {busy ? "Creating…" : "Create"}
+        </button>
+      </div>
+      {error && <ErrorLine>{error}</ErrorLine>}
+    </form>
   );
 }
 
 const vaultLabel = (v: Vault) => (v.kind === "personal" ? "Personal" : v.name);
 
-function MergeVaultsCard({ vaults, onMerged }: { vaults: Vault[]; onMerged: () => void }) {
+function MergeVaultsCard({
+  vaults,
+  onMerged,
+}: {
+  vaults: Vault[];
+  onMerged: () => void;
+}) {
   const [a, setA] = useState(vaults[0]?.id ?? "");
   const [b, setB] = useState(vaults[1]?.id ?? "");
   const [name, setName] = useState("");
@@ -431,63 +723,139 @@ function MergeVaultsCard({ vaults, onMerged }: { vaults: Vault[]; onMerged: () =
       setName("");
       onMerged();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not merge those vaults.");
+      setError(
+        errText(
+          e,
+          "Could not merge those vaults. Check you are a member of both and try again.",
+        ),
+      );
     } finally {
       setBusy(false);
     }
   }
 
   const select = (value: string, set: (v: string) => void, label: string) => (
-    <select className="field px-2.5 py-2 text-[13px] flex-1 min-w-0" value={value} onChange={(e) => set(e.target.value)} aria-label={label}>
-      {vaults.map((v) => (
-        <option key={v.id} value={v.id}>
-          {vaultLabel(v)}
-        </option>
-      ))}
-    </select>
+    <label className="flex flex-col gap-1.5 flex-1 min-w-[140px]">
+      <span className="label">{label}</span>
+      <select
+        className="field h-8 px-2 text-[13px]"
+        value={value}
+        onChange={(e) => set(e.target.value)}
+        aria-label={label}
+      >
+        {vaults.map((v) => (
+          <option key={v.id} value={v.id}>
+            {vaultLabel(v)}
+          </option>
+        ))}
+      </select>
+    </label>
   );
 
   return (
-    <section className="ledger p-5 flex flex-col gap-3">
+    <section className="flex flex-col gap-2.5" aria-labelledby="merge-title">
       <div>
-        <div className="eyebrow flex items-center gap-1.5">
-          <Combine size={12} /> Merge two vaults
-        </div>
-        <p className="text-[12.5px] mt-1" style={{ color: "var(--ink-faint)" }}>
-          Copies both into a new vault. The originals don&apos;t change. Matching entities (same kind and name) are
-          combined, and duplicate facts are kept once.
+        <h2 id="merge-title" className="section-title">
+          Merge two vaults
+        </h2>
+        <p
+          className="text-[13px] mt-1 max-w-[62ch]"
+          style={{ color: "var(--ink-dim)" }}
+        >
+          Copies both into a brand new vault. The originals are never changed.
+          Matching entities (same kind and name) are combined, and duplicate
+          facts are kept once.
         </p>
       </div>
-      <div className="flex items-center gap-2 flex-wrap">
-        {select(a, setA, "First vault")}
-        <span style={{ color: "var(--ink-faint)" }}>+</span>
-        {select(b, setB, "Second vault")}
+      <div className="ledger p-4 flex flex-col gap-3">
+        <div className="flex items-end gap-2 flex-wrap">
+          {select(a, setA, "First vault")}
+          <Plus
+            {...ICON}
+            aria-hidden
+            className="mb-2 hidden sm:block"
+            style={{ color: "var(--ink-faint)" }}
+          />
+          {select(b, setB, "Second vault")}
+        </div>
+        <div className="flex items-end gap-2 flex-wrap">
+          <label className="flex flex-col gap-1.5 flex-1 min-w-[180px]">
+            <span className="label">New vault name</span>
+            <input
+              className="field h-8 px-3 text-[13px]"
+              placeholder="New vault name (optional)"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+            />
+          </label>
+          <button
+            onClick={merge}
+            disabled={busy || !a || a === b}
+            className="btn"
+          >
+            <Combine {...ICON} />
+            {busy ? "Merging…" : "Merge"}
+          </button>
+        </div>
+        {a === b && (
+          <p className="label">Pick two different vaults to merge.</p>
+        )}
+        {result && (
+          <p
+            role="status"
+            className="text-[12.5px] flex items-center gap-2"
+            style={{ color: "var(--ink)" }}
+          >
+            <span
+              className="dot"
+              style={{ background: "var(--good)" }}
+              aria-hidden
+            />
+            {result}
+          </p>
+        )}
+        {error && <ErrorLine>{error}</ErrorLine>}
       </div>
-      <div className="flex items-center gap-2">
-        <input
-          className="field flex-1 px-3 py-2 text-[13px]"
-          placeholder="New vault name (optional)"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-        />
-        <button
-          onClick={merge}
-          disabled={busy || !a || a === b}
-          className="px-4 py-2 text-[13px] font-medium rounded-xl disabled:opacity-50"
-          style={{ background: "var(--felt)", color: "var(--canvas)" }}
-        >
-          {busy ? "Merging…" : "Merge"}
-        </button>
-      </div>
-      {a === b && <p className="text-[12px]" style={{ color: "var(--ink-faint)" }}>Pick two different vaults.</p>}
-      {result && <p className="text-[12px]" style={{ color: "var(--good)" }}>{result}</p>}
-      {error && <p className="text-[12px]" style={{ color: "var(--critical)" }}>{error}</p>}
     </section>
+  );
+}
+
+function SkeletonRows() {
+  return (
+    <div className="ledger hairline-rows" aria-hidden>
+      {[0, 1].map((i) => (
+        <div key={i} className="flex items-center gap-3 px-4 py-3">
+          <div className="flex-1 flex flex-col gap-1.5">
+            <span className="skeleton h-4 w-40" />
+            <span className="skeleton h-3 w-56 max-w-full" />
+          </div>
+          <span className="skeleton h-5 w-24" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// The inspector floats on the right on wide screens and opens under its row on narrow ones.
+const WIDE = "(min-width: 1024px)";
+function useWide() {
+  return useSyncExternalStore(
+    (cb) => {
+      const m = window.matchMedia(WIDE);
+      m.addEventListener("change", cb);
+      return () => m.removeEventListener("change", cb);
+    },
+    () => window.matchMedia(WIDE).matches,
+    () => true,
   );
 }
 
 export default function VaultsPage() {
   const [vaults, setVaults] = useState<Vault[] | null>(null);
+  const [me, setMe] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [rev, setRev] = useState(0);
 
   const load = () =>
     vaultsApi
@@ -497,49 +865,165 @@ export default function VaultsPage() {
 
   useEffect(() => {
     load();
+    auth
+      .me()
+      .then((m) => setMe(m.email))
+      .catch(() => {});
   }, []);
 
-  if (!vaults) return null;
+  const personal = vaults?.filter((v) => v.kind === "personal") ?? [];
+  const org = vaults?.filter((v) => v.kind !== "personal") ?? [];
+  // Open on the first team vault: that is where the people are.
+  const selected =
+    vaults?.find((v) => v.id === selectedId) ?? org[0] ?? personal[0] ?? null;
 
-  const personal = vaults.filter((v) => v.kind === "personal");
-  const org = vaults.filter((v) => v.kind !== "personal");
+  const wide = useWide();
+  const inspectorFor = (inline: boolean) =>
+    selected && (
+      <VaultInspector
+        key={selected.id}
+        inline={inline}
+        vault={selected}
+        me={me}
+        rev={rev}
+        onMembersChanged={() => setRev((r) => r + 1)}
+        onVaultsChanged={() => {
+          setSelectedId(null);
+          load();
+        }}
+      />
+    );
+
+  const list = (items: Vault[]) => (
+    <div className="ledger hairline-rows">
+      {items.map((v) => (
+        <div key={v.id}>
+          <VaultRow
+            vault={v}
+            rev={rev}
+            selected={selected?.id === v.id}
+            onSelect={() => setSelectedId(v.id)}
+          />
+          {!wide && selected?.id === v.id && inspectorFor(true)}
+        </div>
+      ))}
+    </div>
+  );
 
   return (
-    <div className="max-w-2xl flex flex-col gap-8">
-      <div>
-        <div className="eyebrow mb-2">Vaults</div>
-        <h1 className="font-display text-3xl">Who sees what</h1>
-        <p className="text-[13px] mt-2" style={{ color: "var(--ink-faint)" }}>
-          A vault is a scope of shared entities and memory. Your personal vault is always
-          private; invite someone to an org vault to share knowledge with them.
-        </p>
-      </div>
-
-      <InvitationsPanel onChanged={load} />
-
-      <section className="flex flex-col gap-3">
-        <div className="eyebrow flex items-center gap-1.5">
-          <Users size={12} /> Personal
-        </div>
-        {personal.map((v) => (
-          <VaultCard key={v.id} vault={v} onChanged={load} />
-        ))}
-      </section>
-
-      <section className="flex flex-col gap-3">
-        <div className="eyebrow">Shared &amp; organisation</div>
-        {org.length === 0 && (
-          <p className="text-[12.5px]" style={{ color: "var(--ink-faint)" }}>
-            No shared vaults yet — create one, or wait for an invite.
+    <div className="max-w-6xl flex flex-col gap-9">
+      <header className="flex flex-wrap items-start justify-between gap-4">
+        <div className="min-w-0 flex-1">
+          <h1 className="page-title">Who sees what</h1>
+          <p
+            className="text-[13px] mt-1.5 max-w-[62ch]"
+            style={{ color: "var(--ink-dim)" }}
+          >
+            A vault is a scope of shared entities and memory. Your personal
+            vault is always private. Invite people to an org vault and every
+            agent they connect reads and writes the same memory.
           </p>
-        )}
-        {org.map((v) => (
-          <VaultCard key={v.id} vault={v} onChanged={load} />
-        ))}
-        <CreateVaultCard onCreated={load} />
-      </section>
+        </div>
+        <button
+          onClick={() => setCreating(true)}
+          disabled={creating}
+          className="btn btn-primary"
+        >
+          <Plus {...ICON} />
+          New org vault
+        </button>
+      </header>
 
-      {vaults.length > 1 && <MergeVaultsCard vaults={vaults} onMerged={load} />}
+      <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_380px] items-start">
+        <div className="flex flex-col gap-9 min-w-0">
+          <InvitationsPanel onChanged={load} />
+
+          <section
+            className="flex flex-col gap-2.5"
+            aria-labelledby="org-title"
+          >
+            <h2
+              id="org-title"
+              className="section-title flex items-center gap-2"
+            >
+              <Users
+                {...ICON}
+                aria-hidden
+                style={{ color: "var(--ink-faint)" }}
+              />
+              Shared and organisation
+              {vaults && <span className="label font-mono">{org.length}</span>}
+            </h2>
+            {creating && (
+              <CreateVaultForm
+                onCancel={() => setCreating(false)}
+                onCreated={() => {
+                  setCreating(false);
+                  load();
+                }}
+              />
+            )}
+            {!vaults ? (
+              <SkeletonRows />
+            ) : org.length === 0 ? (
+              !creating && (
+                <div className="ledger px-4 py-4 flex flex-wrap items-center justify-between gap-3">
+                  <p
+                    className="text-[13px]"
+                    style={{ color: "var(--ink-dim)" }}
+                  >
+                    No shared vaults yet. Create one to share memory with your
+                    team, or accept an invite.
+                  </p>
+                  <button
+                    onClick={() => setCreating(true)}
+                    className="btn btn-sm"
+                  >
+                    <Plus {...ICON} />
+                    Create a vault
+                  </button>
+                </div>
+              )
+            ) : (
+              list(org)
+            )}
+          </section>
+
+          <section
+            className="flex flex-col gap-2.5"
+            aria-labelledby="personal-title"
+          >
+            <h2
+              id="personal-title"
+              className="section-title flex items-center gap-2"
+            >
+              <Lock
+                {...ICON}
+                aria-hidden
+                style={{ color: "var(--ink-faint)" }}
+              />
+              Personal
+            </h2>
+            {!vaults ? <SkeletonRows /> : list(personal)}
+          </section>
+
+          {vaults && vaults.length > 1 && (
+            <MergeVaultsCard vaults={vaults} onMerged={load} />
+          )}
+        </div>
+
+        {wide && (
+          <div className="sticky top-6">
+            {inspectorFor(false) ?? (
+              <div className="panel p-5 flex flex-col gap-3" aria-hidden>
+                <span className="skeleton h-4 w-24" />
+                <span className="skeleton h-5 w-40" />
+                <span className="skeleton h-24 w-full" />
+              </div>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
