@@ -194,7 +194,7 @@
 .bits-tip .kbd {
   height: 16px;
   min-width: 16px;
-  font-size: 10.5px;
+  font-size: 11.5px;
 }
 
 /* ---- Selection handles snap out when a pointer picked the frame ---- */
