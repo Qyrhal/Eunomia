@@ -1,0 +1,360 @@
+---
+source: tests/migrations.rs
+expression: info(&db).await
+---
+{
+  "accesses": [],
+  "analyzers": [
+    {
+      "filters": [
+        "LOWERCASE",
+        "SNOWBALL(ENGLISH)"
+      ],
+      "name": "cache_text_analyzer",
+      "tokenizers": [
+        "BLANK",
+        "CLASS"
+      ]
+    }
+  ],
+  "apis": [],
+  "configs": [],
+  "functions": [],
+  "models": [],
+  "params": [],
+  "tables": [
+    {
+      "drop": false,
+      "full": true,
+      "kind": {
+        "kind": "NORMAL"
+      },
+      "name": "api_token",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      }
+    },
+    {
+      "drop": false,
+      "full": true,
+      "kind": {
+        "kind": "NORMAL"
+      },
+      "name": "app_settings",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      }
+    },
+    {
+      "drop": false,
+      "full": true,
+      "kind": {
+        "kind": "NORMAL"
+      },
+      "name": "audit_log",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      }
+    },
+    {
+      "drop": false,
+      "full": true,
+      "kind": {
+        "kind": "NORMAL"
+      },
+      "name": "cache_record",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      }
+    },
+    {
+      "drop": false,
+      "full": true,
+      "kind": {
+        "kind": "NORMAL"
+      },
+      "name": "chat_message",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      }
+    },
+    {
+      "drop": false,
+      "full": true,
+      "kind": {
+        "kind": "NORMAL"
+      },
+      "name": "chat_thread",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      }
+    },
+    {
+      "drop": false,
+      "full": true,
+      "kind": {
+        "kind": "NORMAL"
+      },
+      "name": "connector",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      }
+    },
+    {
+      "drop": false,
+      "full": true,
+      "kind": {
+        "kind": "NORMAL"
+      },
+      "name": "embed_cache",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      }
+    },
+    {
+      "drop": false,
+      "full": true,
+      "kind": {
+        "kind": "NORMAL"
+      },
+      "name": "file",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      }
+    },
+    {
+      "drop": false,
+      "full": true,
+      "kind": {
+        "enforced": false,
+        "in": [
+          "cache_record"
+        ],
+        "kind": "RELATION",
+        "out": [
+          "cache_record"
+        ]
+      },
+      "name": "linked_to",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      }
+    },
+    {
+      "drop": false,
+      "full": true,
+      "kind": {
+        "kind": "NORMAL"
+      },
+      "name": "location",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      }
+    },
+    {
+      "drop": false,
+      "full": true,
+      "kind": {
+        "kind": "NORMAL"
+      },
+      "name": "memory",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      }
+    },
+    {
+      "drop": false,
+      "full": true,
+      "kind": {
+        "kind": "NORMAL"
+      },
+      "name": "organisation",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      }
+    },
+    {
+      "drop": false,
+      "full": true,
+      "kind": {
+        "kind": "NORMAL"
+      },
+      "name": "person",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      }
+    },
+    {
+      "drop": false,
+      "full": true,
+      "kind": {
+        "enforced": false,
+        "in": [
+          "person",
+          "organisation",
+          "location",
+          "repository",
+          "file",
+          "symbol"
+        ],
+        "kind": "RELATION",
+        "out": [
+          "person",
+          "organisation",
+          "location",
+          "repository",
+          "file",
+          "symbol"
+        ]
+      },
+      "name": "relates_to",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      }
+    },
+    {
+      "drop": false,
+      "full": true,
+      "kind": {
+        "kind": "NORMAL"
+      },
+      "name": "repository",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      }
+    },
+    {
+      "drop": false,
+      "full": true,
+      "kind": {
+        "kind": "NORMAL"
+      },
+      "name": "session",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      }
+    },
+    {
+      "drop": false,
+      "full": true,
+      "kind": {
+        "kind": "NORMAL"
+      },
+      "name": "symbol",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      }
+    },
+    {
+      "drop": false,
+      "full": true,
+      "kind": {
+        "kind": "NORMAL"
+      },
+      "name": "sync_status",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      }
+    },
+    {
+      "drop": false,
+      "full": true,
+      "kind": {
+        "kind": "NORMAL"
+      },
+      "name": "user",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      }
+    },
+    {
+      "drop": false,
+      "full": true,
+      "kind": {
+        "kind": "NORMAL"
+      },
+      "name": "vault",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      }
+    },
+    {
+      "drop": false,
+      "full": true,
+      "kind": {
+        "kind": "NORMAL"
+      },
+      "name": "vault_member",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      }
+    }
+  ],
+  "users": []
+}
