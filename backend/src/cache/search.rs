@@ -1,10 +1,8 @@
 //! Cache write + query API. The only module that knows SurrealDB's BM25/MTREE
 //! indexes exist -- this module's external signatures (`upsert`,
 //! `set_embedding`, `search`, `get`, `list_records`, `count_records`,
-//! `links`) are the swap point for any future backend, same principle as the
-//! Python `cache/search.py`.
+//! `links`) are the swap point for any future backend.
 //!
-//! Ported from `cache/search.py`.
 
 use surrealdb::types::SurrealValue;
 use std::collections::HashMap;
@@ -22,18 +20,14 @@ use crate::error::{AppError, AppResult};
 
 const RRF_K: f64 = 60.0;
 
-/// One `linked_to` relation to create/keep when upserting a record, mirrors
-/// the `{"target": ..., "rel": ...}` shape of `env["links"]` in the Python
-/// envelope dict.
+/// One `linked_to` relation to create/keep when upserting a record: `{"target": ..., "rel": ...}`.
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct LinkSpec {
     pub target: String,
     pub rel: String,
 }
 
-/// The ingest envelope a mapper produces for one raw source record. Mirrors
-/// the Python `env` dict `cache/search.py::upsert` and `cache/ingest.py`
-/// expect.
+/// The ingest envelope a mapper produces for one raw source record.
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct Envelope {
     pub id: String,
@@ -124,7 +118,7 @@ struct Row {
 }
 
 /// The owner-id prefix baked into the internal `cache_record` key -- callers
-/// never see or pass it. Mirrors `cache/search.py`'s `_rid`.
+/// never see or pass it.
 pub(crate) fn owner_key(owner: &RecordId) -> String {
     crate::rid::key_string(owner.key()).unwrap_or_else(|| owner.to_string())
 }
@@ -133,7 +127,7 @@ pub(crate) fn rid(owner: &RecordId, record_id: &str) -> RecordId {
     RecordId::from_table_key("cache_record", format!("{}:{record_id}", owner_key(owner)))
 }
 
-/// The caller-facing record id -- mirrors `cache/search.py`'s `_literal`.
+/// The caller-facing record id.
 pub(crate) fn literal(key: &RecordId) -> String {
     let raw = crate::rid::key_string(key.key()).unwrap_or_default();
     raw.split_once(':').map(|(_, rest)| rest.to_string()).unwrap_or(raw)
@@ -159,11 +153,8 @@ fn row_to_record(row: Row) -> CacheRecord {
 }
 
 /// `json!({...})`'s default `Map` is a `BTreeMap` (no `preserve_order`
-/// feature enabled), so keys come out sorted -- same effect as Python's
-/// `json.dumps(..., sort_keys=True)`. Mirrors `cache/search.py`'s
-/// `_hash_envelope`; the exact byte representation doesn't need to match the
-/// Python backend's hash (this is a from-scratch SurrealDB-backed cache, not
-/// a shared store), only be stable within this implementation for dedup.
+/// feature enabled), so keys come out sorted. The exact bytes only need to be stable within this
+/// implementation, for dedup.
 fn hash_envelope(env: &Envelope) -> String {
     // Stored hashes come from SurrealDB 2.x, whose `Datetime` displayed as `d'...'`; keep that
     // text so an upgraded install does not see every record as changed (and re-embed it).
@@ -186,8 +177,7 @@ async fn reconcile_links(db: &OrgDb, owner: &RecordId, record_rid: &RecordId, li
     store::cache::DELETE_SYNC_LINKS.on(db).bind(("id", record_rid.clone())).await?;
     for link in links_spec {
         // (in, out, rel) has a unique index -- an error here means the edge
-        // already exists; idempotent no-op, matching the old
-        // get_or_create-style Python behavior.
+        // already exists; idempotent no-op.
         let _ = store::cache::RELATE_SYNC_LINK
             .on(db)
             .bind(("in", record_rid.clone()))
@@ -328,7 +318,7 @@ pub(crate) async fn keyword_ids(db: &OrgDb, owner: &RecordId, q: &str, limit: us
     Ok(rank_term_hits(per_term, limit))
 }
 
-/// Mirrors `cache/search.py`'s `_semantic_ids`: embed the query, then [`nearest_ids`].
+/// Embed the query, then [`nearest_ids`].
 pub(crate) async fn semantic_ids(
     db: &OrgDb,
     settings: &crate::config::Settings,
@@ -381,7 +371,6 @@ pub async fn nearest_ids(db: &OrgDb, owner: &RecordId, vec: Vec<f32>, limit: usi
 /// number of ranked lists. Exposed (not just the fused order) so callers
 /// that need the raw fused score to apply further boosts on top -- e.g.
 /// `cache::recall`'s 4-arm pipeline -- don't reimplement this formula.
-/// Mirrors `cache/search.py`'s `_rrf_scores`.
 pub(crate) fn rrf_scores(ranked_lists: &[Vec<String>]) -> HashMap<String, f64> {
     let mut scores: HashMap<String, f64> = HashMap::new();
     for list in ranked_lists {
@@ -399,7 +388,7 @@ fn rrf(ranked_lists: &[Vec<String>]) -> Vec<String> {
     ids
 }
 
-/// Options for [`search`], mirroring `cache/search.py::search`'s keyword
+/// Options for [`search`]; the keyword
 /// arguments (`sources`, `types`, `since`, `until`, `mode`, `limit`,
 /// `offset`).
 #[derive(Debug, Clone, Default)]
@@ -511,9 +500,8 @@ fn is_ident(name: &str) -> bool {
 fn apply_filters(conditions: &mut Vec<String>, params: &HashMap<String, Value>, bound: &mut HashMap<String, Value>) {
     for (key, val) in params {
         // `__`-suffixed lookups (e.g. `occurred_at__gte`) aren't given
-        // special operator handling -- same as the Python version, which
-        // only strips the suffix for the field name and always compares
-        // with `=`.
+        // special operator handling: only the suffix is stripped for the
+        // field name, and the comparison is always `=`.
         let field_name = key.split("__").next().unwrap_or(key);
         if !is_ident(field_name) {
             continue;

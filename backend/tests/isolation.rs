@@ -257,7 +257,8 @@ async fn plant(state: &AppState, router: &Router, name: &'static str, user: User
         .unwrap()
         .check()
         .unwrap();
-    // an audit_log row comes from every mutating tool call above; a few more with the canary in the args
+    // an audit_log row (tenant database) comes from every mutating tool call above; a few more with the canary in the args.
+    // The control audit_event never gets tool arguments, so its canary row is planted directly below.
     call(state, &user, "memory_write", json!({"subject_name": format!("{name} Bea"), "subject_kind": "person", "text": format!("audit {canary}")})).await;
 
     // control rows: a token and a session named for the canary, an OAuth grant with a token and a code,
@@ -284,6 +285,7 @@ async fn plant(state: &AppState, router: &Router, name: &'static str, user: User
         UPDATE $u SET api_token_hash = $c;
         DELETE membership WHERE user = $u;
         CREATE $mem SET user = $u, org = $org, role = 'owner';
+        CREATE audit_event SET user = $u, actor_kind = 'user', actor_id = 'plant', action = 'plant', target = $c, outcome = 'ok';
         LET $g = (CREATE oauth_grant SET owner = $u, client_id = 'client-x', client_name = $c, scope = ['memory:read'], resource = 'http://localhost:8001/mcp' RETURN VALUE id)[0];
         CREATE oauth_token SET kind = 'access', token_hash = $c, family = $g, expires_at = time::now() + 15m;
         CREATE oauth_code SET code_hash = $c, owner = $u, client_id = 'client-x', redirect_uri = 'http://localhost/cb', code_challenge = $c, scope = ['memory:read'], resource = 'http://x', expires_at = time::now() + 1m;

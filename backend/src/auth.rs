@@ -1,5 +1,5 @@
 //! Authentication: a browser JWT cookie or a personal API token header, both
-//! resolving to the same [`User`]. Ported from `app/auth.py`.
+//! resolving to the same [`User`].
 
 use surrealdb::types::SurrealValue;
 use axum::{
@@ -137,13 +137,13 @@ pub async fn bearer_authn(state: &AppState, token: &str, allow_oauth: bool) -> A
         }
         let Some((user, granted)) = crate::oauth::verify_access_token(state, token).await else { return Ok(None) };
         let client = crate::oauth::server::token_row(&state.control, token).await.and_then(|r| r.client_id).unwrap_or_default();
-        let caller = Caller { actor: Actor { kind: "oauth", id: client }, scopes: granted, vault: None };
+        let caller = Caller { actor: Actor { kind: "oauth", id: client }, scopes: granted, vault: None, expires_at: None };
         return Ok(Some(Authn { user, caller }));
     }
     match models_user::check_api_token(&state.control, token).await? {
         TokenCheck::Valid(v) => {
             let actor = Actor { kind: "token", id: v.token_id.to_string() };
-            Ok(Some(Authn { user: v.user, caller: Caller { actor, scopes: v.scopes, vault: v.vault } }))
+            Ok(Some(Authn { user: v.user, caller: Caller { actor, scopes: v.scopes, vault: v.vault, expires_at: v.expires_at } }))
         }
         TokenCheck::Expired => Err(AppError::coded(ErrorCode::AuthTokenExpired, "This API token has expired.")),
         TokenCheck::Unknown => Ok(None),

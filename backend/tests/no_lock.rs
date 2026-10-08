@@ -186,3 +186,17 @@ async fn job_claims_with_the_lock_off_lose_no_job() {
     eprintln!("NO_LOCK claim: jobs=200 claimers=4 handed_out={} handed_out_twice={doubles} claim_calls_that_exhausted_retries_409={conflicts}", h.len());
     assert_eq!(h.len(), 200, "every job is claimed at least once");
 }
+
+/// Two replicas booting an empty install and taking their first signup at once (lock off stands in
+/// for two processes): both must land in one org, not make a "Default" each.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_first_signups_converge_on_one_org() {
+    let _s = SERIAL.lock().await;
+    let _l = LocksOff::set(true);
+    let state = common::bare_state().await;
+    let (a, b) = tokio::join!(common::register(&state, "first-a@example.com"), common::register(&state, "first-b@example.com"));
+    assert_eq!(a.org, b.org, "one install, one org");
+    let mut res = state.control.test_raw().query("SELECT count() FROM org GROUP ALL").await.unwrap();
+    let n: Option<i64> = res.take("count").unwrap();
+    assert_eq!(n, Some(1));
+}

@@ -1,8 +1,5 @@
-//! Connector CRUD + enable/disable logic. Ported from `connectors/service.py`
-//! -- only the connector-row half of that module; the `app_settings`
-//! functions (`get_app_settings`, `update_app_settings`, `resolve_openai`,
-//! `openai_configured`) belong to a different phase of the port and are not
-//! duplicated here.
+//! Connector CRUD + enable/disable logic (the connector rows only; app settings live in
+//! `routers::settings`).
 //!
 //! Every function takes an explicit `owner` (the user's `RecordId`) and scopes
 //! its SurrealDB query to that owner -- connectors are per-user, not global
@@ -99,8 +96,7 @@ pub async fn list_connectors(db: &OrgDb, owner: &RecordId) -> AppResult<Vec<Conn
 
 /// Partial update of a connector's config/credentials, scoped to `owner`.
 /// Credentials are merged (not replaced) with whatever is already on file,
-/// mirroring the old Django serializer -- saving one refreshed secret must
-/// not drop the others.
+/// so saving one refreshed secret does not drop the others.
 pub async fn upsert_connector(
     db: &OrgDb,
     encryption_key: &str,
@@ -178,9 +174,7 @@ pub async fn credentials_for(db: &OrgDb, encryption_key: &str, owner: &RecordId,
 }
 
 /// Shallow merge of two JSON objects, `patch` winning on key conflicts.
-/// Mirrors Python's `{**existing, **patch}`. Non-object inputs are treated as
-/// empty objects, matching the defensive `row.get("config") or {}` pattern in
-/// the Python service.
+/// Non-object inputs are treated as empty objects.
 fn merge_objects(base: &Value, patch: &Value) -> Value {
     let mut merged = base.as_object().cloned().unwrap_or_default();
     if let Some(patch_obj) = patch.as_object() {

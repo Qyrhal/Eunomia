@@ -55,8 +55,7 @@ fn status_dir(state: &AppState) -> PathBuf {
     PathBuf::from(&state.settings.update_status_dir)
 }
 
-/// Merges the on-disk status JSON into `{"configured": true, ...}`, mirroring
-/// the Python handler's `{"configured": True, **data}`.
+/// Merges the on-disk status JSON into `{"configured": true, ...}`.
 fn merge_status(data: Value) -> Value {
     let mut merged = json!({ "configured": true });
     if let (Some(obj), Some(data_obj)) = (merged.as_object_mut(), data.as_object()) {

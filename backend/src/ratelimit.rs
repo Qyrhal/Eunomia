@@ -123,6 +123,36 @@ pub fn client_addr(peer: Option<IpAddr>, forwarded_for: Option<&str>, trusted: &
         .to_string()
 }
 
+fn is_private(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(a) => a.is_private() || a.is_loopback() || a.is_link_local(),
+        IpAddr::V6(a) => a.is_loopback() || (a.segments()[0] & 0xfe00) == 0xfc00 || (a.segments()[0] & 0xffc0) == 0xfe80,
+    }
+}
+
+/// True (and records it) when `peer` has not been warned about within the last hour.
+fn warn_due(seen: &mut HashMap<IpAddr, Instant>, peer: IpAddr, now: Instant) -> bool {
+    if seen.get(&peer).is_some_and(|t| now.duration_since(*t) < Duration::from_secs(3600)) {
+        return false;
+    }
+    if seen.len() >= 1024 {
+        seen.clear(); // bounded: a hostile network can only make the warning repeat early
+    }
+    seen.insert(peer, now);
+    true
+}
+
+/// A private-range peer that is not trusted sent `X-Forwarded-For`: most likely the operator's own
+/// reverse proxy, whose header is being ignored (so every user shares its address). Warns once per
+/// peer per hour.
+pub fn note_untrusted_forwarder(peer: Option<IpAddr>, forwarded_for: Option<&str>, trusted: &[Cidr]) {
+    static SEEN: std::sync::OnceLock<Mutex<HashMap<IpAddr, Instant>>> = std::sync::OnceLock::new();
+    let Some(peer) = peer.filter(|p| forwarded_for.is_some() && is_private(*p) && !trusted.iter().any(|c| c.contains(*p))) else { return };
+    if warn_due(&mut SEEN.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner()), peer, Instant::now()) {
+        tracing::warn!(%peer, "X-Forwarded-For from a peer that is not in TRUSTED_PROXIES is ignored, so every client behind it shares {peer}'s rate limit; add {peer} (or its hostname) to TRUSTED_PROXIES");
+    }
+}
+
 /// True when the request reached a trusted proxy over https: the peer is trusted and the
 /// right-most `X-Forwarded-Proto` is `https`. An untrusted peer cannot claim it.
 pub fn forwarded_https(peer: Option<IpAddr>, forwarded_proto: Option<&str>, trusted: &[Cidr]) -> bool {
@@ -236,6 +266,33 @@ mod tests {
         assert_eq!(client_addr(ip("172.19.0.5"), Some("203.0.113.9"), &trusted), "172.19.0.5");
         // before the first resolution nothing is trusted
         assert_eq!(client_addr(ip("172.19.0.4"), Some("203.0.113.9"), &effective_trusted(&[], &[])), "172.19.0.4");
+    }
+
+    #[test]
+    fn untrusted_private_forwarders_are_warned_about_once_an_hour() {
+        let mut seen = HashMap::new();
+        let (peer, other): (IpAddr, IpAddr) = ("172.18.0.5".parse().unwrap(), "172.18.0.6".parse().unwrap());
+        let t0 = Instant::now();
+        assert!(warn_due(&mut seen, peer, t0));
+        assert!(!warn_due(&mut seen, peer, t0 + Duration::from_secs(3599)));
+        assert!(warn_due(&mut seen, other, t0 + Duration::from_secs(1)), "per peer");
+        assert!(warn_due(&mut seen, peer, t0 + Duration::from_secs(3601)));
+        assert!(is_private(peer) && is_private("::1".parse().unwrap()) && is_private("fd00::1".parse().unwrap()));
+        assert!(!is_private("8.8.8.8".parse().unwrap()));
+    }
+
+    #[test]
+    fn a_realistic_chain_through_caddy_and_the_frontend_resolves_to_the_client() {
+        // Next's rewrite proxy adds no X-Forwarded-For of its own (httpxy `xfwd` is off): the header
+        // is what Caddy sent. The peer the backend sees is the frontend container.
+        let ip = |s: &str| Some(s.parse::<IpAddr>().unwrap());
+        let frontend_only = parse_cidrs("172.19.0.4");
+        assert_eq!(client_addr(ip("172.19.0.4"), Some("203.0.113.9"), &frontend_only), "203.0.113.9");
+        // if the chain does carry Caddy's address, list Caddy as trusted too, or it is taken for the client
+        let both = parse_cidrs("172.19.0.4,172.19.0.2");
+        assert_eq!(client_addr(ip("172.19.0.4"), Some("203.0.113.9, 172.19.0.2"), &both), "203.0.113.9");
+        assert_eq!(client_addr(ip("172.19.0.4"), Some("6.6.6.6, 203.0.113.9, 172.19.0.2"), &both), "203.0.113.9");
+        assert_eq!(client_addr(ip("172.19.0.4"), Some("203.0.113.9, 172.19.0.2"), &frontend_only), "172.19.0.2");
     }
 
     #[test]

@@ -97,11 +97,11 @@ pub const EXPORT_PERSONAL_VAULT: Stmt = Stmt::new(
 );
 
 pub const EXPORT_MEMORIES: Stmt =
-    Stmt::new("app.export_memories", "SELECT * FROM memory WHERE subject = $id ORDER BY created_at DESC");
+    Stmt::new("app.export_memories", "SELECT * FROM memory WHERE subject IN $ids ORDER BY created_at DESC");
 
-pub const EXPORT_RELATIONS_OUT: Stmt = Stmt::new("app.export_relations_out", "SELECT * FROM relates_to WHERE in = $id");
+pub const EXPORT_RELATIONS_OUT: Stmt = Stmt::new("app.export_relations_out", "SELECT * FROM relates_to WHERE in IN $ids");
 
-pub const EXPORT_RELATIONS_IN: Stmt = Stmt::new("app.export_relations_in", "SELECT * FROM relates_to WHERE out = $id");
+pub const EXPORT_RELATIONS_IN: Stmt = Stmt::new("app.export_relations_in", "SELECT * FROM relates_to WHERE out IN $ids");
 
 pub const SETTINGS_UPSERT_DEFAULTS: Stmt = Stmt::new(
     "app.settings_upsert_defaults",

@@ -467,7 +467,9 @@ async fn audit_events_cover_auth_and_tool_calls_with_trace_ids() {
     assert_eq!(tools.len(), 2);
     assert_eq!(tools[0]["trace_id"], tool_trace);
     assert!(tools.iter().all(|e| e["actor_kind"] == "token" && e["user"] == app.user.id.to_string()));
-    assert!(tools[0]["detail"].as_str().unwrap().contains("Ann"));
+    // argument names and a hash, never the values (the control database is shared across orgs)
+    let detail = tools[0]["detail"].as_str().unwrap();
+    assert!(detail.starts_with("keys=") && detail.contains("subject_name") && !detail.contains("Ann"), "{detail}");
 
     let failed = events(&app, "action = 'auth.failed'").await;
     assert_eq!(failed.len(), 1);
@@ -722,6 +724,66 @@ async fn oauth_consent_and_grants_need_a_browser_session_not_a_token() {
     assert_ne!(status, StatusCode::FORBIDDEN, "{v}");
     let (status, _) = app.http_session("GET", "/api/oauth/grants", None).await;
     assert_eq!(status, StatusCode::OK);
+}
+
+// ------------------------------------------------------------ a token cannot mint a longer-lived or wider token
+
+#[tokio::test]
+async fn an_expiring_or_vault_restricted_token_cannot_mint_a_longer_lived_one() {
+    let app = TestApp::new().await;
+    let org = org_vault(&app).await;
+    let soon = chrono::Utc::now() + chrono::Duration::hours(1);
+    let soon_ts = Datetime::from(soon);
+    let granted: Vec<String> = vec![scopes::VAULTS_ADMIN.into(), scopes::MEMORY_READ.into()];
+    let pat = create_api_token_with(&app.state.control, &app.user.id, "short", &granted, None, Some(soon_ts)).await.unwrap().token;
+    let mint = |body: Value, tok: String| {
+        let router = app.router.clone();
+        async move { send(&router, "POST", "/api/auth/tokens", Some(body), &bearer(&tok)).await }
+    };
+
+    // no expiry, or one past its own: refused
+    for body in [
+        json!({"name": "forever", "scopes": ["memory:read"]}),
+        json!({"name": "later", "scopes": ["memory:read"], "expires_at": (soon + chrono::Duration::hours(1)).to_rfc3339()}),
+    ] {
+        let (status, _, v) = mint(body, pat.clone()).await;
+        assert_eq!((status, v["code"].as_str()), (StatusCode::FORBIDDEN, Some("auth.scope")), "{v}");
+    }
+    // sooner, and within its scopes: fine
+    let body = json!({"name": "sooner", "scopes": ["memory:read"], "expires_at": (soon - chrono::Duration::minutes(10)).to_rfc3339()});
+    let (status, _, v) = mint(body, pat.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+
+    // a vault-restricted token cannot mint at all (the gate keeps account routes from it)
+    let restricted = create_api_token_with(&app.state.control, &app.user.id, "r", &granted, Some(&org), None).await.unwrap().token;
+    let (status, _, v) = mint(json!({"name": "wide", "scopes": ["memory:read"]}), restricted).await;
+    assert_eq!((status, v["code"].as_str()), (StatusCode::FORBIDDEN, Some("auth.scope")), "{v}");
+
+    // a browser session keeps full ability
+    let (status, v) = app.http_session("POST", "/api/auth/tokens", Some(json!({"name": "forever"}))).await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+}
+
+// ------------------------------------------------------------ MCP batches
+
+#[tokio::test]
+async fn mcp_batches_are_capped_and_charged_per_message() {
+    let app = TestApp::new().await;
+    let ping = |id: u32| json!({"jsonrpc": "2.0", "id": id, "method": "ping"});
+    let batch = |n: u32| Value::Array((0..n).map(ping).collect());
+
+    let (status, _, v) = send(&app.router, "POST", "/mcp", Some(batch(33)), &bearer(&app.token)).await;
+    assert_eq!((status, v["error"]["code"].as_i64()), (StatusCode::BAD_REQUEST, Some(-32600)), "{v}");
+    let (status, _, v) = send(&app.router, "POST", "/mcp", Some(batch(32)), &bearer(&app.token)).await;
+    assert_eq!((status, v.as_array().map(Vec::len)), (StatusCode::OK, Some(32)));
+
+    // 10 requests a minute: a 6 message batch uses 6, so a second one is refused
+    let limits = RateConfig { user_per_min: 10, token_per_min: 0, ..RateConfig::default() };
+    let limited = app_with_limits(&app, limits);
+    let (status, _, v) = send(&limited, "POST", "/mcp", Some(batch(6)), &bearer(&app.token)).await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    let (status, _, v) = send(&limited, "POST", "/mcp", Some(batch(6)), &bearer(&app.token)).await;
+    assert_eq!((status, v["code"].as_str()), (StatusCode::TOO_MANY_REQUESTS, Some("rate.limited")), "{v}");
 }
 
 // ------------------------------------------------------------ the chat agent runs as the caller

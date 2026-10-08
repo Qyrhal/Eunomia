@@ -15,9 +15,7 @@
 //! lives in the same graph as person/organisation/location and can be
 //! cross-linked to them via `relates_to`.
 //!
-//! Ported from `entities/service.py`. Unlike the Python version's `_as_rid`
-//! (accepts either a `RecordID` or a string), every function here already
-//! deals in `RecordId` -- callers (routers, tools) parse path/user-supplied
+//! Every function here deals in `RecordId` -- callers (routers, tools) parse path/user-supplied
 //! ids first, same convention as `vaults::service`.
 
 use surrealdb::types::SurrealValue;
@@ -35,19 +33,17 @@ use crate::tx::{lock, with_retry, with_retry_dup};
 use crate::authz::{self, Action};
 use crate::vaults::service as vaults_service;
 
-/// Entity kinds this module manages -- mirrors `entities/service.py`'s
-/// `KINDS` tuple and `vaults::service::ENTITY_KINDS`.
+/// Entity kinds this module manages -- the same set as
+/// `vaults::service::ENTITY_KINDS`.
 pub const KINDS: &[&str] = &["person", "organisation", "location", "repository", "file", "symbol"];
 
-/// Code-graph subset of `KINDS`, mirrors `entities/service.py`'s `CodeKind`.
+/// Code-graph subset of `KINDS`.
 pub const CODE_KINDS: &[&str] = &["repository", "file", "symbol"];
 
 /// Validates `kind` against `KINDS`, returning the matching static str --
 /// used everywhere a kind is interpolated into a raw SurrealDB query (table
 /// names can't be bound parameters), so an unrecognized kind can never reach
-/// string-formatted SQL. The Python version doesn't do this (it trusts the
-/// `Literal["person", ...]` type hint, which isn't enforced at runtime) --
-/// this check is a safety addition for the Rust port, not a behavior change
+/// string-formatted SQL. This check is a safety net, not a behavior change
 /// for any caller that already validates kind (every router/tool call site
 /// does).
 pub fn kind_table(kind: &str) -> AppResult<&'static str> {
@@ -59,8 +55,7 @@ fn owner_key_string(owner: &RecordId) -> String {
 }
 
 /// The internal `cache_record` RecordId for a record's caller-facing id --
-/// mirrors `entities/service.py`'s `_cache_record_rid` (owner-id prefix is
-/// internal).
+/// (the owner-id prefix is internal).
 fn cache_record_rid(owner: &RecordId, record_id: &str) -> RecordId {
     RecordId::from_table_key("cache_record", format!("{}:{}", owner_key_string(owner), record_id))
 }
@@ -926,7 +921,7 @@ pub async fn list_entities(
 /// force-directed view (resolved vault, or `owner`'s personal vault), or a
 /// subgraph restricted to `kinds`.
 ///
-/// v1 limitation, accepted as-is (matches the Python version): an edge is
+/// v1 limitation, accepted as-is: an edge is
 /// only included when BOTH endpoints are in the requested kind set.
 pub async fn graph(
     db: &OrgDb,
@@ -992,8 +987,7 @@ pub async fn graph(
 }
 
 /// Expected `relates_to` label for a code-entity's parent pairing --
-/// file->repository = "part_of", symbol->file = "defined_in". Mirrors
-/// `entities/service.py`'s `_PARENT_LABELS`.
+/// file->repository = "part_of", symbol->file = "defined_in".
 fn parent_label(kind: &str, parent_kind: &str) -> &'static str {
     match (kind, parent_kind) {
         ("file", "repository") => "part_of",

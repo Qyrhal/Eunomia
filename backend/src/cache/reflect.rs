@@ -2,10 +2,9 @@
 //!
 //! One `recall` call (same vault scoping -- see `cache::recall`) feeding one
 //! LLM call that must answer only from what's already there and cite it by
-//! index -- no follow-up retrieval, matching `cache/reflect.py`'s deliberate
+//! index -- no follow-up retrieval, a deliberate
 //! scope cut from Hindsight's agentic multi-round loop.
 //!
-//! Ported from `cache/reflect.py`.
 
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -33,8 +32,7 @@ fn render_memories(items: &[RecallItem]) -> String {
 }
 
 /// Keeps only in-range integer indices (1-based, matching the numbered
-/// memories list), same filter as `cache/reflect.py`'s `cited_indices`
-/// list comprehension.
+/// memories list).
 fn filter_cited_indices(cited: &[i64], items_len: usize) -> Vec<usize> {
     cited.iter().filter(|&&i| i >= 1 && (i as usize) <= items_len).map(|&i| i as usize).collect()
 }

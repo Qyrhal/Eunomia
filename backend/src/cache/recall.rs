@@ -17,8 +17,7 @@
 //! ```
 //!
 //! Cross-encoder: the diagram has a cross-encoder re-ranking step between RRF
-//! fusion and boosts. This is skipped on purpose, same reasoning as
-//! `cache/recall.py`'s module docstring: OpenAI has no cross-encoder/rerank
+//! fusion and boosts. This is skipped on purpose, for the same reason: OpenAI has no cross-encoder/rerank
 //! API endpoint, and `EMBEDDINGS_BACKEND` is OpenAI-only for the user-facing
 //! path. We go straight from RRF fusion to boosts rather than fake a
 //! cross-encoder with a cheap heuristic pretending to be one.
@@ -27,16 +26,10 @@
 //! scope for v1 -- the temporal arm only activates when an explicit
 //! `time_range` is given.
 //!
-//! Deferred: the graph arm's entity matching mirrors
-//! `entities/service.py::list_entities`'s query shape directly against the
-//! `person`/`organisation`/`location`/`repository`/`file`/`symbol` tables,
-//! rather than calling an `entities::service` module -- this crate's
-//! `entities` module isn't wired into `lib.rs` yet (a concurrent port still
-//! in progress elsewhere in this repo), so depending on it here would block
-//! on someone else's unfinished work. Once it lands, `graph_arm`'s entity
-//! listing could delegate to it instead of querying the tables directly.
+//! The graph arm's entity matching queries the
+//! `person`/`organisation`/`location`/`repository`/`file`/`symbol` tables
+//! directly rather than calling `entities::service`.
 //!
-//! Ported from `cache/recall.py`.
 
 use surrealdb::types::SurrealValue;
 use chrono::{DateTime, Utc};
@@ -51,9 +44,7 @@ use crate::store;
 use crate::error::AppResult;
 use crate::vaults::service as vaults_service;
 
-/// Entity tables the graph arm searches -- mirrors `entities/service.py`'s
-/// `KINDS` tuple (see module docstring on why this isn't delegated to a
-/// Rust `entities::service` yet).
+/// Entity tables the graph arm searches (see `entities::service::KINDS`).
 // recency boost floor/ceiling; see `boost` below.
 const RECENCY_FLOOR: f64 = 0.7;
 const RECENCY_WINDOW_DAYS: f64 = 365.0;
@@ -115,7 +106,7 @@ struct EntityRow {
 /// first). For each matched entity, pulls its memories, each memory's
 /// source `cache_record`, and any `cache_record`s `linked_to` that source --
 /// that's the "follow the entity graph" hop the diagram's Graph arm
-/// describes. Mirrors `cache/recall.py`'s `_graph_arm`.
+/// describes.
 async fn graph_arm(db: &OrgDb, owner: &RecordId, vault: &RecordId, query: &str, limit: usize) -> AppResult<Vec<String>> {
     let q_lower = query.to_lowercase();
 
@@ -207,8 +198,7 @@ async fn memory_text_arm(db: &OrgDb, vault: &RecordId, query: &str, limit: usize
 /// Explicit date-range filter only -- no NL date parsing in v1. Merges
 /// `cache_record` (`occurred_at`, caller's own data only -- see `recall`'s
 /// `include_cache_record`) and `memory` (`created_at`, vault-scoped) hits
-/// into one list, ranked by recency. Mirrors `cache/recall.py`'s
-/// `_temporal_ids`.
+/// into one list, ranked by recency.
 async fn temporal_ids(
     db: &OrgDb,
     owner: &RecordId,
@@ -338,7 +328,6 @@ async fn hydrate(db: &OrgDb, owner: &RecordId, vault: &RecordId, key: &str) -> A
 /// recency: 1.0 at age=0, linearly down to a 0.7 floor at 365+ days old;
 ///          1.0 (neutral) when there's no date to judge recency from.
 ///
-/// Mirrors `cache/recall.py`'s `_boost`.
 fn boost(arms_hit: usize, occurred_at: Option<DateTime<Utc>>, now: DateTime<Utc>) -> f64 {
     let proof = 1.0 + PROOF_STEP * (arms_hit as f64 - 1.0);
 

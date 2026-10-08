@@ -69,8 +69,7 @@ async fn get_sync_status(db: &OrgDb, owner: &RecordId, key: &str) -> AppResult<S
 /// Runs one source sync for `owner`, records health, applies backoff on
 /// failure. Never returns an `Err` to the caller -- any failure (bad
 /// credentials, a network error, an unknown source key) is recorded on the
-/// `sync_status` row and reported back as `{"source": key, "error": ...}`,
-/// matching Python's blanket `except Exception` here.
+/// `sync_status` row and reported back as `{"source": key, "error": ...}`.
 pub async fn sync_source(state: &OrgState, owner: &RecordId, key: &str, mode: &str) -> Value {
     let db = &state.db;
     let st = match get_sync_status(db, owner, key).await {
@@ -155,8 +154,7 @@ async fn sync_intervals_for(db: &OrgDb, owner: &RecordId) -> AppResult<Value> {
 }
 
 /// `sync_intervals.get(key, default)`, where the default is heypocket's
-/// 24h plan-mandated minimum (Python: `sync_intervals.setdefault("heypocket",
-/// 86400)`) and everything else's fallback is 15 minutes.
+/// 24h plan-mandated minimum and everything else's fallback is 15 minutes.
 fn interval_for(sync_intervals: &Value, key: &str) -> u64 {
     if let Some(v) = sync_intervals.get(key).and_then(|v| v.as_u64()) {
         return v.max(1);

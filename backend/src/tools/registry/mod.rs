@@ -1,15 +1,13 @@
 //! The one tool registry consumed by both the MCP server and the REST
-//! surface. Ported from `tools/registry.py`. Merges: generic cache tools
+//! surface. Merges: generic cache tools
 //! (`tools::generic`) + per-domain tools (`entities`, `vaults`, `cache`),
-//! wired up in [`register_all`]. Per-source tools (`sources::registry`)
-//! aren't ported yet -- that module doesn't exist on this side.
+//! wired up in [`register_all`].
 //!
 //! Layout: this file is the dispatch and audit core (`call`, `run_tool`, the audit row, the read-only
 //! list, the shared argument helpers). The tools themselves register from one file per group:
 //! `records`, `memory`, `entities`, `code`, `vaults`, `docs`; `admin` holds the REST-only audit read.
 //!
-//! Async end to end, same reason as the Python version: handlers need to be
-//! `async fn` for axum concurrency, same shape works for an MCP server.
+//! Async end to end: handlers need to be `async fn` for axum concurrency, and the same shape serves MCP.
 //!
 //! Audit trail: every call through [`call`] for a tool NOT in
 //! [`READ_ONLY_TOOLS`] writes one `audit_log` row (owner, tool name, a
@@ -66,7 +64,7 @@ pub struct ToolSpec {
 /// Tools that only read data -- excluded from the audit log. Everything
 /// else registered (now or later) is assumed mutating and gets logged; this
 /// is a small explicit allowlist rather than a generic classifier, since the
-/// tool count is small and known (mirrors the Python module's docstring).
+/// tool count is small and known.
 pub const READ_ONLY_TOOLS: &[&str] = &[
     "docs",
     "search",
@@ -170,7 +168,14 @@ async fn record_audit(state: &OrgState, owner: &RecordId, tool_name: &str, args:
         .bind(("args_summary", summary.clone()))
         .bind(("outcome", outcome.to_string()))
         .await;
-    record_event(&state.control, owner, tool_name, code, &summary).await;
+    // the control database is shared across orgs: no tenant text, only the argument names and a hash
+    record_event(&state.control, owner, tool_name, code, &control_detail(args)).await;
+}
+
+/// What the cross-org `audit_event` keeps of a call's arguments: their keys and a hash, never values.
+fn control_detail(args: &Value) -> String {
+    let keys = args.as_object().map(|o| o.keys().cloned().collect::<Vec<_>>().join(",")).unwrap_or_default();
+    format!("keys={keys} hash={}", crate::models_user::hash_token(&args.to_string()))
 }
 
 async fn record_event(db: &ControlDb, owner: &RecordId, tool_name: &str, code: &str, detail: &str) {
@@ -179,16 +184,10 @@ async fn record_event(db: &ControlDb, owner: &RecordId, tool_name: &str, code: &
     audit::record(db, Event { user: Some(owner), actor: &actor, action: &action, target: "", outcome: code, detail }).await;
 }
 
-/// The process-wide tool registry. A `OnceLock<HashMap<..>>` rather than
-/// Python's import-time `_EXTRA` dict + three merge sources (`generic.IMPLS`,
-/// `sources.registry.tool_registry()`, `_EXTRA`) computed fresh on every
-/// `all_tools()` call -- Rust has no import-time side effects to piggyback
-/// on, so registration happens once, explicitly, via `register_all` below.
+/// The process-wide tool registry: a `OnceLock<HashMap<..>>` filled once, explicitly, by `register_all` below.
 static REGISTRY: OnceLock<HashMap<&'static str, ToolSpec>> = OnceLock::new();
 
-/// Used by anything adding tools before first use (mirrors Python's
-/// `register_tool`, called at import time there; called once from
-/// `register_all` here).
+/// Used by anything adding tools before first use (called once from `register_all`).
 pub fn register(registry: &mut HashMap<&'static str, ToolSpec>, name: &'static str, schema: Value, handler: ToolFn) {
     registry.insert(name, ToolSpec { read_only: is_read_only(name), schema, handler });
 }
@@ -206,9 +205,7 @@ struct IdArgs {
     id: String,
 }
 
-/// A JSON-decode failure for a tool's `args` object -- mirrors a Python tool
-/// raising `TypeError`/`ValueError` on bad agent input, which `@safe` (see
-/// `tools/generic.py`) turns into `{"error": ...}` rather than a 500.
+/// A JSON-decode failure for a tool's `args` object: bad agent input is an `{"error": ...}` value, not a 500.
 fn bad_args(e: serde_json::Error) -> Value {
     json!({ "error": format!("invalid arguments: {e}") })
 }
@@ -218,8 +215,8 @@ fn bad_id(field: &str, value: &str) -> Value {
 }
 
 /// Parses a tool argument string into a `RecordId`, yielding an `{"error":
-/// ...}` value (not an `Err`) on failure -- same "never raise on bad agent
-/// input" contract every tool in the Python registry follows via `@safe`.
+/// ...}` value (not an `Err`) on failure: bad agent input never
+/// raises, it comes back as a value.
 fn parse_rid(field: &str, value: &str) -> Result<RecordId, Value> {
     crate::rid::parse(value).map_err(|_| bad_id(field, value))
 }
@@ -232,9 +229,8 @@ fn parse_opt_rid(field: &str, value: &Option<String>) -> Result<Option<RecordId>
 }
 
 /// Converts a typed service-layer result into the tool-call `Value` shape:
-/// `Ok` serializes to JSON, `Err` becomes `{"error": <message>}` -- mirrors
-/// Python's `@safe` decorator (`tools/generic.py`), which never lets a
-/// handled service error raise past the registry.
+/// `Ok` serializes to JSON, `Err` becomes `{"error": <message>}`, so a
+/// handled service error never raises past the registry.
 fn to_tool_value<T: serde::Serialize>(result: AppResult<T>) -> Value {
     match result {
         Ok(v) => serde_json::to_value(v).unwrap_or_else(|e| json!({ "error": e.to_string() })),
@@ -242,9 +238,7 @@ fn to_tool_value<T: serde::Serialize>(result: AppResult<T>) -> Value {
     }
 }
 
-/// Registers every tool the Python registry exposes (`tools/registry.py`'s
-/// `all_tools()`, merging `tools/generic.py`, `entities/tools.py`,
-/// `cache/tools.py`, `vaults/tools.py`): the four generic cache tools, the
+/// Registers every tool: the four generic cache tools, the
 /// entity-memory tools, `recall`/`reflect`, and vault management. Per-source
 /// tools (`sources::registry`) aren't wired in yet -- that module doesn't
 /// exist on the Rust side.
@@ -263,8 +257,7 @@ pub fn all_tools() -> &'static HashMap<&'static str, ToolSpec> {
 
 /// Calls a registered tool by name, applying the audit-log side effect for
 /// anything not in [`READ_ONLY_TOOLS`]. Returns `{"error": "unknown tool
-/// ..."}`` for a name that isn't registered, matching the Python version
-/// rather than a 404 -- the REST router is the one that turns an unknown
+/// ..."}`` for a name that isn't registered, rather than a 404 -- the REST router is the one that turns an unknown
 /// name into a 404 before ever calling this.
 pub async fn call(app: &AppState, user: &User, name: &str, args: Value) -> AppResult<Value> {
     let owner = &user.id;
@@ -370,7 +363,7 @@ mod tests {
     }
 
     #[test]
-    fn read_only_tools_match_python_set_exactly() {
+    fn read_only_tools_are_exactly_the_expected_set() {
         let expected = [
             "docs",
             "search",
@@ -438,7 +431,7 @@ mod tests {
     }
 
     #[test]
-    fn registry_has_every_python_tool_wired_up() {
+    fn registry_has_every_tool_wired_up() {
         let expected = [
             "docs", "search", "get", "list", "links", "recall", "reflect", "entities_search", "entities_get",
             "entities_graph", "code_entity_upsert", "code_relate", "memory_write", "consolidate_observations",

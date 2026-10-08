@@ -1,15 +1,11 @@
-//! heypocket source -- meeting recordings from heypocketai.com. Ported from
-//! `sources/heypocket/source.py`. Wraps
+//! heypocket source -- meeting recordings from heypocketai.com. Wraps
 //! `crate::connectors::clients::PocketAIClient`. Poll + on-demand only (the
 //! public API has no webhooks), so `Source::webhook` keeps the trait default
 //! (`Ok(None)`).
 //!
 //! The tool helpers (`summary`, `list_recordings`, `search_recordings`) read
-//! from the cache (populated by the periodic sync) in Python, via
-//! `cache.search`. That module isn't ported yet, so these read `cache_record`
-//! directly here; `search_recordings` here is a plain case-insensitive
-//! substring match rather than `cache.search`'s hybrid BM25+embedding search,
-//! since the embedding half (`embeddings.service`) isn't ported either.
+//! `cache_record` (populated by the periodic sync) directly; `search_recordings` is a plain case-insensitive
+//! substring match rather than the hybrid BM25+embedding search.
 
 use surrealdb::types::SurrealValue;
 use async_trait::async_trait;
@@ -187,8 +183,7 @@ fn tags_of(payload: &Value) -> Vec<String> {
 }
 
 /// Recording count/duration/tag breakdown over the last `days`, computed from
-/// cached recordings (not a live API call) -- matches the "no invented
-/// metrics" ethos of the Python tool.
+/// cached recordings (not a live API call) with no invented metrics.
 pub(crate) fn compute_summary(recs: &[CachedRecording]) -> Value {
     let mut tag_counts: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
     for r in recs {
@@ -236,9 +231,7 @@ pub async fn list_recordings(ctx: &SourceCtx<'_>, days: i64, tag: Option<&str>, 
     Ok(json!(out))
 }
 
-/// Deferred: Python's `search_recordings` runs `cache.search`'s hybrid
-/// BM25+embedding search; `embeddings.service` isn't ported, so this is a
-/// plain case-insensitive substring match over cached title/body_text.
+/// A plain case-insensitive substring match over cached title/body_text.
 pub async fn search_recordings(ctx: &SourceCtx<'_>, query: &str) -> AppResult<Value> {
     let needle = query.to_lowercase();
     let mut res = store::app::SOURCES_HEYPOCKET_SEARCH

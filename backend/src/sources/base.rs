@@ -1,16 +1,10 @@
-//! The source plug-in contract. Ported from `sources/base.py`.
+//! The source plug-in contract. There is no runtime package discovery, so
+//! `sources::registry` lists the known implementations explicitly (a registry of
+//! `Source` trait objects).
 //!
-//! Python discovers sources dynamically (`pkgutil.iter_modules` over
-//! `sources/<pkg>/` looking for a module-level `SOURCE`). Rust has no
-//! equivalent runtime package discovery, so `sources::registry` lists the
-//! known implementations explicitly instead -- same end result (a registry of
-//! `Source` trait objects), different wiring mechanism.
-//!
-//! `ToolSpec`/`Source::tools()` (per-source MCP/REST tool registration) is
-//! intentionally not ported: there is no MCP/tool-registry machinery in this
-//! codebase yet (see `vaults::tools`'s module doc for the same call). The pure
-//! logic behind each source's tools (finance summaries, recording lookups) is
-//! still ported, as plain functions in each source's module.
+//! Per-source tool registration is not part of the trait. The logic behind each
+//! source's tools (finance summaries, recording lookups) lives as plain functions
+//! in each source's module.
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -32,8 +26,7 @@ pub struct SyncResult {
 
 /// Everything a `Source` method needs to reach the database and this owner's
 /// credentials, bundled so trait methods don't grow an ever-longer parameter
-/// list. Mirrors the Python source modules importing `app.db.db` /
-/// `sources.registry.credentials_for` directly inside each method body.
+/// list.
 pub struct SourceCtx<'a> {
     pub db: &'a OrgDb,
     pub encryption_key: &'a str,
@@ -87,7 +80,7 @@ pub trait Source: Send + Sync {
 }
 
 /// The caller-facing half of a user record id, e.g. `"abc123"` out of
-/// `user:abc123`. Mirrors `cache/search.py`'s `_literal` partition -- the
+/// `user:abc123`. The
 /// owner-id prefix baked into cache/sync-status record ids is internal, never
 /// shown to or passed by a caller.
 pub fn owner_key_str(owner: &RecordId) -> String {

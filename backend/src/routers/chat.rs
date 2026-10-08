@@ -4,7 +4,6 @@
 //! (see `chat::service::ChatEvent` for the event shapes) rather than a
 //! single JSON response, so the frontend can render the reply incrementally.
 //!
-//! Ported from `app/routers/chat.py`.
 
 use std::convert::Infallible;
 

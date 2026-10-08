@@ -1,5 +1,5 @@
 //! User accounts: registration, password auth, personal API tokens.
-//! Ported from `app/models_user.py`. Passwords are hashed with bcrypt;
+//! Passwords are hashed with bcrypt;
 //! personal API tokens are random strings, only their SHA-256 hash is ever
 //! stored.
 
@@ -123,8 +123,22 @@ struct TenantListRow {
     status: String,
 }
 
+/// True once `org`'s tenant row is `ready` (polls for up to 15 seconds).
+async fn wait_ready(state: &AppState, org: &OrgId) -> bool {
+    for _ in 0..75 {
+        if let Ok(mut res) = store::tenant::LIST.on(&state.control).await
+            && let Ok(rows) = res.take::<Vec<TenantListRow>>(0)
+            && rows.iter().any(|r| r.status == "ready" && crate::rid::key_string(&r.org.key).and_then(|k| OrgId::parse(&k)) == Some(*org))
+        {
+            return true;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+    false
+}
+
 async fn assign_org(state: &AppState, user: &RecordId, email: &str, personal: bool) -> AppResult<OrgId> {
-    // ponytail: one signup at a time per process; org creation is rare and the lock keeps "first user creates the org" true.
+    // ponytail: one signup at a time per process (cheap); across replicas the fixed first-org id below keeps it to one org.
     let _one_at_a_time = crate::tx::lock("org.signup").await;
     let mut res = store::tenant::LIST.on(&state.control).await?;
     let rows: Vec<TenantListRow> = res.take(0)?;
@@ -138,9 +152,19 @@ async fn assign_org(state: &AppState, user: &RecordId, email: &str, personal: bo
             let Some(p) = &state.provisioner else {
                 return Err(AppError::coded(ErrorCode::TenantProvisioningDisabled, "This server cannot create organisations."));
             };
-            let org = OrgId::new();
-            p.provision_org(&state.control, org, if found.is_none() { "Default" } else { email }).await?;
-            (org, "owner")
+            // The install's first org has a fixed id: two replicas that both see an empty install
+            // converge on one org (provisioning is idempotent) instead of making two "Default"s.
+            let org = if found.is_none() { OrgId::from_label(&format!("default:{}", state.settings.surreal_ns)) } else { OrgId::new() };
+            let role = match p.provision_org(&state.control, org, if found.is_none() { "Default" } else { email }).await {
+                Ok(()) => "owner",
+                // another replica is provisioning the same first org and got there first: wait for it, then join
+                Err(e) if found.is_none() && wait_ready(state, &org).await => {
+                    tracing::info!(error = %e.message, "first org provisioned by another process, joining it");
+                    "member"
+                }
+                Err(e) => return Err(e),
+            };
+            (org, role)
         }
     };
     store::control::MEMBERSHIP_ADD
@@ -328,6 +352,7 @@ pub struct VerifiedToken {
     pub token_id: RecordId,
     pub scopes: Vec<String>,
     pub vault: Option<RecordId>,
+    pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 pub enum TokenCheck {
@@ -350,6 +375,9 @@ pub async fn check_api_token(db: &ControlDb, token: &str) -> AppResult<TokenChec
         #[serde(default)]
         #[surreal(default)]
         expired: bool,
+        #[serde(default)]
+        #[surreal(default)]
+        expires_at: Option<Datetime>,
     }
     let hash = hash_token(token);
     let mut res = store::control::AUTH_TOKEN_BY_HASH
@@ -376,6 +404,7 @@ pub async fn check_api_token(db: &ControlDb, token: &str) -> AppResult<TokenChec
             token_id: row.id,
             scopes: row.scopes.into_iter().filter(|s| scopes::is_known(s)).collect(),
             vault: row.vault,
+            expires_at: row.expires_at.map(chrono::DateTime::from),
         })),
         None => TokenCheck::Unknown,
     })
@@ -390,7 +419,7 @@ pub async fn verify_api_token(db: &ControlDb, token: &str) -> AppResult<Option<U
     })
 }
 
-/// Mirrors Python's `secrets.token_urlsafe(32)`: 32 random bytes, base64url, no padding.
+/// 32 random bytes, base64url, no padding.
 pub fn generate_token() -> String {
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
     use rand::RngCore;

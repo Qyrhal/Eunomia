@@ -1,17 +1,15 @@
-//! Up Bank source. Ported from `sources/up_bank/source.py`. Wraps
+//! Up Bank source. Wraps
 //! `crate::connectors::clients::UpBankClient`.
 //!
 //! Sync: `filter[since]` delta walk over `/transactions` (following JSON:API
-//! `links.next` pagination, capped at 20 pages like the Python version) plus
+//! `links.next` pagination, capped at 20 pages) plus
 //! a full `/accounts` and `/categories` pull.
 //!
 //! Webhook: verify `X-Up-Authenticity-Signature` (HMAC-SHA256 of the raw body
 //! keyed by the webhook secret), then re-fetch the referenced transaction.
 //!
 //! The tool helpers (`finance_summary`, `list_transactions`, `list_accounts`)
-//! read from the cache (populated by the periodic sync) in Python via
-//! `cache.search`, which isn't ported yet -- these query `cache_record`
-//! directly instead. Behavior and output shape match the Python version.
+//! query `cache_record` (populated by the periodic sync) directly.
 
 use surrealdb::types::SurrealValue;
 use async_trait::async_trait;

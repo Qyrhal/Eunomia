@@ -1,13 +1,8 @@
-//! Source discovery + the operations that run across all sources. Ported
-//! from `sources/registry.py`.
+//! Source discovery + the operations that run across all sources.
 //!
-//! Python's `discover()` dynamically imports every `sources/<pkg>/` exposing
-//! a module-level `SOURCE`. Rust has no runtime package discovery, so
-//! [`all`] lists the four ported sources explicitly -- same registry shape
-//! (`key -> Source`), a static list instead of filesystem scanning.
+//! There is no runtime package discovery: [`all`] lists the four sources
+//! explicitly (`key -> Source`).
 //!
-//! `tool_registry()` (the per-source MCP tool surface) is not ported: see
-//! `sources::base`'s module doc.
 
 use surrealdb::types::SurrealValue;
 use std::collections::HashSet;
@@ -41,8 +36,7 @@ use crate::sources::up_bank::UpBankSource;
 
 /// Every known source. A fresh `Vec` of trait-object handles each call --
 /// cheap (small zero-sized structs) and avoids needing a lazily-initialized
-/// global registry for what Python builds once at import time via
-/// `discover()`.
+/// global registry.
 pub fn all() -> Vec<Arc<dyn Source>> {
     vec![
         Arc::new(DemoSource) as Arc<dyn Source>,
@@ -85,8 +79,7 @@ struct ConnectorKindRow {
 
 /// Every registered source whose connector is enabled for `owner`, excluding
 /// ones in demo mode (a missing `demo` key and an explicit `false` both count
-/// as "not demo mode", filtered in Rust rather than the query, same as the
-/// Python version's comment explains).
+/// as "not demo mode", filtered in Rust rather than the query).
 pub async fn enabled(db: &OrgDb, owner: &RecordId) -> AppResult<Vec<Arc<dyn Source>>> {
     let mut res = store::app::CONNECTOR_ENABLED
         .on(db)
@@ -101,12 +94,8 @@ pub async fn enabled(db: &OrgDb, owner: &RecordId) -> AppResult<Vec<Arc<dyn Sour
     Ok(all().into_iter().filter(|s| on.contains(s.provider_key())).collect())
 }
 
-/// A faithful-but-reduced port of `cache/ingest.py::ingest` for the
-/// map -> upsert stage only. `cache/ingest.py` also runs an embedding stage
-/// (`cache.search.set_embedding` + `embeddings.service.embed`) and an entity
-/// extraction + consolidation stage (`entities.extract`, `entities.consolidate`)
-/// after every write; neither `cache.search`'s embedding half nor `entities.*`
-/// is ported to Rust yet, so both are skipped here rather than faked. Every
+/// The map -> upsert stage of ingestion only. Embedding and entity extraction
+/// run later, not here. Every
 /// `cache_record` written by this path lands with `embedding = NONE`, exactly
 /// the state the `embed` job reconciler (`jobs::handlers`) looks for and fixes.
 pub struct IngestReport {
@@ -122,7 +111,7 @@ impl IngestReport {
         IngestReport { source: source.to_string(), written: 0, skipped: 0, failed: 0, errors: Vec::new() }
     }
 
-    /// Mirrors Python's `IngestReport.as_dict()`: errors capped to the first 20.
+    /// Errors are capped to the first 20.
     pub fn as_value(&self) -> Value {
         serde_json::json!({
             "source": self.source,
@@ -139,10 +128,9 @@ fn cache_record_id(owner: &RecordId, literal_id: &str) -> RecordId {
 }
 
 /// SHA-256 over the envelope fields that determine whether a record actually
-/// changed, mirroring `cache/search.py::_hash_envelope`. Canonicalized via
+/// changed. Canonicalized via
 /// `serde_json`'s key-sorted map so the hash is stable across calls within
-/// this process (not required to match the Python implementation's hash
-/// bytes -- only to be internally consistent for change detection).
+/// this process (only needs to be internally consistent for change detection).
 /// Recursively sorts object keys so the hash below doesn't depend on
 /// `serde_json`'s `Map` insertion-vs-sorted-order feature flag, or on the key
 /// order a source's `map()` happened to build its `payload` object in.
@@ -229,10 +217,8 @@ async fn upsert_one(db: &OrgDb, owner: &RecordId, env: &Value) -> AppResult<bool
     .bind(("deleted", env.get("deleted").and_then(|v| v.as_bool()).unwrap_or(false)))
     .await?;
 
-    // Deferred: `cache/search.py::_reconcile_links` (the `linked_to` edge
-    // sync for `env["links"]`) is not ported -- none of the four ported
-    // sources ever emit a non-empty `links` list, so there is nothing to
-    // reconcile yet.
+    // Deferred: syncing `linked_to` edges from `env["links"]`. None of the four
+    // sources emits a non-empty `links` list, so there is nothing to reconcile yet.
     Ok(true)
 }
 
@@ -271,8 +257,7 @@ pub async fn ingest(state: &OrgState, owner: &RecordId, source_key: &str, raw_re
     report
 }
 
-/// Builds the per-source-call context. A thin constructor so call sites read
-/// like the Python `registry.run_sync(owner, key, mode, cursor)` call.
+/// Builds the per-source-call context.
 pub fn ctx<'a>(db: &'a OrgDb, encryption_key: &'a str, owner: &'a RecordId) -> SourceCtx<'a> {
     SourceCtx { db, encryption_key, owner }
 }
@@ -318,7 +303,7 @@ mod tests {
     }
 
     #[test]
-    fn provider_key_defaults_match_python() {
+    fn provider_key_defaults() {
         // demo.provider == "demo" (explicit); heypocket/up_bank set a
         // distinct provider; example has none, so falls back to its key.
         assert_eq!(get("demo").unwrap().provider_key(), "demo");

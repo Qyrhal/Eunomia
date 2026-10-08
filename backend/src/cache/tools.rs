@@ -1,18 +1,10 @@
 //! `recall`/`reflect` tool-facing wrappers, owner-scoped.
 //!
-//! Deferred: `cache/tools.py`'s `register_tool(...)` / `@safe` plumbing
-//! (wiring these into the Python backend's MCP tool registry, via
-//! `tools/registry.py` and `tools/generic.py::safe`) is NOT ported here --
-//! it's tool-registration glue, not business logic, and this crate has no
-//! MCP registry to register into yet (`src/tools/registry.rs` exists for
-//! `tools::generic`'s handful of inlined cache queries, but there's no
-//! router/dispatcher wired up for a `recall`/`reflect` tool surface in this
-//! pass). What's ported is the one real piece of logic `tools.py` added on
-//! top of `recall`/`reflect`: coercing a `[since, until]` JSON array into the
+//! The tool registration lives in `tools::registry`. This module holds the logic
+//! on top of `recall`/`reflect`: coercing a `[since, until]` JSON array into the
 //! `(since, until)` tuple `cache::recall::recall` expects, and shaping the
 //! `recall` response as `{"results": [...]}`.
 //!
-//! Ported from `cache/tools.py`.
 
 use serde_json::{json, Value};
 use surrealdb::types::RecordId;
@@ -23,8 +15,7 @@ use crate::config::Settings;
 use crate::pool::OrgDb;
 use crate::error::AppResult;
 
-/// Mirrors `cache/tools.py::recall`'s `time_range = tuple(time_range) if
-/// time_range else None` coercion -- a 2-element `[since, until]` JSON array
+/// Coerces a 2-element `[since, until]` JSON array
 /// in, an `(since, until)` tuple out.
 fn time_range_tuple(time_range: Option<&[String]>) -> Option<(&str, &str)> {
     match time_range {

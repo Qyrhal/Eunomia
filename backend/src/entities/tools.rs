@@ -1,18 +1,11 @@
 //! Entity-memory tool functions -- the business logic behind the
 //! `entities_*`/`memory_*`/`entity_*`/`code_*`/`consolidate_observations`
-//! tools that `tools/registry.py` registers for MCP use on the Python side.
+//! tools the registry exposes for MCP use.
 //!
-//! This port keeps only the actual logic: find-or-create/search/merge/
-//! delete/consolidate. The MCP registration glue (`register_tool(name,
-//! json_schema, fn)` and the `@safe` exception-to-`{"error": ...}` wrapper)
-//! is skipped -- there's no MCP tool registry in this Rust codebase yet, and
-//! every function here already returns `AppResult<T>` the same way the rest
-//! of the service layer does (`error.rs`'s `AppError` already renders as
-//! `{"detail": message}`, playing the same role `@safe`'s `{"error": ...}`
-//! did on the Python side). Wiring these into an MCP registry, if/when one
-//! exists in Rust, is future work.
+//! This module keeps only the logic: find-or-create/search/merge/
+//! delete/consolidate. Registration and the error-to-`{"error": ...}` wrapper
+//! live in `tools::registry`; every function here returns `AppResult<T>`.
 //!
-//! Ported from `entities/tools.py`.
 
 use surrealdb::types::RecordId;
 use crate::rid::RecordIdExt;

@@ -1,13 +1,12 @@
 //! Connector CRUD + per-connector data endpoints (finance summary, PocketAI
-//! recordings) + the cross-connector dashboard snapshot. Ported from the old
-//! Django/FastAPI `app/routers/connectors.py`, owner-scoped, no
+//! recordings) + the cross-connector dashboard snapshot. Owner-scoped, no
 //! Google/Twenty/demo-mode.
 //!
-//! The Python module exposes two routers mounted separately by `main.py`:
+//! This module exposes two routers mounted separately:
 //! `router` (prefixed `/connectors`) and `snapshot_router` (mounted bare, so
-//! its one route lands at `/snapshot`). This file mirrors that split as
+//! its one route lands at `/snapshot`). This file has that split as
 //! [`router`] and [`snapshot_router`] -- the caller is responsible for
-//! merging both into the app (matching main.py's `.include_router` calls).
+//! merging both into the app.
 
 use axum::{
     extract::{Path, Query, State},

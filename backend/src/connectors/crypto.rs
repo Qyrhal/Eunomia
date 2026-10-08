@@ -1,15 +1,8 @@
-//! Credential encryption at rest. Ported from `connectors/crypto.py`.
+//! Credential encryption at rest.
 //!
-//! **NOT BYTE-COMPATIBLE WITH THE PYTHON IMPLEMENTATION.** The Python backend
-//! encrypts with `cryptography.fernet.Fernet`, which produces a versioned
-//! token built from AES-128-CBC + HMAC-SHA256. This Rust port instead uses
 //! AES-256-GCM (via the `aes-gcm` crate) with a random 96-bit nonce prepended
-//! to the ciphertext, all base64url-encoded. A ciphertext produced by one
-//! implementation CANNOT be decrypted by the other. If existing
-//! Fernet-encrypted `credentials_encrypted` / `openai_api_key_encrypted`
-//! values need to move from the Python-managed database into this backend,
-//! that is a data migration (decrypt with Python, re-encrypt with this
-//! module) and is explicitly out of scope here.
+//! to the ciphertext, all base64url-encoded. It cannot read Fernet ciphertexts
+//! written by the pre-Rust backend; moving such values needs a one-off re-encryption.
 //!
 //! An empty key derives the all-zero AES key. The backend refuses to boot on it
 //! (see [`guard_key`]) unless `EUNOMIA_ALLOW_EMPTY_ENCRYPTION_KEY=1` is set or the
@@ -52,8 +45,7 @@ fn cipher_for(key: &str) -> Aes256Gcm {
     Aes256Gcm::new_from_slice(&aes_key).expect("derived key is always 32 bytes")
 }
 
-/// Encrypts `value` under `key` (the settings `encryption_key`). Mirrors the
-/// Python `encrypt()`: an empty input round-trips to an empty string without
+/// Encrypts `value` under `key` (the settings `encryption_key`). An empty input round-trips to an empty string without
 /// touching the cipher.
 pub fn encrypt(key: &str, value: &str) -> String {
     if value.is_empty() {
@@ -73,8 +65,7 @@ pub fn encrypt(key: &str, value: &str) -> String {
     URL_SAFE_NO_PAD.encode(out)
 }
 
-/// Decrypts a value produced by [`encrypt`]. Mirrors the Python `decrypt()`:
-/// an empty input round-trips to an empty string.
+/// Decrypts a value produced by [`encrypt`]. An empty input round-trips to an empty string.
 pub fn decrypt(key: &str, value: &str) -> AppResult<String> {
     decrypt_with(key, value, legacy_empty_fallback())
 }

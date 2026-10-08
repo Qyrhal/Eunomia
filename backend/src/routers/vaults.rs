@@ -1,5 +1,5 @@
 //! Vault REST routes: thin wrappers over `vaults::service`, same pattern as
-//! `routers/auth.rs`. Ported from `app/routers/vaults.py`.
+//! `routers/auth.rs`.
 
 use axum::{
     extract::{Path, State},
@@ -79,13 +79,12 @@ struct InvitationList {
     results: Vec<service::InvitationOut>,
 }
 
-/// Mirrors the Python router's inline `kind` validation on create/clone.
+/// Vault kinds a client may create or clone into.
 fn valid_vault_kind(kind: &str) -> bool {
     matches!(kind, "org" | "personal")
 }
 
-/// Path params are plain strings (like `app/routers/vaults.py`'s `vault_id:
-/// str`); parse here, same convention as `routers/auth.rs`'s token/session
+/// Path params are plain strings; parse here, same convention as `routers/auth.rs`'s token/session
 /// id parsing.
 fn parse_vault_id(vault_id: &str) -> AppResult<RecordId> {
     crate::rid::parse(vault_id).map_err(|_| AppError::coded(ErrorCode::VaultNotFound, "Vault not found."))
@@ -401,7 +400,7 @@ mod tests {
     }
 
     #[test]
-    fn defaults_match_python_pydantic_models() {
+    fn request_defaults() {
         assert_eq!(default_kind(), "org");
         assert_eq!(default_role(), "member");
     }

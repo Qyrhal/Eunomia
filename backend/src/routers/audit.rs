@@ -1,8 +1,5 @@
 //! Audit-log REST surface: the owner's own mutating-tool-call history.
-//! Ported from `app/routers/audit.py` (which delegates to
-//! `tools/registry.py::list_audit`); since `tools/registry.py` hasn't been
-//! ported to Rust, the query is written directly here against the
-//! `audit_log` table.
+//! The query runs directly against the `audit_log` table.
 
 use surrealdb::types::SurrealValue;
 use axum::{extract::{Query, State}, routing::get, Json, Router};

@@ -1,12 +1,7 @@
-//! Data export: a single JSON download of the caller's own entities (all
-//! kinds, with their memory + relations) and chat history. Ported from
-//! `app/routers/export.py`. `entities/service.py`, `vaults/service.py` and
-//! `chat/service.py` haven't been ported to Rust yet, so the queries those
-//! modules would run are written directly here (scoped to the caller's
-//! personal vault, same as the Python default).
-//!
-//! Scope cut carried over from the Python version: cache records (raw
-//! synced data) are left out -- re-derivable via a source re-sync.
+//! Data export: a single JSON download of the caller's personal vault: entities of every kind with
+//! their memories and relations, plus their chat history. The document's `scope` key says what is in
+//! and what is left out (other vaults, cache records, connectors, settings, audit log). It is built in
+//! memory with one query per table.
 
 use surrealdb::types::SurrealValue;
 use std::collections::HashMap;
@@ -54,6 +49,7 @@ struct EntityRow {
 #[derive(Debug, Deserialize, SurrealValue)]
 struct MemoryRow {
     id: RecordId,
+    subject: RecordId,
     #[serde(default)]
     #[surreal(default)]
     text: String,
@@ -109,8 +105,7 @@ struct UserEmailRow {
     email: String,
 }
 
-/// `owner`'s personal vault -- the implicit scope for an export, matching
-/// `vaults/service.py::default_vault_id`.
+/// `owner`'s personal vault -- the implicit scope for an export.
 pub(crate) async fn resolve_personal_vault(db: &OrgDb, owner: &RecordId) -> AppResult<RecordId> {
     let mut res = store::app::EXPORT_PERSONAL_VAULT
         .on(db)
@@ -175,8 +170,8 @@ async fn export_data(State(state): State<AppState>, user: User) -> AppResult<Res
 pub async fn build_export(db: &OrgDb, control: &ControlDb, user: &User) -> AppResult<Value> {
     let vault = resolve_personal_vault(db, &user.id).await?;
 
-    // Pass 1: gather every entity + its memory/relations, collecting the
-    // owner ids we'll need emails for.
+    // One query per table, not per entity: the entities of every kind, then the memories and the
+    // relations (both directions) of all of them at once, grouped back onto their entity.
     struct Bundle {
         kind: &'static str,
         row: EntityRow,
@@ -186,51 +181,44 @@ pub async fn build_export(db: &OrgDb, control: &ControlDb, user: &User) -> AppRe
     }
 
     let mut bundles: Vec<Bundle> = Vec::new();
-    let mut owner_ids: Vec<RecordId> = Vec::new();
-
     for kind in KINDS {
         let query = format!("SELECT * FROM {kind} WHERE vault = $vault ORDER BY name");
         // dynamic: the table name is the entity kind
         let mut res = store::dynamic(db, "app.export_entities", query).bind(("vault", vault.clone())).await?;
         let rows: Vec<EntityRow> = res.take(0)?;
+        bundles.extend(rows.into_iter().map(|row| Bundle { kind, row, memories: Vec::new(), outgoing: Vec::new(), incoming: Vec::new() }));
+    }
 
-        for row in rows {
-            if let Some(o) = &row.owner {
-                owner_ids.push(o.clone());
+    let ids: Vec<RecordId> = bundles.iter().map(|b| b.row.id.clone()).collect();
+    let at: HashMap<String, usize> = ids.iter().enumerate().map(|(i, id)| (id.to_string(), i)).collect();
+    if !ids.is_empty() {
+        let memories: Vec<MemoryRow> = store::app::EXPORT_MEMORIES.on(db).bind(("ids", ids.clone())).await?.take(0)?;
+        for m in memories {
+            if let Some(i) = at.get(&m.subject.to_string()) {
+                bundles[*i].memories.push(m);
             }
-
-            let mut mem_res = store::app::EXPORT_MEMORIES
-                .on(db)
-                .bind(("id", row.id.clone()))
-                .await?;
-            let memories: Vec<MemoryRow> = mem_res.take(0)?;
-            for m in &memories {
-                if let Some(o) = &m.owner {
-                    owner_ids.push(o.clone());
-                }
+        }
+        let outgoing: Vec<RelationRow> = store::app::EXPORT_RELATIONS_OUT.on(db).bind(("ids", ids.clone())).await?.take(0)?;
+        for r in outgoing {
+            if let Some(i) = at.get(&r.in_.to_string()) {
+                bundles[*i].outgoing.push(r);
             }
-
-            let mut out_res = store::app::EXPORT_RELATIONS_OUT
-                .on(db)
-                .bind(("id", row.id.clone()))
-                .await?;
-            let outgoing: Vec<RelationRow> = out_res.take(0)?;
-
-            let mut in_res = store::app::EXPORT_RELATIONS_IN
-                .on(db)
-                .bind(("id", row.id.clone()))
-                .await?;
-            let incoming: Vec<RelationRow> = in_res.take(0)?;
-
-            for r in outgoing.iter().chain(incoming.iter()) {
-                if let Some(o) = &r.owner {
-                    owner_ids.push(o.clone());
-                }
+        }
+        let incoming: Vec<RelationRow> = store::app::EXPORT_RELATIONS_IN.on(db).bind(("ids", ids)).await?.take(0)?;
+        for r in incoming {
+            if let Some(i) = at.get(&r.out.to_string()) {
+                bundles[*i].incoming.push(r);
             }
-
-            bundles.push(Bundle { kind, row, memories, outgoing, incoming });
         }
     }
+
+    let owner_ids: Vec<RecordId> = bundles
+        .iter()
+        .flat_map(|b| {
+            let owners = b.memories.iter().map(|m| &m.owner).chain(b.outgoing.iter().chain(&b.incoming).map(|r| &r.owner));
+            std::iter::once(&b.row.owner).chain(owners).flatten().cloned().collect::<Vec<_>>()
+        })
+        .collect();
 
     let emails = fetch_emails(control, &owner_ids).await?;
     let email_for = |id: &Option<RecordId>| -> Value {
@@ -320,9 +308,15 @@ pub async fn build_export(db: &OrgDb, control: &ControlDb, user: &User) -> AppRe
         })
         .collect();
 
+    let tables = [KINDS.as_slice(), &["memory", "relates_to", "chat_message"]].concat();
     Ok(json!({
         "exported_at": Utc::now().to_rfc3339(),
         "user": { "id": user.id.to_string(), "email": user.email },
+        "scope": {
+            "vault": "personal",
+            "tables": tables,
+            "left_out": ["other vaults you belong to (export each separately)", "cache_record (synced source data, re-sync to rebuild)", "connectors and settings", "audit_log"],
+        },
         "entities": entities_out,
         "chat_history": chat_history,
     }))
@@ -344,7 +338,7 @@ mod tests {
     }
 
     #[test]
-    fn kinds_match_the_python_entity_kind_set() {
+    fn kinds_are_the_six_entity_kinds() {
         assert_eq!(KINDS, ["person", "organisation", "location", "repository", "file", "symbol"]);
     }
 }

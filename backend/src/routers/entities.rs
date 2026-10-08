@@ -5,9 +5,7 @@
 //! call -- so the manual add/edit UI and a future agent's tool calls stay in
 //! lockstep.
 //!
-//! Ported from `app/routers/entities.py`.
-//!
-//! `GET /entities/graph`'s `kinds` filter matches Python's repeated-query-param
+//! `GET /entities/graph`'s `kinds` filter takes the repeated-query-param
 //! form (`?kinds=a&kinds=b`) via a manual `RawQuery` parse (see `parse_kinds`),
 //! since `axum::extract::Query`'s `serde_urlencoded` backing doesn't collect
 //! repeated keys into a `Vec` without `axum-extra`. Comma-separated
@@ -117,8 +115,7 @@ fn parse_kinds(raw_query: Option<&str>) -> Vec<String> {
         .collect()
 }
 
-/// Path params are plain strings (like `app/routers/entities.py`'s
-/// `entity_id: str`); parse here, same convention as `routers/vaults.rs`'s
+/// Path params are plain strings; parse here, same convention as `routers/vaults.rs`'s
 /// `parse_vault_id`.
 #[derive(Debug, Default, Deserialize, utoipa::IntoParams)]
 #[into_params(parameter_in = Query)]
@@ -469,12 +466,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_limit_matches_python_default() {
+    fn default_limit_is_50() {
         assert_eq!(default_limit(), 50);
     }
 
     #[test]
-    fn default_memory_type_matches_python_default() {
+    fn default_memory_type_is_world() {
         assert_eq!(default_memory_type(), "world");
     }
 

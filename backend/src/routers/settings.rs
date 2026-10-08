@@ -1,6 +1,5 @@
 //! Per-user app settings: embedding model, sync intervals, theme, and the
-//! OpenAI(-compatible) base URL + optional API key. Ported from
-//! `app/routers/settings.py`.
+//! OpenAI(-compatible) base URL + optional API key.
 //!
 //! `openai_api_key` is stored AES-GCM-encrypted (`connectors::crypto`) in
 //! `openai_api_key_encrypted`; it is never returned, only `openai_api_key_set`.
@@ -133,7 +132,7 @@ async fn get_app_settings(db: &OrgDb, owner: &RecordId) -> AppResult<AppSettings
 }
 
 /// Partial update: each provided field replaces its current value outright
-/// (no deep merge), matching the Python router's semantics.
+/// (no deep merge).
 async fn update_app_settings(db: &OrgDb, owner: &RecordId, body: &SettingsUpdate, encryption_key: &str) -> AppResult<AppSettingsRow> {
     get_app_settings(db, owner).await?; // ensure the row exists
 

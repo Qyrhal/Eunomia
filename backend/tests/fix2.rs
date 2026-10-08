@@ -109,7 +109,7 @@ async fn capsules_keep_only_a_hash_and_shape_of_arguments_by_default() {
     assert_eq!(c.args["shape"], json!({ "entity_id": "string", "summary": "string", "n": "number" }));
     assert_eq!(c.args["hash"].as_str().map(str::len), Some(64));
 
-    let err = eunomia_backend::replay::replay(&app.state, &app.state.settings, &trace).await.unwrap_err();
+    let err = eunomia_backend::replay::replay(&app.state, &app.state.settings, &trace, 0).await.unwrap_err();
     assert!(err.message.contains("CAPSULE_ARGS"), "{}", err.message);
     let test = eunomia_backend::replay::emit_test(&c);
     assert!(test.contains("NOT stored") && test.contains("\"summary\": \"string\"") && !test.contains("diagnosis"), "{test}");

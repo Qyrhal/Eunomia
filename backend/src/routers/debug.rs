@@ -49,21 +49,25 @@ async fn get_metrics(State(state): State<AppState>, user: User) -> AppResult<Jso
     get,
     path = "/api/debug/capsules/{trace_id}",
     tag = "debug",
-    summary = "Fetch the redacted failure capsule for a trace id (instance admin only)",
+    summary = "Fetch the redacted failure capsules for a trace id, oldest first (instance admin only)",
     params(("trace_id" = String, Path)),
-    responses((status = 200, body = Capsule), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    responses((status = 200, body = Vec<Capsule>), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
     security(("cookie" = []), ("bearer" = [])),
 )]
-async fn get_capsule(State(state): State<AppState>, user: User, Path(trace_id): Path<String>) -> AppResult<Json<Capsule>> {
+async fn get_capsule(State(state): State<AppState>, user: User, Path(trace_id): Path<String>) -> AppResult<Json<Vec<Capsule>>> {
     if !crate::authz::is_admin(&state.control, &user).await? {
         return Err(AppError::coded(ErrorCode::AuthForbidden, "Only an instance admin can read failure capsules."));
     }
-    capsules::get(&state.control, &trace_id)
+    // another org's capsule does not exist as far as this admin can tell (instance operators see all)
+    let found: Vec<Capsule> = capsules::get_all(&state.control, &trace_id)
         .await?
-        // another org's capsule does not exist as far as this admin can tell (instance operators see all)
+        .into_iter()
         .filter(|c| crate::authz::is_operator(&user) || c.org.as_deref().is_none_or(|o| o == user.org.key()))
-        .map(Json)
-        .ok_or_else(|| AppError::not_found(format!("No failure capsule for trace {trace_id}.")))
+        .collect();
+    if found.is_empty() {
+        return Err(AppError::not_found(format!("No failure capsule for trace {trace_id}.")));
+    }
+    Ok(Json(found))
 }
 
 #[derive(utoipa::OpenApi)]

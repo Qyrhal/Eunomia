@@ -8,10 +8,8 @@
 //! so admin rights only ever come from creating a vault or being promoted by
 //! an existing owner -- no separate "who can invite" check needed.
 //!
-//! Ported from `vaults/service.py`. Callers resolve a path/user-supplied
-//! vault id into a `RecordId` before calling in (see `routers/vaults.rs`),
-//! unlike the Python version's `_as_rid` which accepted either -- everything
-//! here already deals in `RecordId`.
+//! Callers resolve a path/user-supplied vault id into a `RecordId` before
+//! calling in (see `routers/vaults.rs`); everything here deals in `RecordId`.
 
 use surrealdb::types::SurrealValue;
 use std::collections::{HashMap, HashSet};
@@ -26,8 +24,7 @@ use crate::error::{AppError, AppResult};
 use crate::store;
 use crate::tx::{with_retry, with_retry_dup};
 
-/// Entity tables a vault's data can live in -- mirrors `entities/service.py`'s
-/// `KINDS` tuple and `db.rs`'s `memory.subject` record union.
+/// Entity tables a vault's data can live in -- the same set as `entities::service::KINDS` and `db.rs`'s `memory.subject` record union.
 const ENTITY_KINDS: [&str; 6] = ["person", "organisation", "location", "repository", "file", "symbol"];
 
 #[derive(Debug, Deserialize, SurrealValue)]

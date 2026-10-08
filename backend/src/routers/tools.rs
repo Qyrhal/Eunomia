@@ -1,12 +1,8 @@
 //! REST surface for the tool registry -- the catalogue is public (schema
 //! only, no data); calling a tool requires auth since it reads the caller's
-//! owned data. Ported from `app/routers/tools.py`.
+//! owned data.
 //!
-//! The catalogue currently reports `{}` for every caller: `tools::registry`
-//! is stubbed pending `entities::tools`, `vaults::tools`, `cache::tools` and
-//! `sources::registry` landing (see `tools::registry::build_registry`'s doc
-//! comment). This router itself needs no changes once those wire up --
-//! `all_tools()` and `call()` pick the new entries up automatically.
+//! `all_tools()` and `call()` pick up new registry entries automatically.
 
 use axum::{
     extract::{Path, State},
@@ -34,10 +30,7 @@ pub fn router() -> Router<AppState> {
     security(()),
 )]
 async fn catalogue() -> Json<Value> {
-    // The Python version returns each tool's JSON schema alongside its name;
-    // there's no Rust equivalent of that schema literal yet (see
-    // `tools::registry`'s doc comment), so this reports names only until a
-    // schema representation exists.
+    // Names only: the tools' JSON schemas are served by the MCP `tools/list` call.
     let names: Vec<&str> = registry::all_tools().keys().copied().collect();
     Json(serde_json::json!(names))
 }
