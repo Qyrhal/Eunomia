@@ -10,7 +10,7 @@ use surrealdb::{Datetime, RecordId};
 use crate::db::Db;
 use crate::store;
 use crate::error::{AppError, AppResult};
-use crate::scopes::Scope;
+use crate::scopes;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct User {
@@ -123,7 +123,7 @@ pub struct ApiTokenCreated {
     pub id: RecordId,
     pub name: String,
     pub token: String,
-    pub scopes: Vec<Scope>,
+    pub scopes: Vec<String>,
     pub vault: Option<RecordId>,
     pub expires_at: Option<Datetime>,
 }
@@ -136,14 +136,14 @@ struct ApiTokenRow {
 
 /// A full-scope, non-expiring token, as every token was before scopes existed.
 pub async fn create_api_token(db: &Db, owner: &RecordId, name: &str) -> AppResult<ApiTokenCreated> {
-    create_api_token_with(db, owner, name, &Scope::ALL, None, None).await
+    create_api_token_with(db, owner, name, &all_scope_names(), None, None).await
 }
 
 pub async fn create_api_token_with(
     db: &Db,
     owner: &RecordId,
     name: &str,
-    scopes: &[Scope],
+    scopes: &[String],
     vault: Option<&RecordId>,
     expires_at: Option<Datetime>,
 ) -> AppResult<ApiTokenCreated> {
@@ -155,7 +155,7 @@ pub async fn create_api_token_with(
         .bind(("owner", owner.clone()))
         .bind(("name", name.to_string()))
         .bind(("hash", hash))
-        .bind(("scopes", scopes.iter().map(|s| s.as_str().to_string()).collect::<Vec<_>>()))
+        .bind(("scopes", scopes.to_vec()))
         .bind(("vault", vault.cloned()))
         .bind(("expires_at", expires_at.clone()))
         .await?;
@@ -166,7 +166,7 @@ pub async fn create_api_token_with(
 }
 
 fn all_scope_names() -> Vec<String> {
-    Scope::ALL.iter().map(|s| s.as_str().to_string()).collect()
+    scopes::ALL.iter().map(|s| s.to_string()).collect()
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -209,7 +209,7 @@ pub async fn revoke_api_token(db: &Db, owner: &RecordId, token_id: &RecordId) ->
 pub struct VerifiedToken {
     pub user: User,
     pub token_id: RecordId,
-    pub scopes: Vec<Scope>,
+    pub scopes: Vec<String>,
     pub vault: Option<RecordId>,
 }
 
@@ -254,7 +254,7 @@ pub async fn check_api_token(db: &Db, token: &str) -> AppResult<TokenCheck> {
         Some(r) => TokenCheck::Valid(Box::new(VerifiedToken {
             user: User { id: r.id, email: r.email },
             token_id: row.id,
-            scopes: crate::scopes::parse_all(&row.scopes),
+            scopes: row.scopes.into_iter().filter(|s| scopes::is_known(s)).collect(),
             vault: row.vault,
         })),
         None => TokenCheck::Unknown,

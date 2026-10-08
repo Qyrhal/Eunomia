@@ -27,7 +27,7 @@ use tracing::{field::Empty, Instrument};
 use crate::audit::{self, Event};
 use crate::authz;
 use crate::db::Db;
-use crate::scopes::Scope;
+use crate::scopes;
 use crate::store;
 use crate::error::{AppError, AppResult, ErrorCode};
 use crate::state::AppState;
@@ -74,22 +74,6 @@ pub fn is_read_only(name: &str) -> bool {
 /// (`destructiveHint`) so they can ask before running them.
 pub fn is_destructive(name: &str) -> bool {
     matches!(name, "memory_delete" | "entity_delete" | "entity_merge" | "vault_delete" | "vault_remove_member" | "vault_leave")
-}
-
-/// The token scope each tool needs. Anything not listed is treated as vault
-/// administration (the strictest), so a new tool is closed until it is classified.
-pub fn tool_scope(name: &str) -> Scope {
-    if is_read_only(name) {
-        Scope::MemoryRead
-    } else if matches!(
-        name,
-        "code_entity_upsert" | "code_relate" | "memory_write" | "consolidate_observations" | "memory_update"
-            | "entity_update" | "memory_delete" | "entity_delete" | "entity_merge"
-    ) {
-        Scope::MemoryWrite
-    } else {
-        Scope::VaultsAdmin
-    }
 }
 
 /// Tools over the user's raw synced source records, which belong to no vault:
@@ -1371,7 +1355,7 @@ pub async fn call(state: &AppState, owner: &RecordId, name: &str, args: Value) -
         return Ok(AppError::coded(ErrorCode::ToolNotFound, format!("unknown tool {name}")).to_tool_value());
     };
 
-    let needed = authz::require_scope(tool_scope(name)).and_then(|()| {
+    let needed = authz::require_scope(scopes::for_tool(name, is_read_only(name))).and_then(|()| {
         if reads_source_records(name) { authz::require_unrestricted() } else { Ok(()) }
     });
     if let Err(e) = needed {
@@ -1425,15 +1409,14 @@ mod tests {
     fn every_tool_has_the_intended_scope() {
         for name in all_tools().keys() {
             let want = if is_read_only(name) {
-                Scope::MemoryRead
+                scopes::MEMORY_READ
             } else if name.starts_with("vault_") {
-                Scope::VaultsAdmin
+                scopes::VAULTS_ADMIN
             } else {
-                Scope::MemoryWrite
+                scopes::MEMORY_WRITE
             };
-            assert_eq!(tool_scope(name), want, "{name}: classify the new tool in tool_scope");
+            assert_eq!(scopes::for_tool(name, is_read_only(name)), want, "{name}");
         }
-        assert_eq!(tool_scope("not_a_tool"), Scope::VaultsAdmin, "unknown tools default to the strictest scope");
     }
 
     #[test]

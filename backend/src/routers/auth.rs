@@ -16,7 +16,7 @@ use surrealdb::{Datetime, RecordId};
 use crate::audit::{self, Event};
 use crate::auth::{self, SESSION_COOKIE};
 use crate::authz;
-use crate::scopes::Scope;
+use crate::scopes;
 use crate::error::{AppError, AppResult, ErrorCode};
 use crate::store;
 use crate::models_user::{self, User};
@@ -48,7 +48,7 @@ struct TokenCreated {
     name: String,
     /// Shown once, never retrievable again.
     token: String,
-    scopes: Vec<Scope>,
+    scopes: Vec<String>,
     vault_id: Option<String>,
     #[schema(value_type = Option<String>)]
     expires_at: Option<Datetime>,
@@ -68,9 +68,10 @@ struct Credentials {
 #[derive(Deserialize, utoipa::ToSchema)]
 struct TokenCreate {
     name: String,
-    /// Defaults to every scope. Cannot exceed the creating credential's own scopes.
+    /// Any of `memory:read`, `memory:write`, `vaults:admin`, `connectors`. Defaults
+    /// to all of them. Cannot exceed the creating credential's own scopes.
     #[serde(default)]
-    scopes: Option<Vec<Scope>>,
+    scopes: Option<Vec<String>>,
     /// Restrict the token to one vault you belong to.
     #[serde(default)]
     vault_id: Option<String>,
@@ -97,6 +98,7 @@ fn session_cookie_header(token: &str) -> String {
 }
 
 #[utoipa::path(
+    operation_id = "register",
     post,
     path = "/api/auth/register",
     tag = "auth",
@@ -134,6 +136,7 @@ async fn register(
 }
 
 #[utoipa::path(
+    operation_id = "login",
     post,
     path = "/api/auth/login",
     tag = "auth",
@@ -176,6 +179,7 @@ async fn login(
 }
 
 #[utoipa::path(
+    operation_id = "logout",
     post,
     path = "/api/auth/logout",
     tag = "auth",
@@ -196,6 +200,7 @@ async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Response {
 }
 
 #[utoipa::path(
+    operation_id = "getMe",
     get,
     path = "/api/auth/me",
     tag = "auth",
@@ -209,6 +214,7 @@ async fn me(State(state): State<AppState>, user: User) -> AppResult<Json<AuthOut
 }
 
 #[utoipa::path(
+    operation_id = "createToken",
     post,
     path = "/api/auth/tokens",
     tag = "auth",
@@ -226,17 +232,21 @@ async fn create_token(
         let trimmed = body.name.trim();
         if trimmed.is_empty() { "API token".to_string() } else { trimmed.to_string() }
     };
-    let scopes = match body.scopes {
-        None => Scope::ALL.to_vec(),
+    let scopes: Vec<String> = match body.scopes {
+        None => scopes::ALL.iter().map(|s| s.to_string()).collect(),
         Some(s) if s.is_empty() => return Err(AppError::bad_request("Choose at least one scope.")),
         Some(mut s) => {
+            if let Some(bad) = s.iter().find(|n| !scopes::is_known(n)) {
+                return Err(AppError::bad_request(format!("Unknown scope {bad:?}.")));
+            }
+            s.sort();
             s.dedup();
             s
         }
     };
     // a token cannot hand out more than it holds
     for s in &scopes {
-        authz::require_scope(*s)?;
+        authz::require_scope(s)?;
     }
     let vault = match body.vault_id.as_deref().filter(|v| !v.is_empty()) {
         None => None,
@@ -282,7 +292,7 @@ struct TokenOut {
     created_at: Option<Datetime>,
     #[schema(value_type = Option<String>)]
     last_used_at: Option<Datetime>,
-    scopes: Vec<Scope>,
+    scopes: Vec<String>,
     vault_id: Option<String>,
     /// `null` for a token that never expires.
     #[schema(value_type = Option<String>)]
@@ -290,6 +300,7 @@ struct TokenOut {
 }
 
 #[utoipa::path(
+    operation_id = "listTokens",
     get,
     path = "/api/auth/tokens",
     tag = "auth",
@@ -306,7 +317,7 @@ async fn get_tokens(State(state): State<AppState>, user: User) -> AppResult<Json
                 name: r.name,
                 created_at: Some(r.created_at),
                 last_used_at: r.last_used_at,
-                scopes: crate::scopes::parse_all(&r.scopes),
+                scopes: r.scopes.into_iter().filter(|s| scopes::is_known(s)).collect(),
                 vault_id: r.vault.map(|v| v.to_string()),
                 expires_at: r.expires_at,
             })
@@ -315,6 +326,7 @@ async fn get_tokens(State(state): State<AppState>, user: User) -> AppResult<Json
 }
 
 #[utoipa::path(
+    operation_id = "deleteToken",
     delete,
     path = "/api/auth/tokens/{token_id}",
     tag = "auth",
@@ -357,6 +369,7 @@ struct SessionOut {
 }
 
 #[utoipa::path(
+    operation_id = "listSessions",
     get,
     path = "/api/auth/sessions",
     tag = "auth",
@@ -383,6 +396,7 @@ async fn get_sessions(State(state): State<AppState>, user: User) -> AppResult<Js
 }
 
 #[utoipa::path(
+    operation_id = "revokeSession",
     delete,
     path = "/api/auth/sessions/{session_id}",
     tag = "auth",
@@ -411,6 +425,7 @@ async fn revoke_session_route(
 }
 
 #[utoipa::path(
+    operation_id = "getBootstrap",
     get,
     path = "/api/auth/bootstrap",
     tag = "auth",

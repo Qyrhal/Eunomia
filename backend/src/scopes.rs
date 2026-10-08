@@ -1,38 +1,46 @@
-//! Token scopes: what a personal access token (or, later, an OAuth grant) may do.
-//! Which scope each route and tool needs is decided in `gate.rs` and `tools::registry`.
+//! Scope names shared by OAuth access tokens and personal access tokens.
+//! One place so the two credential types can never drift apart.
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
-pub enum Scope {
-    #[serde(rename = "memory:read")]
-    MemoryRead,
-    #[serde(rename = "memory:write")]
-    MemoryWrite,
-    #[serde(rename = "vaults:admin")]
-    VaultsAdmin,
-    #[serde(rename = "connectors")]
-    Connectors,
+pub const MEMORY_READ: &str = "memory:read";
+pub const MEMORY_WRITE: &str = "memory:write";
+pub const VAULTS_ADMIN: &str = "vaults:admin";
+pub const CONNECTORS: &str = "connectors";
+
+pub const ALL: &[&str] = &[MEMORY_READ, MEMORY_WRITE, VAULTS_ADMIN, CONNECTORS];
+
+/// Granted when a client asks for no scope: day-to-day memory use, nothing administrative.
+pub const DEFAULT: &[&str] = &[MEMORY_READ, MEMORY_WRITE];
+
+pub fn is_known(scope: &str) -> bool {
+    ALL.contains(&scope)
 }
 
-impl Scope {
-    pub const ALL: [Scope; 4] = [Scope::MemoryRead, Scope::MemoryWrite, Scope::VaultsAdmin, Scope::Connectors];
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Scope::MemoryRead => "memory:read",
-            Scope::MemoryWrite => "memory:write",
-            Scope::VaultsAdmin => "vaults:admin",
-            Scope::Connectors => "connectors",
-        }
-    }
-
-    pub fn parse(s: &str) -> Option<Scope> {
-        Scope::ALL.into_iter().find(|sc| sc.as_str() == s)
+/// Plain-words description for the consent screen.
+pub fn describe(scope: &str) -> &'static str {
+    match scope {
+        MEMORY_READ => "Read your memories, entities and synced records",
+        MEMORY_WRITE => "Add, edit and delete memories and entities",
+        VAULTS_ADMIN => "Create, share, merge and delete vaults",
+        CONNECTORS => "Manage connected sources",
+        _ => "",
     }
 }
 
-/// Parses a stored list; unknown names are dropped (a token never gains power from a typo).
-pub fn parse_all<S: AsRef<str>>(names: &[S]) -> Vec<Scope> {
-    names.iter().filter_map(|n| Scope::parse(n.as_ref())).collect()
+/// Whether a granted scope list covers `required`. `memory:write` implies `memory:read`.
+pub fn allows(granted: &[String], required: &str) -> bool {
+    granted.iter().any(|g| g == required) || (required == MEMORY_READ && granted.iter().any(|g| g == MEMORY_WRITE))
+}
+
+/// The scope an MCP tool call needs: vault tools that change membership or
+/// existence need `vaults:admin`, other mutating tools `memory:write`, reads `memory:read`.
+pub fn for_tool(name: &str, read_only: bool) -> &'static str {
+    if read_only {
+        MEMORY_READ
+    } else if name.starts_with("vault_") {
+        VAULTS_ADMIN
+    } else {
+        MEMORY_WRITE
+    }
 }
 
 #[cfg(test)]
@@ -40,11 +48,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn names_round_trip() {
-        for s in Scope::ALL {
-            assert_eq!(Scope::parse(s.as_str()), Some(s));
-        }
-        assert_eq!(Scope::parse("memory:admin"), None);
-        assert_eq!(parse_all(&["memory:read", "nope"]), vec![Scope::MemoryRead]);
+    fn write_implies_read_but_not_admin() {
+        let g = vec![MEMORY_WRITE.to_string()];
+        assert!(allows(&g, MEMORY_READ) && allows(&g, MEMORY_WRITE) && !allows(&g, VAULTS_ADMIN));
+        assert!(!allows(&[MEMORY_READ.to_string()], MEMORY_WRITE));
+    }
+
+    #[test]
+    fn tools_map_to_scopes() {
+        assert_eq!(for_tool("recall", true), MEMORY_READ);
+        assert_eq!(for_tool("memory_write", false), MEMORY_WRITE);
+        assert_eq!(for_tool("vault_delete", false), VAULTS_ADMIN);
     }
 }

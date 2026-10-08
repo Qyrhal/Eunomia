@@ -125,11 +125,20 @@ async fn session_authn(db: &Db, secret: &str, token: &str) -> AppResult<Option<A
     Ok(Some(Authn { user, caller }))
 }
 
-/// A Bearer personal access token. `Ok(None)` means unknown; expired is an error.
-/// This is the one place a bearer credential becomes a [`Caller`], so another
-/// kind of bearer (an OAuth access token) plugs in here.
-pub async fn bearer_authn(db: &Db, token: &str) -> AppResult<Option<Authn>> {
-    match models_user::check_api_token(db, token).await? {
+/// A Bearer personal access token, or (on `/mcp` only, `allow_oauth`) an OAuth
+/// access token. `Ok(None)` means unknown; an expired PAT is an error. This is
+/// the one place a bearer credential becomes a [`Caller`].
+pub async fn bearer_authn(state: &AppState, token: &str, allow_oauth: bool) -> AppResult<Option<Authn>> {
+    if crate::oauth::is_access_token(token) {
+        if !allow_oauth {
+            return Ok(None);
+        }
+        let Some((user, granted)) = crate::oauth::verify_access_token(state, token).await else { return Ok(None) };
+        let client = crate::oauth::server::token_row(&state.db, token).await.and_then(|r| r.client_id).unwrap_or_default();
+        let caller = Caller { actor: Actor { kind: "oauth", id: client }, scopes: granted, vault: None };
+        return Ok(Some(Authn { user, caller }));
+    }
+    match models_user::check_api_token(&state.db, token).await? {
         TokenCheck::Valid(v) => {
             let actor = Actor { kind: "token", id: v.token_id.to_string() };
             Ok(Some(Authn { user: v.user, caller: Caller { actor, scopes: v.scopes, vault: v.vault } }))
@@ -149,14 +158,14 @@ pub fn session_token(headers: &HeaderMap) -> Option<String> {
 }
 
 /// Resolves the request's credential: a Bearer token first, then (unless
-/// `allow_cookie` is false, as on `/mcp`) the session cookie.
-pub async fn authenticate(state: &AppState, headers: &HeaderMap, allow_cookie: bool) -> AppResult<Option<Authn>> {
+/// `mcp`, which takes tokens only) the session cookie.
+pub async fn authenticate(state: &AppState, headers: &HeaderMap, mcp: bool) -> AppResult<Option<Authn>> {
     if let Some(token) = bearer_token(headers)
-        && let Some(authn) = bearer_authn(&state.db, token).await?
+        && let Some(authn) = bearer_authn(state, token, mcp).await?
     {
         return Ok(Some(authn));
     }
-    if allow_cookie
+    if !mcp
         && let Some(token) = session_token(headers)
     {
         return session_authn(&state.db, &state.settings.jwt_secret, &token).await;

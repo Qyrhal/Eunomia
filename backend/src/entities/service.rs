@@ -80,7 +80,7 @@ struct EntityRow {
     summary: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct EntityOut {
     pub id: String,
     pub kind: String,
@@ -129,7 +129,7 @@ fn default_memory_type() -> String {
     "world".to_string()
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct MemoryOut {
     pub id: String,
     pub owner: Option<String>,
@@ -137,12 +137,14 @@ pub struct MemoryOut {
     pub subject: String,
     pub text: String,
     pub source: Option<String>,
+    #[schema(value_type = String)]
     pub created_at: Datetime,
     #[serde(rename = "type")]
     pub mem_type: String,
     pub proof_count: i64,
     pub status: Option<String>,
     pub source_memories: Option<Vec<String>>,
+    #[schema(value_type = Option<String>)]
     pub updated_at: Option<Datetime>,
     pub version: i64,
     pub owner_email: Option<String>,
@@ -184,7 +186,7 @@ struct RelationRow {
     created_at: Option<Datetime>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct RelationOut {
     pub id: String,
     #[serde(rename = "in")]
@@ -194,6 +196,7 @@ pub struct RelationOut {
     pub label: String,
     pub source: Option<String>,
     pub owner: Option<String>,
+    #[schema(value_type = Option<String>)]
     pub created_at: Option<Datetime>,
     pub direction: Option<String>,
     pub owner_email: Option<String>,
@@ -213,7 +216,7 @@ fn relation_out(row: &RelationRow, direction: Option<&str>, owner_email: Option<
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct EntityDetail {
     pub id: String,
     pub kind: String,
@@ -225,14 +228,14 @@ pub struct EntityDetail {
     pub relations: Vec<RelationOut>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct ListEntitiesOut {
     pub results: Vec<EntityOut>,
     pub total: usize,
     pub has_more: bool,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct GraphNode {
     pub id: String,
     pub kind: String,
@@ -240,7 +243,7 @@ pub struct GraphNode {
     pub owner_email: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct GraphEdge {
     pub source: String,
     pub target: String,
@@ -248,7 +251,7 @@ pub struct GraphEdge {
     pub owner_email: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct GraphOut {
     pub nodes: Vec<GraphNode>,
     pub edges: Vec<GraphEdge>,

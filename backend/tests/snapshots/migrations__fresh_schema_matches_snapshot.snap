@@ -218,6 +218,62 @@ expression: info(&db).await
       "kind": {
         "kind": "NORMAL"
       },
+      "name": "oauth_client",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      }
+    },
+    {
+      "drop": false,
+      "full": true,
+      "kind": {
+        "kind": "NORMAL"
+      },
+      "name": "oauth_code",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      }
+    },
+    {
+      "drop": false,
+      "full": true,
+      "kind": {
+        "kind": "NORMAL"
+      },
+      "name": "oauth_grant",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      }
+    },
+    {
+      "drop": false,
+      "full": true,
+      "kind": {
+        "kind": "NORMAL"
+      },
+      "name": "oauth_token",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      }
+    },
+    {
+      "drop": false,
+      "full": true,
+      "kind": {
+        "kind": "NORMAL"
+      },
       "name": "organisation",
       "permissions": {
         "create": false,

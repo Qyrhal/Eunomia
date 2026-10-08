@@ -53,50 +53,54 @@ impl From<VaultFullRow> for VaultOut {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct VaultOut {
     pub id: String,
     pub name: String,
     pub kind: String,
+    #[schema(value_type = Option<String>)]
     pub created_at: Option<Datetime>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct VaultWithRole {
     pub id: String,
     pub name: String,
     pub kind: String,
+    #[schema(value_type = Option<String>)]
     pub created_at: Option<Datetime>,
     pub role: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct InviteOut {
     pub vault_id: String,
     pub user_email: String,
     pub role: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct MemberOut {
     pub email: String,
     pub role: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct InvitationOut {
     pub vault_id: String,
     pub vault_name: String,
     pub vault_kind: String,
     pub role: String,
+    #[schema(value_type = Option<String>)]
     pub created_at: Option<Datetime>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct CloneOut {
     pub id: String,
     pub name: String,
     pub kind: String,
+    #[schema(value_type = Option<String>)]
     pub created_at: Option<Datetime>,
     pub entities_copied: usize,
 }
@@ -648,11 +652,12 @@ pub async fn clone_vault(
     })
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct MergeOut {
     pub id: String,
     pub name: String,
     pub kind: String,
+    #[schema(value_type = Option<String>)]
     pub created_at: Option<Datetime>,
     /// Entities in the merged vault (duplicates across the two sources count once).
     pub entities: usize,

@@ -18,7 +18,7 @@ use surrealdb::RecordId;
 
 use crate::db::Db;
 use crate::error::{AppError, AppResult, ErrorCode};
-use crate::scopes::Scope;
+use crate::scopes;
 use crate::store;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,17 +57,17 @@ impl Action {
     ];
 
     /// The token scope this action needs.
-    pub fn scope(self) -> Scope {
+    pub fn scope(self) -> &'static str {
         match self {
-            Action::ReadMemories | Action::ListMembers => Scope::MemoryRead,
-            Action::WriteMemories => Scope::MemoryWrite,
+            Action::ReadMemories | Action::ListMembers => scopes::MEMORY_READ,
+            Action::WriteMemories => scopes::MEMORY_WRITE,
             Action::ManageMembers
             | Action::Invite
             | Action::Rename
             | Action::Delete
             | Action::Clone
             | Action::Merge
-            | Action::Leave => Scope::VaultsAdmin,
+            | Action::Leave => scopes::VAULTS_ADMIN,
         }
     }
 }
@@ -115,7 +115,7 @@ pub struct Actor {
 #[derive(Debug, Clone)]
 pub struct Caller {
     pub actor: Actor,
-    pub scopes: Vec<Scope>,
+    pub scopes: Vec<String>,
     /// A vault-restricted token may only touch this vault.
     pub vault: Option<RecordId>,
 }
@@ -123,11 +123,12 @@ pub struct Caller {
 impl Caller {
     /// A browser session: every scope, every vault the user belongs to.
     pub fn session(user_id: &RecordId) -> Self {
-        Caller { actor: Actor { kind: "user", id: user_id.to_string() }, scopes: Scope::ALL.to_vec(), vault: None }
+        Caller { actor: Actor { kind: "user", id: user_id.to_string() }, scopes: scopes::ALL.iter().map(|s| s.to_string()).collect(), vault: None }
     }
 
-    pub fn allows(&self, scope: Scope) -> bool {
-        self.scopes.contains(&scope)
+    /// `memory:write` implies `memory:read` (see `scopes::allows`).
+    pub fn allows(&self, scope: &str) -> bool {
+        scopes::allows(&self.scopes, scope)
     }
 }
 
@@ -147,10 +148,10 @@ pub fn current() -> Option<Caller> {
 }
 
 /// 403 `auth.scope` unless the current credential carries `scope`.
-pub fn require_scope(scope: Scope) -> AppResult<()> {
+pub fn require_scope(scope: &str) -> AppResult<()> {
     match current() {
         Some(c) if !c.allows(scope) => {
-            Err(AppError::coded(ErrorCode::AuthScope, format!("this token does not have the {} scope", scope.as_str())))
+            Err(AppError::coded(ErrorCode::AuthScope, format!("this token does not have the {scope} scope")))
         }
         _ => Ok(()),
     }
@@ -249,10 +250,10 @@ mod tests {
 
     #[test]
     fn action_scopes() {
-        assert_eq!(Action::ReadMemories.scope(), Scope::MemoryRead);
-        assert_eq!(Action::WriteMemories.scope(), Scope::MemoryWrite);
+        assert_eq!(Action::ReadMemories.scope(), scopes::MEMORY_READ);
+        assert_eq!(Action::WriteMemories.scope(), scopes::MEMORY_WRITE);
         for a in [Action::Invite, Action::Rename, Action::Delete, Action::Clone, Action::Merge, Action::ManageMembers] {
-            assert_eq!(a.scope(), Scope::VaultsAdmin, "{a:?}");
+            assert_eq!(a.scope(), scopes::VAULTS_ADMIN, "{a:?}");
         }
     }
 
@@ -261,18 +262,18 @@ mod tests {
         let v1: RecordId = "vault:one".parse().unwrap();
         let v2: RecordId = "vault:two".parse().unwrap();
         // no caller: unrestricted
-        assert!(check_vault(&v1).is_ok() && require_scope(Scope::VaultsAdmin).is_ok() && require_unrestricted().is_ok());
+        assert!(check_vault(&v1).is_ok() && require_scope(scopes::VAULTS_ADMIN).is_ok() && require_unrestricted().is_ok());
 
         let caller = Caller {
             actor: Actor { kind: "token", id: "api_token:x".into() },
-            scopes: vec![Scope::MemoryRead],
+            scopes: vec![scopes::MEMORY_READ.to_string()],
             vault: Some(v1.clone()),
         };
         with_caller(caller, async {
             assert!(check_vault(&v1).is_ok());
             assert_eq!(check_vault(&v2).unwrap_err().code, ErrorCode::AuthScope);
-            assert!(require_scope(Scope::MemoryRead).is_ok());
-            assert_eq!(require_scope(Scope::MemoryWrite).unwrap_err().code, ErrorCode::AuthScope);
+            assert!(require_scope(scopes::MEMORY_READ).is_ok());
+            assert_eq!(require_scope(scopes::MEMORY_WRITE).unwrap_err().code, ErrorCode::AuthScope);
             assert_eq!(require_unrestricted().unwrap_err().code, ErrorCode::AuthScope);
         })
         .await;

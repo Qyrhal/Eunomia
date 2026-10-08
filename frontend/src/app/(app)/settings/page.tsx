@@ -10,8 +10,10 @@ import {
   downloadExport,
   settings as settingsApi,
   update as updateApi,
+  oauth,
   vaults as vaultsApi,
   type ApiToken,
+  type OAuthGrant,
   type AppSettings,
   type Scope,
   type Session,
@@ -371,6 +373,87 @@ function TokensSection() {
                 </tr>
               );
             })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+const SCOPE_WORDS: Record<string, string> = {
+  "memory:read": "read memory",
+  "memory:write": "write memory",
+  "vaults:admin": "manage vaults",
+  connectors: "manage sources",
+};
+
+function ConnectedAppsSection() {
+  const [grants, setGrants] = useState<OAuthGrant[] | null>(null);
+  const [error, setError] = useState<Failure | null>(null);
+
+  const load = () => oauth.grants.list().then(setGrants).catch(() => setGrants([]));
+  useEffect(() => {
+    load();
+  }, []);
+
+  async function revoke(id: string) {
+    setError(null);
+    try {
+      await oauth.grants.revoke(id);
+      await load();
+    } catch (e) {
+      setError(failure(e, "Could not disconnect that app. Reload and try again."));
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-5">
+      <PanelHead title="Connected apps">
+        Apps like Claude Code and Cursor that you signed in to Eunomia with OAuth. Disconnecting one stops it
+        immediately and it has to ask you again.
+      </PanelHead>
+      {error && <ErrorLine error={error} />}
+      <div className="ledger overflow-x-auto">
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th>App</th>
+              <th>Can</th>
+              <th className="w-[120px]">Connected</th>
+              <th className="w-[120px]">Last used</th>
+              <th className="w-[110px]">
+                <span className="sr-only">Actions</span>
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {grants === null && <TableSkeleton cols={5} />}
+            {grants?.length === 0 && (
+              <tr>
+                <td colSpan={5} style={{ color: "var(--ink-dim)", height: 56 }}>
+                  No connected apps. Add Eunomia as an MCP server in your agent and approve the sign-in.
+                </td>
+              </tr>
+            )}
+            {grants?.map((g) => (
+              <tr key={g.id}>
+                <td className="font-medium">
+                  <span className="truncate max-w-[220px] block" title={g.client_id}>
+                    {g.client_name}
+                  </span>
+                </td>
+                <td style={{ color: "var(--ink-dim)" }}>{g.scope.map((s) => SCOPE_WORDS[s] ?? s).join(", ")}</td>
+                <td className="font-mono text-[12px]" style={{ color: "var(--ink-dim)" }}>
+                  {relativeTime(g.created_at)}
+                </td>
+                <td className="font-mono text-[12px]" style={{ color: "var(--ink-dim)" }}>
+                  {relativeTime(g.last_used_at)}
+                </td>
+                <td className="text-right">
+                  <RevokeButton label={g.client_name} onRevoke={() => revoke(g.id)} />
+                </td>
+              </tr>
+            ))}
           </tbody>
         </table>
       </div>
@@ -859,6 +942,7 @@ const TABS = [
   { id: "general", label: "General" },
   { id: "updates", label: "Updates" },
   { id: "tokens", label: "API tokens" },
+  { id: "apps", label: "Connected apps" },
   { id: "sessions", label: "Sessions" },
   { id: "data", label: "Your data" },
 ] as const;
@@ -955,6 +1039,7 @@ export default function SettingsPage() {
             {tab === "general" && <GeneralSection settings={settings} onSaved={setSettings} />}
             {tab === "updates" && <UpdateSection />}
             {tab === "tokens" && <TokensSection />}
+            {tab === "apps" && <ConnectedAppsSection />}
             {tab === "sessions" && <SessionsSection />}
             {tab === "data" && <DataSection />}
           </div>

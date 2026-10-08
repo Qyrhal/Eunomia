@@ -122,6 +122,38 @@ export const auth = {
 };
 
 // ---------------------------------------------------------------------------
+// oauth (MCP clients connecting without a pasted token)
+// ---------------------------------------------------------------------------
+
+export type OAuthGrant = {
+  id: string;
+  client_id: string;
+  client_name: string;
+  client_logo: string | null;
+  scope: string[];
+  created_at: string;
+  last_used_at: string | null;
+};
+
+export type ConsentInfo = {
+  client: { name: string; logo_uri: string | null; client_uri: string | null };
+  redirect_host: string;
+  loopback: boolean;
+  scopes: { scope: string; description: string }[];
+  user_email: string;
+};
+
+export const oauth = {
+  consent: (query: string) => api.get<ConsentInfo>(`/api/oauth/consent?${query}`),
+  decide: (params: Record<string, string>, approve: boolean) =>
+    api.post<{ redirect_to: string }>("/api/oauth/consent", { ...params, approve }),
+  grants: {
+    list: () => api.get<OAuthGrant[]>("/api/oauth/grants"),
+    revoke: (id: string) => api.del<{ deleted: boolean }>(`/api/oauth/grants/${encodeURIComponent(id)}`),
+  },
+};
+
+// ---------------------------------------------------------------------------
 // settings
 // ---------------------------------------------------------------------------
 

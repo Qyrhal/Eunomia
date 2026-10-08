@@ -28,7 +28,7 @@ use crate::vaults::service as vaults_service;
 const MAX_PER_LAYER: usize = 1500;
 const LEXICAL_DIM: usize = 512;
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct CloudPoint {
     pub id: String,
     pub vault: String,
@@ -40,7 +40,7 @@ pub struct CloudPoint {
     pub z: f32,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct Cloud {
     /// "semantic" (model embeddings) or "lexical" (hashed words, no model)
     pub space: &'static str,

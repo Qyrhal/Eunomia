@@ -40,6 +40,7 @@ pub fn test_settings() -> Settings {
         cors_allowed_origins: "http://localhost:3000".into(),
         log_level: "WARN".into(),
         update_status_dir: "/nonexistent".into(),
+        public_url: "http://localhost:8001".into(),
     }
 }
 

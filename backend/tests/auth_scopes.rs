@@ -8,7 +8,7 @@ use axum::http::{header, HeaderMap, Request, StatusCode};
 use common::{TestApp, PASSWORD};
 use eunomia_backend::models_user::create_api_token_with;
 use eunomia_backend::ratelimit::RateConfig;
-use eunomia_backend::scopes::Scope;
+use eunomia_backend::scopes;
 use eunomia_backend::vaults::service as vaults;
 use http_body_util::BodyExt;
 use serde_json::{json, Value};
@@ -41,8 +41,9 @@ fn bearer(token: &str) -> Vec<(&'static str, String)> {
     vec![("authorization", format!("Bearer {token}"))]
 }
 
-async fn token(app: &TestApp, scopes: &[Scope], vault: Option<&RecordId>) -> String {
-    create_api_token_with(&app.state.db, &app.user.id, "t", scopes, vault, None).await.unwrap().token
+async fn token(app: &TestApp, granted: &[&str], vault: Option<&RecordId>) -> String {
+    let granted: Vec<String> = granted.iter().map(|s| s.to_string()).collect();
+    create_api_token_with(&app.state.db, &app.user.id, "t", &granted, vault, None).await.unwrap().token
 }
 
 async fn org_vault(app: &TestApp) -> RecordId {
@@ -66,12 +67,16 @@ async fn events(app: &TestApp, filter: &str) -> Vec<Value> {
     res.take::<Vec<Value>>(0).unwrap()
 }
 
+fn all() -> Vec<String> {
+    scopes::ALL.iter().map(|s| s.to_string()).collect()
+}
+
 // ---------------------------------------------------------------- scopes
 
 #[tokio::test]
 async fn read_only_token_reads_but_cannot_write_or_administer() {
     let app = TestApp::new().await;
-    let t = token(&app, &[Scope::MemoryRead], None).await;
+    let t = token(&app, &[scopes::MEMORY_READ], None).await;
     let h = bearer(&t);
 
     let (status, _, _) = send(&app.router, "GET", "/api/entities", None, &h).await;
@@ -92,7 +97,7 @@ async fn read_only_token_reads_but_cannot_write_or_administer() {
 #[tokio::test]
 async fn connectors_scope_gates_connector_routes() {
     let app = TestApp::new().await;
-    let only = token(&app, &[Scope::Connectors], None).await;
+    let only = token(&app, &[scopes::CONNECTORS], None).await;
     let (status, _, _) = send(&app.router, "GET", "/api/connectors", None, &bearer(&only)).await;
     assert_eq!(status, StatusCode::OK);
     let (status, _, _) = send(&app.router, "GET", "/api/entities", None, &bearer(&only)).await;
@@ -102,14 +107,18 @@ async fn connectors_scope_gates_connector_routes() {
 #[tokio::test]
 async fn tool_scopes_hold_over_rest_and_mcp() {
     let app = TestApp::new().await;
-    let read = token(&app, &[Scope::MemoryRead], None).await;
-    let write = token(&app, &[Scope::MemoryWrite], None).await;
+    let read = token(&app, &[scopes::MEMORY_READ], None).await;
+    let write = token(&app, &[scopes::MEMORY_WRITE], None).await;
     let write_args = json!({"subject_name": "Ann", "subject_kind": "person", "text": "likes tea"});
 
     // REST
     let (status, _, body) = send(&app.router, "POST", "/api/tools/memory_write", Some(write_args.clone()), &bearer(&read)).await;
     assert_eq!((status, body["code"].as_str()), (StatusCode::FORBIDDEN, Some("auth.scope")));
-    let (status, _, body) = send(&app.router, "POST", "/api/tools/recall", Some(json!({"query": "tea"})), &bearer(&write)).await;
+    // memory:write implies memory:read, as for OAuth tokens; connectors alone grants neither
+    let (status, _, _) = send(&app.router, "POST", "/api/tools/recall", Some(json!({"query": "tea"})), &bearer(&write)).await;
+    assert_eq!(status, StatusCode::OK);
+    let conn = token(&app, &[scopes::CONNECTORS], None).await;
+    let (status, _, body) = send(&app.router, "POST", "/api/tools/recall", Some(json!({"query": "tea"})), &bearer(&conn)).await;
     assert_eq!((status, body["code"].as_str()), (StatusCode::FORBIDDEN, Some("auth.scope")));
     let (status, _, _) = send(&app.router, "POST", "/api/tools/memory_write", Some(write_args.clone()), &bearer(&write)).await;
     assert_eq!(status, StatusCode::OK);
@@ -174,7 +183,7 @@ async fn token_creation_validates_and_cannot_escalate() {
     assert_eq!((status, body["code"].as_str()), (StatusCode::FORBIDDEN, Some("vault.forbidden")));
 
     // vaults:admin alone cannot mint a memory:read token
-    let admin = token(&app, &[Scope::VaultsAdmin], None).await;
+    let admin = token(&app, &[scopes::VAULTS_ADMIN], None).await;
     let (status, _, body) =
         send(&app.router, "POST", "/api/auth/tokens", Some(json!({"name": "x", "scopes": ["memory:read"]})), &bearer(&admin)).await;
     assert_eq!((status, body["code"].as_str()), (StatusCode::FORBIDDEN, Some("auth.scope")));
@@ -190,7 +199,7 @@ async fn vault_restricted_token_is_confined_to_its_vault() {
     // personal data the restricted token must never see
     app.tool("memory_write", json!({"subject_name": "Secret", "subject_kind": "person", "text": "in personal"})).await;
 
-    let t = token(&app, &Scope::ALL, Some(&org)).await;
+    let t = token(&app, scopes::ALL, Some(&org)).await;
     let h = bearer(&t);
 
     // no vault_id means its own vault, not the personal one
@@ -261,7 +270,7 @@ async fn restricted_token_loses_access_when_removed_from_its_vault() {
     let theirs: RecordId = vaults::create_vault(&app.state.db, &other.id, "Theirs", "org").await.unwrap().id.parse().unwrap();
     vaults::invite_member(&app.state.db, &other.id, &theirs, &app.user.email, "member").await.unwrap();
     vaults::accept_invitation(&app.state.db, &app.user.id, &theirs).await.unwrap();
-    let t = token(&app, &Scope::ALL, Some(&theirs)).await;
+    let t = token(&app, scopes::ALL, Some(&theirs)).await;
 
     let (status, _, _) = send(&app.router, "GET", "/api/entities", None, &bearer(&t)).await;
     assert_eq!(status, StatusCode::OK);
@@ -276,9 +285,9 @@ async fn restricted_token_loses_access_when_removed_from_its_vault() {
 async fn expired_token_is_401_token_expired() {
     let app = TestApp::new().await;
     let past = Datetime::from(chrono::Utc::now() - chrono::Duration::minutes(1));
-    let expired = create_api_token_with(&app.state.db, &app.user.id, "old", &Scope::ALL, None, Some(past)).await.unwrap().token;
+    let expired = create_api_token_with(&app.state.db, &app.user.id, "old", &all(), None, Some(past)).await.unwrap().token;
     let future = Datetime::from(chrono::Utc::now() + chrono::Duration::days(1));
-    let live = create_api_token_with(&app.state.db, &app.user.id, "new", &Scope::ALL, None, Some(future)).await.unwrap().token;
+    let live = create_api_token_with(&app.state.db, &app.user.id, "new", &all(), None, Some(future)).await.unwrap().token;
 
     let (status, _, body) = send(&app.router, "GET", "/api/auth/me", None, &bearer(&expired)).await;
     assert_eq!((status, body["code"].as_str()), (StatusCode::UNAUTHORIZED, Some("auth.token_expired")));
@@ -288,7 +297,8 @@ async fn expired_token_is_401_token_expired() {
     let body = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"});
     let (status, headers, v) = send(&app.router, "POST", "/mcp", Some(body), &bearer(&expired)).await;
     assert_eq!((status, v["code"].as_str()), (StatusCode::UNAUTHORIZED, Some("auth.token_expired")));
-    assert_eq!(headers[header::WWW_AUTHENTICATE], "Bearer");
+    let challenge = headers[header::WWW_AUTHENTICATE].to_str().unwrap();
+    assert!(challenge.starts_with("Bearer error=\"invalid_token\"") && challenge.contains("resource_metadata="), "{challenge}");
 }
 
 async fn login_cookie(app: &TestApp) -> String {
@@ -369,6 +379,48 @@ async fn jwt_exp_is_enforced_and_legacy_cookies_without_exp_still_work() {
 
 // ------------------------------------------------------------------ audit
 
+/// An OAuth access token for `scope`, minted straight into the database.
+async fn oauth_token(app: &TestApp, scope: &[&str]) -> String {
+    let token = format!("eoa_{}", eunomia_backend::models_user::generate_token());
+    let grant: Option<RecordId> = app
+        .state
+        .db
+        .query(
+            "CREATE oauth_grant SET owner = $o, client_id = 'client-x', client_name = 'X', scope = $scope, \
+             resource = 'http://localhost:8001/mcp' RETURN VALUE id",
+        )
+        .bind(("o", app.user.id.clone()))
+        .bind(("scope", scope.iter().map(|s| s.to_string()).collect::<Vec<_>>()))
+        .await
+        .unwrap()
+        .take(0)
+        .unwrap();
+    app.state
+        .db
+        .query("CREATE oauth_token SET kind = 'access', token_hash = $h, family = $g, expires_at = time::now() + 15m")
+        .bind(("h", eunomia_backend::models_user::hash_token(&token)))
+        .bind(("g", grant.unwrap()))
+        .await
+        .unwrap()
+        .check()
+        .unwrap();
+    token
+}
+
+#[tokio::test]
+async fn oauth_tokens_work_on_mcp_only_and_are_audited_as_the_client() {
+    let app = TestApp::new().await;
+    let t = oauth_token(&app, &["memory:write"]).await;
+    let (is_error, v) =
+        mcp_call(&app, &t, "memory_write", json!({"subject_name": "Ann", "subject_kind": "person", "text": "x"})).await;
+    assert!(!is_error, "{v}");
+    let rows = events(&app, "action = 'tool.memory_write'").await;
+    assert_eq!((rows[0]["actor_kind"].as_str(), rows[0]["actor_id"].as_str()), (Some("oauth"), Some("client-x")));
+    // never accepted on the REST API
+    let (status, _, _) = send(&app.router, "GET", "/api/entities", None, &bearer(&t)).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
 #[tokio::test]
 async fn audit_events_cover_auth_and_tool_calls_with_trace_ids() {
     let app = TestApp::new().await;
@@ -400,7 +452,7 @@ async fn audit_events_cover_auth_and_tool_calls_with_trace_ids() {
     // failed auth, and a scope denial
     let (_, headers, _) = send(&app.router, "GET", "/api/auth/me", None, &bearer("not-a-token")).await;
     let auth_trace = headers["x-trace-id"].to_str().unwrap().to_string();
-    let read = token(&app, &[Scope::MemoryRead], None).await;
+    let read = token(&app, &[scopes::MEMORY_READ], None).await;
     send(&app.router, "POST", "/api/tools/memory_write", Some(json!({"subject_name": "Z", "subject_kind": "person", "text": "z"})), &bearer(&read)).await;
     send(&app.router, "GET", "/api/settings", None, &bearer(&read)).await;
 
@@ -507,7 +559,7 @@ async fn guessing_tokens_is_throttled_by_address() {
 async fn requests_are_limited_per_token_and_per_user() {
     let app = TestApp::new().await;
     let router = app_with_limits(&app, RateConfig { token_per_min: 3, user_per_min: 5, auth_per_min: 100 });
-    let other = token(&app, &Scope::ALL, None).await;
+    let other = token(&app, scopes::ALL, None).await;
 
     for _ in 0..3 {
         let (status, _, _) = send(&router, "GET", "/api/auth/me", None, &bearer(&app.token)).await;

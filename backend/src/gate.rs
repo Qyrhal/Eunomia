@@ -29,7 +29,7 @@ use crate::auth::{self, Authn};
 use crate::authz;
 use crate::error::{AppError, ErrorCode};
 use crate::ratelimit::{RateConfig, RateLimiter};
-use crate::scopes::Scope;
+use crate::scopes;
 use crate::state::AppState;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,17 +43,17 @@ pub enum Class {
     /// Any authenticated caller (scope is checked per tool, or not at all).
     Any,
     /// Touches vault content; needs the scope, and the vault restriction is enforced by `authorize()`.
-    Vault(Scope),
+    Vault(&'static str),
     /// Account-level (settings, tokens, connectors, chat, export): needs the
     /// scope and is closed to vault-restricted tokens.
-    Account(Scope),
+    Account(&'static str),
     /// Not an `/api` route (for example OAuth endpoints): authenticate if a
     /// credential is present, never require one.
     Optional,
 }
 
 pub fn classify(method: &Method, path: &str) -> Class {
-    explicit_class(method, path).unwrap_or(Class::Account(Scope::VaultsAdmin))
+    explicit_class(method, path).unwrap_or(Class::Account(scopes::VAULTS_ADMIN))
 }
 
 /// The class a route is listed under. `None` is an `/api` route nobody has
@@ -69,15 +69,17 @@ pub fn explicit_class(method: &Method, path: &str) -> Option<Class> {
         ["api", "auth", "register" | "login"] => AuthAttempt,
         ["api", "auth", "logout" | "bootstrap"] => Public,
         ["api", "auth", "me"] => Any,
-        ["api", "auth", "tokens" | "sessions", ..] => Account(Scope::VaultsAdmin),
+        ["api", "auth", "tokens" | "sessions", ..] => Account(scopes::VAULTS_ADMIN),
         ["api", "tools"] if read => Public,
         ["api", "tools", _] => Any,
-        ["api", "entities", ..] => Vault(if read { Scope::MemoryRead } else { Scope::MemoryWrite }),
-        ["api", "vaults", ..] => Vault(if read { Scope::MemoryRead } else { Scope::VaultsAdmin }),
-        ["api", "connectors", ..] | ["api", "snapshot"] => Account(Scope::Connectors),
+        ["api", "entities", ..] => Vault(if read { scopes::MEMORY_READ } else { scopes::MEMORY_WRITE }),
+        ["api", "vaults", ..] => Vault(if read { scopes::MEMORY_READ } else { scopes::VAULTS_ADMIN }),
+        ["api", "connectors", ..] | ["api", "snapshot"] => Account(scopes::CONNECTORS),
         ["api", "sources", _, "webhook", _] => Public,
-        ["api", "sources", ..] => Account(Scope::Connectors),
-        ["api", "settings" | "export" | "update" | "audit" | "chat", ..] => Account(Scope::VaultsAdmin),
+        ["api", "sources", ..] => Account(scopes::CONNECTORS),
+        ["api", "settings" | "export" | "update" | "audit" | "chat" | "oauth", ..] => Account(scopes::VAULTS_ADMIN),
+        // OAuth endpoints for MCP clients: public, so limited per client address like login
+        ["oauth", "token" | "register" | "revoke"] => AuthAttempt,
         ["api", ..] => return None,
         _ => Optional,
     })
@@ -118,10 +120,13 @@ fn rate_limited(wait_secs: u64) -> Response {
     resp
 }
 
-fn reject(class: Class, err: AppError) -> Response {
+fn reject(g: &Gate, class: Class, err: AppError) -> Response {
     let mut resp = err.into_response();
-    if class == Class::Mcp && resp.status() == StatusCode::UNAUTHORIZED {
-        resp.headers_mut().insert(header::WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"));
+    if class == Class::Mcp
+        && resp.status() == StatusCode::UNAUTHORIZED
+        && let Ok(v) = HeaderValue::from_str(&crate::oauth::www_authenticate(&g.state.settings, true))
+    {
+        resp.headers_mut().insert(header::WWW_AUTHENTICATE, v);
     }
     resp
 }
@@ -140,11 +145,11 @@ pub async fn gate(State(g): State<Gate>, mut req: Request, next: Next) -> Respon
     }
 
     let ip = client_ip(&req);
-    let allow_cookie = class != Class::Mcp;
-    let presented = auth::bearer_token(req.headers()).is_some() || (allow_cookie && auth::session_token(req.headers()).is_some());
+    let mcp = class == Class::Mcp;
+    let presented = auth::bearer_token(req.headers()).is_some() || (!mcp && auth::session_token(req.headers()).is_some());
     let target = format!("{} {}", req.method(), req.uri().path());
 
-    let authn = match auth::authenticate(&g.state, req.headers(), allow_cookie).await {
+    let authn = match auth::authenticate(&g.state, req.headers(), mcp).await {
         Ok(a) => a,
         Err(e) => {
             audit::record(
@@ -152,7 +157,7 @@ pub async fn gate(State(g): State<Gate>, mut req: Request, next: Next) -> Respon
                 Event { user: None, actor: &audit::anonymous(), action: "auth.failed", target: &target, outcome: e.code.as_str(), detail: "" },
             )
             .await;
-            return reject(class, e);
+            return reject(&g, class, e);
         }
     };
 
@@ -170,7 +175,7 @@ pub async fn gate(State(g): State<Gate>, mut req: Request, next: Next) -> Respon
         }
         return match class {
             Class::Optional | Class::Mcp => next.run(req).await,
-            _ => reject(class, AppError::unauthorized("Not authenticated.")),
+            _ => reject(&g, class, AppError::unauthorized("Not authenticated.")),
         };
     };
 
@@ -179,8 +184,8 @@ pub async fn gate(State(g): State<Gate>, mut req: Request, next: Next) -> Respon
     }
 
     let denied = match class {
-        Class::Vault(s) if !authn.caller.allows(s) => Some(format!("this token does not have the {} scope", s.as_str())),
-        Class::Account(s) if !authn.caller.allows(s) => Some(format!("this token does not have the {} scope", s.as_str())),
+        Class::Vault(s) if !authn.caller.allows(s) => Some(format!("this token does not have the {s} scope")),
+        Class::Account(s) if !authn.caller.allows(s) => Some(format!("this token does not have the {s} scope")),
         Class::Account(_) if authn.caller.vault.is_some() => {
             Some("this route is not available to a vault-restricted token".to_string())
         }
@@ -220,16 +225,16 @@ mod tests {
         use Class::*;
         assert_eq!(class(Method::GET, "/healthz"), Public);
         assert_eq!(class(Method::POST, "/api/auth/login"), AuthAttempt);
-        assert_eq!(class(Method::POST, "/api/auth/tokens"), Account(Scope::VaultsAdmin));
-        assert_eq!(class(Method::GET, "/api/entities/graph"), Vault(Scope::MemoryRead));
-        assert_eq!(class(Method::PATCH, "/api/entities/memory/memory:x"), Vault(Scope::MemoryWrite));
-        assert_eq!(class(Method::GET, "/api/vaults/vault:x/members"), Vault(Scope::MemoryRead));
-        assert_eq!(class(Method::DELETE, "/api/vaults/vault:x"), Vault(Scope::VaultsAdmin));
+        assert_eq!(class(Method::POST, "/api/auth/tokens"), Account(scopes::VAULTS_ADMIN));
+        assert_eq!(class(Method::GET, "/api/entities/graph"), Vault(scopes::MEMORY_READ));
+        assert_eq!(class(Method::PATCH, "/api/entities/memory/memory:x"), Vault(scopes::MEMORY_WRITE));
+        assert_eq!(class(Method::GET, "/api/vaults/vault:x/members"), Vault(scopes::MEMORY_READ));
+        assert_eq!(class(Method::DELETE, "/api/vaults/vault:x"), Vault(scopes::VAULTS_ADMIN));
         assert_eq!(class(Method::POST, "/api/sources/github/webhook/user:x"), Public);
-        assert_eq!(class(Method::POST, "/api/sources/github/sync"), Account(Scope::Connectors));
+        assert_eq!(class(Method::POST, "/api/sources/github/sync"), Account(scopes::CONNECTORS));
         assert_eq!(class(Method::GET, "/api/tools"), Public);
         assert_eq!(class(Method::POST, "/api/tools/recall"), Any);
-        assert_eq!(class(Method::GET, "/api/something-new"), Account(Scope::VaultsAdmin));
+        assert_eq!(class(Method::GET, "/api/something-new"), Account(scopes::VAULTS_ADMIN));
         assert_eq!(class(Method::GET, "/.well-known/oauth-authorization-server"), Optional);
         assert_eq!(class(Method::POST, "/mcp"), Mcp);
     }
