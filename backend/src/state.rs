@@ -46,7 +46,7 @@ impl AppState {
     /// `provisioning::legacy`), and build the pool. The one boot path for `main`, `replay` and tests.
     pub async fn build(settings: &Settings, config: surrealdb::opt::Config) -> AppResult<AppState> {
         let template = crate::db::connect_raw(settings, config).await?;
-        let provisioner = Provisioner::connect(&template, settings).await?;
+        let provisioner = Provisioner::connect(&template, settings);
         if let Some(p) = &provisioner {
             p.ensure_control().await?;
         }

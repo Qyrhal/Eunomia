@@ -7,8 +7,9 @@
 //! Resumable: the org's `tenant` row says `moving` until the end, every copy is `INSERT IGNORE` by
 //! record id, so a crash re-runs the same steps and skips what is already there. Verified: per-table
 //! row counts must match before the org is marked `ready`. Invisible to users: record ids, sessions,
-//! tokens and OAuth grants carry over unchanged. The old database is never deleted; the log line at
-//! the end says how to remove it once you have checked.
+//! tokens and OAuth grants carry over unchanged. The old database is never deleted, but it is not
+//! untouched either: it is brought to tenant schema 8 in place first (ledger rows, and the entity-name
+//! merge of migration 0002). The log line at the end says so and how to remove it once you have checked.
 
 use surrealdb::types::{RecordId, SurrealValue, Value};
 
@@ -38,7 +39,25 @@ struct Count {
 }
 
 /// Does the move if there is one to do. A no-op on a fresh install and on every boot after the move.
+/// Two replicas booting together both get here; every step is resumable, so the one that loses a
+/// commit race (or finds the row the other just created) runs the whole thing again, and the second
+/// pass resumes or finds it done.
 pub async fn move_if_needed(p: &Provisioner, control: &ControlDb, settings: &Settings) -> AppResult<()> {
+    use crate::error::ErrorCode;
+    let mut attempt = 1;
+    loop {
+        match move_once(p, control, settings).await {
+            Err(e) if attempt < crate::tx::MAX_ATTEMPTS && matches!(e.code, ErrorCode::DbConflict | ErrorCode::DbDuplicate) => {
+                tracing::warn!(attempt, "another process is moving the data too; re-checking");
+                tokio::time::sleep(std::time::Duration::from_millis(100 * attempt as u64)).await;
+                attempt += 1;
+            }
+            other => return other,
+        }
+    }
+}
+
+async fn move_once(p: &Provisioner, control: &ControlDb, settings: &Settings) -> AppResult<()> {
     let mut res = store::dynamic_control(control, "legacy.tenants", "SELECT org, status FROM tenant").await?;
     #[derive(serde::Deserialize, SurrealValue)]
     struct T {
@@ -51,7 +70,15 @@ pub async fn move_if_needed(p: &Provisioner, control: &ControlDb, settings: &Set
         tracing::warn!(%org, "resuming an interrupted data move");
         return run(p, control, settings, org).await;
     }
-    if !tenants.is_empty() || !p.legacy_has_users(&settings.surreal_db).await? {
+    if !tenants.is_empty() {
+        return Ok(());
+    }
+    // A short-lived root session for the look at the old database; dropped before the move opens its own.
+    let has_users = {
+        let rt = p.open().await?;
+        p.legacy_has_users(&rt, &settings.surreal_db).await?
+    };
+    if !has_users {
         return Ok(());
     }
     tracing::warn!(db = %settings.surreal_db, "moving this install's single database into the org layout");
@@ -64,16 +91,20 @@ fn org_of_record(r: &RecordId) -> AppResult<OrgId> {
 }
 
 async fn run(p: &Provisioner, control: &ControlDb, settings: &Settings, org: OrgId) -> AppResult<()> {
-    let legacy = p.session(&settings.surreal_db).await?;
-    // Bring a 2.x export or an older schema to the last shape the legacy database may have.
+    // One root session for the whole move, dropped when it ends.
+    let rt = p.open().await?;
+    let legacy = p.session(&rt, &settings.surreal_db).await?;
+    // Bring a 2.x export or an older schema to the last shape the legacy database may have. This is the one
+    // thing written to the old database: the `_migration` ledger, the schema up to version 8 and, if two
+    // entities in a vault share a name, their merge (migration 0002). No row is copied back or deleted.
     crate::migrate::apply_up_to(&legacy, crate::migrate::LEGACY_TENANT_VERSION).await?;
-    let ctrl = p.session(pool::CONTROL_DB).await?;
+    let ctrl = p.session(&rt, pool::CONTROL_DB).await?;
 
     // The org and its (still `moving`) routing row first, so a crash from here on resumes.
     store::tenant::ORG_CREATE.on(control).bind(("id", org.record())).bind(("name", "Default")).await?.check()?;
     let (db, pass) = p.claim_tenant(control, &org, "moving").await?;
-    p.build_database(&db, &pass).await?;
-    let dst = p.session(&db).await?;
+    p.build_database(&rt, &db, &pass).await?;
+    let dst = p.session(&rt, &db).await?;
 
     // Accounts and credentials, then membership: oldest user owns.
     for table in CONTROL_COPY {
@@ -102,8 +133,9 @@ async fn run(p: &Provisioner, control: &ControlDb, settings: &Settings, org: Org
     let (users, mems) = (count(&ctrl, "user").await?, count(&ctrl, "membership").await?);
     tracing::warn!(
         %org, users, memberships = mems, db = %db,
-        "data move verified and complete. The old database `{old}` is untouched; once you have checked the app, remove it with: \
-         surreal sql --user <root> --pass <pass> --ns {ns} --hide-welcome <<< 'REMOVE DATABASE `{old}`;'",
+        "data move verified and complete. The old database `{old}` was kept: no row in it was copied back or deleted, but it was \
+         brought to schema 8 in place (migration ledger, and entity names merged if they collided). Once you have checked the app, \
+         remove it with: surreal sql --user <root> --pass <pass> --ns {ns} --hide-welcome <<< 'REMOVE DATABASE `{old}`;'",
         old = settings.surreal_db, ns = settings.surreal_ns
     );
     Ok(())
@@ -112,6 +144,9 @@ async fn run(p: &Provisioner, control: &ControlDb, settings: &Settings, org: Org
 /// Every copied user becomes a member of the org; the oldest is the owner. Re-runs skip existing rows.
 /// Copied jobs and capsules are stamped with the org too.
 async fn add_memberships(ctrl: &crate::db::Db, org: &OrgId) -> AppResult<()> {
+    // a concurrent boot doing the same move may create a membership between the check and the create;
+    // the retry re-checks
+    crate::tx::with_retry_dup(|| async {
     root(
         ctrl,
         "legacy.memberships",
@@ -128,7 +163,10 @@ async fn add_memberships(ctrl: &crate::db::Db, org: &OrgId) -> AppResult<()> {
     .bind(("org", org.record()))
     .bind(("key", org.key()))
     .await?
-    .check()?;
+    .check()
+    .map(|_| ())
+    })
+    .await?;
     Ok(())
 }
 
@@ -161,11 +199,11 @@ async fn copy_table(src: &crate::db::Db, dst: &crate::db::Db, table: &str, edge:
 
 impl Provisioner {
     /// Is there an old single database holding at least one user?
-    pub(super) async fn legacy_has_users(&self, db: &str) -> AppResult<bool> {
+    pub(super) async fn legacy_has_users(&self, rt: &crate::db::Db, db: &str) -> AppResult<bool> {
         if db == pool::CONTROL_DB {
             return Ok(false);
         }
-        let ns = self.session_ns().await?;
+        let ns = self.session_ns(rt).await?;
         let info: Option<serde_json::Value> = root(&ns, "legacy.info_ns", "INFO FOR NS STRUCTURE").await?.take(0)?;
         let exists = info
             .as_ref()
@@ -175,7 +213,7 @@ impl Provisioner {
         if !exists {
             return Ok(false);
         }
-        let s = self.session(db).await?;
+        let s = self.session(rt, db).await?;
         let info: Option<serde_json::Value> = root(&s, "legacy.info_db", "INFO FOR DB STRUCTURE").await?.take(0)?;
         let has_user_table = info
             .as_ref()
@@ -185,8 +223,8 @@ impl Provisioner {
         Ok(has_user_table && count(&s, "user").await? > 0)
     }
 
-    async fn session_ns(&self) -> surrealdb::Result<crate::db::Db> {
-        let s = (*self.root).clone();
+    async fn session_ns(&self, rt: &crate::db::Db) -> surrealdb::Result<crate::db::Db> {
+        let s = rt.clone();
         s.use_ns(&self.settings.surreal_ns).await?;
         Ok(s)
     }

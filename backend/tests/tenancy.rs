@@ -184,7 +184,7 @@ async fn the_move_carries_a_2x_export_into_one_org_and_is_a_noop_the_second_time
     let out = eunomia_backend::tools::registry::call(&state, &user, "entities_search", json!({"query": "Ann"})).await.unwrap();
     assert_eq!(out["results"].as_array().unwrap().len(), 1, "{out}");
 
-    // the old database is untouched
+    // the old database keeps its rows (it was only brought to schema 8 in place)
     assert_eq!(count(&old, "user").await, 1);
     assert_eq!(count(&old, "memory").await, 2);
 
@@ -220,4 +220,48 @@ async fn a_fresh_install_has_nothing_to_move() {
     let state = common::bare_state().await;
     run_move(&state).await;
     assert_eq!(count(state.control.test_raw(), "org").await, 0);
+}
+
+/// No request path holds root: the provisioner keeps credentials, not a signed-in session. It opens
+/// root for one operation (here an org creation and a migration) and drops it.
+#[tokio::test]
+async fn the_provisioner_holds_no_root_session_between_operations() {
+    let app = TestApp::new().await;
+    let p = app.state.provisioner.as_ref().unwrap();
+    let probe = p.scratch("probe").await.unwrap(); // a real root session, to show the check can say no
+    assert!(probe.query("INFO FOR ROOT").await.unwrap().check().is_ok());
+    assert!(p.holds_no_root_session().await, "idle provisioner must not be signed in as root");
+    p.provision_org(&app.state.control, OrgId::new(), "Another").await.unwrap();
+    p.migrate_org(&app.state.control, &app.user.org).await.unwrap();
+    assert!(p.holds_no_root_session().await, "still not signed in after provisioning and migrating");
+}
+
+/// Two replicas booting together on a pre-tenancy install both run the move; both finish, there is
+/// one org, one membership per user and the same counts as a single run.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn two_concurrent_boots_of_a_legacy_install_make_one_org() {
+    let (state, _old) = state_with_legacy().await;
+    let (s1, s2) = (state.clone(), state.clone());
+    let (a, b) = tokio::join!(tokio::spawn(async move { run_move(&s1).await }), tokio::spawn(async move { run_move(&s2).await }));
+    a.unwrap();
+    b.unwrap();
+    let org = only_org(&state).await;
+    let db = state.pool.for_org(&org).await.unwrap();
+    assert_eq!(count(db.test_raw(), "memory").await, 2);
+    assert_eq!(count(state.control.test_raw(), "membership").await, 1);
+}
+
+/// A fresh install booted by two replicas at once: both create the namespace, the control database,
+/// its user and the control schema, and both come up.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn two_replicas_creating_the_control_database_both_succeed() {
+    let state = common::bare_state().await;
+    let p = state.provisioner.clone().unwrap();
+    for _ in 0..5 {
+        let (a, b) = (p.clone(), p.clone());
+        let (ra, rb) = tokio::join!(tokio::spawn(async move { a.ensure_control().await }), tokio::spawn(async move { b.ensure_control().await }));
+        ra.unwrap().unwrap();
+        rb.unwrap().unwrap();
+    }
+    assert!(state.pool.control().test_raw().query("SELECT count() FROM user GROUP ALL").await.is_ok());
 }

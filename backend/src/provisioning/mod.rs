@@ -10,6 +10,11 @@
 //! sign in as root: [`Provisioner::connect`] returns `None`, boot skips setup, and signup answers
 //! `tenant.provisioning_disabled`; such a build serves an install that a default build provisioned.
 //!
+//! No root session outlives an operation: every public operation signs in as root with the
+//! credentials from config, passes that session to its helpers and drops it when it returns. The
+//! credentials stay in `Settings` (they are the process's own environment); what no longer exists
+//! between operations is a signed-in session that a request path could reach.
+//!
 //! Org databases are `STRICT`: a query naming a table the migrations did not define fails instead of
 //! silently reading nothing. The legacy single database stays non-strict (it predates this).
 
@@ -26,10 +31,13 @@ use crate::store::{self, root};
 
 pub mod legacy;
 
-/// A root session. Held by [`Provisioner`] and nothing else.
+/// The means to open a root session for the length of one provisioning operation. It holds an
+/// unauthenticated clone of the connection and the root credentials from config, never a signed-in
+/// session: each operation signs in, does its work and drops the session, so between operations no
+/// live root session exists anywhere in the process.
 #[derive(Clone)]
 pub struct Provisioner {
-    root: Arc<Db>,
+    template: Arc<Db>,
     settings: Settings,
 }
 
@@ -40,30 +48,42 @@ struct TenantState {
 }
 
 impl Provisioner {
-    /// Sign in as root on a clone of `template`. `None` when the `provisioning` feature is off.
+    /// `None` when the `provisioning` feature is off. Does not sign in: see [`Provisioner::open`].
     #[cfg(feature = "provisioning")]
-    pub(crate) async fn connect(template: &Db, settings: &Settings) -> surrealdb::Result<Option<Provisioner>> {
-        use surrealdb::opt::auth::Root;
-        let session = template.clone();
-        session.signin(Root { username: settings.surreal_user.clone(), password: settings.surreal_pass.clone() }).await?;
-        Ok(Some(Provisioner { root: Arc::new(session), settings: settings.clone() }))
+    pub(crate) fn connect(template: &Db, settings: &Settings) -> Option<Provisioner> {
+        Some(Provisioner { template: Arc::new(template.clone()), settings: settings.clone() })
     }
 
     #[cfg(not(feature = "provisioning"))]
-    pub(crate) async fn connect(_template: &Db, _settings: &Settings) -> surrealdb::Result<Option<Provisioner>> {
-        Ok(None)
+    pub(crate) fn connect(_template: &Db, _settings: &Settings) -> Option<Provisioner> {
+        None
     }
 
-    /// A root session on `db` in the install's namespace.
-    async fn session(&self, db: &str) -> surrealdb::Result<Db> {
-        let s = (*self.root).clone();
+    /// A fresh root session, signed in with the configured credentials. The caller owns it for one
+    /// operation and drops it; every helper below takes it as `root`.
+    #[cfg(feature = "provisioning")]
+    async fn open(&self) -> surrealdb::Result<Db> {
+        use surrealdb::opt::auth::Root;
+        let session = (*self.template).clone();
+        session.signin(Root { username: self.settings.surreal_user.clone(), password: self.settings.surreal_pass.clone() }).await?;
+        Ok(session)
+    }
+
+    #[cfg(not(feature = "provisioning"))]
+    async fn open(&self) -> surrealdb::Result<Db> {
+        Err(surrealdb::Error::internal("this build has no provisioning feature".into()))
+    }
+
+    /// A session of the root session `rt`, on database `db` in the install's namespace.
+    async fn session(&self, rt: &Db, db: &str) -> surrealdb::Result<Db> {
+        let s = rt.clone();
         s.use_ns(&self.settings.surreal_ns).use_db(db).await?;
         Ok(s)
     }
 
     /// `DEFINE DATABASE` runs with a namespace selected and no database.
-    async fn define_database(&self, db: &str, strict: bool) -> surrealdb::Result<()> {
-        let s = (*self.root).clone();
+    async fn define_database(&self, rt: &Db, db: &str, strict: bool) -> surrealdb::Result<()> {
+        let s = rt.clone();
         s.use_ns(&self.settings.surreal_ns).await?;
         let strict = if strict { " STRICT" } else { "" };
         root(&s, "provisioning.database", format!("DEFINE DATABASE IF NOT EXISTS `{db}`{strict}")).await?.check()?;
@@ -71,11 +91,17 @@ impl Provisioner {
     }
 
     /// Create the namespace, the `control` database and its user, and bring control to the latest schema.
+    /// Idempotent and safe to run in two replicas at once: a lost commit race is retried.
     pub async fn ensure_control(&self) -> surrealdb::Result<()> {
+        crate::tx::with_retry_dup(|| self.ensure_control_once()).await
+    }
+
+    async fn ensure_control_once(&self) -> surrealdb::Result<()> {
         let ns = &self.settings.surreal_ns;
-        root(&self.root, "provisioning.namespace", format!("DEFINE NAMESPACE IF NOT EXISTS `{ns}`")).await?.check()?;
-        self.define_database(pool::CONTROL_DB, false).await?;
-        let s = self.session(pool::CONTROL_DB).await?;
+        let rt = self.open().await?;
+        root(&rt, "provisioning.namespace", format!("DEFINE NAMESPACE IF NOT EXISTS `{ns}`")).await?.check()?;
+        self.define_database(&rt, pool::CONTROL_DB, false).await?;
+        let s = self.session(&rt, pool::CONTROL_DB).await?;
         // OVERWRITE keeps the password in step with ENCRYPTION_KEY, the only thing it derives from.
         root(
             &s,
@@ -93,7 +119,8 @@ impl Provisioner {
     pub async fn provision_org(&self, control: &ControlDb, org: OrgId, name: &str) -> AppResult<()> {
         store::tenant::ORG_CREATE.on(control).bind(("id", org.record())).bind(("name", name.to_string())).await?.check()?;
         let (db, pass) = self.claim_tenant(control, &org, "provisioning").await?;
-        self.build_database(&db, &pass).await?;
+        let rt = self.open().await?;
+        self.build_database(&rt, &db, &pass).await?;
         self.write_tenant(control, &org, &db, &pass, crate::migrate::LATEST_TENANT, "ready").await?;
         Ok(())
     }
@@ -106,10 +133,10 @@ impl Provisioner {
     }
 
     /// `DEFINE DATABASE .. STRICT`, tenant migrations, and the org's database user.
-    async fn build_database(&self, db: &str, pass: &str) -> AppResult<()> {
+    async fn build_database(&self, rt: &Db, db: &str, pass: &str) -> AppResult<()> {
         let ns = &self.settings.surreal_ns;
-        self.define_database(db, true).await?;
-        let s = self.session(db).await?;
+        self.define_database(rt, db, true).await?;
+        let s = self.session(rt, db).await?;
         crate::migrate::migrate(&s, &self.settings).await?;
         root(&s, "provisioning.db_user", format!("DEFINE USER OVERWRITE {DB_USER} ON DATABASE PASSWORD '{pass}' ROLES EDITOR")).await?.check()?;
         tracing::info!(db, ns, "org database ready");
@@ -121,7 +148,8 @@ impl Provisioner {
         let Some(t) = self.tenant_state(control, org).await? else {
             return Err(AppError::coded(ErrorCode::TenantNotFound, "No data store exists for this organisation."));
         };
-        let s = self.session(&t.db).await?;
+        let rt = self.open().await?;
+        let s = self.session(&rt, &t.db).await?;
         crate::migrate::migrate(&s, &self.settings).await?;
         store::tenant::SET_STATE
             .on(control)
@@ -172,23 +200,36 @@ impl Provisioner {
         Ok(())
     }
 
+    /// True if the connection this provisioner keeps cannot run a root query: it is not signed in,
+    /// so between operations the process holds no root session (`tests/tenancy.rs`).
+    #[cfg(feature = "test-support")]
+    pub async fn holds_no_root_session(&self) -> bool {
+        match (*self.template).clone().query("INFO FOR ROOT").await {
+            Err(_) => true,
+            Ok(mut r) => !r.take_errors().is_empty(),
+        }
+    }
+
     /// A root session on a fresh, empty database (migration tests, the spike). Not strict.
     #[cfg(feature = "test-support")]
     pub async fn scratch(&self, db: &str) -> surrealdb::Result<Db> {
-        self.define_database(db, false).await?;
-        self.session(db).await
+        let rt = self.open().await?;
+        self.define_database(&rt, db, false).await?;
+        self.session(&rt, db).await
     }
 
     /// A root session on `db` (tests that check what is in an org database).
     #[cfg(feature = "test-support")]
     pub async fn session_on(&self, db: &str) -> surrealdb::Result<Db> {
-        self.session(db).await
+        let rt = self.open().await?;
+        self.session(&rt, db).await
     }
 
     /// Spike S1 and the isolation suite: create the database user and database for an org with a
     /// known password (no routing row).
     #[cfg(feature = "test-support")]
     pub async fn build_database_for_tests(&self, db: &str, pass: &str) -> AppResult<()> {
-        self.build_database(db, pass).await
+        let rt = self.open().await?;
+        self.build_database(&rt, db, pass).await
     }
 }
