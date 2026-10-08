@@ -82,7 +82,16 @@ pub async fn register_user(db: &Db, email: &str, password: &str) -> AppResult<Us
         .query("CREATE user SET email = $email, password_hash = $password_hash RETURN AFTER")
         .bind(("email", email.to_string()))
         .bind(("password_hash", password_hash))
-        .await?;
+        .await?
+        .check()
+        .map_err(|e| {
+            // the unique email index is the real guard; the SELECT above is only the friendly path
+            if e.to_string().contains("already contains") {
+                AppError::new(axum::http::StatusCode::CONFLICT, "A user with that email already exists.")
+            } else {
+                e.into()
+            }
+        })?;
     let rows: Vec<UserRow> = res.take(0)?;
     let row = rows.into_iter().next().ok_or_else(|| AppError::internal("insert returned no row"))?;
 

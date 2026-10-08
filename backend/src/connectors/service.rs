@@ -14,6 +14,7 @@ use surrealdb::{Datetime, RecordId};
 
 use crate::connectors::crypto;
 use crate::db::Db;
+use crate::tx::with_retry;
 use crate::error::{AppError, AppResult};
 
 /// Real, non-pseudo connector kinds the CRUD surface manages (excludes
@@ -60,16 +61,27 @@ pub async fn get_connector(db: &Db, owner: &RecordId, kind: &str) -> AppResult<O
 }
 
 pub async fn get_or_create_connector(db: &Db, owner: &RecordId, kind: &str) -> AppResult<Connector> {
-    if let Some(row) = get_connector(db, owner, kind).await? {
-        return Ok(row);
-    }
-    let mut res = db
-        .query("CREATE connector SET owner = $owner, kind = $kind RETURN AFTER")
-        .bind(("owner", owner.clone()))
-        .bind(("kind", kind.to_string()))
-        .await?;
-    let rows: Vec<Connector> = res.take(0)?;
-    rows.into_iter().next().ok_or_else(|| AppError::internal("connector insert returned no row"))
+    // Unique (owner, kind): a racing creator fails the insert and the retry's re-read finds its row.
+    let row = with_retry(|| async {
+        let mut res = db
+            .query("SELECT * FROM connector WHERE owner = $owner AND kind = $kind LIMIT 1")
+            .bind(("owner", owner.clone()))
+            .bind(("kind", kind.to_string()))
+            .await?
+            .check()?;
+        if let Some(row) = res.take::<Vec<Connector>>(0)?.into_iter().next() {
+            return Ok(Some(row));
+        }
+        let mut res = db
+            .query("CREATE connector SET owner = $owner, kind = $kind RETURN AFTER")
+            .bind(("owner", owner.clone()))
+            .bind(("kind", kind.to_string()))
+            .await?
+            .check()?;
+        Ok(res.take::<Vec<Connector>>(0)?.into_iter().next())
+    })
+    .await?;
+    row.ok_or_else(|| AppError::internal("connector insert returned no row"))
 }
 
 pub async fn list_connectors(db: &Db, owner: &RecordId) -> AppResult<Vec<Connector>> {

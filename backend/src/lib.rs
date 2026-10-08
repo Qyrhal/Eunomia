@@ -15,6 +15,7 @@ pub mod sources;
 pub mod state;
 pub mod telemetry;
 pub mod tools;
+pub mod tx;
 pub mod vaults;
 
 use axum::http::{header, HeaderName, HeaderValue, Method};
