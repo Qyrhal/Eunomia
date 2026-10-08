@@ -169,6 +169,12 @@ backend/scripts/backup.sh                              # writes backups/eunomia-
 backend/scripts/restore.sh backups/eunomia-<timestamp>.surql
 ```
 
+Each org's data is its own database (see
+[`docs/architecture/tenancy.md`](docs/architecture/tenancy.md)), so a backup is
+a folder with one encrypted file per database (`control`, each `org_<uuid>`,
+and the old single database until you remove it); `restore.sh` restores them
+all. Backups from before tenancy are single files and still restore.
+
 `restore.sh` replays the dump's `CREATE`/`DEFINE` statements against the
 live database rather than wiping it first — for a guaranteed-clean restore,
 restore into a fresh volume. **Never run `docker compose down -v`** to get a

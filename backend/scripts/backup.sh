@@ -20,7 +20,7 @@ docker compose exec -T backup eunomia-backup now manual || {
 }
 if [ -n "${1:-}" ]; then
   mkdir -p "$1"
-  latest="$(docker compose exec -T backup sh -c 'ls -1 /backups/manual-*.surql.enc | sort | tail -1' | tr -d '\r')"
-  docker compose cp "backup:$latest" "$1/"
+  latest="$(docker compose exec -T backup sh -c 'ls -1d /backups/manual-* | sort | tail -1' | tr -d '\r')"
+  docker compose cp "backup:$latest" "$1/"   # a file, or a directory with one file per database
   echo "copied to $1/$(basename "$latest")"
 fi

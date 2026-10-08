@@ -4,7 +4,8 @@
 #   backend/scripts/restore.sh <file> [--wipe]
 #
 # <file> is a name in the eunomia-backups volume (see `backup.sh list`) or a
-# path on the host (copied in first). Without --wipe the dump is replayed over
+# path on the host (copied in first). A backup of a tenancy install is a
+# directory holding one file per database; it is restored database by database. Without --wipe the dump is replayed over
 # the existing database, which fails or merges if data is already there. With
 # --wipe the database is deleted first, then restored: use that to roll back.
 # Uses the key in .env, so a different key means a clear "could not decrypt".
@@ -12,7 +13,7 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 
 file="${1:?usage: restore.sh <backup-file> [--wipe]}"
-if [ -f "$file" ]; then
+if [ -e "$file" ]; then
   docker compose cp "$file" "backup:/tmp/$(basename "$file")"
   file="/tmp/$(basename "$file")"
 fi

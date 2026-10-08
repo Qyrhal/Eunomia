@@ -7,6 +7,10 @@
 # Files are `surreal export` output encrypted with AES-256-CBC (PBKDF2) using
 # BACKUP_ENCRYPTION_KEY. Decrypt by hand:
 #   openssl enc -d -aes-256-cbc -pbkdf2 -pass env:BACKUP_ENCRYPTION_KEY -in X.surql.enc
+# With org tenancy (a `control` database exists) one backup is a directory, NAME/, holding one
+# file per database of the namespace (control.surql.enc, org_<uuid>.surql.enc, and the old
+# single database until you remove it). Without it (a pre-tenancy install, the restore drill) a
+# backup is the single file NAME.surql.enc as before.
 set -eu
 
 ENDPOINT="${SURREAL_ENDPOINT:-http://surrealdb:8000}"
@@ -26,46 +30,85 @@ need_key() {
 }
 
 
+export_db() { # export one database to stdout
+  surreal export --log none --endpoint "$ENDPOINT" --user "$USER_" --pass "$PASS_" --ns "$NS" --db "$1" -
+}
+
+# The databases to back up: control, every org_<uuid> and $DB (the old single database) when the
+# tenancy layout is there; just $DB otherwise.
+list_dbs() {
+  info="$(echo 'INFO FOR NS;' | surreal sql --endpoint "$ENDPOINT" --user "$USER_" --pass "$PASS_" --ns "$NS" --hide-welcome --json 2>/dev/null || true)"
+  if ! echo "$info" | grep -q '"control"'; then echo "$DB"; return; fi
+  { echo "$info" | grep -oE '"(control|org_[0-9a-f]{32})"[[:space:]]*:' | sed -E 's/^"([^"]+)".*/\1/'
+    echo "$info" | grep -q "\"$DB\"[[:space:]]*:" && echo "$DB"; } | sort -u
+}
+
+encrypt_to() { # stdin -> $1, atomically; refuses an empty export
+  tmp="$1.part"
+  openssl enc -aes-256-cbc -pbkdf2 -salt -pass env:BACKUP_ENCRYPTION_KEY > "$tmp" || { rm -f "$tmp"; return 1; }
+  # Guard against pipe failures that sh cannot see: an empty export still encrypts to ~32 bytes.
+  [ "$(wc -c < "$tmp")" -gt 64 ] || { rm -f "$tmp"; return 1; }
+  mv "$tmp" "$1"
+}
+
 do_backup() {
   prefix="${1:-manual}"
   need_key
   mkdir -p "$DIR"
-  out="$DIR/$prefix-$(date -u +%Y%m%dT%H%M%SZ).surql.enc"
-  tmp="$out.part"
+  name="$prefix-$(date -u +%Y%m%dT%H%M%SZ)"
+  dbs="$(list_dbs)"
   # export | encrypt in one pipe: the plaintext dump never touches disk. --log none keeps log lines out of stdout (they would corrupt the dump).
-  if ! { surreal export --log none --endpoint "$ENDPOINT" --user "$USER_" --pass "$PASS_" --ns "$NS" --db "$DB" - \
-         | openssl enc -aes-256-cbc -pbkdf2 -salt -pass env:BACKUP_ENCRYPTION_KEY > "$tmp"; }; then
-    rm -f "$tmp"; die "export failed (is SurrealDB reachable at $ENDPOINT and are the credentials right?)"
+  if [ "$dbs" = "$DB" ]; then
+    out="$DIR/$name.surql.enc"
+    export_db "$DB" | encrypt_to "$out" || { rm -f "$out"; die "export failed (is SurrealDB reachable at $ENDPOINT and are the credentials right?)"; }
+  else
+    out="$DIR/$name"
+    mkdir -p "$out.part"
+    for d in $dbs; do
+      export_db "$d" | encrypt_to "$out.part/$d.surql.enc" || { rm -rf "$out.part"; die "export of database $d failed (is SurrealDB reachable at $ENDPOINT and are the credentials right?)"; }
+    done
+    mv "$out.part" "$out"
   fi
-  # Guard against pipe failures that sh cannot see: an empty export still encrypts to ~32 bytes.
-  [ "$(wc -c < "$tmp")" -gt 64 ] || { rm -f "$tmp"; die "export looks empty, discarding"; }
-  mv "$tmp" "$out"
-  log "wrote $out ($(wc -c < "$out") bytes)"
+  log "wrote $out ($(du -sk "$out" | cut -f1) KB, databases: $(echo $dbs))"
   rotate daily "$KEEP_DAILY"
   rotate weekly "$KEEP_WEEKLY"
 }
 
-rotate() { # keep the newest $2 files named $1-*.surql.enc
-  ls -1 "$DIR"/"$1"-*.surql.enc 2>/dev/null | sort -r | tail -n +"$(($2 + 1))" | while read -r f; do
-    rm -f "$f"; log "rotated out $f"
+rotate() { # keep the newest $2 backups (files or directories) named $1-*
+  ls -1d "$DIR"/"$1"-* 2>/dev/null | grep -v '\.part$' | sort -r | tail -n +"$(($2 + 1))" | while read -r f; do
+    rm -rf "$f"; log "rotated out $f"
   done
+}
+
+restore_one() { # restore_one FILE DB [--wipe]
+  plain="$(mktemp)"; trap 'rm -f "$plain"' EXIT
+  openssl enc -d -aes-256-cbc -pbkdf2 -pass env:BACKUP_ENCRYPTION_KEY -in "$1" > "$plain" 2>/dev/null \
+    || die "could not decrypt $1: wrong BACKUP_ENCRYPTION_KEY or corrupt file"
+  if [ "${3:-}" = "--wipe" ]; then
+    log "wiping database $NS/$2"
+    echo "REMOVE DATABASE IF EXISTS \`$2\`;" | surreal sql --endpoint "$ENDPOINT" --user "$USER_" --pass "$PASS_" --ns "$NS" --hide-welcome >/dev/null \
+      || die "wipe failed"
+  fi
+  echo "DEFINE DATABASE IF NOT EXISTS \`$2\`;" | surreal sql --endpoint "$ENDPOINT" --user "$USER_" --pass "$PASS_" --ns "$NS" --hide-welcome >/dev/null \
+    || die "could not create database $2"
+  surreal import --endpoint "$ENDPOINT" --user "$USER_" --pass "$PASS_" --ns "$NS" --db "$2" "$plain" \
+    || die "import of $2 failed. If the database already has data, retry with --wipe (this deletes it first)."
+  rm -f "$plain"
 }
 
 do_restore() {
   need_key
-  f="${1:-}"; [ -n "$f" ] || die "usage: restore FILE [--wipe]"
-  [ -f "$f" ] || f="$DIR/$f"
-  [ -f "$f" ] || die "no such backup: $1 (try: list)"
-  plain="$(mktemp)"; trap 'rm -f "$plain"' EXIT
-  openssl enc -d -aes-256-cbc -pbkdf2 -pass env:BACKUP_ENCRYPTION_KEY -in "$f" > "$plain" 2>/dev/null \
-    || die "could not decrypt $f: wrong BACKUP_ENCRYPTION_KEY or corrupt file"
-  if [ "${2:-}" = "--wipe" ]; then
-    log "wiping database $NS/$DB"
-    echo "REMOVE DATABASE IF EXISTS $DB;" | surreal sql --endpoint "$ENDPOINT" --user "$USER_" --pass "$PASS_" --ns "$NS" --hide-welcome >/dev/null \
-      || die "wipe failed"
+  f="${1:-}"; [ -n "$f" ] || die "usage: restore NAME [--wipe]"
+  [ -e "$f" ] || f="$DIR/$f"
+  [ -e "$f" ] || die "no such backup: $1 (try: list)"
+  if [ -d "$f" ]; then
+    for file in "$f"/*.surql.enc; do
+      d="$(basename "$file" .surql.enc)"
+      restore_one "$file" "$d" "${2:-}"
+    done
+  else
+    restore_one "$f" "$DB" "${2:-}"
   fi
-  surreal import --endpoint "$ENDPOINT" --user "$USER_" --pass "$PASS_" --ns "$NS" --db "$DB" "$plain" \
-    || die "import failed. If the database already has data, retry with --wipe (this deletes it first)."
   log "restored $f"
 }
 
@@ -82,11 +125,11 @@ case "${1:-}" in
     while :; do
       sleep "$(secs_to_next_3am)"
       do_backup daily || log "nightly backup failed, will retry tomorrow"
-      [ "$(date +%u)" = 7 ] && { ls -1t "$DIR"/daily-*.surql.enc | head -1 | while read -r f; do
-        cp "$f" "$DIR/weekly-${f##*/daily-}"; done; rotate weekly "$KEEP_WEEKLY"; }
+      [ "$(date +%u)" = 7 ] && { ls -1dt "$DIR"/daily-* | head -1 | while read -r f; do
+        cp -R "$f" "$DIR/weekly-${f##*/daily-}"; done; rotate weekly "$KEEP_WEEKLY"; }
     done ;;
   now) do_backup "${2:-manual}" ;;
   list) ls -lh "$DIR" ;;
   restore) shift; do_restore "$@" ;;
-  *) die "usage: eunomia-backup loop | now [prefix] | list | restore FILE [--wipe]" ;;
+  *) die "usage: eunomia-backup loop | now [prefix] | list | restore NAME [--wipe]" ;;
 esac
