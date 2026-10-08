@@ -23,6 +23,8 @@ leaves `.env` secrets alone, and reconnects agents.
 | `--ref <ref>` | latest release | tag, branch or `latest` |
 | `--frontend-port <port>` | `3000` | web app |
 | `--backend-port <port>` | `8001` | API + MCP server |
+| `--domain <name>` | none (HTTPS off) | serve at `https://<name>` with a free Let's Encrypt certificate; needs DNS pointing here and ports 80/443 open, see [HTTPS](deployment.md#1-https-lets-encrypt) |
+| `--acme-email <email>` | | email for Let's Encrypt, required with `--domain` |
 | `--openai-base-url <url>` | `https://api.openai.com/v1` | any OpenAI-compatible endpoint |
 | `--api-key <key>` | none | optional, see [agents](agents.md#do-i-need-an-openai-key) |
 | `--email <email>` | your git email | Eunomia account to create |
@@ -43,6 +45,11 @@ first when run interactively. Unattended, it never waits on a sudo password:
 it stops and says what to install instead.
 
 If a port is taken the installer stops before changing anything.
+
+With `--domain`, it waits for `https://<domain>` to answer and connects your
+agents there. If DNS or the firewall isn't ready yet it warns and carries on
+with the local address; Caddy keeps retrying the certificate, and Settings →
+HTTPS shows when it's active.
 
 ## Installing as an AI agent
 

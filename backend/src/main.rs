@@ -41,6 +41,7 @@ async fn main() {
         .merge(routers::audit::router())
         .merge(routers::export::router())
         .merge(routers::update::router())
+        .merge(routers::https::router())
         .merge(routers::vaults::router())
         .merge(routers::connectors::router())
         .merge(routers::connectors::snapshot_router())

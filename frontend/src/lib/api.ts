@@ -135,6 +135,27 @@ export const update = {
 };
 
 // ---------------------------------------------------------------------------
+// HTTPS (Let's Encrypt via the `caddy` service, applied by the updater)
+// ---------------------------------------------------------------------------
+
+export type HttpsStatus =
+  | { configured: false }
+  | {
+      configured: true;
+      state: "off" | "pending" | "active" | "error";
+      domain?: string;
+      message?: string | null;
+      checked_at?: string;
+    };
+
+export const https = {
+  status: () => api.get<HttpsStatus>("/api/https/status"),
+  enable: (domain: string, email: string) =>
+    api.post<{ configured: boolean; requested?: boolean }>("/api/https", { enabled: true, domain, email }),
+  disable: () => api.post<{ configured: boolean; requested?: boolean }>("/api/https", { enabled: false }),
+};
+
+// ---------------------------------------------------------------------------
 // export
 // ---------------------------------------------------------------------------
 

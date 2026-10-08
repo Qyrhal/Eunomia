@@ -6,29 +6,51 @@ in front of real users needs three more things: TLS, env vars that aren't
 `localhost`/default secrets, and knowing that the frontend's `NEXT_PUBLIC_*`
 vars are baked in at *build* time, not read at runtime.
 
-## 1. Reverse proxy + TLS
+## 1. HTTPS (Let's Encrypt)
 
-Put something in front of the `frontend` (`:3000`) and `backend` (`:8001`)
-containers that terminates TLS and proxies to them. [Caddy](https://caddyserver.com/)
-gets automatic HTTPS (it provisions and renews a Let's Encrypt cert itself)
-in a handful of lines, which is why it's recommended here over hand-rolling
-nginx + certbot:
+The stack ships an optional `caddy` service that serves Eunomia at your own
+domain with a free Let's Encrypt certificate and renews it on its own.
 
-```caddyfile
-# Caddyfile
-eunomia.example.com {
-    reverse_proxy /api/* localhost:8001
-    reverse_proxy /mcp localhost:8001
-    reverse_proxy /healthz localhost:8001
-    reverse_proxy /* localhost:3000
-}
-```
+You need:
 
-Run it alongside the compose stack (`caddy run` on the host, or as one more
-service in `docker-compose.yml` with ports 80/443 published). An nginx
-equivalent needs its own `server { listen 443 ssl; ... }` block plus a
-certbot container/cron to issue and renew the cert — more moving parts for
-the same result.
+- a domain (or subdomain) whose DNS A/AAAA record points at this machine;
+- ports 80 and 443 reachable from the internet and not used by anything else
+  on the machine (Let's Encrypt checks port 80 when issuing).
+
+Turn it on in any of three ways:
+
+- **Settings → HTTPS**: enter the domain and an email for Let's Encrypt,
+  click **Enable HTTPS**. The status reads *Pending* until the certificate is
+  issued (usually under a minute), then *Active*. Problems (a port already in
+  use, DNS not pointing here yet) show up there. **Disable** stops it.
+- **The installer**: `--domain eunomia.example.com --acme-email you@example.com`
+  (or answer yes to the HTTPS question). Agents are then connected to
+  `https://eunomia.example.com/mcp`.
+- **By hand**: add to `.env`, then `docker compose up -d`:
+
+  ```bash
+  COMPOSE_PROFILES=https
+  EUNOMIA_DOMAIN=eunomia.example.com
+  EUNOMIA_ACME_EMAIL=you@example.com
+  ```
+
+`./Caddyfile` proxies everything to the frontend, which forwards `/api` and
+`/mcp` to the backend, so the web app, the API and MCP all live at
+`https://<domain>`. Certificates are kept in the `eunomia-caddy-data`
+volume. Plain HTTP on port 80 redirects to HTTPS. The old addresses
+(`:3000`, `:8001`) keep working; to make the domain the only way in, firewall
+those ports or remove their `ports:` entries.
+
+How Settings applies it: like updates (below), the backend never touches
+docker or `.env`. It validates the domain and email and writes
+`update-status/https.json`. Within 20 seconds the `updater` service validates
+them again, sets the three `.env` values, starts (or removes) `caddy`, and
+reports in `update-status/https-status.json`, probing the certificate until
+it answers. Watch it with `docker compose logs caddy`.
+
+Using your own reverse proxy instead (nginx, Traefik, an existing Caddy):
+point it at the frontend port only, as in section 3. Leave HTTPS off here
+so the two don't both want ports 80/443.
 
 ## 2. Env vars that need real values
 
@@ -50,8 +72,8 @@ The frontend calls same-origin `/api/*`, and `frontend/next.config.ts`
 rewrites that to `BACKEND_INTERNAL_URL` (`http://backend:8001` in the
 image, the compose service name). The browser never needs the backend's
 host, so one prebuilt image works whether you open it as `localhost`, a LAN
-IP, or a domain -- no rebuild, no CORS. Put your reverse proxy / TLS in
-front of the frontend port only.
+IP, or a domain -- no rebuild, no CORS. The built-in HTTPS (section 1), or
+your own reverse proxy, goes in front of the frontend port only.
 
 `NEXT_PUBLIC_API_URL` still exists as a build-time override for running the
 frontend somewhere it can't reach the backend over a private network; it is
