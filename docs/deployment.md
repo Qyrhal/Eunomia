@@ -73,6 +73,10 @@ a key), it is never sent anywhere: the feature reports an error and the
 credential has to be entered again in Settings or Connectors. Keep
 `ENCRYPTION_KEY` with your backups.
 
+Upgrading an install that never set a key: **Update now** (and re-running the
+installer) generates one before restarting, so the backend comes up. Credentials
+saved without a key then need re-entering; the app says which.
+
 ## 3. The browser only ever talks to the frontend
 
 The frontend calls same-origin `/api/*`, and `frontend/next.config.ts`
