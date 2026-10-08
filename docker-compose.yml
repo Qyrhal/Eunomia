@@ -83,10 +83,13 @@ services:
       surrealdb:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8001/healthz"]
+      # /readyz checks the control database and its migrations, not just the process.
+      # start_period covers a first boot that moves an old install into its org database.
+      test: ["CMD", "curl", "-f", "http://localhost:8001/readyz"]
       interval: 5s
       timeout: 5s
       retries: 10
+      start_period: 30m
 
   frontend:
     image: ghcr.io/qyrhal/eunomia-frontend:${EUNOMIA_IMAGE_TAG:-latest}

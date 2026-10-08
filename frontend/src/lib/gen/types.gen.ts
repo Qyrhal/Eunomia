@@ -1280,7 +1280,7 @@ export type GetFailureCapsuleErrors = {
 export type GetFailureCapsuleError = GetFailureCapsuleErrors[keyof GetFailureCapsuleErrors];
 
 export type GetFailureCapsuleResponses = {
-    200: Capsule;
+    200: Array<Capsule>;
 };
 
 export type GetFailureCapsuleResponse = GetFailureCapsuleResponses[keyof GetFailureCapsuleResponses];
@@ -2372,3 +2372,25 @@ export type RemoveMemberResponses = {
 };
 
 export type RemoveMemberResponse = RemoveMemberResponses[keyof RemoveMemberResponses];
+
+export type GetReadyzData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/readyz';
+};
+
+export type GetReadyzErrors = {
+    /**
+     * Not ready
+     */
+    503: Problem;
+};
+
+export type GetReadyzError = GetReadyzErrors[keyof GetReadyzErrors];
+
+export type GetReadyzResponses = {
+    200: OkBody;
+};
+
+export type GetReadyzResponse = GetReadyzResponses[keyof GetReadyzResponses];
