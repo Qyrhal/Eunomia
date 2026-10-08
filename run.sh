@@ -6,6 +6,8 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
 DB=eunomia-dev-surrealdb
+# NOTE: the dev volume eunomia-dev-surreal must hold 3.x data. If it was last used by a 2.x run of this
+# script, remove it (docker volume rm eunomia-dev-surreal) or upgrade it first (docs/upgrading-to-surrealdb-3.md).
 if [ -z "$(docker ps -q -f name="^${DB}$")" ]; then
   echo "==> starting SurrealDB ($DB, data in volume eunomia-dev-surreal)"
   docker run -d --rm --name "$DB" --user root -p 127.0.0.1:8000:8000 -v eunomia-dev-surreal:/data \

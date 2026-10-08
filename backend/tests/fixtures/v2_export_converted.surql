@@ -694,7 +694,7 @@ DEFINE INDEX user_email_unique ON user FIELDS email UNIQUE;
 -- TABLE DATA: user
 -- ------------------------------
 
-INSERT [ { created_at: d'2026-10-08T13:40:56.972021Z', email: 'a@b.c', id: user:u, password_hash: 'x' } ];
+INSERT [ { created_at: d'2026-10-08T13:40:56.972021Z', email: 'a@b.c', id: user:u, password_hash: 'x' }, { created_at: d'2026-10-08T13:41:00.000000Z', email: 'Zed@Example.com', id: user:u2, password_hash: 'x' }, { created_at: d'2026-10-08T13:42:00.000000Z', email: 'zed@example.COM', id: user:u3, password_hash: 'x' } ];
 
 -- ------------------------------
 -- TABLE: vault
@@ -734,5 +734,5 @@ DEFINE INDEX vault_member_user_idx ON vault_member FIELDS user;
 -- TABLE DATA: vault_member
 -- ------------------------------
 
-INSERT [ { created_at: d'2026-10-08T13:40:56.972740Z', id: vault_member:vm, role: 'owner', status: 'active', user: user:u, vault: vault:v } ];
+INSERT [ { created_at: d'2026-10-08T13:40:56.972740Z', id: vault_member:vm, role: 'owner', status: 'active', user: user:u, vault: vault:v }, { created_at: d'2026-10-08T13:41:00.100000Z', id: vault_member:vm2, role: 'member', status: 'active', user: user:u2, vault: vault:v }, { created_at: d'2026-10-08T13:42:00.100000Z', id: vault_member:vm3, role: 'member', status: 'pending', user: user:u3, vault: vault:v } ];
 

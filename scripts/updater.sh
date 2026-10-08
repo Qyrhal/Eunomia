@@ -22,12 +22,14 @@ if [ "$host" != /eunomia ] && [ ! -e "$host" ]; then
   mkdir -p "$(dirname "$host")" && ln -s /eunomia "$host"
 fi
 owner="$(stat -c %u:%g /eunomia)"
-mkdir -p /eunomia/update-status
+# The backend runs as a non-root user and drops marker files here, so the directory must be writable by it.
+mkdir -p /eunomia/update-status && chmod 777 /eunomia/update-status
 
 while :; do
   (cd "$host" && bash scripts/auto-update.sh) >> /eunomia/update-status/update.log 2>&1
   # root in here; keep the checkout owned by whoever owns it on the host
   chown -R "$owner" /eunomia/.git /eunomia/.env /eunomia/update-status 2>/dev/null
+  chmod 777 /eunomia/update-status 2>/dev/null
   git -C /eunomia ls-files -z | (cd /eunomia && xargs -0 chown -h "$owner" 2>/dev/null)
   tail -n 500 /eunomia/update-status/update.log > /tmp/log && cat /tmp/log > /eunomia/update-status/update.log
   sleep 20

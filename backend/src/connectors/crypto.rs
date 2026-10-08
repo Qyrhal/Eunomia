@@ -141,6 +141,11 @@ pub async fn rotate_tenant_passwords_with(settings: &crate::config::Settings, co
     Ok(moved)
 }
 
+/// `EUNOMIA_ALLOW_EMPTY_ENCRYPTION_KEY=1`: the explicit opt-in to the public zero key (dev, tests).
+pub fn empty_key_allowed() -> bool {
+    std::env::var("EUNOMIA_ALLOW_EMPTY_ENCRYPTION_KEY").is_ok_and(|v| v == "1")
+}
+
 /// Boot check, run once the control database is up. A real key passes. An empty one is allowed only
 /// when `EUNOMIA_ALLOW_EMPTY_ENCRYPTION_KEY=1` (dev, tests), or when the install already has orgs: they
 /// were provisioned under the empty key, and refusing would lock the owner out of their own data.
@@ -149,7 +154,7 @@ pub async fn guard_key(settings: &crate::config::Settings, control: &crate::pool
     if !settings.encryption_key.is_empty() {
         return Ok(());
     }
-    if std::env::var("EUNOMIA_ALLOW_EMPTY_ENCRYPTION_KEY").is_ok_and(|v| v == "1") {
+    if empty_key_allowed() {
         tracing::warn!("ENCRYPTION_KEY is empty and EUNOMIA_ALLOW_EMPTY_ENCRYPTION_KEY=1: stored credentials use a public key. Dev only.");
         return Ok(());
     }

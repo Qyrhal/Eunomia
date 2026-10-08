@@ -71,6 +71,16 @@ async fn model_listing_uses_the_url_guard_and_returns_no_upstream_text() {
     assert_eq!(body["error"], "unreachable", "{body}");
 }
 
+/// Does `text` construct a reqwest client? `Client::new` and friends count only as a whole word (so
+/// `UpBankClient::new` does not), and `use reqwest::` is fine only for the `header` module.
+fn builds_http_client(text: &str) -> bool {
+    const CALLS: &[&str] = &["Client::builder", "ClientBuilder", "Client::new", "Client::default", "reqwest::get", "reqwest::post", "reqwest::blocking"];
+    let whole_word = |needle: &str| {
+        text.match_indices(needle).any(|(i, _)| !text[..i].chars().next_back().is_some_and(|c| c.is_alphanumeric() || c == '_'))
+    };
+    CALLS.iter().any(|n| whole_word(n)) || text.match_indices("use reqwest::").any(|(i, m)| !text[i + m.len()..].starts_with("header"))
+}
+
 /// Every outbound HTTP client is built in a file on this list; everything else must go through `llm_net::client`.
 #[test]
 fn only_allow_listed_files_build_http_clients() {
@@ -95,7 +105,7 @@ fn only_allow_listed_files_build_http_clients() {
     for f in files {
         let rel = f.strip_prefix(&src).unwrap().to_string_lossy().replace('\\', "/");
         let text = std::fs::read_to_string(&f).unwrap();
-        let builds = text.contains("reqwest::Client::new()") || text.contains("reqwest::Client::builder()") || text.contains("reqwest::blocking");
+        let builds = builds_http_client(&text);
         if builds && !ALLOWED.iter().any(|(a, _)| *a == rel) {
             bad.push(rel);
         }

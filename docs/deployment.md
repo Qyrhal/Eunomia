@@ -34,7 +34,7 @@ runs first and can only drop or keep what the client sent):
   client-supplied `X-Forwarded-For`, `X-Forwarded-Proto` and `X-Real-IP`, so none reach the
   backend. The backend peer is the frontend container, which is trusted but sent no header,
   so every direct client shares one rate-limit bucket (the frontend's address) and
-  `COOKIE_SECURE=auto` sees http. Put a reverse proxy in front if you need per-client limits.
+  `COOKIE_SECURE=auto` sees http. Put a reverse proxy in front if you need per-client limits. The consequence of one shared bucket: with a direct `:3000` install, a few failed sign-ins from one client can lock every other direct client out for the rest of the minute (the login limit is per address, and they all look like the same address).
 - Caddy on the host in front of the frontend, with `FRONTEND_TRUST_FORWARDED=1`: `proxy.ts`
   keeps the headers. Caddy sets `X-Forwarded-For` to the connecting client and
   `X-Forwarded-Proto` itself (it replaces client-supplied values unless you configured
@@ -90,6 +90,7 @@ their local-dev defaults in production:
 | `TRUSTED_PROXIES` | loopback only (`127.0.0.0/8`, `::1/128`); `docker-compose.yml` sets `frontend` | Comma-separated proxies whose `X-Forwarded-For` is believed: CIDRs, bare addresses or hostnames. A hostname (the compose service `frontend`) is resolved at boot and again every 60 seconds; the last good answer is kept and failures are logged at warn. The right-most address that is not itself trusted is the client. A LAN or bridge peer that is not listed cannot spoof its address. Only if you point a proxy straight at the backend (not recommended, see section 1): add its address or name (`TRUSTED_PROXIES=frontend,203.0.113.5`). `none` trusts nobody (every client is its peer address). |
 | `PUBLIC_URL` | `http://localhost:8001` | The address MCP clients reach Eunomia at, no trailing slash, e.g. `https://eunomia.example.com`. Used in OAuth discovery documents and as the audience of OAuth tokens, so it must match what clients connect to. |
 | `SIGNUP` | `open` | Who can create an account once the install has a first user (the first user can always sign up). `open`: anyone who can reach the server. `invite`: only emails listed in `SIGNUP_ALLOWLIST` (comma separated). `closed`: nobody. A typo closes signup. The default is `open` because a vault invitation needs an existing account (`no user with email`), so a team's second member has to be able to sign up before anyone can invite them. **On an instance reachable by people you do not trust, set `SIGNUP=invite` or `closed` after your team has signed up.** The same gate applies with `EUNOMIA_SIGNUP_ORG=personal`. Once the install has users, an address listed in `EUNOMIA_ADMIN_EMAILS` can never sign up (so nobody can claim an operator address first): register the account, then list it. |
+| `SIGNUP` + `ALLOW_PRIVATE_LLM_URL` | see above | Defaults `open` and allowed together: anyone who can reach the server can sign up and point a model URL at a private address. The backend logs one warning at boot when both are in effect. Set `SIGNUP=invite` or `ALLOW_PRIVATE_LLM_URL=0` on a reachable instance. |
 | `SIGNUP_ALLOWLIST` | empty | Emails allowed to sign up when `SIGNUP=invite`. |
 | `COOKIE_SECURE` | `auto` | `auto`: the session cookie is `Secure` when `PUBLIC_URL` is https or a trusted proxy (`TRUSTED_PROXIES`) sent `X-Forwarded-Proto: https`; the browser usually talks to the frontend origin, which can be https while `PUBLIC_URL` is not. `true` / `false` force it. |
 | `CAPSULE_ARGS` | `off` | `off`: failure capsules keep only a hash and the JSON shape of a failed call's arguments. `redacted`: keep the arguments with secrets masked, so `eunomia replay` can re-run them. See [debugging](debugging.md). |
@@ -155,7 +156,7 @@ Each org's data lives in its own database, `org_<uuid>`, in the `SURREAL_NS` nam
 
 ### Rotating ENCRYPTION_KEY
 
-Older installs ran with an empty `ENCRYPTION_KEY`, so their stored connector credentials, OpenAI keys and org database passwords were encrypted under a public all-zero key. The backend does not refuse to boot over that data (it would lock you out of it); it logs an error on every start until you move to a real key:
+Older installs ran with an empty `ENCRYPTION_KEY`, so their stored connector credentials, OpenAI keys and org database passwords were encrypted under a public all-zero key. An old install with data still to move into the org layout refuses to boot on an empty key until `ENCRYPTION_KEY` is set (the move would otherwise protect the new org database password with the public key); step 1 below is that fix. `/readyz` adds a `warning` field (still `200`) while an empty key is in use. The backend does not refuse to boot over data it already holds (it would lock you out of it); it logs an error on every start until you move to a real key:
 
 1. Set `ENCRYPTION_KEY` (`openssl rand -base64 32`) **and** `ENCRYPTION_KEY_LEGACY_EMPTY=1` in `.env`, then restart the backend. "Update now" does both for you when the key is blank. With the flag on, a value that does not decrypt under the new key is tried under the old empty one, and the log notes each time that happens. Every new write uses the new key.
 2. Org database passwords are re-encrypted under the new key automatically at that boot. Connector credentials and OpenAI keys are re-encrypted when you save them again: reconnect each connector (or re-enter its credentials) and re-enter the OpenAI key in Settings.
@@ -165,4 +166,4 @@ Changing a real key later has no such fallback: values written under the old key
 
 ## Backups
 
-See the [README's Backups section](../README.md#backups).
+See [INSTALLATION.md](../INSTALLATION.md#backups): the nightly encrypted export, where the key lives, and how to restore.

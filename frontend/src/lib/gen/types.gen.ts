@@ -372,6 +372,10 @@ export type ModelsOut = {
 
 export type OkBody = {
     ok: boolean;
+    /**
+     * Set on `/readyz` when the server is up but running on the public empty `ENCRYPTION_KEY`.
+     */
+    warning?: string | null;
 };
 
 export type PocketaiSummary = {

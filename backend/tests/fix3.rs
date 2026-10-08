@@ -48,10 +48,15 @@ async fn readyz_checks_the_control_database_and_its_migration_version() {
     let app = TestApp::new().await;
     let ((status, body), _) = common::http(&app.router, "GET", "/readyz", None, None, None).await;
     assert_eq!((status, &body["ok"]), (StatusCode::OK, &json!(true)));
+    assert!(body.get("warning").is_none(), "{body}");
     let ((status, _), _) = common::http(&app.router, "GET", "/healthz", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
 
     app.control().test_raw().query("DELETE _migration WHERE version = 4").await.unwrap().check().unwrap();
+    // the check is cached for 2 seconds: still ready right after the change, down after it expires
+    let ((status, _), _) = common::http(&app.router, "GET", "/readyz", None, None, None).await;
+    assert_eq!(status, StatusCode::OK);
+    tokio::time::sleep(std::time::Duration::from_millis(2100)).await;
     let ((status, body), _) = common::http(&app.router, "GET", "/readyz", None, None, None).await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(body["code"], "internal");

@@ -29,6 +29,9 @@ pub struct Problem {
 #[derive(Serialize, ToSchema)]
 pub struct OkBody {
     pub ok: bool,
+    /// Set on `/readyz` when the server is up but running on the public empty `ENCRYPTION_KEY`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
 }
 
 #[derive(Serialize, ToSchema)]

@@ -18,6 +18,8 @@ pub struct AppStateInner {
     pub settings: Settings,
     /// Failed sign-ins per account and per OAuth client (see `ratelimit::FailThrottle`).
     pub fail_throttle: crate::ratelimit::FailThrottle,
+    /// `/readyz` result and when it was taken: the route is public, so it answers from here for 2 seconds.
+    pub ready_cache: std::sync::Mutex<Option<(std::time::Instant, Option<String>)>>,
 }
 
 impl std::ops::Deref for AppState {
@@ -59,7 +61,7 @@ impl AppState {
         crate::connectors::crypto::guard_key(settings, &control).await?;
         crate::connectors::crypto::rotate_tenant_passwords(settings, &control).await?;
         let pool = Pool::new(template, control.clone(), settings);
-        Ok(AppState(Arc::new(AppStateInner { control, pool, provisioner, settings: settings.clone(), fail_throttle: Default::default() })))
+        Ok(AppState(Arc::new(AppStateInner { control, pool, provisioner, settings: settings.clone(), fail_throttle: Default::default(), ready_cache: Default::default() })))
     }
 
     /// Connect to an install that is already set up, without provisioning or moving anything
@@ -68,7 +70,7 @@ impl AppState {
         let template = crate::db::connect_raw(settings, config).await?;
         let control = crate::pool::connect_control(&template, settings).await?;
         let pool = Pool::new(template, control.clone(), settings);
-        Ok(AppState(Arc::new(AppStateInner { control, pool, provisioner: None, settings: settings.clone(), fail_throttle: Default::default() })))
+        Ok(AppState(Arc::new(AppStateInner { control, pool, provisioner: None, settings: settings.clone(), fail_throttle: Default::default(), ready_cache: Default::default() })))
     }
 
     /// The org's database, bundled with the app state.

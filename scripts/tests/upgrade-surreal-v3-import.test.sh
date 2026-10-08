@@ -18,6 +18,7 @@ case "\$*" in
   "compose ps -q"*) ;;
   "compose config --images") echo surrealdb/surrealdb:v3.3.1 ;;
   "volume ls"*) echo proj_eunomia-surreal-data ;;
+  "inspect -f {{.State.Running}} "*) echo true ;;
   "create"*) echo cid ;;
   "start -a"*) cat "$T/export.surql" ;;
   "run --rm -i"*) cat >/dev/null; echo '[{"person":1}]' ;;

@@ -1,4 +1,5 @@
-FROM rust:1-bookworm AS builder
+# Same toolchain CI and local builds use (CI tracks stable); bump deliberately.
+FROM rust:1.95.0-bookworm AS builder
 
 WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
@@ -10,13 +11,18 @@ COPY migrations ./migrations
 COPY --from=docs . /docs
 ARG APP_VERSION
 ENV APP_VERSION=$APP_VERSION
-RUN cargo build --release
+RUN cargo build --release --locked
 
 FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/target/release/eunomia-backend /usr/local/bin/eunomia-backend
+
+# Not root. The only path it writes is /update-status (a bind mount that scripts/updater.sh keeps
+# world-writable); everything else it needs is read-only.
+RUN useradd --system --uid 10001 --no-create-home eunomia
+USER eunomia
 
 EXPOSE 8001
 

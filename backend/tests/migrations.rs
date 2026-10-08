@@ -183,6 +183,10 @@ async fn regenerate_v2_fixture() {
          CREATE user:u SET email = 'a@b.c', password_hash = 'x';
          CREATE vault:v SET name = 'Personal', kind = 'personal';
          CREATE vault_member:vm SET vault = vault:v, user = user:u, role = 'owner';
+         CREATE user:u2 SET email = 'Zed@Example.com', password_hash = 'x', created_at = d'2026-10-08T13:41:00Z';
+         CREATE user:u3 SET email = 'zed@example.COM', password_hash = 'x', created_at = d'2026-10-08T13:42:00Z';
+         CREATE vault_member:vm2 SET vault = vault:v, user = user:u2, role = 'member';
+         CREATE vault_member:vm3 SET vault = vault:v, user = user:u3, role = 'member', status = 'pending';
          CREATE person:ann SET owner = user:u, vault = vault:v, name = 'Ann';
          CREATE organisation:acme SET owner = user:u, vault = vault:v, name = 'Acme';
          RELATE person:ann->relates_to->organisation:acme SET label = 'works_at';

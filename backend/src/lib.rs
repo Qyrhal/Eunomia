@@ -143,13 +143,44 @@ async fn healthz() -> axum::Json<serde_json::Value> {
 )]
 pub async fn readyz(axum::extract::State(state): axum::extract::State<state::AppState>) -> axum::response::Response {
     use axum::response::IntoResponse;
+    let cached = state.ready_cache.lock().ok().and_then(|c| c.as_ref().filter(|(at, _)| at.elapsed() < std::time::Duration::from_secs(2)).map(|(_, p)| p.clone()));
+    let problem = match cached {
+        Some(p) => p,
+        None => {
+            let p = ready_problem(&state).await;
+            if let Ok(mut c) = state.ready_cache.lock() {
+                *c = Some((std::time::Instant::now(), p.clone()));
+            }
+            p
+        }
+    };
+    match problem {
+        None => {
+            let warning = state.settings.encryption_key.is_empty().then(|| "ENCRYPTION_KEY is empty: stored credentials use a public key. Set one; see docs/deployment.md.".to_string());
+            axum::Json(openapi::OkBody { ok: true, warning }).into_response()
+        }
+        Some(detail) => {
+            tracing::warn!(%detail, "not ready");
+            // built by hand, not through AppError: an `internal` error hides its detail, and a probe polling
+            // a down database should not fill the failure-capsule table
+            let body = serde_json::json!({
+                "type": "about:blank", "title": "Service Unavailable", "status": 503, "detail": detail,
+                "code": error::ErrorCode::Internal.as_str(), "trace_id": telemetry::current_trace_id(),
+            });
+            (axum::http::StatusCode::SERVICE_UNAVAILABLE, [(axum::http::header::CONTENT_TYPE, "application/problem+json")], body.to_string()).into_response()
+        }
+    }
+}
+
+/// The two database checks behind `/readyz`; `None` means ready.
+async fn ready_problem(state: &state::AppState) -> Option<String> {
     use surrealdb::types::SurrealValue;
     #[derive(serde::Deserialize, SurrealValue)]
     struct Row {
         version: i64,
     }
     let newest = migrate::CONTROL_MIGRATIONS.iter().map(|m| i64::from(m.0)).max().unwrap_or(0);
-    let problem = match store::control::READY_PING.on(&state.control).await {
+    match store::control::READY_PING.on(&state.control).await {
         Err(e) => {
             tracing::warn!(error = %e, "readyz: control ping failed");
             Some("The control database did not answer.".to_string())
@@ -164,18 +195,5 @@ pub async fn readyz(axum::extract::State(state): axum::extract::State<state::App
                 (applied != newest).then(|| format!("The control database is at migration {applied}, this build expects {newest}."))
             }
         },
-    };
-    match problem {
-        None => axum::Json(openapi::OkBody { ok: true }).into_response(),
-        Some(detail) => {
-            tracing::warn!(%detail, "not ready");
-            // built by hand, not through AppError: an `internal` error hides its detail, and a probe polling
-            // a down database should not fill the failure-capsule table
-            let body = serde_json::json!({
-                "type": "about:blank", "title": "Service Unavailable", "status": 503, "detail": detail,
-                "code": error::ErrorCode::Internal.as_str(), "trace_id": telemetry::current_trace_id(),
-            });
-            (axum::http::StatusCode::SERVICE_UNAVAILABLE, [(axum::http::header::CONTENT_TYPE, "application/problem+json")], body.to_string()).into_response()
-        }
     }
 }

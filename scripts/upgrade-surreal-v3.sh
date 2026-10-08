@@ -69,7 +69,10 @@ target_image="$(compose config --images 2>/dev/null | grep '^surrealdb/surrealdb
 if [ "$(major_of "$target_image")" != 3 ]; then
   log "compose file pins $target_image, not 3.x: nothing to do"; exit 0
 fi
-# "down": surrealdb is stopped or unhealthy. That is what an install looks like after an OLD
+# "down": surrealdb is stopped or unhealthy, and SURREAL_DATA_VOLUME is not the v3 volume. A 3.x install that
+# was never on 2.x looks the same, so the 2.x server started on the copy below decides: if it cannot open the
+# data, we exit 0 without changing anything.
+# The 2.x case is what an install looks like after an OLD
 # updater (one without this hook) pulled a 3.x release over 2.x data: the 3.x server refuses
 # the 2.x files and exits. Recover from the volume by name; never start anything on the original.
 health=""; $running && health="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$cid" 2>/dev/null)"
@@ -162,9 +165,13 @@ if $down; then
   docker run -d --name "$SCRATCH_CTR" --network "$NET" --network-alias surrealdb --user root -v "$SCRATCH_VOLUME:/data" \
     --entrypoint /surreal "$old_image" start --user "$SURREAL_USER" --pass "$SURREAL_PASS" rocksdb:/data/eunomia.db >/dev/null \
     || die "could not start $old_image on the copy"
+  # A 2.x server that cannot open the copy means the data is not 2.x (a 3.x install whose server is just
+  # stopped): nothing to upgrade, so leave everything as it was and let the update carry on.
+  not_2x() { log "$old_image cannot open the data in $OLD_VOLUME (it is probably already 3.x data; see: docker logs $SCRATCH_CTR). Nothing was changed."; exit 0; }
   for i in $(seq 1 60); do
+    [ "$(docker inspect -f '{{.State.Running}}' "$SCRATCH_CTR" 2>/dev/null)" = true ] || not_2x
     docker run --rm --network "$NET" "$old_image" isready --endpoint http://surrealdb:8000 >/dev/null 2>&1 && break
-    [ "$i" -lt 60 ] || die "$old_image did not open the copy of the data (see: docker logs $SCRATCH_CTR). Nothing was changed."
+    [ "$i" -lt 60 ] || not_2x
     sleep 2
   done
 fi

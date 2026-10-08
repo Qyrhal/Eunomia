@@ -159,15 +159,15 @@ async fn the_move_carries_a_2x_export_into_one_org_and_is_a_noop_the_second_time
     let org = only_org(&state).await;
 
     // accounts moved to control, the oldest user owns the org
-    assert_eq!(count(state.control.test_raw(), "user").await, 1);
-    let role: String = scalar(state.control.test_raw(), "SELECT VALUE role FROM membership").await;
-    assert_eq!(role, "owner");
+    assert_eq!(count(state.control.test_raw(), "user").await, 3);
+    assert_eq!(count(state.control.test_raw(), "membership WHERE role = 'owner' AND user = user:u").await, 1, "the oldest user owns");
+    assert_eq!(count(state.control.test_raw(), "membership WHERE role = 'owner'").await, 1);
     let status: String = scalar(state.control.test_raw(), &format!("SELECT VALUE status FROM tenant:{}", org.key())).await;
     assert_eq!(status, "ready");
 
     // org data moved, record ids unchanged, and the indexes answer over it
     let db = state.pool.for_org(&org).await.unwrap();
-    for (table, n) in [("memory", 2), ("cache_record", 2), ("person", 1), ("organisation", 1), ("relates_to", 1), ("vault_member", 1)] {
+    for (table, n) in [("memory", 2), ("cache_record", 2), ("person", 1), ("organisation", 1), ("relates_to", 1), ("vault_member", 3)] {
         assert_eq!(count(db.test_raw(), table).await, n, "{table}");
     }
     let owner = eunomia_backend::rid::parse("user:u").unwrap();
@@ -185,7 +185,7 @@ async fn the_move_carries_a_2x_export_into_one_org_and_is_a_noop_the_second_time
     assert_eq!(out["results"].as_array().unwrap().len(), 1, "{out}");
 
     // the old database keeps its rows (it was only brought to schema 8 in place)
-    assert_eq!(count(&old, "user").await, 1);
+    assert_eq!(count(&old, "user").await, 3);
     assert_eq!(count(&old, "memory").await, 2);
 
     // a second run is a no-op: no second org, nothing changes
@@ -212,7 +212,7 @@ async fn an_interrupted_move_resumes_and_verifies() {
     assert_eq!(count(db.test_raw(), "memory").await, 2);
     assert_eq!(count(db.test_raw(), "cache_record").await, 2);
     assert_eq!(only_org(&state).await, org, "resumed, not restarted");
-    assert_eq!(count(state.control.test_raw(), "membership").await, 1, "no duplicate membership");
+    assert_eq!(count(state.control.test_raw(), "membership").await, 3, "no duplicate membership");
 }
 
 #[tokio::test]
@@ -248,7 +248,7 @@ async fn two_concurrent_boots_of_a_legacy_install_make_one_org() {
     let org = only_org(&state).await;
     let db = state.pool.for_org(&org).await.unwrap();
     assert_eq!(count(db.test_raw(), "memory").await, 2);
-    assert_eq!(count(state.control.test_raw(), "membership").await, 1);
+    assert_eq!(count(state.control.test_raw(), "membership").await, 3);
 }
 
 /// A fresh install booted by two replicas at once: both create the namespace, the control database,
@@ -284,6 +284,43 @@ async fn twenty_concurrent_cold_for_org_calls_sign_in_once() {
     assert_eq!(app.state.pool.open_handles(), 1);
 }
 
+/// The 2.x export has 3 users (two share an email in different case) and 3 vault members, none with an
+/// `email_lc`: `INSERT IGNORE` must not trip the UNIQUE index on the missing value, and the backfill gives
+/// the oldest of the duplicates the address; the later one is moved but cannot sign in by email.
+#[tokio::test]
+async fn a_2x_export_with_a_mixed_case_duplicate_email_moves_whole() {
+    let (state, old) = state_with_legacy().await;
+    let hash = bcrypt::hash("pw-12345678", 4).unwrap();
+    old.query("UPDATE user SET password_hash = $h").bind(("h", hash)).await.unwrap().check().unwrap();
+    run_move(&state).await;
+    let org = only_org(&state).await;
+    assert_eq!(count(state.control.test_raw(), "user").await, 3);
+    assert_eq!(count(state.control.test_raw(), "membership").await, 3);
+    let lcs: Vec<String> = state.control.test_raw().query("SELECT VALUE email_lc FROM user ORDER BY created_at").await.unwrap().take(0).unwrap();
+    assert_eq!(lcs[0], "a@b.c");
+    assert_eq!(lcs[1], "zed@example.com", "the oldest of the duplicates takes the address");
+    assert!(lcs[2].starts_with("duplicate:"), "{lcs:?}");
+    let db = state.pool.for_org(&org).await.unwrap();
+    assert_eq!(count(db.test_raw(), "vault_member").await, 3);
+    for email in ["a@b.c", "A@B.C", "zed@example.com", "ZED@EXAMPLE.COM"] {
+        let u = eunomia_backend::models_user::authenticate(&state.control, email, "pw-12345678").await.unwrap();
+        assert!(u.is_some(), "{email} cannot sign in after the move");
+    }
+}
+
+/// An old install with an empty ENCRYPTION_KEY must not get its org database password written under the
+/// public zero key: the move refuses until a key is set, and nothing is created.
+#[tokio::test]
+async fn the_move_refuses_an_empty_encryption_key() {
+    let (state, _old) = state_with_legacy().await;
+    let empty = eunomia_backend::config::Settings { encryption_key: String::new(), ..state.settings.clone() };
+    let err = legacy::move_if_needed(state.provisioner.as_ref().unwrap(), &state.control, &empty).await.unwrap_err();
+    assert!(err.message.contains("ENCRYPTION_KEY"), "{}", err.message);
+    assert_eq!(count(state.control.test_raw(), "org").await, 0);
+    run_move(&state).await; // with the real key it goes through
+    assert_eq!(count(state.control.test_raw(), "org").await, 1);
+}
+
 /// The move inserts users after the control migrations ran, so their backfills must be applied to the
 /// moved rows: sign-in by `email_lc`, a case-insensitive duplicate signup, and one owner with member slots.
 #[tokio::test]
@@ -308,12 +345,12 @@ async fn moved_users_can_sign_in_in_any_case_and_memberships_carry_slots() {
     }
     let dup = eunomia_backend::models_user::register_user_with(&state, "bOb@example.com", "pw-12345678", false).await;
     assert!(dup.is_err(), "a different-case signup of a moved email must be refused");
-    assert_eq!(count(state.control.test_raw(), "user").await, 4);
+    assert_eq!(count(state.control.test_raw(), "user").await, 6);
 
     let owners = count(state.control.test_raw(), "membership WHERE role = 'owner'").await;
     assert_eq!(owners, 1);
     let slots = count(state.control.test_raw(), "membership WHERE slot != NONE").await;
-    assert_eq!(slots, 4, "every moved membership has a slot");
+    assert_eq!(slots, 6, "every moved membership has a slot");
     // the owner slot is taken: a further owner cannot be added
     let again = state.control.test_raw().query("CREATE membership SET user = user:zz, org = $o, role = 'owner', slot = string::concat(<string>$o, '/owner')")
         .bind(("o", only_org(&state).await.record())).await.unwrap().check();

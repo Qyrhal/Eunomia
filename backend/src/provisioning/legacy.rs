@@ -81,6 +81,14 @@ async fn move_once(p: &Provisioner, control: &ControlDb, settings: &Settings) ->
     if !has_users {
         return Ok(());
     }
+    // The move creates the org's database password; under an empty key that would be encrypted with the public zero key.
+    if settings.encryption_key.is_empty() && !crate::connectors::crypto::empty_key_allowed() {
+        return Err(AppError::internal(
+            "ENCRYPTION_KEY is empty and this install has data to move into the org layout. Set ENCRYPTION_KEY (openssl rand -base64 32) \
+             before starting; also set ENCRYPTION_KEY_LEGACY_EMPTY=1 if connector secrets were saved under the empty key. \
+             EUNOMIA_ALLOW_EMPTY_ENCRYPTION_KEY=1 overrides this (dev only). See docs/deployment.md, \"Rotating ENCRYPTION_KEY\".",
+        ));
+    }
     tracing::warn!(db = %settings.surreal_db, "moving this install's single database into the org layout");
     run(p, control, settings, OrgId::from_label(&format!("legacy:{}:{}", settings.surreal_ns, settings.surreal_db))).await
 }

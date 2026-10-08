@@ -16,7 +16,8 @@ case "\$*" in
   "compose ps -q"*) ;;                                     # nothing running
   "compose config --images") echo surrealdb/surrealdb:v3.3.1 ;;
   "volume ls"*) cat "$T/volume" 2>/dev/null ;;
-  "network inspect"*) exit 1 ;;
+  "network inspect"*) [ -f "$T/net" ] || exit 1 ;;
+  "inspect -f {{.State.Running}} proj-v2scratch") cat "$T/scratch_running" 2>/dev/null ;;
 esac
 exit 0
 SHIM
@@ -33,6 +34,14 @@ out="$(run)"; rc=$?
 check "down, volume found, no network: fails with a hint" test "$rc" -ne 0
 check "down: the original volume is never mounted" bash -c "! grep -q 'proj_eunomia-surreal-data:/data' '$T/docker.log'"
 check "down: no container was started" bash -c "! grep -q '^run -d' '$T/docker.log'"
+
+# 3.x data in a stopped install: the 2.x server cannot open the copy, so the script leaves everything alone
+touch "$T/net"; rm -f "$T/scratch_running"; : > "$T/docker.log"
+out="$(run)"; rc=$?
+check "down, 2.x cannot open the data: exits 0" test "$rc" -eq 0
+check "down, 2.x cannot open the data: says nothing was changed" grep -q 'Nothing was changed' <<<"$out"
+check "down, 2.x cannot open the data: backend untouched" bash -c "! grep -q 'compose stop backend' '$T/docker.log'"
+check "down, 2.x cannot open the data: scratch container removed" grep -q 'rm -f proj-v2scratch' "$T/docker.log"
 
 echo SURREAL_DATA_VOLUME=eunomia-surreal-data-v3 > "$T/repo/.env"; : > "$T/docker.log"
 out="$(run)"; rc=$?

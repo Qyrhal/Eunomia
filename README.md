@@ -158,27 +158,10 @@ via `.github/workflows/ci.yml`.
 
 ## Backups
 
-The SurrealDB data lives in the `eunomia-surreal-data` Docker volume. Back
-it up with `surreal export` (the only backup mechanism SurrealDB v2.x's CLI
-offers), via the wrapper scripts below — both run inside the `surrealdb`
-container, so nothing needs installing on the host, and both need the
-`surrealdb` service already running (`docker compose up -d`):
-
-```bash
-backend/scripts/backup.sh                              # writes backups/eunomia-<timestamp>.surql
-backend/scripts/restore.sh backups/eunomia-<timestamp>.surql
-```
-
-Each org's data is its own database (see
-[`docs/architecture/tenancy.md`](docs/architecture/tenancy.md)), so a backup is
-a folder with one encrypted file per database (`control`, each `org_<uuid>`,
-and the old single database until you remove it); `restore.sh` restores them
-all. Backups from before tenancy are single files and still restore.
-
-`restore.sh` replays the dump's `CREATE`/`DEFINE` statements against the
-live database rather than wiping it first — for a guaranteed-clean restore,
-restore into a fresh volume. **Never run `docker compose down -v`** to get a
-clean slate; it deletes the volume (and any real data in it) outright.
+The stack takes a nightly encrypted export of every database into the `eunomia-backups`
+volume. How to take, list and restore backups is in [`INSTALLATION.md`](INSTALLATION.md)
+and [`docs/deployment.md`](docs/deployment.md). **Never run `docker compose down -v`**; it
+deletes the data volume.
 
 ## Production deployment
 
