@@ -14,6 +14,11 @@ services:
       - --pass
       - ${SURREAL_PASS:-root}
       - --deny-all
+      # --deny-all alone may also deny RPC, HTTP (the isready healthcheck) and root queries on 3.x:
+      # allow those explicitly. Not yet run against a live 3.3.1 server (docs/architecture/foundation-plan.md).
+      - --allow-rpc
+      - --allow-http
+      - --allow-arbitrary-query=system
       - --allow-funcs=time,string,search,count,array,vector,math
       - --deny-guests
       - --query-timeout=60s
@@ -95,7 +100,11 @@ services:
     image: ghcr.io/qyrhal/eunomia-frontend:${EUNOMIA_IMAGE_TAG:-latest}
     build: ./frontend
     ports:
-      - "${FRONTEND_PORT:-3000}:3000"
+      # Set FRONTEND_BIND=127.0.0.1 when a reverse proxy runs on this host (docs/deployment.md).
+      - "${FRONTEND_BIND:-0.0.0.0}:${FRONTEND_PORT:-3000}:3000"
+    environment:
+      # 1 only behind a trusted reverse proxy: believe the X-Forwarded-For/Proto it sets (src/proxy.ts)
+      - FRONTEND_TRUST_FORWARDED=${FRONTEND_TRUST_FORWARDED:-}
     depends_on:
       backend:
         condition: service_healthy

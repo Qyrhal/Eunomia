@@ -25,11 +25,9 @@ Files for `count()`: `routers/audit.rs`, `routers/auth.rs`, `routers/sources.rs`
 
 ## Function families
 
-Families used: `time`, `string`, `search`, `count`. No `vector::`, `array::`, `math::`, `object::`, `type::`, `record::`, `rand::`, `crypto::`, `duration::`, `http::`, or `fn::` calls appear in SQL.
-
 ## Allow list for `surreal start`
 
-Use this with `--deny-all`. The flag syntax is documented at https://surrealdb.com/docs/surrealdb/cli/start: `--allow-funcs` takes a comma-separated list, and each entry is `<family>` or `<family>::<name>`.
+Use this with `--deny-all`, plus `--allow-rpc --allow-http --allow-arbitrary-query=system` (RPC for the backend, HTTP for the `isready` healthcheck and the CLI, arbitrary queries for root; flag names from the 3.3 `surreal start` docs). `--deny-all` has not been run against a live 3.3.1 server yet. The flag syntax is documented at https://surrealdb.com/docs/surrealdb/cli/start: `--allow-funcs` takes a comma-separated list, and each entry is `<family>` or `<family>::<name>`.
 
 ```
 surreal start --deny-all --allow-funcs time,string,search,count [other flags]

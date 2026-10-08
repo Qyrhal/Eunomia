@@ -25,10 +25,25 @@ eunomia.example.com {
 }
 ```
 
-Caddy sets `X-Forwarded-For` and `X-Forwarded-Proto` itself. Next.js passes
-both through unchanged to the backend (it only fills them in when they are
-missing), so the backend reads the real client address and sees https with no
-extra `TRUSTED_PROXIES` entry. Set `PUBLIC_URL=https://eunomia.example.com`.
+Caddy sets `X-Forwarded-For` and `X-Forwarded-Proto` itself. Next.js forwards
+whatever the client sent unchanged, and only adds `X-Forwarded-For` when it is
+missing, using the peer it sees. It cannot tell a trusted proxy from a client, so
+`frontend/src/proxy.ts` drops client-supplied `X-Forwarded-For`, `X-Forwarded-Proto`
+and `X-Real-IP` unless `FRONTEND_TRUST_FORWARDED=1`. Behind Caddy, set in `.env`:
+
+```
+FRONTEND_BIND=127.0.0.1
+FRONTEND_TRUST_FORWARDED=1
+PUBLIC_URL=https://eunomia.example.com
+```
+
+`FRONTEND_BIND=127.0.0.1` stops anyone reaching `:3000` around the proxy, which is
+what makes trusting the header safe. Without a proxy (a plain LAN install: the
+defaults, `FRONTEND_BIND=0.0.0.0`), client forwarding headers are dropped so they
+cannot be spoofed, and the backend sees the frontend container as the peer: all
+direct clients then share one rate-limit bucket and `COOKIE_SECURE=auto` sees http.
+Next does not expose the TCP peer to its proxy hook, so it cannot be filled in
+there; put a reverse proxy in front if you need per-client limits.
 
 The compose file publishes the backend only on `127.0.0.1:8001`, so it is not
 reachable from the LAN. Agents on the same machine keep using

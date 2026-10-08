@@ -1,5 +1,17 @@
 # Upgrading a self-hosted install to SurrealDB 3
 
+**Order matters.** The release that adds the SurrealDB 3 upgrade hook (a new `scripts/auto-update.sh` plus `scripts/upgrade-surreal-v3.sh`) must be installed BEFORE the release that pins `surrealdb/surrealdb:v3.x`. "Update now" runs the updater script that is already loaded from the OLD release, so an install that jumps straight from v1.2.2 or v1.3.0 to a 3.x release has no hook: the 3.x server starts on the 2.x volume, refuses it and exits, and the backend never becomes healthy. Your data is not deleted, but treat it as at risk until recovered (a 3.3 server may write to the files while it opens them; the original volume is only ever used by the script as a read-only copy source).
+
+If that happened, recover by hand from the repo root, on the new checkout:
+
+```
+docker compose stop
+bash scripts/upgrade-surreal-v3.sh
+docker compose up -d
+```
+
+The script finds `<project>_eunomia-surreal-data` by itself, never starts a server on the original, takes the encrypted `pre-v3` backup from a temporary 2.x server running on a COPY, then migrates. Set `EUNOMIA_SURREAL_OLD_IMAGE` if your old install did not run `surrealdb/surrealdb:v2.3`. Releasers: see [releasing.md](releasing.md).
+
 Eunomia moves from SurrealDB 2.x to SurrealDB 3.3. Released installs run `surrealdb/surrealdb:v2.3` (v1.2.2 and v1.3.0), so that is the real starting point. SurrealDB 3 cannot read 2.x data files, and it refuses to open a database that a newer version has written to. So the data is copied across, never upgraded in place. The script `scripts/upgrade-surreal-v3.sh` does the copy and checks it. You normally do not run it yourself: clicking "Update now" in Settings runs it for you.
 
 ## What happens
@@ -44,7 +56,7 @@ docker compose up -d
 
 ## Notes
 
-- The hook lives in `scripts/auto-update.sh`, and the running copy of that script is the one from the OLD release (the updater reads it before it checks out the new one). So the release that adds the hook must ship, and be installed, before the release that pins SurrealDB 3.x. Otherwise run `scripts/upgrade-surreal-v3.sh` by hand once.
+- The hook lives in `scripts/auto-update.sh`, and the running copy of that script is the one from the OLD release (the updater reads it before it checks out the new one). So the release that adds the hook must ship, and be installed, before the release that pins SurrealDB 3.x. Otherwise run `scripts/upgrade-surreal-v3.sh` by hand once (see the top of this page). `scripts/ci/check-release-order.sh` enforces the order at tag time.
 - What is proven and what is not (be honest about this before trusting a real install):
   - Proven by shell tests with mocks (no Docker): the updater only runs the upgrade before pulling, undoes the checkout on failure, and injects `ENCRYPTION_KEY`/`JWT_SECRET` only after it succeeds; the backup script refuses a half-written export and its nightly loop survives a failed run.
   - Needs Docker, written but NOT yet run: the whole of `scripts/upgrade-surreal-v3.sh`, including case B in `scripts/tests/upgrade-surreal-v3.test.sh` (starts from the real v1.2.2 compose file: `surrealdb:v2.3`, no `backup` service).
