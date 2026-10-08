@@ -5,11 +5,12 @@
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use surrealdb::RecordId;
+use surrealdb::{Datetime, RecordId};
 
 use crate::db::Db;
 use crate::store;
 use crate::error::{AppError, AppResult};
+use crate::scopes;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct User {
@@ -122,6 +123,9 @@ pub struct ApiTokenCreated {
     pub id: RecordId,
     pub name: String,
     pub token: String,
+    pub scopes: Vec<String>,
+    pub vault: Option<RecordId>,
+    pub expires_at: Option<Datetime>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -130,7 +134,19 @@ struct ApiTokenRow {
     name: String,
 }
 
+/// A full-scope, non-expiring token, as every token was before scopes existed.
 pub async fn create_api_token(db: &Db, owner: &RecordId, name: &str) -> AppResult<ApiTokenCreated> {
+    create_api_token_with(db, owner, name, &all_scope_names(), None, None).await
+}
+
+pub async fn create_api_token_with(
+    db: &Db,
+    owner: &RecordId,
+    name: &str,
+    scopes: &[String],
+    vault: Option<&RecordId>,
+    expires_at: Option<Datetime>,
+) -> AppResult<ApiTokenCreated> {
     let token = generate_token();
     let hash = hash_token(&token);
 
@@ -139,19 +155,32 @@ pub async fn create_api_token(db: &Db, owner: &RecordId, name: &str) -> AppResul
         .bind(("owner", owner.clone()))
         .bind(("name", name.to_string()))
         .bind(("hash", hash))
+        .bind(("scopes", scopes.to_vec()))
+        .bind(("vault", vault.cloned()))
+        .bind(("expires_at", expires_at.clone()))
         .await?;
     let rows: Vec<ApiTokenRow> = res.take(0)?;
     let row = rows.into_iter().next().ok_or_else(|| AppError::internal("insert returned no row"))?;
 
-    Ok(ApiTokenCreated { id: row.id, name: row.name, token })
+    Ok(ApiTokenCreated { id: row.id, name: row.name, token, scopes: scopes.to_vec(), vault: vault.cloned(), expires_at })
+}
+
+fn all_scope_names() -> Vec<String> {
+    scopes::ALL.iter().map(|s| s.to_string()).collect()
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct ApiTokenSummary {
     pub id: RecordId,
     pub name: String,
-    pub created_at: surrealdb::Datetime,
-    pub last_used_at: Option<surrealdb::Datetime>,
+    pub created_at: Datetime,
+    pub last_used_at: Option<Datetime>,
+    #[serde(default = "all_scope_names")]
+    pub scopes: Vec<String>,
+    #[serde(default)]
+    pub vault: Option<RecordId>,
+    #[serde(default)]
+    pub expires_at: Option<Datetime>,
 }
 
 pub async fn list_api_tokens(db: &Db, owner: &RecordId) -> AppResult<Vec<ApiTokenSummary>> {
@@ -176,11 +205,31 @@ pub async fn revoke_api_token(db: &Db, owner: &RecordId, token_id: &RecordId) ->
     Ok(true)
 }
 
-pub async fn verify_api_token(db: &Db, token: &str) -> AppResult<Option<User>> {
+/// A token that exists, has not expired and belongs to a live user.
+pub struct VerifiedToken {
+    pub user: User,
+    pub token_id: RecordId,
+    pub scopes: Vec<String>,
+    pub vault: Option<RecordId>,
+}
+
+pub enum TokenCheck {
+    Unknown,
+    Expired,
+    Valid(Box<VerifiedToken>),
+}
+
+pub async fn check_api_token(db: &Db, token: &str) -> AppResult<TokenCheck> {
     #[derive(Deserialize)]
     struct TokenRow {
         id: RecordId,
         owner: RecordId,
+        #[serde(default = "all_scope_names")]
+        scopes: Vec<String>,
+        #[serde(default)]
+        vault: Option<RecordId>,
+        #[serde(default)]
+        expired: bool,
     }
     let hash = hash_token(token);
     let mut res = store::app::AUTH_TOKEN_BY_HASH
@@ -188,16 +237,37 @@ pub async fn verify_api_token(db: &Db, token: &str) -> AppResult<Option<User>> {
         .bind(("hash", hash))
         .await?;
     let rows: Vec<TokenRow> = res.take(0)?;
-    let Some(row) = rows.into_iter().next() else { return Ok(None) };
+    let Some(row) = rows.into_iter().next() else { return Ok(TokenCheck::Unknown) };
+
+    if row.expired {
+        return Ok(TokenCheck::Expired);
+    }
 
     // Best-effort bump; failure here must not block auth.
     let _ = store::app::AUTH_TOKEN_TOUCH
         .on(db)
-        .bind(("id", row.id))
+        .bind(("id", row.id.clone()))
         .await;
 
     let owner_row: Option<UserRow> = db.select(row.owner).await?;
-    Ok(owner_row.map(|r| User { id: r.id, email: r.email }))
+    Ok(match owner_row {
+        Some(r) => TokenCheck::Valid(Box::new(VerifiedToken {
+            user: User { id: r.id, email: r.email },
+            token_id: row.id,
+            scopes: row.scopes.into_iter().filter(|s| scopes::is_known(s)).collect(),
+            vault: row.vault,
+        })),
+        None => TokenCheck::Unknown,
+    })
+}
+
+/// The token's user, or `None` if it is unknown or expired. Callers that need
+/// the scopes or the expiry error use [`check_api_token`].
+pub async fn verify_api_token(db: &Db, token: &str) -> AppResult<Option<User>> {
+    Ok(match check_api_token(db, token).await? {
+        TokenCheck::Valid(v) => Some(v.user),
+        _ => None,
+    })
 }
 
 /// Mirrors Python's `secrets.token_urlsafe(32)`: 32 random bytes, base64url, no padding.

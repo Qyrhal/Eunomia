@@ -68,19 +68,31 @@ pub const ALL: &[&Stmt] = &[
     &OAUTH_TOKEN_DELETE,
     &OAUTH_TOKENS_DELETE_FAMILY,
     &OAUTH_PRUNE,
+    // --- auth ---
+    &AUDIT_EVENT_CREATE,
 ];
 
 // auth sessions and users
 
 pub const AUTH_SESSION_CREATE: Stmt =
-    Stmt::new("app.auth_session_create", "CREATE session SET owner = $owner, sid = $sid, user_agent = $user_agent");
+    Stmt::new(
+    "app.auth_session_create",
+    "CREATE session SET owner = $owner, sid = $sid, user_agent = $user_agent, expires_at = $expires_at",
+);
 
 pub const AUTH_SESSION_FIND: Stmt = Stmt::new(
     "app.auth_session_find",
-    "SELECT * FROM session WHERE sid = $sid AND owner = $owner AND revoked = false LIMIT 1",
+    "SELECT *, (expires_at != NONE AND expires_at <= time::now()) AS expired FROM session \
+     WHERE sid = $sid AND owner = $owner AND revoked = false LIMIT 1",
 );
 
-pub const AUTH_SESSION_TOUCH: Stmt = Stmt::new("app.auth_session_touch", "UPDATE $id SET last_seen_at = time::now()");
+/// Slides `expires_at` forward, but only when it is more than an hour behind
+/// `$new_exp` (so at most one extension per hour of use).
+pub const AUTH_SESSION_TOUCH: Stmt = Stmt::new(
+    "app.auth_session_touch",
+    "UPDATE $id SET last_seen_at = time::now(), \
+     expires_at = IF expires_at = NONE OR expires_at < $threshold THEN $new_exp ELSE expires_at END",
+);
 
 pub const AUTH_SESSION_REVOKE_BY_SID: Stmt =
     Stmt::new("app.auth_session_revoke_by_sid", "UPDATE session SET revoked = true WHERE sid = $sid");
@@ -108,17 +120,22 @@ pub const AUTH_USER_ONBOARDED: Stmt = Stmt::new("app.auth_user_onboarded", "UPDA
 
 pub const AUTH_TOKEN_CREATE: Stmt = Stmt::new(
     "app.auth_token_create",
-    "CREATE api_token SET owner = $owner, name = $name, token_hash = $hash RETURN AFTER",
+    "CREATE api_token SET owner = $owner, name = $name, token_hash = $hash, scopes = $scopes, \
+     vault = $vault, expires_at = $expires_at RETURN AFTER",
 );
 
 pub const AUTH_TOKEN_LIST: Stmt = Stmt::new(
     "app.auth_token_list",
-    "SELECT id, name, created_at, last_used_at FROM api_token \
+    "SELECT id, name, created_at, last_used_at, scopes, vault, expires_at FROM api_token \
      WHERE owner = $owner ORDER BY created_at DESC",
 );
 
 pub const AUTH_TOKEN_BY_HASH: Stmt =
-    Stmt::new("app.auth_token_by_hash", "SELECT * FROM api_token WHERE token_hash = $hash LIMIT 1");
+    Stmt::new(
+        "app.auth_token_by_hash",
+        "SELECT *, (expires_at != NONE AND expires_at <= time::now()) AS expired FROM api_token \
+         WHERE token_hash = $hash LIMIT 1",
+    );
 
 pub const AUTH_TOKEN_TOUCH: Stmt = Stmt::new("app.auth_token_touch", "UPDATE $id SET last_used_at = time::now()");
 
@@ -346,4 +363,13 @@ pub const OAUTH_TOKENS_DELETE_FAMILY: Stmt =
 pub const OAUTH_PRUNE: Stmt = Stmt::new(
     "app.oauth_prune",
     "DELETE oauth_token WHERE expires_at < time::now() - 1d; DELETE oauth_code WHERE expires_at < time::now()",
+);
+
+// --- auth ---
+
+/// Append-only: this module only ever creates audit_event rows.
+pub const AUDIT_EVENT_CREATE: Stmt = Stmt::new(
+    "app.audit_event_create",
+    "CREATE audit_event SET user = $user, actor_kind = $actor_kind, actor_id = $actor_id, action = $action, \
+     target = $target, outcome = $outcome, trace_id = $trace_id, detail = $detail",
 );

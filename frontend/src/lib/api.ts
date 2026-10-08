@@ -88,7 +88,19 @@ export const api = {
 
 export type Me = { id: string; email: string; onboarded: boolean };
 
-export type ApiToken = { id: string; name: string; created_at: string | null; last_used_at: string | null };
+export type Scope = "memory:read" | "memory:write" | "vaults:admin" | "connectors";
+export type ApiToken = {
+  id: string;
+  name: string;
+  created_at: string | null;
+  last_used_at: string | null;
+  scopes: Scope[];
+  /** Set when the token is restricted to one vault. */
+  vault_id: string | null;
+  /** Null for a token that never expires. */
+  expires_at: string | null;
+};
+export type NewToken = { scopes?: Scope[]; vault_id?: string | null; expires_at?: string | null };
 export type Session = { id: string; user_agent: string; created_at: string | null; last_seen_at: string | null };
 
 export const auth = {
@@ -99,7 +111,8 @@ export const auth = {
   bootstrap: () => api.get<{ has_users: boolean }>("/api/auth/bootstrap"),
   tokens: {
     list: () => api.get<ApiToken[]>("/api/auth/tokens"),
-    create: (name: string) => api.post<{ id: string; name: string; token: string }>("/api/auth/tokens", { name }),
+    create: (name: string, opts: NewToken = {}) =>
+      api.post<{ id: string; name: string; token: string }>("/api/auth/tokens", { name, ...opts }),
     revoke: (id: string) => api.del<{ ok: boolean }>(`/api/auth/tokens/${encodeURIComponent(id)}`),
   },
   sessions: {

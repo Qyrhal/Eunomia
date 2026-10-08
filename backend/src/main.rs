@@ -29,7 +29,7 @@ async fn main() {
         let app = eunomia_backend::app(state);
         let listener = tokio::net::TcpListener::bind("0.0.0.0:8001").await.unwrap();
         tracing::info!(?role, "listening on {}", listener.local_addr().unwrap());
-        axum::serve(listener, app).with_graceful_shutdown(shutdown_signal()).await.unwrap();
+        axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>()).with_graceful_shutdown(shutdown_signal()).await.unwrap();
     } else {
         tracing::info!(?role, worker = %cfg.id, "worker running (no HTTP)");
         shutdown_signal().await;

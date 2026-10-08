@@ -194,8 +194,9 @@ async fn layer_items(db: &Db, owner: &RecordId, vault: &RecordId, personal: bool
 /// The cloud for `vault_ids` (default: the caller's personal vault). Every
 /// vault must be one the caller belongs to.
 pub async fn cloud(db: &Db, settings: &Settings, owner: &RecordId, vault_ids: &[RecordId]) -> AppResult<Cloud> {
-    let personal = vaults_service::default_vault_id(db, owner).await?;
-    let vaults: Vec<RecordId> = if vault_ids.is_empty() { vec![personal.clone()] } else { vault_ids.to_vec() };
+    let personal = vaults_service::personal_vault_id(db, owner).await?;
+    let vaults: Vec<RecordId> =
+        if vault_ids.is_empty() { vec![vaults_service::default_vault_id(db, owner).await?] } else { vault_ids.to_vec() };
 
     let mut items = Vec::new();
     #[allow(clippy::mutable_key_type)] // RecordId hashes by value; the interior mutability is never touched
@@ -204,7 +205,7 @@ pub async fn cloud(db: &Db, settings: &Settings, owner: &RecordId, vault_ids: &[
         if !seen.insert(v.clone()) {
             continue;
         }
-        vaults_service::require_membership(db, owner, v).await?;
+        crate::authz::authorize(db, owner, crate::authz::Action::ReadMemories, v).await?;
         items.extend(layer_items(db, owner, v, *v == personal).await?);
     }
 

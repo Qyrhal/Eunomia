@@ -26,9 +26,10 @@ use serde::{Deserialize, Serialize};
 use surrealdb::{Datetime, RecordId};
 
 use crate::db::Db;
-use crate::error::{AppError, AppResult};
+use crate::error::{AppError, AppResult, ErrorCode};
 use crate::store::entities as q;
 use crate::tx::{lock, with_retry};
+use crate::authz::{self, Action};
 use crate::vaults::service as vaults_service;
 
 /// Entity kinds this module manages -- mirrors `entities/service.py`'s
@@ -268,21 +269,21 @@ pub struct WriteMemoryOut {
 
 /// `vault_id`, membership-checked, or `owner`'s personal vault when omitted --
 /// the one place every public function in this module resolves its scope.
-async fn resolve_vault(db: &Db, owner: &RecordId, vault_id: Option<&RecordId>) -> AppResult<RecordId> {
+async fn resolve_vault(db: &Db, owner: &RecordId, vault_id: Option<&RecordId>, action: Action) -> AppResult<RecordId> {
     match vault_id {
         None => vaults_service::default_vault_id(db, owner).await,
-        Some(v) => {
-            vaults_service::require_membership(db, owner, v).await?;
-            Ok(v.clone())
-        }
+        Some(v) => Ok(authz::authorize(db, owner, action, v).await?.vault().clone()),
     }
 }
 
 /// Whether `owner` may read/write a row in `vault` -- member of its vault.
 /// Not-a-member is treated the same as not-found everywhere in this module.
-async fn accessible(db: &Db, owner: &RecordId, vault: &RecordId) -> AppResult<bool> {
-    let ids = vaults_service::accessible_vault_ids(db, owner).await?;
-    Ok(ids.contains(vault))
+async fn accessible(db: &Db, owner: &RecordId, vault: &RecordId, action: Action) -> AppResult<bool> {
+    match authz::authorize(db, owner, action, vault).await {
+        Ok(_) => Ok(true),
+        Err(e) if e.code == ErrorCode::VaultForbidden => Ok(false),
+        Err(e) => Err(e),
+    }
 }
 
 /// Batch-resolve `user` RecordIds to emails, for attributing who wrote what
@@ -331,7 +332,7 @@ pub async fn upsert_entity(
     vault_id: Option<&RecordId>,
 ) -> AppResult<EntityOut> {
     let table = kind_table(kind)?;
-    let vault = resolve_vault(db, owner, vault_id).await?;
+    let vault = resolve_vault(db, owner, vault_id, Action::WriteMemories).await?;
     let aliases = aliases.unwrap_or_default();
     let needle = name.trim().to_lowercase();
 
@@ -401,7 +402,7 @@ pub async fn add_memory(
     let subject_row = select_entity(db, subject_id)
         .await?
         .ok_or_else(|| AppError::bad_request(format!("subject entity not found: {subject_id}")))?;
-    if !accessible(db, owner, &subject_row.vault).await? {
+    if !accessible(db, owner, &subject_row.vault, Action::WriteMemories).await? {
         return Err(AppError::new(
             axum::http::StatusCode::FORBIDDEN,
             format!("not a member of {}'s vault", subject_row.vault),
@@ -488,11 +489,11 @@ pub async fn add_relation(
     let in_row = select_entity(db, from_id).await?;
     let out_row = select_entity(db, to_id).await?;
     let in_ok = match &in_row {
-        Some(r) => accessible(db, owner, &r.vault).await?,
+        Some(r) => accessible(db, owner, &r.vault, Action::WriteMemories).await?,
         None => false,
     };
     let out_ok = match &out_row {
-        Some(r) => accessible(db, owner, &r.vault).await?,
+        Some(r) => accessible(db, owner, &r.vault, Action::WriteMemories).await?,
         None => false,
     };
     if !in_ok || !out_ok {
@@ -551,7 +552,7 @@ async fn find_relation(db: &Db, from_id: &RecordId, to_id: &RecordId, label: &st
 pub async fn delete_memory(db: &Db, owner: &RecordId, memory_id: &RecordId) -> AppResult<bool> {
     let row: Option<MemoryRow> = db.select(memory_id.clone()).await?;
     let Some(row) = row else { return Ok(false) };
-    if !accessible(db, owner, &row.vault).await? {
+    if !accessible(db, owner, &row.vault, Action::WriteMemories).await? {
         return Ok(false);
     }
     q::DELETE_RECORD.on(db).bind(("id", memory_id.clone())).await?;
@@ -592,7 +593,7 @@ pub async fn update_memory(
 ) -> AppResult<Option<MemoryOut>> {
     let row: Option<MemoryRow> = db.select(memory_id.clone()).await?;
     let Some(row) = row else { return Ok(None) };
-    if !accessible(db, owner, &row.vault).await? {
+    if !accessible(db, owner, &row.vault, Action::WriteMemories).await? {
         return Ok(None);
     }
     check_memory_edit(&row.mem_type, text, new_type)?;
@@ -633,7 +634,7 @@ pub async fn update_entity(
     summary: Option<&str>,
 ) -> AppResult<Option<EntityOut>> {
     let Some(mut row) = select_entity(db, entity_id).await? else { return Ok(None) };
-    if !accessible(db, owner, &row.vault).await? {
+    if !accessible(db, owner, &row.vault, Action::WriteMemories).await? {
         return Ok(None);
     }
 
@@ -673,7 +674,7 @@ pub async fn update_entity(
 /// not-found-is-false convention as `delete_memory`.
 pub async fn delete_entity(db: &Db, owner: &RecordId, entity_id: &RecordId) -> AppResult<bool> {
     let Some(row) = select_entity(db, entity_id).await? else { return Ok(false) };
-    if !accessible(db, owner, &row.vault).await? {
+    if !accessible(db, owner, &row.vault, Action::WriteMemories).await? {
         return Ok(false);
     }
     with_retry(|| async {
@@ -716,13 +717,13 @@ pub async fn merge_entities(
         .await?
         .filter(|_| true)
         .ok_or_else(|| AppError::bad_request(format!("winner entity not found: {winner_id}")))?;
-    if !accessible(db, owner, &winner.vault).await? {
+    if !accessible(db, owner, &winner.vault, Action::WriteMemories).await? {
         return Err(AppError::bad_request(format!("winner entity not found: {winner_id}")));
     }
     let loser = select_entity(db, loser_id)
         .await?
         .ok_or_else(|| AppError::bad_request(format!("loser entity not found: {loser_id}")))?;
-    if !accessible(db, owner, &loser.vault).await? {
+    if !accessible(db, owner, &loser.vault, Action::WriteMemories).await? {
         return Err(AppError::bad_request(format!("loser entity not found: {loser_id}")));
     }
 
@@ -795,7 +796,7 @@ pub async fn merge_entities(
 /// shared vault that's no longer implied by who's asking.
 pub async fn get_entity(db: &Db, owner: &RecordId, entity_id: &RecordId) -> AppResult<Option<EntityDetail>> {
     let Some(row) = select_entity(db, entity_id).await? else { return Ok(None) };
-    if !accessible(db, owner, &row.vault).await? {
+    if !accessible(db, owner, &row.vault, Action::ReadMemories).await? {
         return Ok(None);
     }
 
@@ -854,7 +855,7 @@ pub async fn list_entities(
     limit: Option<usize>,
     offset: usize,
 ) -> AppResult<ListEntitiesOut> {
-    let vault = resolve_vault(db, owner, vault_id).await?;
+    let vault = resolve_vault(db, owner, vault_id, Action::ReadMemories).await?;
     let kinds: Vec<&str> = match kind {
         Some(k) => vec![kind_table(k)?],
         None => KINDS.to_vec(),
@@ -891,7 +892,7 @@ pub async fn graph(
     kinds: Option<&[String]>,
     vault_id: Option<&RecordId>,
 ) -> AppResult<GraphOut> {
-    let vault = resolve_vault(db, owner, vault_id).await?;
+    let vault = resolve_vault(db, owner, vault_id, Action::ReadMemories).await?;
     let requested: Vec<&str> = match kinds {
         Some(ks) => {
             let mut out = Vec::with_capacity(ks.len());

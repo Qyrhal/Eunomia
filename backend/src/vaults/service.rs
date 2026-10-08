@@ -15,10 +15,10 @@
 
 use std::collections::{HashMap, HashSet};
 
-use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 use surrealdb::{Datetime, RecordId};
 
+use crate::authz::{self, Action};
 use crate::db::Db;
 use crate::error::{AppError, AppResult};
 use crate::store;
@@ -145,6 +145,7 @@ pub async fn create_personal_vault(db: &Db, user_id: &RecordId) -> AppResult<Rec
 /// Create a new vault (org, or an extra personal-style one -- a user can have
 /// several, per the product ask); creator becomes its owner.
 pub async fn create_vault(db: &Db, user_id: &RecordId, name: &str, kind: &str) -> AppResult<VaultOut> {
+    authz::require_unrestricted()?;
     let vault = with_retry(|| async {
         let mut res = store::vaults::CREATE_VAULT
             .on(db)
@@ -193,12 +194,24 @@ pub async fn accessible_vault_ids(db: &Db, user_id: &RecordId) -> AppResult<Vec<
         .bind(("user", user_id.clone()))
         .await?;
     let rows: Vec<Row> = res.take(0)?;
-    Ok(rows.into_iter().map(|r| r.vault).collect())
+    let only = authz::restricted_vault();
+    Ok(rows.into_iter().map(|r| r.vault).filter(|v| only.as_ref().is_none_or(|o| o == v)).collect())
 }
 
 /// `user_id`'s personal vault -- the implicit scope for any tool call that
 /// doesn't pass `vault_id`, so existing single-user callers need no changes.
 pub async fn default_vault_id(db: &Db, user_id: &RecordId) -> AppResult<RecordId> {
+    // a vault-restricted token's default scope is its vault, not the personal one
+    if let Some(only) = authz::restricted_vault() {
+        authz::ensure_member(db, user_id, &only).await?;
+        return Ok(only);
+    }
+    personal_vault_id(db, user_id).await
+}
+
+/// The user's own personal vault, whatever the credential is restricted to. The
+/// only vault that also draws on the user's synced source records.
+pub async fn personal_vault_id(db: &Db, user_id: &RecordId) -> AppResult<RecordId> {
     #[derive(Deserialize)]
     struct Row {
         vault: RecordId,
@@ -212,23 +225,6 @@ pub async fn default_vault_id(db: &Db, user_id: &RecordId) -> AppResult<RecordId
     })
 }
 
-/// Raises (403) if `user_id` isn't a member of `vault_id`. Used by every
-/// entity/memory read or write that takes an explicit `vault_id`.
-pub async fn require_membership(db: &Db, user_id: &RecordId, vault_id: &RecordId) -> AppResult<()> {
-    if membership(db, vault_id, user_id).await?.is_none() {
-        return Err(AppError::new(StatusCode::FORBIDDEN, format!("not a member of vault {vault_id}")));
-    }
-    Ok(())
-}
-
-pub async fn require_owner(db: &Db, user_id: &RecordId, vault_id: &RecordId) -> AppResult<()> {
-    let m = membership(db, vault_id, user_id).await?;
-    match m {
-        Some(m) if m.role == "owner" => Ok(()),
-        _ => Err(AppError::new(StatusCode::FORBIDDEN, format!("must be an owner of vault {vault_id}"))),
-    }
-}
-
 pub async fn list_my_vaults(db: &Db, user_id: &RecordId) -> AppResult<Vec<VaultWithRole>> {
     #[derive(Deserialize)]
     struct Row {
@@ -239,8 +235,10 @@ pub async fn list_my_vaults(db: &Db, user_id: &RecordId) -> AppResult<Vec<VaultW
         .bind(("user", user_id.clone()))
         .await?;
     let rows: Vec<Row> = res.take(0)?;
+    let only = authz::restricted_vault();
     Ok(rows
         .into_iter()
+        .filter(|r| only.as_ref().is_none_or(|o| o == &r.vault.id))
         .map(|r| {
             let v: VaultOut = r.vault.into();
             VaultWithRole { id: v.id, name: v.name, kind: v.kind, created_at: v.created_at, role: r.role }
@@ -249,7 +247,7 @@ pub async fn list_my_vaults(db: &Db, user_id: &RecordId) -> AppResult<Vec<VaultW
 }
 
 pub async fn rename_vault(db: &Db, user_id: &RecordId, vault_id: &RecordId, name: &str) -> AppResult<VaultOut> {
-    require_owner(db, user_id, vault_id).await?;
+    authz::authorize(db, user_id, Action::Rename, vault_id).await?;
     let mut res = store::vaults::RENAME.on(db)
         .bind(("id", vault_id.clone()))
         .bind(("name", name.to_string()))
@@ -264,7 +262,7 @@ pub async fn rename_vault(db: &Db, user_id: &RecordId, vault_id: &RecordId, name
 /// accepted tradeoff as the rest of this codebase's delete paths -- add a
 /// cascade if dangling vault data ever becomes a real problem).
 pub async fn delete_vault(db: &Db, user_id: &RecordId, vault_id: &RecordId) -> AppResult<()> {
-    require_owner(db, user_id, vault_id).await?;
+    authz::authorize(db, user_id, Action::Delete, vault_id).await?;
     with_retry(|| async {
         store::vaults::DELETE_VAULT.on(db)
             .bind(("vault", vault_id.clone()))
@@ -285,7 +283,7 @@ pub async fn invite_member(
     email: &str,
     role: &str,
 ) -> AppResult<InviteOut> {
-    require_owner(db, user_id, vault_id).await?;
+    authz::authorize(db, user_id, Action::Invite, vault_id).await?;
 
     let mut res = store::vaults::USER_ID_BY_EMAIL.on(db)
         .bind(("email", crate::models_user::normalize_email(email)))
@@ -318,7 +316,7 @@ pub async fn invite_member(
 }
 
 pub async fn list_members(db: &Db, user_id: &RecordId, vault_id: &RecordId) -> AppResult<Vec<MemberOut>> {
-    require_membership(db, user_id, vault_id).await?;
+    authz::authorize(db, user_id, Action::ListMembers, vault_id).await?;
     #[derive(Deserialize)]
     struct Row {
         email: String,
@@ -344,8 +342,10 @@ pub async fn list_my_invitations(db: &Db, user_id: &RecordId) -> AppResult<Vec<I
         .bind(("user", user_id.clone()))
         .await?;
     let rows: Vec<Row> = res.take(0)?;
+    let only = authz::restricted_vault();
     Ok(rows
         .into_iter()
+        .filter(|r| only.as_ref().is_none_or(|o| o == &r.vault.id))
         .map(|r| InvitationOut {
             vault_id: r.vault.id.to_string(),
             vault_name: r.vault.name,
@@ -359,6 +359,7 @@ pub async fn list_my_invitations(db: &Db, user_id: &RecordId) -> AppResult<Vec<I
 /// Accept a pending invitation into `vault_id`. Only the invitee can accept
 /// their own invite.
 pub async fn accept_invitation(db: &Db, user_id: &RecordId, vault_id: &RecordId) -> AppResult<VaultWithRole> {
+    authz::check_vault(vault_id)?;
     let m = membership_any_status(db, vault_id, user_id)
         .await?
         .filter(|m| m.status == "pending")
@@ -382,6 +383,7 @@ pub async fn accept_invitation(db: &Db, user_id: &RecordId, vault_id: &RecordId)
 
 /// Decline (delete) a pending invitation into `vault_id`.
 pub async fn decline_invitation(db: &Db, user_id: &RecordId, vault_id: &RecordId) -> AppResult<()> {
+    authz::check_vault(vault_id)?;
     let m = membership_any_status(db, vault_id, user_id)
         .await?
         .filter(|m| m.status == "pending")
@@ -394,7 +396,7 @@ pub async fn decline_invitation(db: &Db, user_id: &RecordId, vault_id: &RecordId
 /// Owner-only. Refuses to remove the last owner, so a vault can't be left
 /// admin-less.
 pub async fn remove_member(db: &Db, user_id: &RecordId, vault_id: &RecordId, email: &str) -> AppResult<()> {
-    require_owner(db, user_id, vault_id).await?;
+    authz::authorize(db, user_id, Action::ManageMembers, vault_id).await?;
 
     let mut res = store::vaults::USER_ID_BY_EMAIL.on(db)
         .bind(("email", crate::models_user::normalize_email(email)))
@@ -629,7 +631,8 @@ pub async fn clone_vault(
     name: Option<&str>,
     kind: &str,
 ) -> AppResult<CloneOut> {
-    require_membership(db, user_id, vault_id).await?;
+    authz::authorize(db, user_id, Action::Clone, vault_id).await?;
+    authz::require_unrestricted()?;
 
     let source: Option<VaultFullRow> = db.select(vault_id.clone()).await?;
     let source = source.ok_or_else(|| AppError::coded(crate::error::ErrorCode::VaultNotFound, format!("vault not found: {vault_id}")))?;
@@ -677,8 +680,9 @@ pub async fn merge_vaults(
     if a == b {
         return Err(AppError::bad_request("pick two different vaults to merge"));
     }
-    require_membership(db, user_id, a).await?;
-    require_membership(db, user_id, b).await?;
+    authz::authorize(db, user_id, Action::Merge, a).await?;
+    authz::authorize(db, user_id, Action::Merge, b).await?;
+    authz::require_unrestricted()?;
     let (va, vb): (Option<VaultFullRow>, Option<VaultFullRow>) = (db.select(a.clone()).await?, db.select(b.clone()).await?);
     let va = va.ok_or_else(|| AppError::coded(crate::error::ErrorCode::VaultNotFound, format!("vault not found: {a}")))?;
     let vb = vb.ok_or_else(|| AppError::coded(crate::error::ErrorCode::VaultNotFound, format!("vault not found: {b}")))?;
@@ -713,6 +717,12 @@ pub async fn merge_vaults(
 /// vault that still has other members (would strand them admin-less --
 /// delete the vault instead if that's the intent).
 pub async fn leave_vault(db: &Db, user_id: &RecordId, vault_id: &RecordId) -> AppResult<()> {
+    match authz::authorize(db, user_id, Action::Leave, vault_id).await {
+        Ok(_) => {}
+        // not a member: nothing to leave
+        Err(e) if e.code == crate::error::ErrorCode::VaultForbidden => return Ok(()),
+        Err(e) => return Err(e),
+    }
     let Some(m) = membership(db, vault_id, user_id).await? else { return Ok(()) };
 
     with_retry(|| async {

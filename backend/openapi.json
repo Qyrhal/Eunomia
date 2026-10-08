@@ -5038,8 +5038,32 @@
           "name"
         ],
         "properties": {
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "RFC 3339 timestamp in the future. Omit for a token that never expires."
+          },
           "name": {
             "type": "string"
+          },
+          "scopes": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Any of `memory:read`, `memory:write`, `vaults:admin`, `connectors`. Defaults\nto all of them. Cannot exceed the creating credential's own scopes."
+          },
+          "vault_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Restrict the token to one vault you belong to."
           }
         }
       },
@@ -5048,18 +5072,37 @@
         "required": [
           "id",
           "name",
-          "token"
+          "token",
+          "scopes"
         ],
         "properties": {
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "id": {
             "type": "string"
           },
           "name": {
             "type": "string"
           },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
           "token": {
             "type": "string",
             "description": "Shown once, never retrievable again."
+          },
+          "vault_id": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },
@@ -5067,7 +5110,8 @@
         "type": "object",
         "required": [
           "id",
-          "name"
+          "name",
+          "scopes"
         ],
         "properties": {
           "created_at": {
@@ -5075,6 +5119,13 @@
               "string",
               "null"
             ]
+          },
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`null` for a token that never expires."
           },
           "id": {
             "type": "string"
@@ -5087,6 +5138,18 @@
           },
           "name": {
             "type": "string"
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "vault_id": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },

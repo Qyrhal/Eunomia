@@ -360,13 +360,10 @@ pub async fn recall(
 
     let default_vault = vaults_service::default_vault_id(db, owner).await?;
     let vault = match vault_id {
-        Some(v) => {
-            vaults_service::require_membership(db, owner, v).await?;
-            v.clone()
-        }
+        Some(v) => crate::authz::authorize(db, owner, crate::authz::Action::ReadMemories, v).await?.vault().clone(),
         None => default_vault.clone(),
     };
-    let personal = vault == default_vault;
+    let personal = vault == vaults_service::personal_vault_id(db, owner).await?;
 
     let keyword_ids = if personal { cs::keyword_ids(db, owner, query, pool).await? } else { Vec::new() };
     // No embeddings (no OpenAI key -- the MCP agent is the model) or a failing

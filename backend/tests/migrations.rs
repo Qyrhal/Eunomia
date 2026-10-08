@@ -114,7 +114,7 @@ async fn rerun_is_noop() {
     let before = info(&db).await;
     migrate::migrate(&db, &s).await.unwrap();
     assert_eq!(before, info(&db).await);
-    assert_eq!(count(&db, "_migration").await, 4);
+    assert_eq!(count(&db, "_migration").await, eunomia_backend::migrate::MIGRATIONS.len());
 }
 
 #[tokio::test]
@@ -125,4 +125,24 @@ async fn tampered_checksum_is_a_hard_error() {
     db.query("UPDATE _migration SET checksum = 'tampered' WHERE version = 1").await.unwrap().check().unwrap();
     let err = migrate::migrate(&db, &s).await.unwrap_err().to_string();
     assert!(err.contains("edited after it was applied"), "{err}");
+}
+
+#[tokio::test]
+async fn existing_tokens_and_sessions_survive_0003() {
+    let db = fresh().await;
+    migrate::apply_up_to(&db, 2).await.unwrap();
+    db.query(
+        "CREATE user:u SET email = 'a@b.c', password_hash = 'x';
+         CREATE api_token:t SET owner = user:u, token_hash = 'h';
+         CREATE session:s SET owner = user:u, sid = 'sid';",
+    )
+    .await
+    .unwrap()
+    .check()
+    .unwrap();
+    migrate::migrate(&db, &test_settings()).await.unwrap();
+    let scopes: Option<Vec<String>> = db.query("SELECT VALUE scopes FROM api_token:t").await.unwrap().take(0).unwrap();
+    assert_eq!(scopes.unwrap(), ["memory:read", "memory:write", "vaults:admin", "connectors"]);
+    assert_eq!(count(&db, "api_token WHERE expires_at = NONE AND vault = NONE").await, 1, "non-expiring, unrestricted");
+    assert_eq!(count(&db, "session WHERE expires_at > time::now()").await, 1, "existing sessions get an expiry");
 }

@@ -24,6 +24,17 @@ export type AuthOut = {
     onboarded: boolean;
 };
 
+export type AuthzParams = {
+    client_id?: string;
+    code_challenge?: string;
+    code_challenge_method?: string;
+    redirect_uri?: string;
+    resource?: string | null;
+    response_type?: string;
+    scope?: string | null;
+    state?: string | null;
+};
+
 export type BootstrapOut = {
     has_users: boolean;
 };
@@ -78,6 +89,42 @@ export type ConnectorUpdateBody = {
     config?: unknown;
     credentials?: unknown;
     enabled?: boolean | null;
+};
+
+export type ConsentClient = {
+    client_uri?: string | null;
+    logo_uri?: string | null;
+    name: string;
+};
+
+export type ConsentDecision = AuthzParams & {
+    approve: boolean;
+};
+
+export type ConsentInfo = {
+    client: ConsentClient;
+    /**
+     * True when the redirect goes to this computer only (localhost); the page warns about it.
+     */
+    loopback: boolean;
+    /**
+     * Host the user is sent back to after deciding.
+     */
+    redirect_host: string;
+    scopes: Array<ConsentScope>;
+    user_email: string;
+};
+
+export type ConsentResult = {
+    /**
+     * Send the browser here: the client's redirect URI with the code (or the denial).
+     */
+    redirect_to: string;
+};
+
+export type ConsentScope = {
+    description: string;
+    scope: string;
 };
 
 export type Credentials = {
@@ -142,6 +189,16 @@ export type FinanceTransaction = {
     amount: string;
     created_at: string;
     description: string;
+};
+
+export type Grant = {
+    client_id: string;
+    client_logo?: string | null;
+    client_name: string;
+    created_at: string;
+    id: string;
+    last_used_at?: string | null;
+    scope: Array<string>;
 };
 
 export type GraphEdge = {
@@ -445,23 +502,45 @@ export type ThreadOut = {
 };
 
 export type TokenCreate = {
+    /**
+     * RFC 3339 timestamp in the future. Omit for a token that never expires.
+     */
+    expires_at?: string | null;
     name: string;
+    /**
+     * Any of `memory:read`, `memory:write`, `vaults:admin`, `connectors`. Defaults
+     * to all of them. Cannot exceed the creating credential's own scopes.
+     */
+    scopes?: Array<string> | null;
+    /**
+     * Restrict the token to one vault you belong to.
+     */
+    vault_id?: string | null;
 };
 
 export type TokenCreated = {
+    expires_at?: string | null;
     id: string;
     name: string;
+    scopes: Array<string>;
     /**
      * Shown once, never retrievable again.
      */
     token: string;
+    vault_id?: string | null;
 };
 
 export type TokenOut = {
     created_at?: string | null;
+    /**
+     * `null` for a token that never expires.
+     */
+    expires_at?: string | null;
     id: string;
     last_used_at?: string | null;
     name: string;
+    scopes: Array<string>;
+    vault_id?: string | null;
 };
 
 /**
@@ -1454,6 +1533,105 @@ export type ExportDataResponses = {
 };
 
 export type ExportDataResponse = ExportDataResponses[keyof ExportDataResponses];
+
+export type GetOauthConsentData = {
+    body?: never;
+    path?: never;
+    query?: {
+        response_type?: string;
+        client_id?: string;
+        redirect_uri?: string;
+        code_challenge?: string;
+        code_challenge_method?: string;
+        state?: string;
+        scope?: string;
+        resource?: string;
+    };
+    url: '/api/oauth/consent';
+};
+
+export type GetOauthConsentErrors = {
+    /**
+     * Error
+     */
+    default: Problem;
+};
+
+export type GetOauthConsentError = GetOauthConsentErrors[keyof GetOauthConsentErrors];
+
+export type GetOauthConsentResponses = {
+    200: ConsentInfo;
+};
+
+export type GetOauthConsentResponse = GetOauthConsentResponses[keyof GetOauthConsentResponses];
+
+export type DecideOauthConsentData = {
+    body: ConsentDecision;
+    path?: never;
+    query?: never;
+    url: '/api/oauth/consent';
+};
+
+export type DecideOauthConsentErrors = {
+    /**
+     * Error
+     */
+    default: Problem;
+};
+
+export type DecideOauthConsentError = DecideOauthConsentErrors[keyof DecideOauthConsentErrors];
+
+export type DecideOauthConsentResponses = {
+    200: ConsentResult;
+};
+
+export type DecideOauthConsentResponse = DecideOauthConsentResponses[keyof DecideOauthConsentResponses];
+
+export type ListOauthGrantsData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/oauth/grants';
+};
+
+export type ListOauthGrantsErrors = {
+    /**
+     * Error
+     */
+    default: Problem;
+};
+
+export type ListOauthGrantsError = ListOauthGrantsErrors[keyof ListOauthGrantsErrors];
+
+export type ListOauthGrantsResponses = {
+    200: Array<Grant>;
+};
+
+export type ListOauthGrantsResponse = ListOauthGrantsResponses[keyof ListOauthGrantsResponses];
+
+export type RevokeOauthGrantData = {
+    body?: never;
+    path: {
+        grant_id: string;
+    };
+    query?: never;
+    url: '/api/oauth/grants/{grant_id}';
+};
+
+export type RevokeOauthGrantErrors = {
+    /**
+     * Error
+     */
+    default: Problem;
+};
+
+export type RevokeOauthGrantError = RevokeOauthGrantErrors[keyof RevokeOauthGrantErrors];
+
+export type RevokeOauthGrantResponses = {
+    200: DeletedBody;
+};
+
+export type RevokeOauthGrantResponse = RevokeOauthGrantResponses[keyof RevokeOauthGrantResponses];
 
 export type GetOpenapiData = {
     body?: never;
