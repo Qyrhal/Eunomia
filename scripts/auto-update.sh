@@ -86,6 +86,12 @@ main() {
     exit 1
   fi
 
+  # HTTPS on: the new release may ship a changed Caddyfile, which compose
+  # doesn't notice (it's a mounted file) -- reload it, no downtime.
+  if printf '%s\n' $services | grep -qx caddy; then
+    docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile >/dev/null 2>&1 || true
+  fi
+
   rm -f "$status_dir/.last-error"
   write_status "$status_dir" "$latest" "$latest" false ""
   echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) updated $current -> $latest" >> "$status_dir/history.log"

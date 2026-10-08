@@ -17,7 +17,9 @@ cp "$REAL_SCRIPT" "$TMP/src/scripts/auto-update.sh"
   && echo two > compose.yml && git_ commit -qam v1.1 && git tag v1.1.0)
 git clone -q --branch v1.0.0 "file://$TMP/src" "$TMP/repo" 2>/dev/null
 printf 'JWT_SECRET=x\nEUNOMIA_IMAGE_TAG=v1.0.0\n' > "$TMP/repo/.env"
-printf '#!/bin/sh\necho "$@" >> "%s/docker.log"\n' "$TMP" > "$TMP/bin/docker"; chmod +x "$TMP/bin/docker"
+# the shim answers `compose config --services` from $TMP/services (default: no caddy)
+printf 'surrealdb\nbackend\nfrontend\nupdater\n' > "$TMP/services"
+printf '#!/bin/sh\necho "$@" >> "%s/docker.log"\n[ "$1 $2" = "compose config" ] && cat "%s/services"\nexit 0\n' "$TMP" "$TMP" > "$TMP/bin/docker"; chmod +x "$TMP/bin/docker"
 update() { EUNOMIA_DIR="$TMP/repo" PATH="$TMP/bin:$PATH" bash "$TMP/repo/scripts/auto-update.sh"; }
 S="$TMP/repo/update-status"
 
@@ -60,6 +62,17 @@ check "history recorded" grep -q 'updated v1.0.0 -> v1.1.0' "$S/history.log"
 : > "$TMP/docker.log"; touch "$S/requested"; update
 check "nothing newer: no docker run" test ! -s "$TMP/docker.log"
 check "nothing newer: marker consumed" test ! -e "$S/requested"
+
+# 3b. without HTTPS no caddy reload; with HTTPS on, the update restarts and
+#     reloads caddy (a changed Caddyfile isn't noticed by compose)
+check "no HTTPS: no caddy reload" bash -c "! grep -q 'caddy reload' '$TMP/docker.log'"
+(cd "$TMP/src" && echo https > compose.yml && git_ commit -qam v1.1.1 && git tag v1.1.1)
+printf 'surrealdb\nbackend\nfrontend\ncaddy\nupdater\n' > "$TMP/services"
+: > "$TMP/docker.log"; touch "$S/requested"; update
+check "HTTPS on: caddy restarted with the stack" grep -q 'up -d --remove-orphans .*caddy' "$TMP/docker.log"
+check "HTTPS on: Caddyfile reloaded" grep -q 'exec -T caddy caddy reload --config /etc/caddy/Caddyfile' "$TMP/docker.log"
+check "HTTPS on: updater still not restarted by itself" bash -c "! grep -q 'up -d --remove-orphans.*updater' '$TMP/docker.log'"
+printf 'surrealdb\nbackend\nfrontend\nupdater\n' > "$TMP/services"
 
 # 4. local edits to tracked files are reported, not clobbered
 (cd "$TMP/src" && echo three > compose.yml && git_ commit -qam v1.2 && git tag v1.2.0)
