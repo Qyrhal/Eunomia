@@ -130,7 +130,7 @@ pub async fn live_wake(db: crate::pool::ControlDb, wake: std::sync::Arc<tokio::s
     use futures::StreamExt;
     use surrealdb::types::Action;
     while !*shutdown.borrow() {
-        match db.raw().select::<Vec<surrealdb::types::Value>>("job").live().await {
+        match db.raw(super::RawKey(())).select::<Vec<surrealdb::types::Value>>("job").live().await {
             Ok(mut stream) => loop {
                 tokio::select! {
                     n = stream.next() => match n {

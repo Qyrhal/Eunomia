@@ -153,7 +153,7 @@ impl<'a> IntoFuture for Q<'a> {
         Box::pin(
             async move {
                 let started = Instant::now();
-                let res = self.inner.await;
+                let res = self.inner.await.and_then(surface_root_cause);
                 let span = tracing::Span::current();
                 span.record("duration_ms", started.elapsed().as_millis() as u64);
                 span.record("ok", res.is_ok());
@@ -162,6 +162,27 @@ impl<'a> IntoFuture for Q<'a> {
             .instrument(span),
         )
     }
+}
+
+/// When a transaction fails to commit, SurrealDB marks every statement in it "not executed due to a
+/// failed transaction" and puts the real error (a commit conflict, a unique violation) on a later
+/// one. `IndexedResults::check` returns the first, so `tx::is_conflict` never saw the conflict and a
+/// lost race surfaced as a 500 instead of a retry. Return the real error from the await itself.
+/// Any statement error becomes the `Err` of the await (the same error `.check()` would have given,
+/// minus the shadowing), so a batch with a failed statement is never half-read.
+fn surface_root_cause(mut res: surrealdb::IndexedResults) -> surrealdb::Result<surrealdb::IndexedResults> {
+    let mut errors: Vec<(usize, surrealdb::Error)> = res.take_errors().into_iter().collect();
+    if errors.is_empty() {
+        return Ok(res);
+    }
+    errors.sort_by_key(|(i, _)| *i);
+    let shadow = |e: &surrealdb::Error| e.to_string().contains("not executed due to a failed transaction");
+    let pick = errors
+        .iter()
+        .position(|(_, e)| crate::tx::is_conflict(e))
+        .or_else(|| errors.iter().position(|(_, e)| !shadow(e)))
+        .unwrap_or(0);
+    Err(errors.swap_remove(pick).1)
 }
 
 /// Tables that live in the control database. Everything else a statement names is an org table.

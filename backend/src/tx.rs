@@ -25,6 +25,13 @@ pub fn stable_key(tag: char, parts: &str) -> String {
 const STRIPES: usize = 64;
 static LOCKS: [Mutex<()>; STRIPES] = [const { Mutex::const_new(()) }; STRIPES];
 
+/// Test-only: when set, [`lock`] returns at once, so concurrent writers in one test process reach the
+/// transaction and retry path the way writers in separate processes do. Compiled only with the
+/// `test-support` feature (a release binary has no such switch). Process-global: tests that use it
+/// live in their own test binary (`tests/no_lock.rs`) and take a mutex.
+#[cfg(feature = "test-support")]
+pub static LOCKS_OFF: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// In-process write lock striped by `key`. Optimistic retry alone starves under
 /// a sustained writer on one entity: a memory insert is slow (full-text index
 /// work), so a retried transaction keeps overlapping the other writer's commit
@@ -32,11 +39,15 @@ static LOCKS: [Mutex<()>; STRIPES] = [const { Mutex::const_new(()) }; STRIPES];
 /// writers inside the process removes that; the transaction and retry still
 /// guard other processes and stripe collisions.
 // ponytail: single-node (self-host) assumption; a multi-node deployment relies on retry alone.
-pub async fn lock(key: &str) -> MutexGuard<'static, ()> {
+pub async fn lock(key: &str) -> Option<MutexGuard<'static, ()>> {
     use std::hash::{Hash, Hasher};
+    #[cfg(feature = "test-support")]
+    if LOCKS_OFF.load(std::sync::atomic::Ordering::SeqCst) {
+        return None;
+    }
     let mut h = std::collections::hash_map::DefaultHasher::new();
     key.hash(&mut h);
-    LOCKS[(h.finish() as usize) % STRIPES].lock().await
+    Some(LOCKS[(h.finish() as usize) % STRIPES].lock().await)
 }
 
 /// The single definition of a commit-time read/write conflict (also used by
