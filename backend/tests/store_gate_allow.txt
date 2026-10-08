@@ -10,6 +10,7 @@ src/embeddings/service.rs
 src/entities/consolidate.rs
 src/entities/extract.rs
 src/entities/service.rs
+src/migrate.rs
 src/models_user.rs
 src/routers/audit.rs
 src/routers/auth.rs

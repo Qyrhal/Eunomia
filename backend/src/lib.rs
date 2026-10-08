@@ -8,6 +8,7 @@ pub mod docs;
 pub mod embeddings;
 pub mod entities;
 pub mod error;
+pub mod migrate;
 pub mod models_user;
 pub mod openapi;
 pub mod routers;

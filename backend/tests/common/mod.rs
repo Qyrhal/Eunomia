@@ -47,7 +47,7 @@ pub fn test_settings() -> Settings {
 pub async fn bare_state() -> AppState {
     let settings = test_settings();
     let db = eunomia_backend::db::connect(&settings).await.expect("mem db");
-    eunomia_backend::db::ensure_schema(&db, &settings).await.expect("schema");
+    eunomia_backend::migrate::migrate(&db, &settings).await.expect("schema");
     AppState(Arc::new(AppStateInner { db, settings }))
 }
 

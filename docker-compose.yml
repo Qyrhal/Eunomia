@@ -2,7 +2,7 @@ services:
   surrealdb:
     # Pinned to 2.x: SurrealDB 3.x dropped the MTREE index syntax this
     # schema uses (DEFINE INDEX ... MTREE DIMENSION ... DIST COSINE TYPE F32).
-    image: surrealdb/surrealdb:v2.3
+    image: surrealdb/surrealdb:v2.7.0
     user: root
     entrypoint:
       - /surreal
