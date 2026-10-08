@@ -14,7 +14,12 @@ W="$(mktemp -d)"
 export EUNOMIA_DIR="$W" COMPOSE_PROJECT_NAME=fw-upgrade BACKEND_PORT=8242 BACKUP_ENCRYPTION_KEY=test-key-not-secret
 PASS=0; FAIL=0
 check() { local d="$1" out; shift; if out="$("$@" 2>&1)"; then PASS=$((PASS + 1)); echo "ok   $d"; else FAIL=$((FAIL + 1)); echo "FAIL $d"; [ -z "$out" ] || echo "$out" | sed 's/^/       /'; fi; }
-cleanup() { (cd "$W" && docker compose down -v --remove-orphans >/dev/null 2>&1); rm -rf "$W"; }
+# down -v skips volumes no service references any more (the old data volume after the switch)
+cleanup() {
+  (cd "$W" && docker compose down -v --remove-orphans >/dev/null 2>&1)
+  docker volume ls -q --filter label=com.docker.compose.project=fw-upgrade | xargs docker volume rm >/dev/null 2>&1
+  rm -rf "$W"
+}
 trap cleanup EXIT
 
 sq() { docker run --rm -i --network "$NET" "$1" sql --endpoint http://surrealdb:8000 --user root --pass root \
