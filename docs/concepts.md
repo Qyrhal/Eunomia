@@ -84,8 +84,9 @@ results that several arms agree on and recent ones:
 4. **graph**: entities named in the question, then their memories and linked records
 5. **temporal**: an explicit `time_range`
 
-The arms run concurrently, each with a 4-second deadline: a slow or failing
-embedding provider drops only the semantic arm. Inputs are bounded (query at
+The semantic arm runs alongside the four database arms, and every arm has a
+4-second deadline: a slow or failing embedding provider drops only the
+semantic arm. Inputs are bounded (query at
 most 2000 characters, `limit` 1-100, `max_tokens` 1-100000, `time_range` two
 ISO 8601 dates with since <= until); anything else is a clear error.
 
