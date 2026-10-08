@@ -28,7 +28,7 @@ pub mod tx;
 pub mod vaults;
 
 use axum::http::{header, HeaderName, HeaderValue, Method};
-use tower_http::cors::CorsLayer;
+use tower_http::cors::{AllowOrigin, CorsLayer};
 
 use crate::state::AppState;
 
@@ -72,15 +72,35 @@ pub fn app_with(state: AppState, limits: ratelimit::RateConfig) -> axum::Router 
         .merge(routers::sources::webhook_router())
         .merge(routers::oauth::router());
 
-    axum::Router::new()
-        .route("/healthz", axum::routing::get(healthz))
-        .merge(routers::mcp::router())
-        .merge(oauth::router())
-        .nest("/api", api)
-        .layer(axum::middleware::from_fn_with_state(gate::Gate::new(state.clone(), limits), gate::gate))
-        .layer(axum::middleware::from_fn(telemetry::trace_request))
-        .layer(cors)
-        .with_state(state)
+    // Browser-based MCP clients (for example MCP Inspector) run on any origin and
+    // authenticate with a bearer token only, so these routes answer CORS for any
+    // origin and never allow credentials: no cookie is ever sent or honoured here.
+    // The ambient-credential routes (`/api`, which accept the session cookie) keep
+    // the single-origin credentialed CORS above.
+    let open_cors = CorsLayer::new()
+        .allow_origin(AllowOrigin::any())
+        .allow_methods([Method::GET, Method::POST, Method::DELETE])
+        .allow_headers([
+            header::CONTENT_TYPE,
+            header::AUTHORIZATION,
+            header::ACCEPT,
+            HeaderName::from_static("mcp-protocol-version"),
+            HeaderName::from_static("mcp-session-id"),
+            HeaderName::from_static("traceparent"),
+        ])
+        .expose_headers([header::WWW_AUTHENTICATE, HeaderName::from_static("x-trace-id"), HeaderName::from_static("mcp-session-id")]);
+
+    // CORS wraps the gate so a preflight is answered before authentication.
+    let gate = gate::Gate::new(state.clone(), limits);
+    let guarded = |routes: axum::Router<AppState>, cors: CorsLayer| {
+        routes
+            .layer(axum::middleware::from_fn_with_state(gate.clone(), gate::gate))
+            .layer(axum::middleware::from_fn(telemetry::trace_request))
+            .layer(cors)
+    };
+
+    let open = axum::Router::new().route("/healthz", axum::routing::get(healthz)).merge(routers::mcp::router()).merge(oauth::router());
+    guarded(open, open_cors).merge(guarded(axum::Router::new().nest("/api", api), cors)).with_state(state)
 }
 
 async fn healthz() -> axum::Json<serde_json::Value> {

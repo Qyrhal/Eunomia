@@ -46,7 +46,10 @@ their local-dev defaults in production:
 | `SESSION_TTL_DAYS` | `30` | Browser sessions expire this many days after last use (extended at most once an hour). The session cookie itself also carries a hard 90 day limit. |
 | `RATE_LIMIT_USER_PER_MIN` | `1200` | Requests per minute per signed-in user. `0` turns the limit off. Over the limit the API answers 429 `rate.limited` with `Retry-After`. |
 | `RATE_LIMIT_TOKEN_PER_MIN` | `600` | Requests per minute per API token (a user's limit applies as well). |
-| `RATE_LIMIT_AUTH_PER_MIN` | `20` | Login, signup, OAuth token and failed-credential attempts per minute per client address (read from `X-Forwarded-For`, which the bundled frontend proxy sets). |
+| `RATE_LIMIT_AUTH_PER_MIN` | `20` | Login, signup, OAuth token and failed-credential attempts per minute per client address (read from `X-Forwarded-For`, but only when the connecting peer is in `TRUSTED_PROXIES`). |
+| `TRUSTED_PROXIES` | loopback and private ranges (`127.0.0.0/8`, `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `::1/128`, `fc00::/7`) | Comma-separated CIDRs of proxies whose `X-Forwarded-For` is believed; the right-most address that is not itself trusted is the client. The default covers the compose network (the Next.js frontend proxies to the backend there). If the backend port is reachable directly from the internet, narrow it to your proxy's address; `none` trusts nobody (every client is its peer address). |
+| `PUBLIC_URL` | `http://localhost:8001` | The address MCP clients reach Eunomia at, no trailing slash, e.g. `https://eunomia.example.com`. Used in OAuth discovery documents and as the audience of OAuth tokens, so it must match what clients connect to. |
+| `BACKUP_ENCRYPTION_KEY` | none (the `backup` service will not start) | Encrypts nightly backups. On a fresh install generate it before the first `docker compose up`: `openssl rand -base64 32`, put it in `.env`, and keep a copy off the machine, since backups cannot be read without it. The installer does not create it yet; the auto-updater adds one when it updates an existing install. |
 
 ## 3. The browser only ever talks to the frontend
 
