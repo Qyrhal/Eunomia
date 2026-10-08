@@ -2,13 +2,14 @@
 //! from the Python `app/db.py` -- schema must stay identical across both
 //! implementations during the migration.
 
-use surrealdb::engine::remote::ws::{Client, Ws};
+use surrealdb::engine::any::Any;
 use surrealdb::opt::auth::Root;
 use surrealdb::Surreal;
 
 use crate::config::Settings;
 
-pub type Db = Surreal<Client>;
+/// `Any` so the same code runs over `ws://` in production and `mem://` in tests.
+pub type Db = Surreal<Any>;
 
 pub const SCHEMA_STATEMENTS: &[&str] = &[
     "DEFINE TABLE IF NOT EXISTS user SCHEMAFULL;",
@@ -206,15 +207,12 @@ pub const SCHEMA_STATEMENTS: &[&str] = &[
 ];
 
 pub async fn connect(settings: &Settings) -> surrealdb::Result<Db> {
-    let db: Db = Surreal::new::<Ws>(
-        settings
-            .surreal_url
-            .trim_start_matches("ws://")
-            .trim_start_matches("wss://"),
-    )
-    .await?;
-    db.signin(Root { username: &settings.surreal_user, password: &settings.surreal_pass })
-        .await?;
+    let db: Db = surrealdb::engine::any::connect(settings.surreal_url.as_str()).await?;
+    // The embedded in-memory engine (tests) has no auth to sign in to.
+    if !settings.surreal_url.starts_with("mem://") {
+        db.signin(Root { username: &settings.surreal_user, password: &settings.surreal_pass })
+            .await?;
+    }
     db.use_ns(&settings.surreal_ns).use_db(&settings.surreal_db).await?;
     Ok(db)
 }

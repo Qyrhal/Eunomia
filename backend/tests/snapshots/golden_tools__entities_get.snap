@@ -1,0 +1,63 @@
+---
+source: tests/golden_tools.rs
+expression: stable
+---
+{
+  "id": "person:<id1>",
+  "kind": "person",
+  "name": "Alice",
+  "aliases": [],
+  "summary": "",
+  "owner_email": "tester@example.com",
+  "memory": [
+    {
+      "id": "memory:<id8>",
+      "owner": "user:<id3>",
+      "vault": "vault:<id4>",
+      "subject": "person:<id1>",
+      "text": "Alice is a tea drinker at Acme",
+      "source": null,
+      "created_at": "<ts>",
+      "type": "observation",
+      "proof_count": 1,
+      "status": null,
+      "source_memories": null,
+      "updated_at": "<ts>",
+      "version": 1,
+      "owner_email": "tester@example.com"
+    },
+    {
+      "id": "memory:<id5>",
+      "owner": "user:<id3>",
+      "vault": "vault:<id4>",
+      "subject": "person:<id1>",
+      "text": "Alice works at Acme",
+      "source": null,
+      "created_at": "<ts>",
+      "type": "experience",
+      "proof_count": 1,
+      "status": null,
+      "source_memories": null,
+      "updated_at": "<ts>",
+      "version": 1,
+      "owner_email": "tester@example.com"
+    },
+    {
+      "id": "memory:<id2>",
+      "owner": "user:<id3>",
+      "vault": "vault:<id4>",
+      "subject": "person:<id1>",
+      "text": "Alice likes green tea",
+      "source": null,
+      "created_at": "<ts>",
+      "type": "world",
+      "proof_count": 1,
+      "status": null,
+      "source_memories": null,
+      "updated_at": "<ts>",
+      "version": 1,
+      "owner_email": "tester@example.com"
+    }
+  ],
+  "relations": []
+}

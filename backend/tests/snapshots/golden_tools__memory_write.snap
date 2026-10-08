@@ -1,0 +1,29 @@
+---
+source: tests/golden_tools.rs
+expression: stable
+---
+{
+  "entity": {
+    "id": "person:<id1>",
+    "kind": "person",
+    "name": "Alice",
+    "aliases": [],
+    "summary": ""
+  },
+  "memory": {
+    "id": "memory:<id2>",
+    "owner": "user:<id3>",
+    "vault": "vault:<id4>",
+    "subject": "person:<id1>",
+    "text": "Alice likes green tea",
+    "source": null,
+    "created_at": "<ts>",
+    "type": "world",
+    "proof_count": 1,
+    "status": null,
+    "source_memories": null,
+    "updated_at": "<ts>",
+    "version": 1,
+    "owner_email": null
+  }
+}

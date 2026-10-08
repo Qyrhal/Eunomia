@@ -1,0 +1,15 @@
+---
+source: tests/golden_tools.rs
+expression: stable
+---
+{
+  "id": "relates_to:<id11>",
+  "in": "file:<id10>",
+  "out": "repository:<id9>",
+  "label": "imports",
+  "source": null,
+  "owner": "user:<id3>",
+  "created_at": "<ts>",
+  "direction": null,
+  "owner_email": null
+}

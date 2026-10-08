@@ -1,0 +1,25 @@
+---
+source: tests/golden_tools.rs
+expression: stable
+---
+{
+  "id": "demo:up.transaction:t1",
+  "source": "demo",
+  "type": "up.transaction",
+  "external_id": "t1",
+  "title": "Woolworths",
+  "body_text": "Woolworths at Spending",
+  "occurred_at": "<ts>",
+  "url": null,
+  "payload": {
+    "amount": "-42.50",
+    "amount_cents": -4250,
+    "category": "Groceries",
+    "currency": "AUD",
+    "is_income": false,
+    "status": "SETTLED"
+  },
+  "links": {
+    "links": []
+  }
+}

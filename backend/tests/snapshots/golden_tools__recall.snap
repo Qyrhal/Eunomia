@@ -1,0 +1,26 @@
+---
+source: tests/golden_tools.rs
+expression: stable
+---
+{
+  "results": [
+    {
+      "id": "memory:<id8>",
+      "kind": "memory",
+      "text": "Alice is a tea drinker at Acme",
+      "source": null,
+      "occurred_at": "<ts>",
+      "score": "<unstable>",
+      "arms_hit": 1
+    },
+    {
+      "id": "memory:<id2>",
+      "kind": "memory",
+      "text": "Alice likes green tea",
+      "source": null,
+      "occurred_at": "<ts>",
+      "score": "<unstable>",
+      "arms_hit": 1
+    }
+  ]
+}

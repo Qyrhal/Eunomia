@@ -1,0 +1,10 @@
+---
+source: tests/golden_tools.rs
+expression: stable
+---
+{
+  "id": "vault:<id14>",
+  "name": "Team",
+  "kind": "org",
+  "created_at": "<ts>"
+}
