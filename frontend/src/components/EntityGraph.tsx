@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { forceCenter, forceLink, forceManyBody, forceSimulation } from "d3-force-3d";
 import { ArrowLeft, ArrowRight, Pencil, Plus, Trash2, X } from "lucide-react";
-import Scene3D from "./Scene3D";
+import Scene3D, { type SceneInsets } from "./Scene3D";
 import AuthorTag from "./AuthorTag";
 import { Blobatar } from "@blobatar/react";
 import {
@@ -38,19 +38,20 @@ const ALL_KINDS: EntityKind[] = ["person", "organisation", "location", "reposito
 
 const KIND_SIZE: Record<EntityKind, number> = { person: 1, organisation: 1.15, location: 1, repository: 1.4, file: 0.85, symbol: 0.7 };
 
-// Static 3D force layout, run to completion once per graph (KISS: orbit the
-// result rather than simulate live).
-function layout3d(graph: EntityGraphData): Map<string, { x: number; y: number; z: number }> {
+// Static force layout on a plane, run to completion once per graph (KISS:
+// view the result rather than simulate live). Flat like a canvas: a 3D layout
+// let nodes at different depths project onto each other.
+function layout(graph: EntityGraphData): Map<string, { x: number; y: number; z: number }> {
   const nodes = graph.nodes.map((n) => ({ id: n.id }));
   const ids = new Set(nodes.map((n) => n.id));
   const links = graph.edges.filter((e) => ids.has(e.source) && ids.has(e.target)).map((e) => ({ source: e.source, target: e.target }));
-  forceSimulation(nodes, 3)
-    .force("link", forceLink<{ id: string }>(links).id((n) => n.id).distance(40))
-    .force("charge", forceManyBody().strength(-60))
+  forceSimulation(nodes, 2)
+    .force("link", forceLink<{ id: string }>(links).id((n) => n.id).distance(60))
+    .force("charge", forceManyBody().strength(-180))
     .force("center", forceCenter())
     .stop()
     .tick(300);
-  return new Map(nodes.map((n: { id: string; x?: number; y?: number; z?: number }) => [n.id, { x: n.x ?? 0, y: n.y ?? 0, z: n.z ?? 0 }]));
+  return new Map(nodes.map((n: { id: string; x?: number; y?: number }) => [n.id, { x: n.x ?? 0, y: n.y ?? 0, z: 0 }]));
 }
 
 // Compact age for a timestamp: "now", "4m", "3h", "2d", then a date.
@@ -75,7 +76,18 @@ function Author({ email, me }: { email: string | null; me: string | null }) {
 
 const ICON = { size: 14, strokeWidth: 1.75 } as const;
 
-export default function EntityGraph({ kinds, header }: { kinds?: EntityKind[]; header?: ReactNode } = {}) {
+const SPARSE = 3; // fewer nodes than this shows the `guide`
+
+export default function EntityGraph({
+  kinds,
+  header,
+  guide,
+}: {
+  kinds?: EntityKind[];
+  header?: ReactNode;
+  /** one sentence plus one action, shown while the graph is empty or sparse */
+  guide?: ReactNode;
+} = {}) {
   const shownKinds = kinds ?? ALL_KINDS;
   const [graph, setGraph] = useState<EntityGraphData | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -95,6 +107,27 @@ export default function EntityGraph({ kinds, header }: { kinds?: EntityKind[]; h
   const [relForm, setRelForm] = useState({ to: "", label: "" });
   const [actionError, setActionError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  // px of canvas covered by the floating header/toolbar (top) and, on desktop,
+  // the inspector column (right), so the camera fits nodes into what is left.
+  const chromeRef = useRef<HTMLDivElement>(null);
+  const [insets, setInsets] = useState<SceneInsets>({ top: 0, right: 0, bottom: 0, left: 0 });
+  useEffect(() => {
+    const el = chromeRef.current;
+    if (!el) return;
+    const measure = () => {
+      const md = window.matchMedia("(min-width: 768px)").matches;
+      setInsets({ top: el.offsetTop + el.offsetHeight, right: md ? 400 : 0, bottom: md ? 48 : 16, left: 0 });
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    window.addEventListener("resize", measure);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [graph]);
 
   function toggleKind(kind: EntityKind) {
     setVisibleKinds((prev) => {
@@ -135,7 +168,7 @@ export default function EntityGraph({ kinds, header }: { kinds?: EntityKind[]; h
     return () => window.removeEventListener("keydown", onKey);
   }, [selected, showCreate, editing]);
 
-  const positions = useMemo(() => (graph ? layout3d(graph) : new Map()), [graph]);
+  const positions = useMemo(() => (graph ? layout(graph) : new Map()), [graph]);
 
   async function selectNode(id: string) {
     setEditing(false);
@@ -273,14 +306,20 @@ export default function EntityGraph({ kinds, header }: { kinds?: EntityKind[]; h
     }
   }
 
-  // Everything floats over one full-bleed canvas: header and toolbar top left,
-  // inspector top right, zoom bottom right (inside Scene3D).
-  const frame = (toolbar: ReactNode, content: ReactNode, inspector?: ReactNode) => (
+  // Everything floats over one full-bleed canvas: header and toolbar top left
+  // at the same page inset as every other route (main's px-4 py-6, md px-10
+  // py-8), inspector top right, zoom bottom right (inside Scene3D).
+  const frame = (toolbar: ReactNode, content: ReactNode, inspector?: ReactNode, aside?: ReactNode) => (
     <div className="absolute inset-0 overflow-hidden">
       <div className="absolute inset-0">{content}</div>
-      <div className={`absolute left-0 top-0 right-0 md:right-auto p-4 md:p-5 flex flex-col gap-3 items-start pointer-events-none max-w-full [&>*]:pointer-events-auto ${inspector ? "md:max-w-[calc(100%-24rem)]" : ""}`}>
+      <div
+        ref={chromeRef}
+        // the inspector column is always kept clear, so opening it never reflows the toolbar or moves the camera
+        className="absolute left-0 top-0 right-0 md:right-auto px-4 pt-6 md:px-10 md:pt-8 flex flex-col gap-3 items-start pointer-events-none max-w-full md:max-w-[calc(100%-25rem)] [&>*]:pointer-events-auto"
+      >
         {header}
         {toolbar}
+        {aside}
       </div>
       {inspector}
     </div>
@@ -488,15 +527,22 @@ export default function EntityGraph({ kinds, header }: { kinds?: EntityKind[]; h
         {frame(
           toolbar,
           <div className="h-full flex items-center justify-center p-6">
-            <div className="flex flex-col items-center gap-3 text-center max-w-xs">
-              <p className="text-[13px]" style={{ color: "var(--ink-dim)" }}>
-                No entities yet. They appear as sources sync and agents write memory, or add one yourself.
-              </p>
-              <button type="button" className="btn btn-primary btn-sm" onClick={() => setShowCreate(true)}>
-                <Plus size={13} strokeWidth={1.75} />
-                New entity
-              </button>
-            </div>
+            {guide ? (
+              <div className="flex flex-col items-center gap-3 text-center max-w-xs text-[13px]" style={{ color: "var(--ink-dim)" }}>
+                <p>No entities yet.</p>
+                {guide}
+              </div>
+            ) : (
+              <div className="flex flex-col items-center gap-3 text-center max-w-xs">
+                <p className="text-[13px]" style={{ color: "var(--ink-dim)" }}>
+                  No entities yet. They appear as sources sync and agents write memory, or add one yourself.
+                </p>
+                <button type="button" className="btn btn-primary btn-sm" onClick={() => setShowCreate(true)}>
+                  <Plus size={13} strokeWidth={1.75} />
+                  New entity
+                </button>
+              </div>
+            )}
           </div>
         )}
         {createModal}
@@ -521,8 +567,8 @@ export default function EntityGraph({ kinds, header }: { kinds?: EntityKind[]; h
   const inspector = selected && (
     <aside
       aria-label={`${selected.name} details`}
-      className="panel frame-selected pop-in absolute z-10 flex flex-col inset-x-2 bottom-2 max-h-[62%] md:inset-x-auto md:bottom-auto md:right-4 md:top-4 md:w-[22rem] md:max-h-[calc(100%-4.5rem)]"
-      style={{ transformOrigin: "top right" }}
+      className="panel frame-selected pop-in absolute z-20 flex flex-col inset-x-2 bottom-2 max-h-[62%] md:inset-x-auto md:bottom-auto md:right-6 md:top-6 md:w-[22rem] md:max-h-[calc(100%-5rem)]"
+      style={{ transformOrigin: "top right", boxShadow: "var(--shadow-pop)" }}
     >
       <div className="flex items-start justify-between gap-2 p-4 pb-3">
         <div className="flex items-center gap-3 min-w-0">
@@ -738,10 +784,25 @@ export default function EntityGraph({ kinds, header }: { kinds?: EntityKind[]; h
       {frame(
         toolbar,
         <>
-          <Scene3D points={points} links={graph.edges} labels zoomControls selectedId={selected?.id} onSelect={selectNode} ariaLabel="Entity relationship graph" />
-          <p className="label absolute left-5 bottom-4 hidden md:block pointer-events-none">Drag to orbit, scroll to zoom, click a node to open it</p>
+          <Scene3D
+            points={points}
+            links={graph.edges}
+            labels
+            flat
+            insets={insets}
+            zoomControls
+            selectedId={selected?.id}
+            onSelect={selectNode}
+            ariaLabel="Entity relationship graph"
+          />
+          <p className="label absolute left-10 bottom-4 hidden md:block pointer-events-none">Drag to orbit, scroll to zoom, click a node to open it</p>
         </>,
-        inspector
+        inspector,
+        guide && graph.nodes.length < SPARSE && (
+          <div className="panel px-3 py-2.5 max-w-sm text-[13px] flex flex-col gap-2 items-start" style={{ color: "var(--ink-dim)" }}>
+            {guide}
+          </div>
+        )
       )}
       {createModal}
     </>

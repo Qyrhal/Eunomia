@@ -191,7 +191,6 @@ function VaultInspector({
       aria-label={`${vault.name} details`}
     >
       <div className="px-5 pt-4 pb-4 flex flex-col gap-1">
-        <span className="label">{isOrg ? "Org vault" : "Personal vault"}</span>
         <div className="flex items-center gap-2 min-w-0">
           <h2 className="text-[17px] font-semibold tracking-[-0.015em] truncate">
             {vault.name}
@@ -200,8 +199,8 @@ function VaultInspector({
         </div>
         <span className="label">
           {isOrg
-            ? "Shared with every member below"
-            : "Private to you. Nobody else can be added."}
+            ? "Org vault · shared with every member below"
+            : "Personal vault · private to you, nobody else can be added"}
           {created ? ` · created ${created}` : ""}
         </span>
       </div>
@@ -914,7 +913,7 @@ export default function VaultsPage() {
     <div className="max-w-6xl flex flex-col gap-9">
       <header className="flex flex-wrap items-start justify-between gap-4">
         <div className="min-w-0 flex-1">
-          <h1 className="page-title">Who sees what</h1>
+          <h1 className="page-title">Vaults</h1>
           <p
             className="text-[13px] mt-1.5 max-w-[62ch]"
             style={{ color: "var(--ink-dim)" }}

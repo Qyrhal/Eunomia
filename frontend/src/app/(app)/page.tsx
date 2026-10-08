@@ -3,8 +3,10 @@
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import { AlertTriangle, ArrowRight, Check, Copy, RefreshCw } from "lucide-react";
-import { auth, entities, sources, type EntityKind, type EntityMemory, type SourceRow } from "@/lib/api";
+import { auth, entities, sources, type ApiToken, type EntityKind, type EntityMemory, type SourceRow } from "@/lib/api";
 import AuthorTag from "@/components/AuthorTag";
+import { kindForSource } from "@/lib/connectorMeta";
+import { FAILURE_ALERT_THRESHOLD, isLiveSource, isStubSource, sourceHealth, sourceLabel } from "@/lib/sourceState";
 
 // Same origin as the app: the frontend proxies /mcp to the backend.
 const noSubscribe = () => () => {};
@@ -46,6 +48,16 @@ function stamp(iso: string | null | undefined): string {
   return new Date(iso).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 }
 
+/** Scroll to the MCP card and put focus on its main action. */
+function focusConnect(e: React.MouseEvent) {
+  const card = document.getElementById("connect");
+  if (!card) return;
+  e.preventDefault();
+  const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  card.scrollIntoView({ behavior: reduce ? "auto" : "smooth", block: "start" });
+  card.querySelector<HTMLElement>(".btn-primary, button")?.focus({ preventScroll: true });
+}
+
 // ---- MCP connect card ----
 
 function CopyField({ value }: { value: string }) {
@@ -67,7 +79,7 @@ function CopyField({ value }: { value: string }) {
   );
 }
 
-function McpCard() {
+function McpCard({ onCreated }: { onCreated: () => void }) {
   const mcpUrl = useMcpUrl();
   const [token, setToken] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -79,6 +91,7 @@ function McpCard() {
     try {
       const res = await auth.tokens.create("MCP");
       setToken(res.token);
+      onCreated();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not generate a token.");
     } finally {
@@ -146,13 +159,8 @@ function McpCard() {
 
 // ---- failure banner ----
 
-// A source that's been failing this many syncs in a row has moved past
-// transient backoff (the scheduler's backoff table reaches a full hour by
-// index 2) into "this needs attention".
-const FAILURE_ALERT_THRESHOLD = 3;
-
 function FailureBanner({ rows, dismissed, onDismiss }: { rows: SourceRow[]; dismissed: Set<string>; onDismiss: (key: string) => void }) {
-  const failing = rows.filter((r) => r.connected && r.sync_status.consecutive_failures >= FAILURE_ALERT_THRESHOLD && !dismissed.has(r.key));
+  const failing = rows.filter((r) => isLiveSource(r) && r.sync_status.consecutive_failures >= FAILURE_ALERT_THRESHOLD && !dismissed.has(r.key));
   if (failing.length === 0) return null;
   return (
     <section className="flex flex-col gap-2">
@@ -166,7 +174,7 @@ function FailureBanner({ rows, dismissed, onDismiss }: { rows: SourceRow[]; dism
           <AlertTriangle size={15} strokeWidth={1.75} color="var(--critical)" className="shrink-0" />
           <div className="flex-1 min-w-0">
             <div className="text-[13px] font-medium">
-              {s.label} has failed {s.sync_status.consecutive_failures} syncs in a row
+              {sourceLabel(s)} has failed {s.sync_status.consecutive_failures} syncs in a row
             </div>
             {s.sync_status.last_error && (
               <div className="text-[11.5px] font-mono truncate" style={{ color: "var(--ink-dim)" }}>
@@ -234,7 +242,7 @@ function LiveMemory({ rows, selectedId, onSelect }: { rows: LiveRow[] | null; se
       ) : rows.length === 0 ? (
         <div className="px-3 py-8 text-[13px] flex flex-wrap items-center gap-x-3 gap-y-2" style={{ color: "var(--ink-dim)" }}>
           No memories yet. Connect an agent and what it learns lands here, tagged with who wrote it.
-          <a href="#connect" className="btn btn-sm">
+          <a href="#connect" onClick={focusConnect} className="btn btn-sm">
             Connect an agent <ArrowRight size={12} strokeWidth={1.75} />
           </a>
         </div>
@@ -242,10 +250,12 @@ function LiveMemory({ rows, selectedId, onSelect }: { rows: LiveRow[] | null; se
         <table className="data-table" style={{ tableLayout: "fixed" }}>
           <thead>
             <tr>
-              <th style={{ width: 112 }}>Author</th>
+              <th className="hidden sm:table-cell" style={{ width: 112 }}>
+                Author
+              </th>
               <th>Memory</th>
               <th className="hidden md:table-cell" style={{ width: 160 }}>Entity</th>
-              <th className="text-right" style={{ width: 56 }}>
+              <th className="hidden sm:table-cell text-right" style={{ width: 56 }}>
                 Age
               </th>
             </tr>
@@ -272,22 +282,31 @@ function LiveMemory({ rows, selectedId, onSelect }: { rows: LiveRow[] | null; se
                   // A row outline, not .frame-selected: its ::after would become an extra table cell.
                   style={selected ? { background: "var(--accent-soft)", outline: "1px solid var(--accent)", outlineOffset: -1 } : undefined}
                 >
-                  <td className="overflow-hidden">{author && <AuthorTag name={author} />}</td>
+                  <td className="hidden sm:table-cell overflow-hidden">{author && <AuthorTag name={author} />}</td>
                   <td className="overflow-hidden">
-                    <button
-                      type="button"
-                      aria-pressed={selected}
-                      data-memory-id={m.id}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onSelect(m.id);
-                      }}
-                      className="block w-full truncate text-left"
-                      style={{ color: "var(--ink)" }}
-                      title={m.text}
-                    >
-                      {m.text}
-                    </button>
+                    <div className="py-2 sm:py-0 flex flex-col gap-1 min-w-0">
+                      <button
+                        type="button"
+                        aria-pressed={selected}
+                        data-memory-id={m.id}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onSelect(m.id);
+                        }}
+                        className="block w-full truncate text-left"
+                        style={{ color: "var(--ink)" }}
+                        title={m.text}
+                      >
+                        {m.text}
+                      </button>
+                      {/* Below sm the author and age ride under the text so the memory keeps the full width. */}
+                      <span className="sm:hidden flex items-center gap-2 min-w-0">
+                        {author && <AuthorTag name={author} />}
+                        <time dateTime={m.created_at} className="font-mono text-[11.5px]" style={{ color: "var(--ink-faint)" }}>
+                          {age(m.created_at)}
+                        </time>
+                      </span>
+                    </div>
                   </td>
                   <td className="hidden md:table-cell overflow-hidden">
                     <span className="flex items-center gap-1.5 min-w-0 text-[12.5px]" style={{ color: "var(--ink-dim)" }}>
@@ -295,7 +314,7 @@ function LiveMemory({ rows, selectedId, onSelect }: { rows: LiveRow[] | null; se
                       <span className="truncate">{m.entityName}</span>
                     </span>
                   </td>
-                  <td className="text-right font-mono text-[12px]" style={{ color: "var(--ink-faint)" }}>
+                  <td className="hidden sm:table-cell text-right font-mono text-[12px]" style={{ color: "var(--ink-faint)" }}>
                     <time dateTime={m.created_at}>{age(m.created_at)}</time>
                   </td>
                 </tr>
@@ -354,7 +373,10 @@ function Stat({ label, value, href, children }: { label: string; value: string; 
   const body = (
     <>
       <span className="label">{label}</span>
-      <span className={`flex items-center gap-2 text-[18px] leading-none ${/\d/.test(value) ? "font-mono tracking-tight" : "font-medium"}`} style={{ color: "var(--ink)" }}>
+      <span
+        className={`flex items-center gap-2 text-[26px] leading-none tracking-[-0.02em] ${/\d/.test(value) ? "font-mono" : "font-medium"}`}
+        style={{ color: /\d/.test(value) ? "var(--ink)" : "var(--ink-dim)" }}
+      >
         {children}
         {value}
       </span>
@@ -373,9 +395,69 @@ function Stat({ label, value, href, children }: { label: string; value: string; 
 // The full catalogue lives on /connectors; the dashboard shows a short list.
 const NOT_CONNECTED_SHOWN = 6;
 
-function healthColor(failures: number, lastOk: string | null): string {
-  if (failures === 0) return lastOk ? "var(--good)" : "var(--ink-faint)";
-  return failures < FAILURE_ALERT_THRESHOLD ? "var(--warning)" : "var(--critical)";
+// ---- agents presence ----
+
+const LIVE_WINDOW_MS = 10 * 60_000;
+const AGENTS_SHOWN = 6;
+// Same pattern as age(): read the clock at render, refreshed by the 60s poll.
+const isLive = (iso: string | null) => iso !== null && Date.now() - new Date(iso).getTime() < LIVE_WINDOW_MS;
+
+/** Who can write to this memory right now: the user's API tokens, by name, as multiplayer cursors. */
+function Agents({ tokens }: { tokens: ApiToken[] | null | "error" }) {
+  const sorted = Array.isArray(tokens) ? [...tokens].sort((a, b) => (b.last_used_at ?? "").localeCompare(a.last_used_at ?? "")) : [];
+  return (
+    <section aria-labelledby="agents-title" className="flex flex-wrap items-end gap-x-4 gap-y-2 min-h-8">
+      <span id="agents-title" className="label pb-[3px]">
+        Agents
+      </span>
+      {tokens === null ? (
+        <span className="skeleton h-5 w-40" aria-label="Loading agents" />
+      ) : tokens === "error" ? (
+        <span className="text-[12.5px]" style={{ color: "var(--ink-faint)" }}>
+          Could not load agents.
+        </span>
+      ) : sorted.length === 0 ? (
+        <span className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[12.5px]" style={{ color: "var(--ink-dim)" }}>
+          No agent has a token yet.
+          <a href="#connect" onClick={focusConnect} className="btn btn-sm">
+            Connect an agent <ArrowRight size={12} strokeWidth={1.75} />
+          </a>
+        </span>
+      ) : (
+        <ul className="flex flex-wrap items-end gap-x-4 gap-y-2">
+          {sorted.slice(0, AGENTS_SHOWN).map((t) => {
+            const live = isLive(t.last_used_at);
+            return (
+              <li key={t.id} className="flex items-end gap-1.5">
+                <AuthorTag name={t.name} cursor title={`${t.name}: API token, ${t.last_used_at ? `last used ${stamp(t.last_used_at)}` : "never used"}`} />
+                {live ? (
+                  <span className="flex items-center gap-1 text-[11.5px] pb-[3px]" style={{ color: "var(--ink-dim)" }}>
+                    <span className="dot" style={{ background: "var(--good)" }} aria-hidden />
+                    live
+                  </span>
+                ) : t.last_used_at ? (
+                  <time dateTime={t.last_used_at} className="font-mono text-[11.5px] pb-[3px]" style={{ color: "var(--ink-faint)" }}>
+                    {age(t.last_used_at)}
+                  </time>
+                ) : (
+                  <span className="text-[11.5px] pb-[3px]" style={{ color: "var(--ink-faint)" }}>
+                    unused
+                  </span>
+                )}
+              </li>
+            );
+          })}
+          {sorted.length > AGENTS_SHOWN && (
+            <li className="pb-[3px]">
+              <Link href="/settings?tab=tokens" className="text-[12px] underline-offset-2 hover:underline" style={{ color: "var(--accent-text)" }}>
+                +{sorted.length - AGENTS_SHOWN} more
+              </Link>
+            </li>
+          )}
+        </ul>
+      )}
+    </section>
+  );
 }
 
 export default function DashboardPage() {
@@ -385,20 +467,25 @@ export default function DashboardPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [syncingKey, setSyncingKey] = useState<string | null>(null);
   const [dismissedFailures, setDismissedFailures] = useState<Set<string>>(new Set());
+  const [tokens, setTokens] = useState<ApiToken[] | null | "error">(null);
 
   const load = useCallback(() => sources.list().then(setRows).catch(() => setRows([])), []);
+  const loadTokens = useCallback(() => auth.tokens.list().then(setTokens).catch(() => setTokens((prev) => (Array.isArray(prev) ? prev : "error"))), []);
   useEffect(() => {
     load();
     entities
       .list()
       .then((res) => setEntityCount(res.total))
       .catch(() => setEntityCount(0));
-    const refresh = () => loadLiveMemory().then(setLive).catch(() => setLive((prev) => prev ?? []));
+    const refresh = () => {
+      loadLiveMemory().then(setLive).catch(() => setLive((prev) => prev ?? []));
+      loadTokens();
+    };
     refresh();
     // Live: rows refresh in place on a fixed-layout table, nothing jumps.
     const timer = setInterval(refresh, 60_000);
     return () => clearInterval(timer);
-  }, [load]);
+  }, [load, loadTokens]);
 
   async function sync(key: string) {
     setSyncingKey(key);
@@ -410,9 +497,9 @@ export default function DashboardPage() {
     }
   }
 
-  const connected = rows?.filter((r) => r.connected) ?? [];
-  const disconnected = rows?.filter((r) => !r.connected) ?? [];
-  const healthy = connected.filter((r) => r.sync_status.consecutive_failures === 0 && r.sync_status.last_ok).length;
+  const connected = rows?.filter(isLiveSource) ?? [];
+  const disconnected = rows?.filter((r) => !isLiveSource(r) && !isStubSource(r)) ?? [];
+  const healthy = connected.filter((r) => sourceHealth(r).label === "Healthy").length;
   const totalRecords = rows?.reduce((sum, r) => sum + r.record_count, 0) ?? 0;
   const lastSyncs = connected.map((r) => r.sync_status.last_ok).filter((d): d is string => Boolean(d));
   const lastSync = lastSyncs.length ? lastSyncs.sort().at(-1)! : null;
@@ -420,7 +507,10 @@ export default function DashboardPage() {
 
   return (
     <div className="flex flex-col gap-6 max-w-[1240px]">
-      <h1 className="page-title">Dashboard</h1>
+      <header className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <h1 className="page-title">Dashboard</h1>
+        <Agents tokens={tokens} />
+      </header>
 
       <section
         aria-label="Summary"
@@ -453,13 +543,13 @@ export default function DashboardPage() {
 
         <div className="flex flex-col gap-6 min-w-0 lg:col-start-2 lg:row-start-1 lg:row-span-2 lg:sticky lg:top-8">
           {selected && <Inspector row={selected} />}
-          <McpCard />
+          <McpCard onCreated={loadTokens} />
         </div>
 
         <div className="flex flex-col gap-8 min-w-0 lg:col-start-1 lg:row-start-2">
-          <section className="flex flex-col gap-3" aria-labelledby="whats-next">
-            <h2 id="whats-next" className="section-title">
-              What&apos;s next
+          <section className="flex flex-col gap-3" aria-labelledby="connected-sources">
+            <h2 id="connected-sources" className="section-title">
+              Connected sources
             </h2>
             {rows === null ? (
               <div className="ledger p-3 flex flex-col gap-3" aria-busy="true">
@@ -468,16 +558,17 @@ export default function DashboardPage() {
               </div>
             ) : connected.length === 0 ? (
               <p className="text-[13px]" style={{ color: "var(--ink-dim)" }}>
-                Nothing connected yet. Pick a source under &ldquo;what&apos;s not&rdquo; below.
+                Nothing connected yet. Pick one under &ldquo;Add a source&rdquo; below.
               </p>
             ) : (
-              <div className="ledger overflow-x-auto">
-                <table className="data-table" style={{ minWidth: 520 }}>
+              <div className="ledger overflow-x-auto relative">
+                {/* relative: keeps the sr-only labels inside the scroll box, or they widen the page on mobile. */}
+                <table className="data-table">
                   <thead>
                     <tr>
                       <th>Source</th>
                       <th className="text-right">Records</th>
-                      <th>Last sync</th>
+                      <th className="hidden sm:table-cell">Last sync</th>
                       <th style={{ width: 1 }}>
                         <span className="sr-only">Actions</span>
                       </th>
@@ -487,17 +578,19 @@ export default function DashboardPage() {
                     {connected.map((s) => {
                       const st = s.sync_status;
                       const busy = syncingKey === s.key;
+                      const health = sourceHealth(s);
                       return (
                         <tr key={s.key}>
                           <td>
                             <div className="flex items-center gap-2 min-w-0">
-                              <span className="dot" aria-hidden style={{ background: healthColor(st.consecutive_failures, st.last_ok) }} />
-                              <span className="font-medium truncate">{s.label}</span>
+                              <span className="dot" title={health.label} style={{ background: health.tone }} />
+                              <span className="sr-only">{health.label}:</span>
+                              <span className="font-medium truncate">{sourceLabel(s)}</span>
                               <AuthorTag name={s.key} />
                             </div>
                           </td>
                           <td className="text-right font-mono text-[12.5px]">{s.record_count.toLocaleString()}</td>
-                          <td className="text-[12.5px] whitespace-nowrap">
+                          <td className="hidden sm:table-cell text-[12.5px] whitespace-nowrap">
                             <span className="font-mono" style={{ color: "var(--ink-dim)" }}>
                               {since(st.last_ok)}
                             </span>
@@ -519,25 +612,28 @@ export default function DashboardPage() {
           </section>
 
           {disconnected.length > 0 && (
-            <section className="flex flex-col gap-3" aria-labelledby="whats-not">
-              <h2 id="whats-not" className="section-title">
-                What&apos;s not
+            <section className="flex flex-col gap-3" aria-labelledby="add-source">
+              <h2 id="add-source" className="section-title">
+                Add a source
               </h2>
               <ul className="ledger hairline-rows">
-                {disconnected.slice(0, NOT_CONNECTED_SHOWN).map((s) => (
-                  <li key={s.key} className="flex items-center gap-3 min-h-11 px-3 py-2">
-                    <span className="dot" aria-hidden style={{ background: "var(--border-strong)" }} />
-                    <div className="flex-1 min-w-0 flex flex-col sm:flex-row sm:items-center gap-x-3 gap-y-0.5">
-                      <span className="text-[13px] font-medium truncate">{s.label}</span>
-                      <span className="text-[12px] font-mono truncate" style={{ color: "var(--ink-faint)" }}>
-                        {s.record_types.join(", ")}
-                      </span>
-                    </div>
-                    <Link href="/connectors" className="btn btn-sm shrink-0">
-                      Connect <ArrowRight size={12} strokeWidth={1.75} />
-                    </Link>
-                  </li>
-                ))}
+                {disconnected.slice(0, NOT_CONNECTED_SHOWN).map((s) => {
+                  const kind = kindForSource(s.key);
+                  return (
+                    <li key={s.key} className="flex items-center gap-3 min-h-11 px-3 py-2">
+                      <span className="dot" aria-hidden style={{ background: "var(--border-strong)" }} />
+                      <div className="flex-1 min-w-0 flex flex-col sm:flex-row sm:items-center gap-x-3 gap-y-0.5">
+                        <span className="text-[13px] font-medium truncate">{sourceLabel(s)}</span>
+                        <span className="text-[12px] font-mono truncate" style={{ color: "var(--ink-faint)" }}>
+                          {s.record_types.join(", ")}
+                        </span>
+                      </div>
+                      <Link href={kind ? `/connectors/setup/${kind}` : "/connectors"} className="btn btn-sm shrink-0">
+                        Connect <ArrowRight size={12} strokeWidth={1.75} />
+                      </Link>
+                    </li>
+                  );
+                })}
                 {disconnected.length > NOT_CONNECTED_SHOWN && (
                   <li className="flex items-center min-h-11 px-3">
                     <Link href="/connectors" className="text-[13px] inline-flex items-center gap-1.5 underline-offset-2 hover:underline" style={{ color: "var(--accent-text)" }}>

@@ -73,7 +73,7 @@ test.describe("Command palette", () => {
     await registerAndOnboard(page, uniqueEmail("palette"));
     await seedTwoRelatedPeople(page);
     await page.goto("/");
-    await expect(page.getByText("What's next", { exact: true })).toBeVisible(); // hydrated
+    await expect(page.getByText("Connected sources", { exact: true })).toBeVisible(); // hydrated
 
     const input = page.getByPlaceholder("Jump to a page…");
     const palette = page.getByRole("dialog", { name: "Command palette" });

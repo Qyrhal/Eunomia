@@ -767,7 +767,7 @@ export default function SettingsPage() {
 
   return (
     <div className="max-w-5xl flex flex-col gap-7">
-      <h1 className="page-title">The instrument</h1>
+      <h1 className="page-title">Settings</h1>
 
       {!settings ? (
         loadError ? (

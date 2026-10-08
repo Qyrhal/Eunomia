@@ -37,7 +37,7 @@ export default function EntitiesPage() {
       {view === "graph" ? (
         <EntityGraph header={header} />
       ) : (
-        <div className="absolute inset-0 p-4 md:p-5 flex flex-col gap-4 overflow-y-auto">
+        <div className="absolute inset-0 px-4 py-6 md:px-10 md:py-8 flex flex-col gap-4 overflow-y-auto">
           {header}
           <VectorCloud />
         </div>

@@ -93,7 +93,7 @@ export default function SkillPage() {
         </p>
       </header>
 
-      <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_300px] items-start">
+      <div className="grid gap-8 grid-cols-[minmax(0,1fr)] lg:grid-cols-[minmax(0,1fr)_300px] items-start">
         <section className="ledger min-w-0 overflow-hidden" aria-label="Skill" style={editing ? { borderColor: "var(--accent)" } : undefined}>
           <div className="flex items-center gap-2 flex-wrap px-4 py-2.5" style={{ borderBottom: "var(--hair) solid var(--border)" }}>
             <span className="font-mono text-[12.5px]" style={{ color: "var(--ink)" }}>

@@ -2,7 +2,7 @@ import Link from "next/link";
 import { CircleAlert } from "lucide-react";
 import EunomiaMark from "@/components/EunomiaMark";
 import ThemeToggle from "@/components/ThemeToggle";
-import AuthorTag from "@/components/AuthorTag";
+import AuthorTag, { CursorGlyph, authorColor } from "@/components/AuthorTag";
 
 /** Split layout shared by /login and /register: a compact form on the left,
  * and on wide screens an illustrative canvas where several agents converge
@@ -160,7 +160,12 @@ function AgentCanvas() {
 
           {CURSORS.map((c) => (
             <span key={c.name} className="auth-drift absolute" style={{ left: c.x, top: c.y, animationName: c.anim, animationDuration: c.dur }}>
-              <AuthorTag name={c.name} cursor />
+              <span className="inline-flex items-start gap-0.5">
+                <CursorGlyph color={authorColor(c.name)} size={20} />
+                <span className="mt-4">
+                  <AuthorTag name={c.name} />
+                </span>
+              </span>
             </span>
           ))}
         </div>

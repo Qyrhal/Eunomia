@@ -9,6 +9,7 @@ import ThemeToggle from "./ThemeToggle";
 import { authorColor } from "./AuthorTag";
 import { openCommandPalette } from "./CommandPalette";
 import { auth, sources, update, type Me, type SourceRow } from "@/lib/api";
+import { isLiveSource, sourceHealth, sourceLabel } from "@/lib/sourceState";
 
 const STATIC_NAV = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
@@ -21,12 +22,6 @@ const STATIC_NAV = [
   { href: "/docs", label: "Docs", icon: BookOpen },
   { href: "/settings", label: "Settings", icon: Settings },
 ];
-
-function healthColor(failures: number): string {
-  if (failures === 0) return "var(--good)";
-  if (failures <= 2) return "var(--warning)";
-  return "var(--critical)";
-}
 
 function isActive(pathname: string, href: string) {
   return href === "/" ? pathname === "/" : pathname === href || pathname.startsWith(`${href}/`);
@@ -72,7 +67,7 @@ export default function Sidebar() {
       .catch(() => {});
   }, []);
 
-  const connected = rows?.filter((r) => r.connected) ?? [];
+  const connected = rows?.filter(isLiveSource) ?? [];
 
   async function logout() {
     await auth.logout().catch(() => {});
@@ -137,15 +132,15 @@ export default function Sidebar() {
           )}
           {rows !== null && connected.length === 0 && (
             <Link href="/connectors" className="px-2.5 py-1.5 text-[12.5px]" style={{ color: "var(--ink-faint)" }}>
-              Nothing connected yet. <span style={{ color: "var(--accent-text)" }}>Add a source</span>
+              Nothing connected yet. <span style={{ color: "var(--accent-text)" }}>Connect one</span>
             </Link>
           )}
           {connected.map((s) => {
             const href = `/connectors/${s.key}`;
             return (
               <NavLink key={s.key} href={href} active={pathname === href}>
-                <span className="dot" style={{ background: healthColor(s.sync_status.consecutive_failures) }} aria-hidden />
-                <span className="flex-1 truncate">{s.label}</span>
+                <span className="dot" style={{ background: sourceHealth(s).tone }} aria-hidden />
+                <span className="flex-1 truncate">{sourceLabel(s)}</span>
                 <span className="font-mono text-[11px]" style={{ color: "var(--ink-faint)" }}>
                   {s.record_count.toLocaleString()}
                 </span>

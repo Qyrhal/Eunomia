@@ -5,6 +5,7 @@ import Link from "next/link";
 import { ChevronRight, Search, X } from "lucide-react";
 import { connectors as connectorsApi, sources as sourcesApi, type Connector, type SourceRow } from "@/lib/api";
 import { CONNECTOR_META, CONNECTOR_ORDER, ConnectorTile, connectorStatus, kindForSource, relativeTime } from "@/lib/connectorMeta";
+import { isLiveSource, sourceHealth } from "@/lib/sourceState";
 
 type StatusFilter = "all" | "connected" | "disconnected";
 
@@ -22,14 +23,6 @@ const CONNECTED_COLS = "grid-cols-[minmax(0,1fr)_auto] md:grid-cols-[minmax(0,1.
 const AVAILABLE_COLS = "grid-cols-[minmax(0,1fr)_auto] md:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)_96px_16px]";
 const ROW_LINK =
   "grid items-center gap-x-4 px-4 min-h-12 py-2 text-[13px] transition-[background-color,transform] duration-[120ms] ease-[var(--ease-out)] hover:bg-[var(--surface-raised)] active:scale-[0.995] focus-visible:outline-offset-[-2px]";
-
-function healthTone(source: SourceRow | undefined): string {
-  if (!source) return "var(--good)";
-  const { consecutive_failures: fails, last_ok } = source.sync_status;
-  if (fails > 2) return "var(--critical)";
-  if (fails > 0) return "var(--warning)";
-  return last_ok ? "var(--good)" : "var(--ink-faint)";
-}
 
 function matches(q: string, label: string, description = "") {
   return !q || label.toLowerCase().includes(q) || description.toLowerCase().includes(q);
@@ -78,7 +71,7 @@ export default function ConnectorsPage() {
   }
   // Sources that hold records but belong to no connector (seeded demo data).
   for (const s of sourceRows) {
-    if (!kindForSource(s.key) && s.record_count > 0) {
+    if (!kindForSource(s.key) && isLiveSource(s)) {
       connected.push({ id: s.key, kind: null, label: s.label, status: "demo", source: s, href: `/connectors/${s.key}` });
     }
   }
@@ -166,6 +159,7 @@ export default function ConnectorsPage() {
               {shownConnected.map((r) => {
                 const s = r.source;
                 const fails = s?.sync_status.consecutive_failures ?? 0;
+                const health = sourceHealth(s);
                 return (
                   <Link key={r.id} href={r.href} className={`${ROW_LINK} ${CONNECTED_COLS}`}>
                     <span className="flex items-center gap-3 min-w-0">
@@ -173,8 +167,8 @@ export default function ConnectorsPage() {
                       <span className="font-medium truncate">{r.label}</span>
                     </span>
                     <span className="flex items-center gap-2" title={s?.sync_status.last_error || undefined}>
-                      <span className="dot" style={{ background: healthTone(s) }} aria-hidden />
-                      <span>{r.status === "demo" ? "Demo data" : "Connected"}</span>
+                      <span className="dot" style={{ background: health.tone }} aria-hidden />
+                      <span>{health.label}</span>
                     </span>
                     <span className="hidden md:block font-mono text-right">{s ? s.record_count.toLocaleString() : "n/a"}</span>
                     <span className="hidden md:block font-mono text-[12px]" style={{ color: fails ? "var(--critical)" : "var(--ink-dim)" }}>
