@@ -4,6 +4,9 @@
 -- converter produced, so drop it by name first (a no-op on a fresh database).
 REMOVE INDEX IF EXISTS cache_record_embedding_idx ON cache_record;
 REMOVE INDEX IF EXISTS cache_record_fts_idx ON cache_record;
+-- scripts/upgrade-surreal-v3.sh splits the 2.x two-field index into these two.
+REMOVE INDEX IF EXISTS cache_record_fts_idx_title ON cache_record;
+REMOVE INDEX IF EXISTS cache_record_fts_idx_body_text ON cache_record;
 REMOVE INDEX IF EXISTS memory_text_fts_idx ON memory;
 -- HNSW for semantic recall, queried with `<|K,EF|>`.
 DEFINE INDEX OVERWRITE cache_record_embedding_idx ON cache_record FIELDS embedding HNSW DIMENSION 1536 DIST COSINE TYPE F32 CONCURRENTLY;
