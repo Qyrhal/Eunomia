@@ -698,3 +698,111 @@ async fn forwarded_for_from_a_lan_peer_is_not_believed_by_default() {
     }
     assert_eq!(last, StatusCode::TOO_MANY_REQUESTS);
 }
+
+// ------------------------------------------------------------ session-only OAuth routes
+
+#[tokio::test]
+async fn oauth_consent_and_grants_need_a_browser_session_not_a_token() {
+    let app = TestApp::new().await;
+    let admin_pat = token(&app, &[scopes::VAULTS_ADMIN], None).await;
+    let body = json!({
+        "response_type": "code", "client_id": "nope", "redirect_uri": "http://127.0.0.1:7777/cb",
+        "code_challenge": "x", "code_challenge_method": "S256", "approve": true,
+    });
+    // a vaults:admin token is not enough to approve a grant (it would mint a longer-lived credential)
+    let (status, _, v) = send(&app.router, "POST", "/api/oauth/consent", Some(body.clone()), &bearer(&admin_pat)).await;
+    assert_eq!((status, v["code"].as_str()), (StatusCode::FORBIDDEN, Some("auth.scope")), "{v}");
+    let (status, _, v) = send(&app.router, "GET", "/api/oauth/grants", None, &bearer(&admin_pat)).await;
+    assert_eq!((status, v["code"].as_str()), (StatusCode::FORBIDDEN, Some("auth.scope")), "{v}");
+    let (status, _, v) = send(&app.router, "DELETE", "/api/oauth/grants/x", None, &bearer(&admin_pat)).await;
+    assert_eq!((status, v["code"].as_str()), (StatusCode::FORBIDDEN, Some("auth.scope")), "{v}");
+
+    // the browser session gets past the check (the unknown client then fails validation, not scope)
+    let (status, v) = app.http_session("POST", "/api/oauth/consent", Some(body)).await;
+    assert_ne!(status, StatusCode::FORBIDDEN, "{v}");
+    let (status, _) = app.http_session("GET", "/api/oauth/grants", None).await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+// ------------------------------------------------------------ the chat agent runs as the caller
+
+/// A stand-in for the OpenAI endpoint: asks for a `memory_write` first, then answers in text.
+/// With `fail` it answers every request with a 500 instead.
+async fn stub_openai(fail: bool) -> String {
+    use axum::{routing::post, Router};
+    async fn completions(axum::extract::State(fail): axum::extract::State<bool>, body: String) -> axum::response::Response {
+        use axum::response::IntoResponse;
+        if fail {
+            return (StatusCode::INTERNAL_SERVER_ERROR, "boom").into_response();
+        }
+        let sse = |chunk: Value| format!("data: {chunk}\n\ndata: [DONE]\n\n");
+        let text = if body.contains("\"role\":\"tool\"") {
+            sse(json!({"choices": [{"delta": {"content": "done"}}]}))
+        } else {
+            let args = json!({"subject_name": "Chat", "subject_kind": "person", "text": "written by the model"}).to_string();
+            sse(json!({"choices": [{"delta": {"tool_calls": [{"index": 0, "id": "c1", "function": {"name": "memory_write", "arguments": args}}]}}]}))
+        };
+        ([(header::CONTENT_TYPE, "text/event-stream")], text).into_response()
+    }
+    let router = Router::new().route("/v1/chat/completions", post(completions)).with_state(fail);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    format!("http://{addr}/v1")
+}
+
+/// Sends one chat message with `tok` and returns the SSE events.
+async fn chat_events(app: &TestApp, tok: &str, base_url: &str) -> (String, Vec<Value>) {
+    let h = bearer(tok);
+    let (status, _, _) = send(&app.router, "PATCH", "/api/settings", Some(json!({"openai_base_url": base_url})), &h).await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, _, thread) = send(&app.router, "POST", "/api/chat/threads", Some(json!({})), &h).await;
+    let thread_id = thread["id"].as_str().unwrap().to_string();
+    let mut req = Request::builder().method("POST").uri(format!("/api/chat/threads/{thread_id}")).header(header::CONTENT_TYPE, "application/json");
+    for (k, v) in &h {
+        req = req.header(*k, v);
+    }
+    let req = req.body(Body::from(json!({"message": "remember something"}).to_string())).unwrap();
+    let resp = app.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let text = String::from_utf8(resp.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap();
+    let events = text.lines().filter_map(|l| l.strip_prefix("data:")).filter_map(|d| serde_json::from_str(d.trim()).ok()).collect();
+    (thread_id, events)
+}
+
+async fn memory_count(app: &TestApp) -> i64 {
+    let mut res = app.db().await.test_raw().query("SELECT count() FROM memory GROUP ALL").await.unwrap();
+    let rows: Vec<Value> = res.take(0).unwrap();
+    rows.first().and_then(|r| r["count"].as_i64()).unwrap_or(0)
+}
+
+#[tokio::test]
+async fn model_tool_calls_in_chat_carry_the_callers_scopes() {
+    let app = TestApp::new().await;
+    let base = stub_openai(false).await;
+
+    // vaults:admin reaches the chat route but has no memory:write, so the model's write is refused
+    let admin_only = token(&app, &[scopes::VAULTS_ADMIN], None).await;
+    let (thread_id, events) = chat_events(&app, &admin_only, &base).await;
+    assert!(events.iter().any(|e| e["type"] == "tool_result"), "{events:?}");
+    assert_eq!(memory_count(&app).await, 0, "the model wrote memory for a token without memory:write");
+    let (_, _, hist) = send(&app.router, "GET", &format!("/api/chat/threads/{thread_id}/history"), None, &bearer(&admin_only)).await;
+    assert!(hist.to_string().contains("auth.scope"), "{hist}");
+
+    // with memory:write the same flow writes
+    let both = token(&app, &[scopes::VAULTS_ADMIN, scopes::MEMORY_WRITE], None).await;
+    chat_events(&app, &both, &base).await;
+    assert_eq!(memory_count(&app).await, 1);
+}
+
+#[tokio::test]
+async fn chat_error_events_carry_a_code_and_trace_id() {
+    let app = TestApp::new().await;
+    let base = stub_openai(true).await;
+    let tok = token(&app, &[scopes::VAULTS_ADMIN], None).await;
+    let (_, events) = chat_events(&app, &tok, &base).await;
+    let err = events.iter().find(|e| e["type"] == "error").expect("an error event");
+    assert_eq!(err["code"], "internal");
+    assert_eq!(err["trace_id"].as_str().map(str::len), Some(32), "{err}");
+    assert!(err["message"].as_str().unwrap().contains("OpenAI request failed"));
+}

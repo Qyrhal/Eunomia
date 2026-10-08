@@ -542,3 +542,50 @@ async fn browser_mcp_clients_get_credential_free_cors_and_api_stays_strict() {
         .unwrap();
     assert_eq!(app.router.clone().oneshot(req).await.unwrap().status(), StatusCode::OK);
 }
+
+#[tokio::test]
+async fn refresh_grants_have_their_own_bucket_and_code_exchange_stays_strict() {
+    let app = TestApp::new().await;
+    let limits = eunomia_backend::ratelimit::RateConfig { auth_per_min: 2, refresh_per_min: 5, ..Default::default() };
+    let router = eunomia_backend::app_with(app.state.clone(), limits);
+    let post = |fields: Vec<(&'static str, &'static str)>| {
+        let router = router.clone();
+        async move {
+            let req = Request::builder()
+                .method("POST")
+                .uri("/oauth/token")
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(serde_urlencoded::to_string(&fields).unwrap()))
+                .unwrap();
+            router.oneshot(req).await.unwrap().status()
+        }
+    };
+    // many refreshes through one address and client: well past the strict 2 per minute
+    for i in 0..5 {
+        let s = post(vec![("grant_type", "refresh_token"), ("client_id", "c1"), ("refresh_token", "bad")]).await;
+        assert_ne!(s, StatusCode::TOO_MANY_REQUESTS, "refresh {i}");
+    }
+    assert_eq!(post(vec![("grant_type", "refresh_token"), ("client_id", "c1"), ("refresh_token", "bad")]).await, StatusCode::TOO_MANY_REQUESTS);
+    // another client behind the same address has its own bucket
+    assert_ne!(post(vec![("grant_type", "refresh_token"), ("client_id", "c2"), ("refresh_token", "bad")]).await, StatusCode::TOO_MANY_REQUESTS);
+    // code exchange is still on the strict per-address bucket
+    for _ in 0..2 {
+        assert_ne!(post(vec![("grant_type", "authorization_code"), ("code", "x")]).await, StatusCode::TOO_MANY_REQUESTS);
+    }
+    assert_eq!(post(vec![("grant_type", "authorization_code"), ("code", "x")]).await, StatusCode::TOO_MANY_REQUESTS);
+}
+
+#[tokio::test]
+async fn never_authorized_dcr_clients_are_pruned_after_24_hours() {
+    let app = TestApp::new().await;
+    let (stale, fresh) = (register(&app).await, register(&app).await);
+    let (granted_id, _) = connect(&app, None).await; // authorized: kept
+    let raw = app.state.control.test_raw();
+    raw.query("UPDATE oauth_client SET fetched_at = time::now() - 25h WHERE client_id IN [$a, $g]").bind(("a", stale.clone())).bind(("g", granted_id.clone())).await.unwrap();
+    raw.query("UPDATE oauth_client SET fetched_at = time::now() - 23h WHERE client_id = $f").bind(("f", fresh.clone())).await.unwrap();
+    let _ = register(&app).await; // registration prunes
+    let mut res = raw.query("SELECT VALUE client_id FROM oauth_client WHERE kind = 'dcr'").await.unwrap();
+    let left: Vec<String> = res.take(0).unwrap();
+    assert!(!left.contains(&stale), "unused for 25h and never authorized: {left:?}");
+    assert!(left.contains(&fresh) && left.contains(&granted_id), "{left:?}");
+}

@@ -610,7 +610,7 @@ async fn run_send(
             let args: Value = serde_json::from_str(&tc.arguments).unwrap_or_else(|_| json!({}));
             let result = match registry::call(&state.app, user, &name, args).await {
                 Ok(v) => v,
-                Err(e) => json!({ "error": e.message }),
+                Err(e) => e.to_tool_value(),
             };
             tool_calls_made.push(name.clone());
 
