@@ -47,20 +47,40 @@ pub fn is_conflict(err: &surrealdb::Error) -> bool {
     err.query_details() == Some(&QueryError::TransactionConflict) || err.to_string().contains("can be retried")
 }
 
-/// Worth retrying: a conflict, or a unique-index/record-exists violation (a
-/// concurrent writer created the row we were about to, so the retry's re-read
-/// finds it).
-pub fn is_retryable(err: &surrealdb::Error) -> bool {
-    if is_conflict(err) {
-        return true;
-    }
+/// A unique-index / record-exists violation.
+pub fn is_duplicate(err: &surrealdb::Error) -> bool {
     let msg = err.to_string();
     err.is_already_exists() || msg.contains("already contains") || msg.contains("already exists")
 }
 
-/// Run `f` up to `MAX_ATTEMPTS` times, retrying only when `is_retryable`, with
+/// Worth retrying by default: a commit-time conflict only. A duplicate is the
+/// caller's answer (a taken email retried five times is still taken); see [`with_retry_dup`].
+pub fn is_retryable(err: &surrealdb::Error) -> bool {
+    is_conflict(err)
+}
+
+/// Run `f` up to `MAX_ATTEMPTS` times, retrying only on a commit conflict, with
 /// a small jittered backoff. `f` must be safe to re-run from scratch.
-pub async fn with_retry<T, F, Fut>(mut f: F) -> Result<T, surrealdb::Error>
+pub async fn with_retry<T, F, Fut>(f: F) -> Result<T, surrealdb::Error>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<T, surrealdb::Error>>,
+{
+    retry(f, is_retryable).await
+}
+
+/// [`with_retry`] that also retries a unique violation. Only for a closure that
+/// re-reads first (get-or-create, upsert by deterministic id): a concurrent writer
+/// created the row, so the retry finds it instead of inserting.
+pub async fn with_retry_dup<T, F, Fut>(f: F) -> Result<T, surrealdb::Error>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<T, surrealdb::Error>>,
+{
+    retry(f, |e| is_retryable(e) || is_duplicate(e)).await
+}
+
+async fn retry<T, F, Fut>(mut f: F, retryable: impl Fn(&surrealdb::Error) -> bool) -> Result<T, surrealdb::Error>
 where
     F: FnMut() -> Fut,
     Fut: Future<Output = Result<T, surrealdb::Error>>,
@@ -68,7 +88,7 @@ where
     let mut attempt = 1;
     loop {
         match f().await {
-            Err(e) if attempt < MAX_ATTEMPTS && is_retryable(&e) => {
+            Err(e) if attempt < MAX_ATTEMPTS && retryable(&e) => {
                 let ms = rand::thread_rng().gen_range(1..=(5u64 << attempt).min(100));
                 tokio::time::sleep(Duration::from_millis(ms)).await;
                 attempt += 1;
@@ -110,6 +130,26 @@ mod tests {
         .await;
         assert_eq!(out.unwrap(), 7);
         assert_eq!(calls.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn duplicate_retries_only_when_opted_in() {
+        let dup = || surrealdb::Error::query("Database index `u` already contains 'x'".into(), None);
+        let calls = AtomicU32::new(0);
+        let out: Result<(), _> = with_retry(|| async {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Err(dup())
+        })
+        .await;
+        assert!(out.is_err());
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        let out: Result<(), _> = with_retry_dup(|| async {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Err(dup())
+        })
+        .await;
+        assert!(out.is_err());
+        assert_eq!(calls.load(Ordering::SeqCst), 1 + MAX_ATTEMPTS);
     }
 
     #[tokio::test]

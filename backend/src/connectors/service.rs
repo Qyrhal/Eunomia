@@ -16,7 +16,7 @@ use surrealdb::types::{Datetime, RecordId};
 use crate::connectors::crypto;
 use crate::pool::OrgDb;
 use crate::store;
-use crate::tx::with_retry;
+use crate::tx::with_retry_dup;
 use crate::error::{AppError, AppResult};
 
 /// Real, non-pseudo connector kinds the CRUD surface manages (excludes
@@ -67,7 +67,7 @@ pub async fn get_connector(db: &OrgDb, owner: &RecordId, kind: &str) -> AppResul
 
 pub async fn get_or_create_connector(db: &OrgDb, owner: &RecordId, kind: &str) -> AppResult<Connector> {
     // Unique (owner, kind): a racing creator fails the insert and the retry's re-read finds its row.
-    let row = with_retry(|| async {
+    let row = with_retry_dup(|| async {
         let mut res = store::app::CONNECTOR_BY_KIND
             .on(db)
             .bind(("owner", owner.clone()))

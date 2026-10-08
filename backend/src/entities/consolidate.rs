@@ -33,7 +33,7 @@ use crate::pool::OrgDb;
 use crate::store;
 use crate::error::{AppError, AppResult};
 use crate::store::entities as q;
-use crate::tx::with_retry;
+use crate::tx::with_retry_dup;
 
 use super::service::observation_rid;
 
@@ -222,7 +222,7 @@ pub async fn consolidate_subject(
         None => (&q::CONSOLIDATE_CREATE, fresh.len() as i64),
         Some(_) => (&q::CONSOLIDATE_UPDATE, all_source_ids.len() as i64),
     };
-    let row = with_retry(|| async {
+    let row = with_retry_dup(|| async {
         let mut res = stmt
             .on(db)
             .bind(("owner", owner.clone()))

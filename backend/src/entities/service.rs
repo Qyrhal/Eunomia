@@ -31,7 +31,7 @@ use crate::pool::{ControlDb, OrgDb};
 use crate::store;
 use crate::error::{AppError, AppResult, ErrorCode};
 use crate::store::entities as q;
-use crate::tx::{lock, with_retry};
+use crate::tx::{lock, with_retry, with_retry_dup};
 use crate::authz::{self, Action};
 use crate::vaults::service as vaults_service;
 
@@ -333,7 +333,25 @@ async fn emails_for(db: &ControlDb, user_ids: Vec<Option<RecordId>>) -> AppResul
     Ok(rows.into_iter().map(|r| (r.id.to_string(), r.email)).collect())
 }
 
+/// `rid` must name an entity table. `rid::parse` takes any table, so without this a tool or route
+/// handed `memory:..` or `vault_member:..` would read it as an entity.
+pub fn require_entity_id(rid: &RecordId) -> AppResult<()> {
+    if KINDS.contains(&rid.table()) {
+        return Ok(());
+    }
+    Err(AppError::bad_request(format!("{} is not an entity id", rid.to_string())))
+}
+
+/// `rid` must be a `memory` row.
+pub fn require_memory_id(rid: &RecordId) -> AppResult<()> {
+    if rid.table() == "memory" {
+        return Ok(());
+    }
+    Err(AppError::bad_request(format!("{} is not a memory id", rid.to_string())))
+}
+
 async fn select_entity(db: &OrgDb, rid: &RecordId) -> AppResult<Option<EntityRow>> {
+    require_entity_id(rid)?;
     let row: Option<EntityRow> = store::get(db, rid).await?;
     Ok(row)
 }
@@ -360,7 +378,7 @@ pub async fn upsert_entity(
 
     // Read-then-write: a concurrent upsert of the same name loses on the
     // `{table}_vault_name_unique` index, and the retry's re-read finds the winner.
-    let row = with_retry(|| async {
+    let row = with_retry_dup(|| async {
         let mut res = q::select_by_vault(db, table, false).bind(("vault", vault.clone())).await?.check()?;
         let rows: Vec<EntityRow> = res.take(0)?;
 
@@ -425,8 +443,8 @@ pub async fn add_memory(
         .await?
         .ok_or_else(|| AppError::bad_request(format!("subject entity not found: {}", subject_id.to_string())))?;
     if !accessible(db, owner, &subject_row.vault, Action::WriteMemories).await? {
-        return Err(AppError::new(
-            axum::http::StatusCode::FORBIDDEN,
+        return Err(AppError::coded(
+            crate::error::ErrorCode::VaultForbidden,
             format!("not a member of {}'s vault", subject_row.vault.to_string()),
         ));
     }
@@ -446,7 +464,7 @@ pub async fn add_memory(
     // deterministic ids.
     let stmt = if is_obs { &q::WRITE_OBSERVATION } else { &q::WRITE_FACT };
     let _guard = lock(&subject_id.to_string()).await;
-    let memory = with_retry(|| async {
+    let memory = with_retry_dup(|| async {
         let mut res = stmt
             .on(db)
             .bind(("owner", owner.clone()))
@@ -519,7 +537,7 @@ pub async fn add_relation(
         None => false,
     };
     if !in_ok || !out_ok {
-        return Err(AppError::new(axum::http::StatusCode::FORBIDDEN, "not a member of both entities' vaults"));
+        return Err(AppError::coded(crate::error::ErrorCode::VaultForbidden, "not a member of both entities' vaults"));
     }
 
     if let Some(existing) = find_relation(db, from_id, to_id, label).await? {
@@ -572,6 +590,7 @@ async fn find_relation(db: &OrgDb, from_id: &RecordId, to_id: &RecordId, label: 
 /// doesn't exist or `owner` isn't a member of its vault, rather than
 /// erroring -- mirrors `get_entity`'s not-found-is-None convention.
 pub async fn delete_memory(db: &OrgDb, owner: &RecordId, memory_id: &RecordId) -> AppResult<bool> {
+    require_memory_id(memory_id)?;
     let row: Option<MemoryRow> = store::get(db, memory_id).await?;
     let Some(row) = row else { return Ok(false) };
     if !accessible(db, owner, &row.vault, Action::WriteMemories).await? {
@@ -613,6 +632,7 @@ pub async fn update_memory(
     text: Option<&str>,
     new_type: Option<&str>,
 ) -> AppResult<Option<MemoryOut>> {
+    require_memory_id(memory_id)?;
     let row: Option<MemoryRow> = store::get(db, memory_id).await?;
     let Some(row) = row else { return Ok(None) };
     if !accessible(db, owner, &row.vault, Action::WriteMemories).await? {

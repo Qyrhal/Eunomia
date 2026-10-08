@@ -24,7 +24,7 @@ use crate::authz::{self, Action};
 use crate::pool::{ControlDb, OrgDb};
 use crate::error::{AppError, AppResult};
 use crate::store;
-use crate::tx::with_retry;
+use crate::tx::{with_retry, with_retry_dup};
 
 /// Entity tables a vault's data can live in -- mirrors `entities/service.py`'s
 /// `KINDS` tuple and `db.rs`'s `memory.subject` record union.
@@ -137,7 +137,7 @@ pub async fn create_personal_vault(db: &OrgDb, user_id: &RecordId) -> AppResult<
     // Deterministic id: a second personal vault for the same user collides on
     // the key, so "one personal vault per user" holds even under a race.
     let vault_id = RecordId::from_table_key("vault", crate::tx::stable_key('p', &user_id.to_string()));
-    with_retry(|| async {
+    with_retry_dup(|| async {
         store::vaults::CREATE_PERSONAL.on(db)
         .bind(("vault", vault_id.clone()))
         .bind(("user", user_id.clone()))

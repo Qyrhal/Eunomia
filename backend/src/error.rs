@@ -148,12 +148,14 @@ impl ErrorCode {
         matches!(self, ErrorCode::Internal | ErrorCode::TenantDenied)
     }
 
-    /// A code for a bare status, for the `AppError::new(status, ..)` callers.
+    /// A code for a bare status, for the `AppError::new(status, ..)` callers. A caller that
+    /// means a more specific code (`vault.forbidden`) uses [`AppError::coded`].
     fn from_status(status: StatusCode) -> Self {
         match status {
             StatusCode::BAD_REQUEST => ErrorCode::ValidationInvalid,
             StatusCode::UNAUTHORIZED => ErrorCode::AuthUnauthorized,
-            StatusCode::FORBIDDEN => ErrorCode::VaultForbidden,
+            StatusCode::FORBIDDEN => ErrorCode::AuthForbidden,
+            StatusCode::TOO_MANY_REQUESTS => ErrorCode::RateLimited,
             StatusCode::NOT_FOUND => ErrorCode::ResourceNotFound,
             StatusCode::CONFLICT => ErrorCode::DbConflict,
             _ => ErrorCode::Internal,
@@ -301,6 +303,14 @@ mod tests {
                 | ErrorCode::Internal => {}
             }
         }
+    }
+
+    #[test]
+    fn bare_statuses_map_to_their_own_codes() {
+        let code = |s: StatusCode| AppError::new(s, "x").code.as_str();
+        assert_eq!(code(StatusCode::TOO_MANY_REQUESTS), "rate.limited");
+        assert_eq!(code(StatusCode::FORBIDDEN), "auth.forbidden");
+        assert_eq!(code(StatusCode::BAD_GATEWAY), "internal");
     }
 
     #[test]

@@ -18,7 +18,7 @@ use crate::pool::{ControlDb, OrgId};
 use crate::error::{AppError, AppResult, ErrorCode};
 use crate::sources::base::owner_key_str;
 use crate::store::jobs as q;
-use crate::tx::{stable_key, with_retry};
+use crate::tx::{stable_key, with_retry, with_retry_dup};
 
 pub mod handlers;
 pub mod leader;
@@ -219,7 +219,7 @@ pub async fn enqueue(db: &ControlDb, job: NewJob) -> AppResult<bool> {
     let id = RecordId::from_table_key("job", stable_key('j', &job.key));
     let run_at = Datetime::from(job.run_at.unwrap_or_else(chrono::Utc::now));
     let traceparent = crate::telemetry::current_traceparent();
-    let rows = with_retry(|| async {
+    let rows = with_retry_dup(|| async {
         let mut res = q::ENQUEUE
             .on(db)
             .bind(("id", id.clone()))
