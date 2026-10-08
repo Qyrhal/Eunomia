@@ -10,7 +10,7 @@ import AuthorTag from "@/components/AuthorTag";
 import SyncMark from "@/components/bits/SyncMark";
 import Tooltip, { TooltipGroup } from "@/components/bits/Tooltip";
 import { useQueryClient } from "@tanstack/react-query";
-import { chat } from "@/lib/api";
+import { ApiError, chat } from "@/lib/api";
 import type { ChatMessage, ChatThread } from "@/lib/types";
 import { useMe } from "@/lib/queries/auth";
 import { chatKeys, historyQuery, threadsQuery, useCreateThread, useDeleteThread, useThreads } from "@/lib/queries/chat";
@@ -332,7 +332,7 @@ export default function ChatPage() {
   const [sending, setSending] = useState(false);
   const [streamingText, setStreamingText] = useState("");
   const [liveSteps, setLiveSteps] = useState<ToolStep[]>([]);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<Failure | null>(null);
   const [loadError, setLoadError] = useState<Failure | null>(null);
   const [needsKey, setNeedsKey] = useState(false);
   const me = useMe().data?.email ?? null;
@@ -449,7 +449,8 @@ export default function ChatPage() {
           if (step) step.running = false;
           setLiveSteps([...steps]);
         } else if (event.type === "error") {
-          setError(event.message);
+          // code and trace id are optional: older backends send only the message
+          setError(failure(event.code ? new ApiError(200, event.code, event.message, event.trace_id) : new Error(event.message), event.message));
           setNeedsKey(/OpenAI API key/i.test(event.message));
         }
       }, controller.signal);
@@ -466,7 +467,7 @@ export default function ChatPage() {
         return;
       }
       const msg = e instanceof Error ? e.message : "Something went wrong.";
-      setError(msg);
+      setError(failure(e, msg));
       setNeedsKey(/OpenAI API key/i.test(msg));
     } finally {
       abortRef.current = null;
@@ -574,9 +575,15 @@ export default function ChatPage() {
                           .
                         </>
                       ) : (
-                        error
+                        error.message
                       )}
                     </div>
+                    {(error.code && !error.code.startsWith("http.")) || error.traceId ? (
+                      <div className="mt-1 flex flex-wrap items-center gap-x-3 font-mono text-[12px]">
+                        {error.code && !error.code.startsWith("http.") && <code>{error.code}</code>}
+                        {error.traceId && <span>Trace {error.traceId}</span>}
+                      </div>
+                    ) : null}
                     {!needsKey && lastSent && (
                       <button type="button" onClick={() => send(lastSent, true)} className="btn btn-sm mt-2.5">
                         <RotateCcw size={13} strokeWidth={1.75} /> Retry

@@ -26,13 +26,29 @@ const hex = (n: number) =>
 // W3C traceparent (version 00, sampled) so the backend joins the browser's trace.
 export const traceparent = () => `00-${hex(16)}-${hex(8)}-01`;
 
+// Error bodies are RFC 9457 problem+json: detail, code, trace_id. Same fields `toApiError` reads for the generated client.
+async function apiErrorFromResponse(res: Response, path: string): Promise<ApiError> {
+  let detail = `${res.status} ${path}`;
+  let code = `http.${res.status}`;
+  let traceId = res.headers.get("x-trace-id") ?? undefined;
+  try {
+    const body = await res.json();
+    if (typeof body?.detail === "string") detail = body.detail;
+    if (typeof body?.code === "string") code = body.code;
+    if (typeof body?.trace_id === "string") traceId = body.trace_id;
+  } catch {
+    // non-JSON error body, fall back to the status line above
+  }
+  return new ApiError(res.status, code, detail, traceId);
+}
+
 // ---------------------------------------------------------------------------
 // export
 // ---------------------------------------------------------------------------
 
 export async function downloadExport(): Promise<void> {
-  const res = await fetch(`${API_URL}/api/export`, { credentials: "include" });
-  if (!res.ok) throw new Error(`${res.status} /api/export`);
+  const res = await fetch(`${API_URL}/api/export`, { credentials: "include", headers: { traceparent: traceparent() } });
+  if (!res.ok) throw await apiErrorFromResponse(res, "/api/export");
   const blob = await res.blob();
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -53,7 +69,7 @@ export type ChatStreamEvent =
   | { type: "tool_call"; name: string }
   | { type: "tool_result"; name: string }
   | { type: "done"; reply: string; tool_calls_made: string[] }
-  | { type: "error"; message: string };
+  | { type: "error"; message: string; code?: string; trace_id?: string };
 
 export const chat = {
   // Streams a reply for `threadId`, calling `onEvent` for every parsed SSE
@@ -70,23 +86,11 @@ export const chat = {
       method: "POST",
       signal,
       credentials: "include",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", traceparent: traceparent() },
       body: JSON.stringify({ message }),
     });
     if (!res.ok || !res.body) {
-      // Error bodies are RFC 9457 problem+json: detail, code, trace_id.
-      let detail = `${res.status} /api/chat/threads/${threadId}`;
-      let code = `http.${res.status}`;
-      let traceId = res.headers.get("x-trace-id") ?? undefined;
-      try {
-        const body = await res.json();
-        if (typeof body?.detail === "string") detail = body.detail;
-        if (typeof body?.code === "string") code = body.code;
-        if (typeof body?.trace_id === "string") traceId = body.trace_id;
-      } catch {
-        // non-JSON error body, fall back to the status line above
-      }
-      throw new ApiError(res.status, code, detail, traceId);
+      throw await apiErrorFromResponse(res, `/api/chat/threads/${threadId}`);
     }
 
     const reader = res.body.getReader();
