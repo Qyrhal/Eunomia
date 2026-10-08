@@ -1,3 +1,2 @@
 src/connectors/clients.rs
 src/db.rs
-src/vaults/service.rs

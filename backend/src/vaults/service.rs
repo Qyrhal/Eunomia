@@ -21,6 +21,7 @@ use surrealdb::{Datetime, RecordId};
 
 use crate::db::Db;
 use crate::error::{AppError, AppResult};
+use crate::store;
 use crate::tx::with_retry;
 
 /// Entity tables a vault's data can live in -- mirrors `entities/service.py`'s
@@ -127,12 +128,7 @@ pub async fn create_personal_vault(db: &Db, user_id: &RecordId) -> AppResult<Rec
     // the key, so "one personal vault per user" holds even under a race.
     let vault_id = RecordId::from_table_key("vault", crate::tx::stable_key('p', &user_id.to_string()));
     with_retry(|| async {
-        db.query(
-            r#"BEGIN TRANSACTION;
-            CREATE $vault SET name = "Personal", kind = "personal";
-            CREATE vault_member SET vault = $vault, user = $user, role = "owner";
-            COMMIT TRANSACTION;"#,
-        )
+        store::vaults::CREATE_PERSONAL.on(db)
         .bind(("vault", vault_id.clone()))
         .bind(("user", user_id.clone()))
         .await?
@@ -146,14 +142,8 @@ pub async fn create_personal_vault(db: &Db, user_id: &RecordId) -> AppResult<Rec
 /// several, per the product ask); creator becomes its owner.
 pub async fn create_vault(db: &Db, user_id: &RecordId, name: &str, kind: &str) -> AppResult<VaultOut> {
     let vault = with_retry(|| async {
-        let mut res = db
-            .query(
-                r#"BEGIN TRANSACTION;
-                LET $v = (CREATE vault SET name = $name, kind = $kind RETURN AFTER);
-                CREATE vault_member SET vault = $v[0].id, user = $user, role = "owner";
-                RETURN $v;
-                COMMIT TRANSACTION;"#,
-            )
+        let mut res = store::vaults::CREATE_VAULT
+            .on(db)
             .bind(("name", name.to_string()))
             .bind(("kind", kind.to_string()))
             .bind(("user", user_id.clone()))
@@ -169,8 +159,7 @@ pub async fn create_vault(db: &Db, user_id: &RecordId, name: &str, kind: &str) -
 
 /// Active membership only -- a pending invite isn't membership yet.
 async fn membership(db: &Db, vault_id: &RecordId, user_id: &RecordId) -> AppResult<Option<MembershipRow>> {
-    let mut res = db
-        .query("SELECT * FROM vault_member WHERE vault = $vault AND user = $user AND status = \"active\" LIMIT 1")
+    let mut res = store::vaults::MEMBERSHIP_ACTIVE.on(db)
         .bind(("vault", vault_id.clone()))
         .bind(("user", user_id.clone()))
         .await?;
@@ -181,8 +170,7 @@ async fn membership(db: &Db, vault_id: &RecordId, user_id: &RecordId) -> AppResu
 /// Any `vault_member` row regardless of status -- used only where a pending
 /// invite also needs to count (duplicate-invite checks, accept/decline).
 async fn membership_any_status(db: &Db, vault_id: &RecordId, user_id: &RecordId) -> AppResult<Option<MembershipRow>> {
-    let mut res = db
-        .query("SELECT * FROM vault_member WHERE vault = $vault AND user = $user LIMIT 1")
+    let mut res = store::vaults::MEMBERSHIP_ANY.on(db)
         .bind(("vault", vault_id.clone()))
         .bind(("user", user_id.clone()))
         .await?;
@@ -197,8 +185,7 @@ pub async fn accessible_vault_ids(db: &Db, user_id: &RecordId) -> AppResult<Vec<
     struct Row {
         vault: RecordId,
     }
-    let mut res = db
-        .query("SELECT vault FROM vault_member WHERE user = $user AND status = \"active\"")
+    let mut res = store::vaults::ACCESSIBLE_IDS.on(db)
         .bind(("user", user_id.clone()))
         .await?;
     let rows: Vec<Row> = res.take(0)?;
@@ -212,8 +199,7 @@ pub async fn default_vault_id(db: &Db, user_id: &RecordId) -> AppResult<RecordId
     struct Row {
         vault: RecordId,
     }
-    let mut res = db
-        .query("SELECT vault FROM vault_member WHERE user = $user AND status = \"active\" AND vault.kind = \"personal\" LIMIT 1")
+    let mut res = store::vaults::DEFAULT_ID.on(db)
         .bind(("user", user_id.clone()))
         .await?;
     let rows: Vec<Row> = res.take(0)?;
@@ -245,8 +231,7 @@ pub async fn list_my_vaults(db: &Db, user_id: &RecordId) -> AppResult<Vec<VaultW
         vault: VaultFullRow,
         role: String,
     }
-    let mut res = db
-        .query("SELECT vault.* AS vault, role FROM vault_member WHERE user = $user AND status = \"active\"")
+    let mut res = store::vaults::LIST_MINE.on(db)
         .bind(("user", user_id.clone()))
         .await?;
     let rows: Vec<Row> = res.take(0)?;
@@ -261,8 +246,7 @@ pub async fn list_my_vaults(db: &Db, user_id: &RecordId) -> AppResult<Vec<VaultW
 
 pub async fn rename_vault(db: &Db, user_id: &RecordId, vault_id: &RecordId, name: &str) -> AppResult<VaultOut> {
     require_owner(db, user_id, vault_id).await?;
-    let mut res = db
-        .query("UPDATE $id SET name = $name RETURN AFTER")
+    let mut res = store::vaults::RENAME.on(db)
         .bind(("id", vault_id.clone()))
         .bind(("name", name.to_string()))
         .await?;
@@ -278,7 +262,7 @@ pub async fn rename_vault(db: &Db, user_id: &RecordId, vault_id: &RecordId, name
 pub async fn delete_vault(db: &Db, user_id: &RecordId, vault_id: &RecordId) -> AppResult<()> {
     require_owner(db, user_id, vault_id).await?;
     with_retry(|| async {
-        db.query("BEGIN TRANSACTION; DELETE vault_member WHERE vault = $vault; DELETE $vault; COMMIT TRANSACTION;")
+        store::vaults::DELETE_VAULT.on(db)
             .bind(("vault", vault_id.clone()))
             .await?
             .check()
@@ -299,8 +283,7 @@ pub async fn invite_member(
 ) -> AppResult<InviteOut> {
     require_owner(db, user_id, vault_id).await?;
 
-    let mut res = db
-        .query("SELECT id FROM user WHERE string::lowercase(email) = $email LIMIT 1")
+    let mut res = store::vaults::USER_ID_BY_EMAIL.on(db)
         .bind(("email", crate::models_user::normalize_email(email)))
         .await?;
     let rows: Vec<EmailLookupRow> = res.take(0)?;
@@ -310,8 +293,7 @@ pub async fn invite_member(
         return Err(AppError::bad_request(format!("{email} is already a member or has a pending invite")));
     }
 
-    let mut res = db
-        .query("CREATE vault_member SET vault = $vault, user = $user, role = $role, status = \"pending\" RETURN AFTER")
+    let mut res = store::vaults::INVITE.on(db)
         .bind(("vault", vault_id.clone()))
         .bind(("user", invitee))
         .bind(("role", role.to_string()))
@@ -338,8 +320,7 @@ pub async fn list_members(db: &Db, user_id: &RecordId, vault_id: &RecordId) -> A
         email: String,
         role: String,
     }
-    let mut res = db
-        .query("SELECT user.email AS email, role FROM vault_member WHERE vault = $vault AND status = \"active\"")
+    let mut res = store::vaults::LIST_MEMBERS.on(db)
         .bind(("vault", vault_id.clone()))
         .await?;
     let rows: Vec<Row> = res.take(0)?;
@@ -355,8 +336,7 @@ pub async fn list_my_invitations(db: &Db, user_id: &RecordId) -> AppResult<Vec<I
         role: String,
         created_at: Option<Datetime>,
     }
-    let mut res = db
-        .query("SELECT vault.* AS vault, role, created_at FROM vault_member WHERE user = $user AND status = \"pending\"")
+    let mut res = store::vaults::LIST_INVITATIONS.on(db)
         .bind(("user", user_id.clone()))
         .await?;
     let rows: Vec<Row> = res.take(0)?;
@@ -383,12 +363,7 @@ pub async fn accept_invitation(db: &Db, user_id: &RecordId, vault_id: &RecordId)
     // Guarded flip plus the vault read in one transaction: a double accept, or
     // an accept racing a decline/withdraw, activates at most once.
     let mut res = with_retry(|| async {
-        db.query(
-            r#"BEGIN TRANSACTION;
-            LET $flipped = (UPDATE $id SET status = "active" WHERE status = "pending" RETURN AFTER);
-            RETURN IF array::len($flipped) > 0 { (SELECT * FROM $vault) } ELSE { [] };
-            COMMIT TRANSACTION;"#,
-        )
+        store::vaults::ACCEPT_INVITATION.on(db)
         .bind(("id", m.id.clone()))
         .bind(("vault", vault_id.clone()))
         .await?
@@ -408,7 +383,7 @@ pub async fn decline_invitation(db: &Db, user_id: &RecordId, vault_id: &RecordId
         .filter(|m| m.status == "pending")
         .ok_or_else(|| AppError::bad_request("no pending invitation for this vault"))?;
 
-    db.query("DELETE $id").bind(("id", m.id)).await?;
+    store::vaults::DELETE_RECORD.on(db).bind(("id", m.id)).await?;
     Ok(())
 }
 
@@ -417,8 +392,7 @@ pub async fn decline_invitation(db: &Db, user_id: &RecordId, vault_id: &RecordId
 pub async fn remove_member(db: &Db, user_id: &RecordId, vault_id: &RecordId, email: &str) -> AppResult<()> {
     require_owner(db, user_id, vault_id).await?;
 
-    let mut res = db
-        .query("SELECT id FROM user WHERE string::lowercase(email) = $email LIMIT 1")
+    let mut res = store::vaults::USER_ID_BY_EMAIL.on(db)
         .bind(("email", crate::models_user::normalize_email(email)))
         .await?;
     let rows: Vec<EmailLookupRow> = res.take(0)?;
@@ -432,13 +406,7 @@ pub async fn remove_member(db: &Db, user_id: &RecordId, vault_id: &RecordId, ema
     // Owner count check and delete in one transaction, so two concurrent
     // removals cannot each see a second owner and strand the vault.
     with_retry(|| async {
-        db.query(
-            r#"BEGIN TRANSACTION;
-            LET $owners = (SELECT VALUE id FROM vault_member WHERE vault = $vault AND role = "owner");
-            IF $is_owner AND array::len($owners) <= 1 { THROW "last_owner" };
-            DELETE $id;
-            COMMIT TRANSACTION;"#,
-        )
+        store::vaults::REMOVE_MEMBER.on(db)
         .bind(("vault", vault_id.clone()))
         .bind(("is_owner", target_membership.role == "owner"))
         .bind(("id", target_membership.id.clone()))
@@ -487,8 +455,8 @@ struct RelationRow {
 
 /// Looks an entity up in `vault` by case-insensitive name (merge matching).
 async fn find_by_name(db: &Db, kind: &str, vault: &RecordId, name: &str) -> AppResult<Option<EntityRow>> {
-    let mut res = db
-        .query(format!("SELECT * FROM {kind} WHERE vault = $vault AND string::lowercase(name) = $name LIMIT 1"))
+    // dynamic: table name varies over the six entity kinds
+    let mut res = store::dynamic(db, "vaults.find_by_name", format!("SELECT * FROM {kind} WHERE vault = $vault AND string::lowercase(name) = $name LIMIT 1"))
         .bind(("vault", vault.clone()))
         .bind(("name", name.to_lowercase()))
         .await?;
@@ -507,22 +475,20 @@ async fn fold_into_existing_memory(db: &Db, subject: &RecordId, mem: &MemoryRow)
         text: String,
     }
     if mem.mem_type == "observation" {
-        let mut res = db
-            .query(r#"SELECT id, text FROM memory WHERE subject = $s AND type = "observation" LIMIT 1"#)
+        let mut res = store::vaults::OBSERVATION_OF.on(db)
             .bind(("s", subject.clone()))
             .await?;
         let existing: Vec<Existing> = res.take(0)?;
         let Some(existing) = existing.into_iter().next() else { return Ok(false) };
         if existing.text != mem.text {
-            db.query("UPDATE $id SET text = $text, version = version + 1, status = \"stale\", updated_at = time::now()")
+            store::vaults::APPEND_OBSERVATION.on(db)
                 .bind(("id", existing.id))
                 .bind(("text", format!("{}\n\n{}", existing.text, mem.text)))
                 .await?;
         }
         return Ok(true);
     }
-    let mut res = db
-        .query("SELECT id FROM memory WHERE subject = $s AND type = $type AND text = $text LIMIT 1")
+    let mut res = store::vaults::SAME_MEMORY.on(db)
         .bind(("s", subject.clone()))
         .bind(("type", mem.mem_type.clone()))
         .bind(("text", mem.text.clone()))
@@ -540,8 +506,8 @@ async fn copy_into(db: &Db, user_id: &RecordId, src: &RecordId, dest: &RecordId,
     #[allow(clippy::mutable_key_type)] // RecordId hashes by value; the interior mutability is never touched
     let mut id_map: HashMap<RecordId, RecordId> = HashMap::new();
     for entity_kind in ENTITY_KINDS {
-        let mut res = db
-            .query(format!("SELECT * FROM {entity_kind} WHERE vault = $vault"))
+        // dynamic: table name varies over the six entity kinds
+        let mut res = store::dynamic(db, "vaults.entities_in_vault", format!("SELECT * FROM {entity_kind} WHERE vault = $vault"))
             .bind(("vault", src.clone()))
             .await?;
         let rows: Vec<EntityRow> = res.take(0)?;
@@ -555,7 +521,7 @@ async fn copy_into(db: &Db, user_id: &RecordId, src: &RecordId, dest: &RecordId,
                         }
                     }
                     let summary = if existing.summary.is_empty() { row.summary.clone() } else { existing.summary.clone() };
-                    db.query("UPDATE $id SET aliases = $aliases, summary = $summary, updated_at = time::now()")
+                    store::vaults::MERGE_ENTITY_INTO.on(db)
                         .bind(("id", existing.id.clone()))
                         .bind(("aliases", aliases))
                         .bind(("summary", summary))
@@ -563,11 +529,15 @@ async fn copy_into(db: &Db, user_id: &RecordId, src: &RecordId, dest: &RecordId,
                     id_map.insert(row.id, existing.id);
                     continue;
                 }
-            let mut created = db
-                .query(format!(
+            // dynamic: table name varies over the six entity kinds
+            let mut created = store::dynamic(
+                db,
+                "vaults.copy_entity",
+                format!(
                     "CREATE {entity_kind} SET owner = $owner, vault = $vault, name = $name, \
                      aliases = $aliases, summary = $summary RETURN AFTER"
-                ))
+                ),
+            )
                 .bind(("owner", user_id.clone()))
                 .bind(("vault", dest.clone()))
                 .bind(("name", row.name))
@@ -582,8 +552,7 @@ async fn copy_into(db: &Db, user_id: &RecordId, src: &RecordId, dest: &RecordId,
     }
 
     for (old_id, new_id) in id_map.clone() {
-        let mut res = db
-            .query("SELECT * FROM memory WHERE subject = $id")
+        let mut res = store::vaults::MEMORIES_OF.on(db)
             .bind(("id", old_id))
             .await?;
         let memories: Vec<MemoryRow> = res.take(0)?;
@@ -591,10 +560,7 @@ async fn copy_into(db: &Db, user_id: &RecordId, src: &RecordId, dest: &RecordId,
             if merge_duplicates && fold_into_existing_memory(db, &new_id, &mem).await? {
                 continue;
             }
-            db.query(
-                "CREATE memory SET owner = $owner, vault = $vault, subject = $subject, text = $text, \
-                 type = $type, source = $source RETURN AFTER",
-            )
+            store::vaults::COPY_MEMORY.on(db)
             .bind(("owner", user_id.clone()))
             .bind(("vault", dest.clone()))
             .bind(("subject", new_id.clone()))
@@ -608,7 +574,7 @@ async fn copy_into(db: &Db, user_id: &RecordId, src: &RecordId, dest: &RecordId,
     #[allow(clippy::mutable_key_type)] // RecordId hashes by value; the interior mutability is never touched
     let mut seen_edges: HashSet<(RecordId, RecordId, String)> = HashSet::new();
     for (old_id, new_id) in id_map.clone() {
-        let mut res = db.query("SELECT * FROM relates_to WHERE in = $id").bind(("id", old_id.clone())).await?;
+        let mut res = store::vaults::RELATIONS_FROM.on(db).bind(("id", old_id.clone())).await?;
         let edges: Vec<RelationRow> = res.take(0)?;
         for edge in edges {
             let Some(other_new) = id_map.get(&edge.other) else { continue };
@@ -618,8 +584,7 @@ async fn copy_into(db: &Db, user_id: &RecordId, src: &RecordId, dest: &RecordId,
             }
             seen_edges.insert(key);
             if merge_duplicates {
-                let mut res = db
-                    .query("SELECT id FROM relates_to WHERE in = $in AND out = $out AND label = $label LIMIT 1")
+                let mut res = store::vaults::SAME_RELATION.on(db)
                     .bind(("in", new_id.clone()))
                     .bind(("out", other_new.clone()))
                     .bind(("label", edge.label.clone()))
@@ -629,7 +594,7 @@ async fn copy_into(db: &Db, user_id: &RecordId, src: &RecordId, dest: &RecordId,
                     continue;
                 }
             }
-            db.query("RELATE $in->relates_to->$out SET label = $label, owner = $owner")
+            store::vaults::COPY_RELATION.on(db)
                 .bind(("in", new_id.clone()))
                 .bind(("out", other_new.clone()))
                 .bind(("label", edge.label))
@@ -722,8 +687,8 @@ pub async fn merge_vaults(
 
     let mut entities = 0;
     for entity_kind in ENTITY_KINDS {
-        let mut res = db
-            .query(format!("SELECT count() FROM {entity_kind} WHERE vault = $vault GROUP ALL"))
+        // dynamic: table name varies over the six entity kinds
+        let mut res = store::dynamic(db, "vaults.count_entities", format!("SELECT count() FROM {entity_kind} WHERE vault = $vault GROUP ALL"))
             .bind(("vault", dest.clone()))
             .await?;
         let rows: Vec<CountRow> = res.take(0)?;
@@ -746,14 +711,7 @@ pub async fn leave_vault(db: &Db, user_id: &RecordId, vault_id: &RecordId) -> Ap
     let Some(m) = membership(db, vault_id, user_id).await? else { return Ok(()) };
 
     with_retry(|| async {
-        db.query(
-            r#"BEGIN TRANSACTION;
-            LET $owners = (SELECT VALUE id FROM vault_member WHERE vault = $vault AND role = "owner");
-            LET $others = (SELECT VALUE id FROM vault_member WHERE vault = $vault AND user != $user);
-            IF $is_owner AND array::len($owners) <= 1 AND array::len($others) > 0 { THROW "last_owner" };
-            DELETE $id;
-            COMMIT TRANSACTION;"#,
-        )
+        store::vaults::LEAVE.on(db)
         .bind(("vault", vault_id.clone()))
         .bind(("user", user_id.clone()))
         .bind(("is_owner", m.role == "owner"))
