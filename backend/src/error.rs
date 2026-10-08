@@ -207,7 +207,7 @@ impl From<surrealdb::Error> for AppError {
         let raw = err.to_string();
         let lower = raw.to_lowercase();
         let (code, message) = match &err {
-            surrealdb::Error::Db(Db::TxRetryable) => (ErrorCode::DbConflict, "The write conflicted with another; retry it."),
+            _ if crate::tx::is_conflict(&err) => (ErrorCode::DbConflict, "The write conflicted with another; retry it."),
             surrealdb::Error::Db(
                 Db::IamError(_)
                 | Db::TablePermissions { .. }
@@ -216,8 +216,6 @@ impl From<surrealdb::Error> for AppError {
                 | Db::NsNotAllowed { .. }
                 | Db::DbNotAllowed { .. },
             ) => (ErrorCode::TenantDenied, "Internal server error."),
-            // Remote (WebSocket) errors arrive as plain text.
-            _ if lower.contains("can be retried") => (ErrorCode::DbConflict, "The write conflicted with another; retry it."),
             _ if lower.contains("you don't have permission") || lower.contains("not enough permissions") => {
                 (ErrorCode::TenantDenied, "Internal server error.")
             }

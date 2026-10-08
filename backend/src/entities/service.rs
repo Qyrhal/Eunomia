@@ -472,7 +472,7 @@ pub async fn add_memory(
 /// two observations. Older observations keep their random ids; lookups go by
 /// `subject` + `type`, never by this id.
 pub fn observation_rid(subject: &RecordId) -> RecordId {
-    RecordId::from_table_key("memory", format!("obs_{}", subject.to_string().replace(':', "_")))
+    RecordId::from_table_key("memory", crate::tx::stable_key('o', &subject.to_string()))
 }
 
 /// Programmatic memory write -- a direct path for an agent to record a fact

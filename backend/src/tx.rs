@@ -13,6 +13,14 @@ use tokio::sync::{Mutex, MutexGuard};
 /// when uncontended.
 pub const MAX_ATTEMPTS: u32 = 5;
 
+/// Deterministic record key from `parts`: a 20-char `[a-z0-9]` string with a
+/// leading letter (like SurrealDB's generated ids, and never all digits).
+pub fn stable_key(tag: char, parts: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let hex: String = Sha256::digest(parts.as_bytes()).iter().take(10).map(|b| format!("{b:02x}")).collect();
+    format!("{tag}{}", &hex[..19])
+}
+
 const STRIPES: usize = 64;
 static LOCKS: [Mutex<()>; STRIPES] = [const { Mutex::const_new(()) }; STRIPES];
 
@@ -30,17 +38,23 @@ pub async fn lock(key: &str) -> MutexGuard<'static, ()> {
     LOCKS[(h.finish() as usize) % STRIPES].lock().await
 }
 
-/// The one place that decides an error is worth retrying: a commit-time
-/// conflict, or a unique-index/record-exists violation (a concurrent writer
-/// created the row we were about to, so the retry's re-read finds it). Over
-/// `ws://` the SDK only carries the server's message text, so we match on that
-/// too; the text is stable ("...This transaction can be retried").
+/// The single definition of a commit-time read/write conflict (also used by
+/// `AppError`'s mapping). Over `ws://` the SDK only carries the server's
+/// message text, so we match on that too; it is stable ("...This transaction
+/// can be retried").
+pub fn is_conflict(err: &surrealdb::Error) -> bool {
+    matches!(err, surrealdb::Error::Db(surrealdb::error::Db::TxRetryable)) || err.to_string().contains("can be retried")
+}
+
+/// Worth retrying: a conflict, or a unique-index/record-exists violation (a
+/// concurrent writer created the row we were about to, so the retry's re-read
+/// finds it).
 pub fn is_retryable(err: &surrealdb::Error) -> bool {
-    if matches!(err, surrealdb::Error::Db(surrealdb::error::Db::TxRetryable)) {
+    if is_conflict(err) {
         return true;
     }
     let msg = err.to_string();
-    msg.contains("can be retried") || msg.contains("already contains") || msg.contains("already exists")
+    msg.contains("already contains") || msg.contains("already exists")
 }
 
 /// Run `f` up to `MAX_ATTEMPTS` times, retrying only when `is_retryable`, with

@@ -125,7 +125,7 @@ struct CountRow {
 pub async fn create_personal_vault(db: &Db, user_id: &RecordId) -> AppResult<RecordId> {
     // Deterministic id: a second personal vault for the same user collides on
     // the key, so "one personal vault per user" holds even under a race.
-    let vault_id = RecordId::from_table_key("vault", format!("personal_{}", user_id.key()));
+    let vault_id = RecordId::from_table_key("vault", crate::tx::stable_key('p', &user_id.to_string()));
     with_retry(|| async {
         db.query(
             r#"BEGIN TRANSACTION;
@@ -663,7 +663,7 @@ pub async fn clone_vault(
     require_membership(db, user_id, vault_id).await?;
 
     let source: Option<VaultFullRow> = db.select(vault_id.clone()).await?;
-    let source = source.ok_or_else(|| AppError::bad_request(format!("vault not found: {vault_id}")))?;
+    let source = source.ok_or_else(|| AppError::coded(crate::error::ErrorCode::VaultNotFound, format!("vault not found: {vault_id}")))?;
 
     let clone_name = name.map(str::to_string).unwrap_or_else(|| format!("{} (copy)", source.name));
     let clone = create_vault(db, user_id, &clone_name, kind).await?;
@@ -710,8 +710,8 @@ pub async fn merge_vaults(
     require_membership(db, user_id, a).await?;
     require_membership(db, user_id, b).await?;
     let (va, vb): (Option<VaultFullRow>, Option<VaultFullRow>) = (db.select(a.clone()).await?, db.select(b.clone()).await?);
-    let va = va.ok_or_else(|| AppError::bad_request(format!("vault not found: {a}")))?;
-    let vb = vb.ok_or_else(|| AppError::bad_request(format!("vault not found: {b}")))?;
+    let va = va.ok_or_else(|| AppError::coded(crate::error::ErrorCode::VaultNotFound, format!("vault not found: {a}")))?;
+    let vb = vb.ok_or_else(|| AppError::coded(crate::error::ErrorCode::VaultNotFound, format!("vault not found: {b}")))?;
 
     let merged_name = name.map(str::to_string).unwrap_or_else(|| format!("{} + {}", va.name, vb.name));
     let merged = create_vault(db, user_id, &merged_name, kind).await?;
