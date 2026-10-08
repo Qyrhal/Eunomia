@@ -16,6 +16,10 @@ pub enum ErrorCode {
     AuthForbidden,
     AuthEmailTaken,
     AuthNotFound,
+    AuthScope,
+    AuthTokenExpired,
+    AuthSessionExpired,
+    RateLimited,
     TenantDenied,
     VaultNotFound,
     VaultForbidden,
@@ -39,6 +43,10 @@ impl ErrorCode {
         ErrorCode::AuthForbidden,
         ErrorCode::AuthEmailTaken,
         ErrorCode::AuthNotFound,
+        ErrorCode::AuthScope,
+        ErrorCode::AuthTokenExpired,
+        ErrorCode::AuthSessionExpired,
+        ErrorCode::RateLimited,
         ErrorCode::TenantDenied,
         ErrorCode::VaultNotFound,
         ErrorCode::VaultForbidden,
@@ -62,6 +70,10 @@ impl ErrorCode {
             ErrorCode::AuthForbidden => "auth.forbidden",
             ErrorCode::AuthEmailTaken => "auth.email_taken",
             ErrorCode::AuthNotFound => "auth.not_found",
+            ErrorCode::AuthScope => "auth.scope",
+            ErrorCode::AuthTokenExpired => "auth.token_expired",
+            ErrorCode::AuthSessionExpired => "auth.session_expired",
+            ErrorCode::RateLimited => "rate.limited",
             ErrorCode::TenantDenied => "tenant.denied",
             ErrorCode::VaultNotFound => "vault.not_found",
             ErrorCode::VaultForbidden => "vault.forbidden",
@@ -82,8 +94,11 @@ impl ErrorCode {
 
     pub fn default_status(self) -> StatusCode {
         match self {
-            ErrorCode::AuthUnauthorized => StatusCode::UNAUTHORIZED,
-            ErrorCode::AuthForbidden | ErrorCode::TenantDenied | ErrorCode::VaultForbidden => StatusCode::FORBIDDEN,
+            ErrorCode::AuthUnauthorized | ErrorCode::AuthTokenExpired | ErrorCode::AuthSessionExpired => StatusCode::UNAUTHORIZED,
+            ErrorCode::AuthForbidden | ErrorCode::AuthScope | ErrorCode::TenantDenied | ErrorCode::VaultForbidden => {
+                StatusCode::FORBIDDEN
+            }
+            ErrorCode::RateLimited => StatusCode::TOO_MANY_REQUESTS,
             ErrorCode::AuthEmailTaken | ErrorCode::DbConflict | ErrorCode::DbDuplicate => StatusCode::CONFLICT,
             ErrorCode::AuthNotFound
             | ErrorCode::VaultNotFound
@@ -250,6 +265,7 @@ mod tests {
         for c in ErrorCode::ALL {
             match c {
                 ErrorCode::AuthUnauthorized | ErrorCode::AuthForbidden | ErrorCode::AuthEmailTaken | ErrorCode::AuthNotFound
+                | ErrorCode::AuthScope | ErrorCode::AuthTokenExpired | ErrorCode::AuthSessionExpired | ErrorCode::RateLimited
                 | ErrorCode::TenantDenied | ErrorCode::VaultNotFound | ErrorCode::VaultForbidden | ErrorCode::EntityNotFound
                 | ErrorCode::MemoryNotFound | ErrorCode::ChatThreadNotFound | ErrorCode::ConnectorNotFound
                 | ErrorCode::ConnectorNotConnected | ErrorCode::SourceNotFound | ErrorCode::ToolNotFound

@@ -204,7 +204,7 @@ pub async fn cloud(db: &Db, settings: &Settings, owner: &RecordId, vault_ids: &[
         if !seen.insert(v.clone()) {
             continue;
         }
-        vaults_service::require_membership(db, owner, v).await?;
+        crate::authz::authorize(db, owner, crate::authz::Action::ReadMemories, v).await?;
         items.extend(layer_items(db, owner, v, *v == personal).await?);
     }
 

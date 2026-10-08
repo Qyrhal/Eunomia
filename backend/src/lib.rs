@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod authz;
 pub mod cache;
 pub mod chat;
 pub mod config;
@@ -12,6 +13,7 @@ pub mod migrate;
 pub mod models_user;
 pub mod openapi;
 pub mod routers;
+pub mod scopes;
 pub mod sources;
 pub mod state;
 pub mod store;

@@ -18,6 +18,10 @@ The `ErrorCode` enum is in `backend/src/error.rs`. A unit test fails if a code i
 | `auth.forbidden` | 403 | Request rejected before auth, for example a disallowed browser `Origin` on `/mcp`. | `routers/mcp.rs` |
 | `auth.email_taken` | 409 | Signup with an email that already has an account. | `models_user.rs`, `routers/auth.rs` |
 | `auth.not_found` | 404 | API token or session id does not exist or is not yours. | `routers/auth.rs` |
+| `auth.scope` | 403 | The token lacks the scope this route or tool needs, or is restricted to another vault, or the route is account-level and the token is vault-restricted. | `gate.rs`, `authz.rs`, `tools/registry.rs` |
+| `auth.token_expired` | 401 | The API token's `expires_at` has passed. Create a new token. | `gate.rs`, `auth.rs` |
+| `auth.session_expired` | 401 | The session cookie is past its (sliding) expiry or its JWT `exp`. Log in again. | `gate.rs`, `auth.rs` |
+| `rate.limited` | 429 | Too many requests for this user, token or (for login and signup) client address. Honour the `Retry-After` header. | `gate.rs` |
 | `tenant.denied` | 403 | The database refused a query on permissions grounds. Logged at error level; treat as a high-severity alert. | `error.rs` (DB error mapping) |
 | `vault.not_found` | 404 | Vault id is malformed or unknown. | `routers/vaults.rs` |
 | `vault.forbidden` | 403 | You are not a member, or not an owner, of the vault (or of both entities' vaults). Also the default for a bare 403. | `vaults/service.rs`, `entities/service.rs` |
