@@ -91,16 +91,11 @@ fn checksum(sql: &str) -> String {
 pub async fn migrate(db: &Db, settings: &Settings) -> surrealdb::Result<()> {
     apply_up_to(db, u32::MAX).await?;
     // The one config-dependent definition: re-applied on every migration pass, outside the ledger.
-    root(
-        db,
-        "migrate.openai_base_url",
-        format!(
-            "DEFINE FIELD OVERWRITE openai_base_url ON app_settings TYPE string DEFAULT \"{}\";",
-            settings.openai_base_url.replace('"', "\\\"")
-        ),
-    )
-    .await?
-    .check()?;
+    let sql = format!(
+        "DEFINE FIELD OVERWRITE openai_base_url ON app_settings TYPE string DEFAULT \"{}\";",
+        settings.openai_base_url.replace('"', "\\\"")
+    );
+    crate::tx::with_retry(|| async { root(db, "migrate.openai_base_url", &sql).await?.check().map(|_| ()) }).await?;
     Ok(())
 }
 
@@ -115,7 +110,9 @@ pub async fn apply_up_to(db: &Db, max: u32) -> surrealdb::Result<()> {
 }
 
 async fn apply(db: &Db, set: &[(u32, &str, &str)], max: u32) -> surrealdb::Result<()> {
-    root(db, "migrate.ledger", LEDGER).await?.check()?;
+    // Two replicas booting together race on everything below; a lost race is a commit conflict or a
+    // unique violation on `_migration.version`, and means the other one did the work.
+    crate::tx::with_retry(|| async { root(db, "migrate.ledger", LEDGER).await?.check().map(|_| ()) }).await?;
     let applied: Vec<Applied> = root(db, "migrate.applied", "SELECT version, checksum FROM _migration").await?.take(0)?;
     for &(version, name, sql) in set.iter().filter(|m| m.0 <= max) {
         let sum = checksum(sql);
@@ -134,19 +131,40 @@ async fn apply(db: &Db, set: &[(u32, &str, &str)], max: u32) -> surrealdb::Resul
             dedupe_entity_names(db).await?;
         }
         // DEFINE is allowed inside a transaction, so schema and ledger row commit together.
-        root(
-            db,
-            "migrate.apply",
-            format!("BEGIN TRANSACTION;\n{sql}\nCREATE _migration SET version = $v, name = $n, checksum = $c;\nCOMMIT TRANSACTION;"),
-        )
-        .bind(("v", version))
-        .bind(("n", name))
-        .bind(("c", sum))
-        .await?
-        .check()?;
-        tracing::info!(version, name, "applied migration");
+        let mut attempt = 1;
+        loop {
+            let run = root(
+                db,
+                "migrate.apply",
+                format!("BEGIN TRANSACTION;\n{sql}\nCREATE _migration SET version = $v, name = $n, checksum = $c;\nCOMMIT TRANSACTION;"),
+            )
+            .bind(("v", version))
+            .bind(("n", name))
+            .bind(("c", sum.clone()))
+            .await
+            .and_then(|r| r.check());
+            match run {
+                Ok(_) => {
+                    tracing::info!(version, name, "applied migration");
+                    break;
+                }
+                Err(e) if attempt < crate::tx::MAX_ATTEMPTS && (crate::tx::is_conflict(&e) || crate::tx::is_duplicate(&e)) => {
+                    if is_applied(db, version).await? {
+                        tracing::info!(version, name, "migration was applied by another process");
+                        break;
+                    }
+                    attempt += 1;
+                }
+                Err(e) => return Err(e),
+            }
+        }
     }
     Ok(())
+}
+
+async fn is_applied(db: &Db, version: u32) -> surrealdb::Result<bool> {
+    let rows: Vec<Applied> = root(db, "migrate.is_applied", "SELECT version, checksum FROM _migration WHERE version = $v").bind(("v", version)).await?.take(0)?;
+    Ok(!rows.is_empty())
 }
 
 /// 0002 pre-step: merge entities sharing (vault, name) into the oldest, so the UNIQUE index can build.

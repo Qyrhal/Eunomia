@@ -237,3 +237,28 @@ async fn v2_export_upgrades_to_the_fresh_schema() {
     let mems: Vec<surrealdb::types::RecordId> = db.query("SELECT VALUE id FROM memory WHERE text @1@ 'tea'").await.unwrap().take(0).unwrap();
     assert_eq!(mems.len(), 1);
 }
+
+/// Two replicas booting together both run the control and tenant migrations on the same empty
+/// database. The loser used to hit the unique `_migration.version` index inside the migration
+/// transaction and the boot panicked; now it sees the other process applied the version and moves on.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_migrations_on_one_database_both_succeed() {
+    let state = common::bare_state().await;
+    let p = state.provisioner.as_ref().expect("provisioning feature");
+    for round in 0..6 {
+        let ctl = p.scratch(&format!("race_ctl_{round}")).await.unwrap();
+        let (a, b) = (ctl.clone(), ctl.clone());
+        let (ra, rb) = tokio::join!(tokio::spawn(async move { migrate::migrate_control(&a).await }), tokio::spawn(async move { migrate::migrate_control(&b).await }));
+        ra.unwrap().unwrap_or_else(|e| panic!("round {round}, first control migrator: {e}"));
+        rb.unwrap().unwrap_or_else(|e| panic!("round {round}, second control migrator: {e}"));
+        assert_eq!(count(&ctl, "_migration").await, migrate::CONTROL_MIGRATIONS.len());
+
+        let ten = p.scratch(&format!("race_ten_{round}")).await.unwrap();
+        let (a, b, settings) = (ten.clone(), ten.clone(), test_settings());
+        let s2 = settings.clone();
+        let (ra, rb) = tokio::join!(tokio::spawn(async move { migrate::migrate(&a, &settings).await }), tokio::spawn(async move { migrate::migrate(&b, &s2).await }));
+        ra.unwrap().unwrap_or_else(|e| panic!("round {round}, first tenant migrator: {e}"));
+        rb.unwrap().unwrap_or_else(|e| panic!("round {round}, second tenant migrator: {e}"));
+        assert_eq!(count(&ten, "_migration").await, migrate::MIGRATIONS.len());
+    }
+}
