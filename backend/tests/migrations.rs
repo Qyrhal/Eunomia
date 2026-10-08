@@ -2,12 +2,16 @@
 mod common;
 
 use common::test_settings;
-use eunomia_backend::db::Db;
 use eunomia_backend::migrate;
 use serde_json::Value;
 
+type Db = surrealdb::Surreal<surrealdb::engine::any::Any>;
+
+/// A root session on an empty, non-strict scratch database: the migration runner's own view of a
+/// database (tenancy aside), the same way a legacy single-database install is seen.
 async fn fresh() -> Db {
-    common::connect(&test_settings()).await
+    let state = common::bare_state().await;
+    state.provisioner.as_ref().expect("provisioning feature").scratch("scratch").await.unwrap()
 }
 
 async fn info(db: &Db) -> Value {
@@ -41,6 +45,17 @@ async fn fresh_schema_matches_snapshot() {
     let db = fresh().await;
     migrate::migrate(&db, &test_settings()).await.unwrap();
     insta::assert_json_snapshot!(info(&db).await);
+}
+
+#[tokio::test]
+async fn control_schema_matches_snapshot_and_reapplies_cleanly() {
+    let db = fresh().await;
+    migrate::migrate_control(&db).await.unwrap();
+    let first = info(&db).await;
+    migrate::migrate_control(&db).await.unwrap();
+    assert_eq!(first, info(&db).await, "re-running the control migrations changes nothing");
+    assert_eq!(count(&db, "_migration").await, migrate::CONTROL_MIGRATIONS.len());
+    insta::assert_json_snapshot!(first);
 }
 
 #[tokio::test]
@@ -120,7 +135,8 @@ async fn existing_tokens_and_sessions_survive_0003() {
     .unwrap()
     .check()
     .unwrap();
-    migrate::migrate(&db, &test_settings()).await.unwrap();
+    // the legacy database is only ever taken this far: 0009 drops the tables the move reads
+    migrate::apply_up_to(&db, migrate::LEGACY_TENANT_VERSION).await.unwrap();
     let scopes: Option<Vec<String>> = db.query("SELECT VALUE scopes FROM api_token:t").await.unwrap().take(0).unwrap();
     assert_eq!(scopes.unwrap(), ["memory:read", "memory:write", "vaults:admin", "connectors"]);
     assert_eq!(count(&db, "api_token WHERE expires_at = NONE AND vault = NONE").await, 1, "non-expiring, unrestricted");
@@ -213,12 +229,8 @@ async fn v2_export_upgrades_to_the_fresh_schema() {
     migrate::migrate(&new, &settings).await.unwrap();
     assert_eq!(info(&db).await, info(&new).await);
 
-    // The re-defined indexes answer queries over the imported rows.
-    let owner = eunomia_backend::rid::parse("user:u").unwrap();
-    let ids = eunomia_backend::cache::search::nearest_ids(&db, &owner, unit_vector(1), 5).await.unwrap();
-    assert_eq!(ids.first().map(String::as_str), Some("r2"));
-    let top1 = eunomia_backend::cache::search::nearest_ids(&db, &owner, unit_vector(1), 1).await.unwrap();
-    assert_eq!(top1, ["r2"], "HNSW path, no fallback needed");
+    // The re-defined indexes answer queries over the imported rows (the vector index is exercised
+    // end to end by tenancy.rs, which moves this same fixture into an org database).
     let hits: Vec<surrealdb::types::RecordId> =
         db.query("SELECT VALUE id FROM cache_record WHERE title @1@ 'netflix'").await.unwrap().take(0).unwrap();
     assert_eq!(hits.len(), 1);

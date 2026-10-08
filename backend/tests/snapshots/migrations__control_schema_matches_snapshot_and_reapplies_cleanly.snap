@@ -1,0 +1,406 @@
+---
+source: tests/migrations.rs
+expression: first
+---
+{
+  "accesses": [],
+  "analyzers": [],
+  "apis": [],
+  "buckets": [],
+  "configs": [],
+  "functions": [],
+  "models": [],
+  "modules": [],
+  "params": [],
+  "sequences": [],
+  "tables": [
+    {
+      "drop": false,
+      "schemafull": true,
+      "kind": {
+        "kind": "NORMAL"
+      },
+      "name": "api_token",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      },
+      "indexes": [
+        {
+          "cols": [
+            "token_hash"
+          ],
+          "index": "UNIQUE",
+          "name": "api_token_hash_unique",
+          "table": "api_token"
+        },
+        {
+          "cols": [
+            "owner"
+          ],
+          "index": "",
+          "name": "api_token_owner_idx",
+          "table": "api_token"
+        }
+      ]
+    },
+    {
+      "drop": false,
+      "schemafull": true,
+      "kind": {
+        "kind": "NORMAL"
+      },
+      "name": "audit_event",
+      "permissions": {
+        "create": true,
+        "delete": false,
+        "select": true,
+        "update": false
+      },
+      "indexes": [
+        {
+          "cols": [
+            "trace_id"
+          ],
+          "index": "",
+          "name": "audit_event_trace_idx",
+          "table": "audit_event"
+        },
+        {
+          "cols": [
+            "user",
+            "created_at"
+          ],
+          "index": "",
+          "name": "audit_event_user_idx",
+          "table": "audit_event"
+        }
+      ]
+    },
+    {
+      "drop": false,
+      "schemafull": true,
+      "kind": {
+        "kind": "NORMAL"
+      },
+      "name": "failure_capsule",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      },
+      "indexes": [
+        {
+          "cols": [
+            "created_at"
+          ],
+          "index": "",
+          "name": "failure_capsule_created_idx",
+          "table": "failure_capsule"
+        }
+      ]
+    },
+    {
+      "drop": false,
+      "schemafull": true,
+      "kind": {
+        "kind": "NORMAL"
+      },
+      "name": "job",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      },
+      "indexes": [
+        {
+          "cols": [
+            "idempotency_key"
+          ],
+          "index": "UNIQUE",
+          "name": "job_idempotency_unique",
+          "table": "job"
+        },
+        {
+          "cols": [
+            "status",
+            "locked_until"
+          ],
+          "index": "",
+          "name": "job_lease_idx",
+          "table": "job"
+        },
+        {
+          "cols": [
+            "status",
+            "run_at"
+          ],
+          "index": "",
+          "name": "job_ready_idx",
+          "table": "job"
+        }
+      ]
+    },
+    {
+      "drop": false,
+      "schemafull": true,
+      "kind": {
+        "kind": "NORMAL"
+      },
+      "name": "job_leader",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      },
+      "indexes": []
+    },
+    {
+      "drop": false,
+      "schemafull": true,
+      "kind": {
+        "kind": "NORMAL"
+      },
+      "name": "membership",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      },
+      "indexes": [
+        {
+          "cols": [
+            "org"
+          ],
+          "index": "",
+          "name": "membership_org_idx",
+          "table": "membership"
+        },
+        {
+          "cols": [
+            "user",
+            "org"
+          ],
+          "index": "UNIQUE",
+          "name": "membership_unique",
+          "table": "membership"
+        },
+        {
+          "cols": [
+            "user",
+            "created_at"
+          ],
+          "index": "",
+          "name": "membership_user_idx",
+          "table": "membership"
+        }
+      ]
+    },
+    {
+      "drop": false,
+      "schemafull": true,
+      "kind": {
+        "kind": "NORMAL"
+      },
+      "name": "oauth_client",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      },
+      "indexes": [
+        {
+          "cols": [
+            "client_id"
+          ],
+          "index": "UNIQUE",
+          "name": "oauth_client_id_unique",
+          "table": "oauth_client"
+        }
+      ]
+    },
+    {
+      "drop": false,
+      "schemafull": true,
+      "kind": {
+        "kind": "NORMAL"
+      },
+      "name": "oauth_code",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      },
+      "indexes": [
+        {
+          "cols": [
+            "code_hash"
+          ],
+          "index": "UNIQUE",
+          "name": "oauth_code_hash_unique",
+          "table": "oauth_code"
+        }
+      ]
+    },
+    {
+      "drop": false,
+      "schemafull": true,
+      "kind": {
+        "kind": "NORMAL"
+      },
+      "name": "oauth_grant",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      },
+      "indexes": [
+        {
+          "cols": [
+            "owner"
+          ],
+          "index": "",
+          "name": "oauth_grant_owner_idx",
+          "table": "oauth_grant"
+        }
+      ]
+    },
+    {
+      "drop": false,
+      "schemafull": true,
+      "kind": {
+        "kind": "NORMAL"
+      },
+      "name": "oauth_token",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      },
+      "indexes": [
+        {
+          "cols": [
+            "family"
+          ],
+          "index": "",
+          "name": "oauth_token_family_idx",
+          "table": "oauth_token"
+        },
+        {
+          "cols": [
+            "token_hash"
+          ],
+          "index": "UNIQUE",
+          "name": "oauth_token_hash_unique",
+          "table": "oauth_token"
+        }
+      ]
+    },
+    {
+      "drop": false,
+      "schemafull": true,
+      "kind": {
+        "kind": "NORMAL"
+      },
+      "name": "org",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      },
+      "indexes": []
+    },
+    {
+      "drop": false,
+      "schemafull": true,
+      "kind": {
+        "kind": "NORMAL"
+      },
+      "name": "session",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      },
+      "indexes": [
+        {
+          "cols": [
+            "owner"
+          ],
+          "index": "",
+          "name": "session_owner_idx",
+          "table": "session"
+        },
+        {
+          "cols": [
+            "sid"
+          ],
+          "index": "UNIQUE",
+          "name": "session_sid_unique",
+          "table": "session"
+        }
+      ]
+    },
+    {
+      "drop": false,
+      "schemafull": true,
+      "kind": {
+        "kind": "NORMAL"
+      },
+      "name": "tenant",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      },
+      "indexes": [
+        {
+          "cols": [
+            "org"
+          ],
+          "index": "UNIQUE",
+          "name": "tenant_org_unique",
+          "table": "tenant"
+        }
+      ]
+    },
+    {
+      "drop": false,
+      "schemafull": true,
+      "kind": {
+        "kind": "NORMAL"
+      },
+      "name": "user",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      },
+      "indexes": [
+        {
+          "cols": [
+            "email"
+          ],
+          "index": "UNIQUE",
+          "name": "user_email_unique",
+          "table": "user"
+        }
+      ]
+    }
+  ],
+  "users": []
+}

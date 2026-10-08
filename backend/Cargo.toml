@@ -3,6 +3,14 @@ name = "eunomia-backend"
 version = "1.2.2"
 edition = "2024"
 
+[features]
+default = ["provisioning"]
+# The only code that may sign in as the SurrealDB root user: creating org databases and their users
+# (src/provisioning/). Enabled by default for the single binary; see docs/architecture/tenancy.md.
+provisioning = []
+# Test-only hooks: the raw client accessor, the isolation-suite layer switches and the mutation hook.
+test-support = []
+
 [dependencies]
 axum = { version = "0.8", features = ["macros"] }
 tokio = { version = "1", features = ["full"] }
@@ -42,3 +50,4 @@ tokio-test = "0.4"
 regex = "1"
 insta = { version = "1", features = ["json", "redactions"] }
 jsonschema = { version = "0.58.6", default-features = false }
+eunomia-backend = { path = ".", features = ["test-support"] }

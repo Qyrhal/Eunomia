@@ -1,11 +1,14 @@
-//! Versioned schema runner. Ordered `migrations/tenant/*.surql` files are applied once each
-//! and recorded in the `_migration` ledger (version, name, sha256 checksum, applied_at).
+//! Versioned schema runner. Ordered `migrations/{control,tenant}/*.surql` files are applied once each
+//! and recorded in the `_migration` ledger (version, name, sha256 checksum, applied_at) of the database
+//! they run in: the control database once at boot, each org database when it is provisioned and by the
+//! `migrate_tenant` job after an upgrade. These functions take a root session (see `provisioning/`).
 
 use sha2::{Digest, Sha256};
 use surrealdb::types::{Datetime, RecordId, SurrealValue};
 
 use crate::config::Settings;
 use crate::db::Db;
+use crate::store::root;
 
 pub const MIGRATIONS: &[(u32, &str, &str)] = &[
     (1, "baseline", include_str!("../migrations/tenant/0001_baseline.surql")),
@@ -16,7 +19,22 @@ pub const MIGRATIONS: &[(u32, &str, &str)] = &[
     (6, "oauth_code_redeemed", include_str!("../migrations/tenant/0006_oauth_code_redeemed.surql")),
     (7, "capsules", include_str!("../migrations/tenant/0007_capsules.surql")),
     (8, "v3_indexes", include_str!("../migrations/tenant/0008_v3_indexes.surql")),
+    (9, "drop_control_tables", include_str!("../migrations/tenant/0009_drop_control_tables.surql")),
 ];
+
+/// The tenant schema version this code writes. An org database is current at this version.
+pub const LATEST_TENANT: u32 = MIGRATIONS[MIGRATIONS.len() - 1].0;
+
+/// The oldest tenant schema this code still serves (N-1), so a rolling upgrade can run the new code
+/// while the per-org migration jobs catch up. Below it, `tenant.schema_behind`.
+pub const MIN_SUPPORTED_TENANT: u32 = LATEST_TENANT - 1;
+
+/// Migrations for the control database.
+pub const CONTROL_MIGRATIONS: &[(u32, &str, &str)] = &[(1, "control", include_str!("../migrations/control/0001_control.surql"))];
+
+/// The last tenant migration the legacy single database may be brought to before its data moves out
+/// (0009 drops the tables the move is about to read).
+pub const LEGACY_TENANT_VERSION: u32 = 8;
 
 /// Checksums of migration files as they were applied on SurrealDB 2.x, before being rewritten to
 /// 3.x-valid syntax (0001: MTREE and SEARCH ANALYZER indexes moved to the v3 indexes migration;
@@ -66,24 +84,37 @@ fn checksum(sql: &str) -> String {
     hex::encode(Sha256::digest(sql.as_bytes()))
 }
 
-/// Apply every pending migration, then the settings-dependent field default.
+/// Bring an org database to the latest tenant schema, then the settings-dependent field default.
 pub async fn migrate(db: &Db, settings: &Settings) -> surrealdb::Result<()> {
     apply_up_to(db, u32::MAX).await?;
-    // The one config-dependent definition: re-applied each boot, outside the ledger.
-    db.query(format!(
-        "DEFINE FIELD OVERWRITE openai_base_url ON app_settings TYPE string DEFAULT \"{}\";",
-        settings.openai_base_url.replace('"', "\\\"")
-    ))
+    // The one config-dependent definition: re-applied on every migration pass, outside the ledger.
+    root(
+        db,
+        "migrate.openai_base_url",
+        format!(
+            "DEFINE FIELD OVERWRITE openai_base_url ON app_settings TYPE string DEFAULT \"{}\";",
+            settings.openai_base_url.replace('"', "\\\"")
+        ),
+    )
     .await?
     .check()?;
     Ok(())
 }
 
-/// Apply pending migrations with `version <= max`. Public for tests that need a half-migrated DB.
+/// Bring the control database to the latest control schema.
+pub async fn migrate_control(db: &Db) -> surrealdb::Result<()> {
+    apply(db, CONTROL_MIGRATIONS, u32::MAX).await
+}
+
+/// Apply pending tenant migrations with `version <= max`. Public for tests that need a half-migrated DB.
 pub async fn apply_up_to(db: &Db, max: u32) -> surrealdb::Result<()> {
-    db.query(LEDGER).await?.check()?;
-    let applied: Vec<Applied> = db.query("SELECT version, checksum FROM _migration").await?.take(0)?;
-    for &(version, name, sql) in MIGRATIONS.iter().filter(|m| m.0 <= max) {
+    apply(db, MIGRATIONS, max).await
+}
+
+async fn apply(db: &Db, set: &[(u32, &str, &str)], max: u32) -> surrealdb::Result<()> {
+    root(db, "migrate.ledger", LEDGER).await?.check()?;
+    let applied: Vec<Applied> = root(db, "migrate.applied", "SELECT version, checksum FROM _migration").await?.take(0)?;
+    for &(version, name, sql) in set.iter().filter(|m| m.0 <= max) {
         let sum = checksum(sql);
         if let Some(a) = applied.iter().find(|a| a.version == version) {
             if a.checksum != sum && !LEGACY_CHECKSUMS.contains(&(version, a.checksum.as_str())) {
@@ -99,9 +130,11 @@ pub async fn apply_up_to(db: &Db, max: u32) -> surrealdb::Result<()> {
             dedupe_entity_names(db).await?;
         }
         // DEFINE is allowed inside a transaction, so schema and ledger row commit together.
-        db.query(format!(
-            "BEGIN TRANSACTION;\n{sql}\nCREATE _migration SET version = $v, name = $n, checksum = $c;\nCOMMIT TRANSACTION;"
-        ))
+        root(
+            db,
+            "migrate.apply",
+            format!("BEGIN TRANSACTION;\n{sql}\nCREATE _migration SET version = $v, name = $n, checksum = $c;\nCOMMIT TRANSACTION;"),
+        )
         .bind(("v", version))
         .bind(("n", name))
         .bind(("c", sum))
@@ -116,8 +149,7 @@ pub async fn apply_up_to(db: &Db, max: u32) -> surrealdb::Result<()> {
 /// Mirrors `entities::service::merge_entities`. Idempotent: a crash midway just resumes next boot.
 async fn dedupe_entity_names(db: &Db) -> surrealdb::Result<()> {
     for table in ENTITY_TABLES {
-        let rows: Vec<Entity> = db
-            .query(format!("SELECT id, vault, name, aliases, created_at FROM {table} ORDER BY created_at, id"))
+        let rows: Vec<Entity> = root(db, "migrate.dedupe_list", format!("SELECT id, vault, name, aliases, created_at FROM {table} ORDER BY created_at, id"))
             .await?
             .take(0)?;
         let mut groups: Vec<Vec<Entity>> = Vec::new();
@@ -140,15 +172,14 @@ async fn dedupe_entity_names(db: &Db) -> surrealdb::Result<()> {
 }
 
 async fn merge_into(db: &Db, winner: &mut Entity, loser: &Entity) -> surrealdb::Result<()> {
-    db.query("UPDATE memory SET subject = $w WHERE subject = $l")
+    root(db, "migrate.dedupe_memory", "UPDATE memory SET subject = $w WHERE subject = $l")
         .bind(("w", winner.id.clone()))
         .bind(("l", loser.id.clone()))
         .await?
         .check()?;
     // Relation endpoints are immutable: re-create each edge on the winner (the (in, out, label)
     // UNIQUE index drops ones it already has, so errors here are expected), then drop the loser's.
-    let edges: Vec<Edge> = db
-        .query("SELECT * FROM relates_to WHERE in = $l OR out = $l")
+    let edges: Vec<Edge> = root(db, "migrate.dedupe_edges", "SELECT * FROM relates_to WHERE in = $l OR out = $l")
         .bind(("l", loser.id.clone()))
         .await?
         .take(0)?;
@@ -158,8 +189,7 @@ async fn merge_into(db: &Db, winner: &mut Entity, loser: &Entity) -> surrealdb::
         if from == to {
             continue;
         }
-        let _ = db
-            .query("RELATE $from->relates_to->$to SET label = $label, owner = $owner, source = $source, created_at = $at")
+        let _ = root(db, "migrate.dedupe_relate", "RELATE $from->relates_to->$to SET label = $label, owner = $owner, source = $source, created_at = $at")
             .bind(("from", from))
             .bind(("to", to))
             .bind(("label", e.label))
@@ -173,7 +203,7 @@ async fn merge_into(db: &Db, winner: &mut Entity, loser: &Entity) -> surrealdb::
             winner.aliases.push(a.clone());
         }
     }
-    db.query("UPDATE $w SET aliases = $a; DELETE relates_to WHERE in = $l OR out = $l; DELETE $l;")
+    root(db, "migrate.dedupe_finish", "UPDATE $w SET aliases = $a; DELETE relates_to WHERE in = $l OR out = $l; DELETE $l;")
         .bind(("w", winner.id.clone()))
         .bind(("a", winner.aliases.clone()))
         .bind(("l", loser.id.clone()))

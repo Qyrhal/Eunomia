@@ -1183,6 +1183,7 @@ dependencies = [
  "bcrypt 0.15.1",
  "chrono",
  "dotenvy",
+ "eunomia-backend",
  "futures",
  "hex",
  "hmac",
