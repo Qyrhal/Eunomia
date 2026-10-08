@@ -4,8 +4,11 @@
 #   eunomia-backup now [prefix]      one encrypted export now (prefix: manual|daily|weekly)
 #   eunomia-backup list              list backup files
 #   eunomia-backup restore FILE [--wipe]   FILE is a name in /backups or a path
-# Files are `surreal export` output encrypted with AES-256-CBC (PBKDF2) using
-# BACKUP_ENCRYPTION_KEY. Decrypt by hand:
+# Files are `surreal export` output, encrypted then authenticated (encrypt-then-MAC):
+#   line 1: "EUNOMIA-BK2 <salt hex>"; then AES-256-CBC ciphertext; then a 64-char hex HMAC-SHA256 of
+#   everything before it. Key and IV come from PBKDF2 of BACKUP_ENCRYPTION_KEY and the salt; the MAC
+#   key is HMAC(key, "eunomia-backup-mac"). Restore checks the MAC before decrypting, so a tampered
+#   file is refused. Older files (plain `openssl enc -aes-256-cbc -pbkdf2`, no header) still restore:
 #   openssl enc -d -aes-256-cbc -pbkdf2 -pass env:BACKUP_ENCRYPTION_KEY -in X.surql.enc
 # With org tenancy (a `control` database exists) one backup is a directory, NAME/, holding one
 # file per database of the namespace (control.surql.enc, org_<uuid>.surql.enc, and the old
@@ -25,9 +28,36 @@ KEEP_WEEKLY="${KEEP_WEEKLY:-8}"
 log() { echo "[backup $(date -u +%FT%TZ)] $*"; }
 die() { log "ERROR: $*" >&2; exit 1; }
 
+KEY_FILE="${BACKUP_KEY_FILE:-$DIR/.backup-key}"
+MAGIC="EUNOMIA-BK2"
+
+# The key comes from BACKUP_ENCRYPTION_KEY (.env, recommended). If it is unset, use the key file in
+# the backup volume, creating one on first start. That file sits next to the backups, so anyone who
+# copies the volume gets both: set the key in .env to keep them apart.
 need_key() {
-  [ -n "${BACKUP_ENCRYPTION_KEY:-}" ] || die "BACKUP_ENCRYPTION_KEY is empty. Set it in .env (generate one with: openssl rand -base64 32), then restart the backup service. Refusing to write unencrypted backups."
+  if [ -z "${BACKUP_ENCRYPTION_KEY:-}" ]; then
+    if [ ! -s "$KEY_FILE" ]; then
+      mkdir -p "$(dirname "$KEY_FILE")"
+      ( umask 077; openssl rand -base64 32 > "$KEY_FILE" ) || die "could not create $KEY_FILE"
+      log "============================================================"
+      log "BACKUP_ENCRYPTION_KEY was not set, so a key was generated and saved to $KEY_FILE."
+      log "COPY IT SOMEWHERE SAFE NOW (a password manager). Without it your backups cannot be read."
+      log "Show it:  docker compose exec backup cat $KEY_FILE"
+      log "Better: put BACKUP_ENCRYPTION_KEY=<that value> in .env so the key is not stored beside the backups."
+      log "============================================================"
+    fi
+    BACKUP_ENCRYPTION_KEY="$(cat "$KEY_FILE")"; export BACKUP_ENCRYPTION_KEY
+  fi
 }
+
+# derive SALT_HEX: sets ENC_KEY, ENC_IV, MAC_KEY (hex)
+derive() {
+  kv="$(openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -S "$1" -pass env:BACKUP_ENCRYPTION_KEY -P < /dev/null)" || return 1
+  ENC_KEY="$(echo "$kv" | sed -n 's/^key *= *//p')"; ENC_IV="$(echo "$kv" | sed -n 's/^iv *= *//p')"
+  MAC_KEY="$(printf eunomia-backup-mac | openssl dgst -sha256 -mac HMAC -macopt "hexkey:$ENC_KEY" -r | cut -d' ' -f1)"
+  [ -n "$ENC_KEY" ] && [ -n "$ENC_IV" ] && [ -n "$MAC_KEY" ]
+}
+mac_of() { openssl dgst -sha256 -mac HMAC -macopt "hexkey:$MAC_KEY" -r | cut -d' ' -f1; } # stdin -> hex
 
 
 export_db() { # export one database to stdout
@@ -45,9 +75,13 @@ list_dbs() {
 
 encrypt_to() { # stdin -> $1, atomically; refuses an empty export
   tmp="$1.part"
-  openssl enc -aes-256-cbc -pbkdf2 -salt -pass env:BACKUP_ENCRYPTION_KEY > "$tmp" || { rm -f "$tmp"; return 1; }
+  salt="$(openssl rand -hex 8)"; derive "$salt" || return 1
+  { echo "$MAGIC $salt"; openssl enc -aes-256-cbc -K "$ENC_KEY" -iv "$ENC_IV"; } > "$tmp" || { rm -f "$tmp"; return 1; }
+  # append the MAC (64 hex chars, no newline) of everything written so far
+  m="$(mac_of < "$tmp")" || { rm -f "$tmp"; return 1; }
+  printf '%s' "$m" >> "$tmp"
   # Guard against pipe failures that sh cannot see: an empty export still encrypts to ~32 bytes.
-  [ "$(wc -c < "$tmp")" -gt 64 ] || { rm -f "$tmp"; return 1; }
+  [ "$(wc -c < "$tmp")" -gt 160 ] || { rm -f "$tmp"; return 1; }
   mv "$tmp" "$1"
 }
 
@@ -80,10 +114,26 @@ rotate() { # keep the newest $2 backups (files or directories) named $1-*
   done
 }
 
+decrypt_to() { # decrypt_to FILE OUT
+  first="$(head -n1 "$1" | tr -d '\000')"
+  case "$first" in
+    "$MAGIC "*)
+      derive "${first#"$MAGIC "}" || die "could not derive keys for $1"
+      body=$(( $(wc -c < "$1") - 64 )); hl=$(( ${#first} + 1 ))
+      [ "$body" -gt "$hl" ] || die "$1 is truncated"
+      [ "$(head -c "$body" "$1" | mac_of)" = "$(tail -c 64 "$1")" ] \
+        || die "$1 failed its integrity check: wrong BACKUP_ENCRYPTION_KEY, or the file was modified or corrupted"
+      head -c "$body" "$1" | tail -c +"$((hl + 1))" | openssl enc -d -aes-256-cbc -K "$ENC_KEY" -iv "$ENC_IV" > "$2" 2>/dev/null \
+        || die "could not decrypt $1" ;;
+    *) # legacy format: no header, no MAC
+      openssl enc -d -aes-256-cbc -pbkdf2 -pass env:BACKUP_ENCRYPTION_KEY -in "$1" > "$2" 2>/dev/null \
+        || die "could not decrypt $1: wrong BACKUP_ENCRYPTION_KEY or corrupt file" ;;
+  esac
+}
+
 restore_one() { # restore_one FILE DB [--wipe]
   plain="$(mktemp)"; trap 'rm -f "$plain"' EXIT
-  openssl enc -d -aes-256-cbc -pbkdf2 -pass env:BACKUP_ENCRYPTION_KEY -in "$1" > "$plain" 2>/dev/null \
-    || die "could not decrypt $1: wrong BACKUP_ENCRYPTION_KEY or corrupt file"
+  decrypt_to "$1" "$plain"
   if [ "${3:-}" = "--wipe" ]; then
     log "wiping database $NS/$2"
     echo "REMOVE DATABASE IF EXISTS \`$2\`;" | surreal sql --endpoint "$ENDPOINT" --user "$USER_" --pass "$PASS_" --ns "$NS" --hide-welcome >/dev/null \
