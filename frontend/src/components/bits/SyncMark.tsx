@@ -1,0 +1,42 @@
+// Inspired by React Bits SyncMark (reactbits.dev). Original implementation for Eunomia.
+// Usage: <SyncMark status={busy ? "running" : ok ? "done" : "idle"} size={14} /> inside a button; keep the button's text label.
+// The check or cross draws only when status changes after mount, so history rows that mount "done" sit still.
+"use client";
+
+import { useState } from "react";
+import "./bits.css";
+
+export type SyncStatus = "idle" | "running" | "done" | "failed";
+
+export default function SyncMark({ status, size = 14 }: { status: SyncStatus; size?: number }) {
+  // Derived "changed since mount" flag (render-time state update, no effect).
+  const [prev, setPrev] = useState(status);
+  const [changed, setChanged] = useState(false);
+  if (status !== prev) {
+    setPrev(status);
+    setChanged(true);
+  }
+  const animate = changed || undefined;
+
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round" aria-hidden style={{ flexShrink: 0 }}>
+      {(status === "idle" || status === "running") && (
+        // 68% of the circle, rotating while running.
+        <circle
+          cx="8"
+          cy="8"
+          r="5.5"
+          stroke="currentColor"
+          pathLength={100}
+          strokeDasharray="68 100"
+          transform="rotate(-90 8 8)"
+          className={status === "running" ? "bits-spin" : undefined}
+        />
+      )}
+      {status === "done" && <path d="M3.5 8.4 6.6 11.3 12.5 4.9" stroke="var(--good)" pathLength={1} className="bits-draw" data-animate={animate} />}
+      {status === "failed" && (
+        <path d="M4.5 4.5 11.5 11.5M11.5 4.5 4.5 11.5" stroke="var(--critical)" pathLength={1} className="bits-draw" data-animate={animate} />
+      )}
+    </svg>
+  );
+}

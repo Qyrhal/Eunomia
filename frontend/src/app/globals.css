@@ -521,6 +521,14 @@ button.pill:active {
 
 }
 
+/* Theme wipe (ThemeToggle): the new theme grows as a circle from the toggle.
+   Only while the toggle runs a pointer-started View Transition; no crossfade. */
+html[data-theme-wipe]::view-transition-old(root),
+html[data-theme-wipe]::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+
 @layer base {
 /* ---- browser surfaces ---- */
 
