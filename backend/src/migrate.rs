@@ -12,6 +12,7 @@ use crate::db::Db;
 const MIGRATIONS: &[(u32, &str, &str)] = &[
     (1, "baseline", include_str!("../migrations/tenant/0001_baseline.surql")),
     (2, "entity_name_unique", include_str!("../migrations/tenant/0002_entity_name_unique.surql")),
+    (5, "jobs", include_str!("../migrations/tenant/0005_jobs.surql")),
 ];
 
 const LEDGER: &str = "DEFINE TABLE IF NOT EXISTS _migration SCHEMAFULL;

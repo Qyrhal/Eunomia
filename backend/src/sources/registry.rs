@@ -104,8 +104,7 @@ pub async fn enabled(db: &Db, owner: &RecordId) -> AppResult<Vec<Arc<dyn Source>
 /// after every write; neither `cache.search`'s embedding half nor `entities.*`
 /// is ported to Rust yet, so both are skipped here rather than faked. Every
 /// `cache_record` written by this path lands with `embedding = NONE`, exactly
-/// the state the Python backfill job (`sources::scheduler::backfill_embeddings`,
-/// itself stubbed for the same reason) expects to find and retry.
+/// the state the `embed` job reconciler (`jobs::handlers`) looks for and fixes.
 pub struct IngestReport {
     pub source: String,
     pub written: i64,
@@ -246,7 +245,12 @@ pub async fn ingest(db: &Db, owner: &RecordId, source_key: &str, raw_records: &[
             }
 
         match upsert_one(db, owner, &env).await {
-            Ok(true) => report.written += 1,
+            Ok(true) => {
+                report.written += 1;
+                if !env.get("deleted").and_then(|v| v.as_bool()).unwrap_or(false) {
+                    crate::jobs::handlers::enqueue_extract(db, owner, &str_field(&env, "id"), &hash_envelope(&env)).await;
+                }
+            }
             Ok(false) => report.skipped += 1,
             Err(e) => {
                 report.failed += 1;
@@ -255,11 +259,8 @@ pub async fn ingest(db: &Db, owner: &RecordId, source_key: &str, raw_records: &[
         }
     }
 
-    // Deferred (non-fatal enrichment in Python, not core pipeline): embedding
-    // (`_embed_record`) and entity extraction + consolidation
-    // (`_extract_record_entities`, `_consolidate_touched_subjects`) -- both
-    // depend on modules not yet ported to Rust (`embeddings::service`,
-    // `entities::extract`, `entities::consolidate`).
+    // Enrichment is level-triggered: the `embed` reconciler finds records with no embedding,
+    // and the `extract` job queued above feeds entity extraction and consolidation.
     report
 }
 

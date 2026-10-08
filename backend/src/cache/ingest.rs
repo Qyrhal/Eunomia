@@ -2,21 +2,16 @@
 //!
 //! One entrypoint, [`ingest`], called by the scheduler, webhook endpoints, and
 //! on-demand refresh. Stages, per record: map -> upsert (idempotent) ->
-//! embed -> extract entities. Then, once per batch: consolidate observations
-//! for every subject that got a new raw memory during the batch.
+//! embed -> queue entity extraction.
 //!
 //! Partial failure is isolated: a bad record is recorded and skipped, the
 //! batch continues. Embedding failure is non-fatal (backfill retries).
 //! Entity extraction and observation consolidation failures are likewise
 //! non-fatal -- they're enrichment steps, not core pipeline.
 //!
-//! Deferred: entity extraction (`entities/extract.py::extract_entities`) and
-//! observation consolidation (`entities/consolidate.py::consolidate_subject`)
-//! aren't ported to Rust in this pass -- there's no `entities::extract` /
-//! `entities::consolidate` module to call into yet. Both stages are wired up
-//! as no-ops below (clearly marked) rather than blocked on; the write/embed
-//! core of the pipeline is fully functional without them, same as the Python
-//! version when those stages raise (non-fatal by design either way).
+//! Entity extraction and consolidation run as background jobs (`jobs::handlers`): this
+//! pipeline only enqueues an `extract` job per changed record, and the extract handler
+//! enqueues consolidation for the entities it touched. A lost enqueue only delays enrichment.
 //!
 //! Ported from `cache/ingest.py`.
 
@@ -69,19 +64,6 @@ async fn embed_record(db: &Db, settings: &Settings, owner: &RecordId, rec: &sear
     search::set_embedding(db, owner, &rec.id, vec).await
 }
 
-/// Deferred -- see module docstring. `entities::extract::extract_entities`
-/// hasn't been ported, so this always reports no touched subjects.
-fn extract_record_entities(_owner: &RecordId, _rec: &search::CacheRecord) -> Vec<String> {
-    Vec::new()
-}
-
-/// Deferred -- see module docstring. `entities::consolidate::consolidate_subject`
-/// hasn't been ported; `extract_record_entities` never returns any touched
-/// subjects yet, so this is currently always a no-op, but kept as the
-/// pipeline's named stage so wiring the real consolidation in later is a
-/// one-function change.
-async fn consolidate_touched_subjects(_owner: &RecordId, _subject_ids: &[String]) {}
-
 /// `raw_records` are JSON values (mirrors Python's untyped `dict` raw
 /// records); `map_fn` maps one raw record to `Some(Envelope)`, `None` to
 /// skip it, or `Err(message)` on a mapping failure (mirrors a raised
@@ -95,7 +77,6 @@ pub async fn ingest(
     map_fn: impl Fn(&Value) -> Result<Option<Envelope>, String>,
 ) -> AppResult<IngestReport> {
     let mut report = IngestReport::new(source_key);
-    let mut touched_subjects: Vec<String> = Vec::new();
 
     for raw in raw_records {
         let env = match map_fn(raw) {
@@ -130,7 +111,7 @@ pub async fn ingest(
                         && let Err(e) = embed_record(db, settings, owner, &rec).await {
                             report.errors.push(format!("embed {}: {}", rec.id, e.message));
                         }
-                    touched_subjects.extend(extract_record_entities(owner, &rec));
+                    crate::jobs::handlers::enqueue_extract(db, owner, &rec.id, &rec.content_hash).await;
                 }
             }
             Err(e) => {
@@ -140,7 +121,6 @@ pub async fn ingest(
         }
     }
 
-    consolidate_touched_subjects(owner, &touched_subjects).await;
     Ok(report)
 }
 

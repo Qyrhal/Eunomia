@@ -32,4 +32,7 @@ The `ErrorCode` enum is in `backend/src/error.rs`. A unit test fails if a code i
 | `validation.invalid` | 400 | The request or tool arguments are invalid. Also the default for a bare 400, for MCP protocol errors and for tool errors with no more specific code. | most routers, `tools/registry.rs`, `routers/mcp.rs` |
 | `db.conflict` | 409 | A transaction conflicted with another write. Retryable: repeat the request. Also the default for a bare 409. | `error.rs` (DB error mapping) |
 | `db.duplicate` | 409 | A unique index rejected the write. Not retryable. | `error.rs` (DB error mapping), `routers/auth.rs` |
+| `job.no_handler` | n/a | A job of a kind no handler is registered for was claimed. Dead-lettered, never sent over HTTP (stored in `job.last_error_code`). | `jobs/worker.rs` |
+| `job.lease_expired` | n/a | A job was claimed `max_attempts` times and each lease expired (worker crash loop). Dead-lettered. Stored in `job.last_error_code`. | `jobs/leader.rs` |
+| `job.panicked` | n/a | A job handler panicked. Retried with backoff, dead after `max_attempts`. Stored in `job.last_error_code`. | `jobs/worker.rs` |
 | `internal` | 500 | Anything else. The detail is always the generic "Internal server error."; use the `trace_id` to find the cause. | everywhere via `AppError::internal` and unmapped DB errors |

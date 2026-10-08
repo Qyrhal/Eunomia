@@ -180,6 +180,10 @@ pub async fn consolidate_subject(
     let raw_ids: Vec<(String, String)> = raw_rows.iter().map(|r| (r.id.to_string(), r.text.clone())).collect();
     let fresh = new_facts(&raw_ids, &already_consolidated);
     if fresh.is_empty() {
+        // Nothing new since the last run: a stale mark is just out of date.
+        if let Some(e) = &existing {
+            crate::store::jobs::OBSERVATION_MARK_FRESH.on(db).bind(("id", e.id.clone())).await?.check()?;
+        }
         return Ok(None);
     }
 

@@ -1,19 +1,7 @@
-//! Sync scheduler. Ported from `sources/scheduler.py`.
-//!
-//! Python drives these jobs from an APScheduler `AsyncIOScheduler` wired into
-//! the FastAPI app's lifespan; each job is also directly callable, which is
-//! what its tests and the on-demand `/sources/{key}/sync` endpoint use. This
-//! port keeps that same shape -- [`sync_source`] and [`poll_all`] are plain
-//! async functions callable on demand -- and replaces APScheduler with
-//! `tokio::time::interval` tasks spawned by [`spawn`], per the task's "keep it
-//! simple" instruction: one task per (owner, source) plus one `poll_all`
-//! sweep, no generic scheduler library.
-//!
-//! `backfill_embeddings` is stubbed: it depends on `cache.search.set_embedding`
-//! and `embeddings.service.embed`, neither of which is ported to Rust yet
-//! (see `sources::registry::ingest`'s doc comment for the same gap).
-
-use std::time::Duration as StdDuration;
+//! Sync scheduling. [`sync_source`] runs one source for one user (called by the `sync` job
+//! handler and the on-demand `/sources/{key}/sync` endpoint). [`due_syncs`] says which
+//! `(owner, source)` pairs should sync now; the scheduler leader (`jobs::leader`) turns those
+//! into `sync:<owner>:<source>:<window>` jobs. There are no per-user timer loops.
 
 use chrono::Utc;
 use serde::Deserialize;
@@ -25,7 +13,6 @@ use crate::store;
 use crate::error::AppResult;
 use crate::sources::base::{datetime_to_chrono, owner_key_str};
 use crate::sources::registry;
-use crate::state::AppState;
 
 const BACKOFF: [u64; 5] = [900, 1800, 3600, 7200, 21600];
 
@@ -113,81 +100,38 @@ pub async fn sync_source(db: &Db, encryption_key: &str, owner: &RecordId, key: &
     }
 }
 
-/// Polls every enabled source, for every user, whose backoff window has
-/// elapsed.
-pub async fn poll_all(db: &Db, encryption_key: &str) -> AppResult<Vec<Value>> {
+/// One source that should sync now. `period` (the source's interval) sizes the idempotency window.
+pub struct DueSync {
+    pub owner: RecordId,
+    pub source: String,
+    pub period: u64,
+}
+
+/// Whether a source last run at `last_run` should run again: its interval has passed, and after
+/// failures the longer backoff has too. A source that never ran is due.
+pub fn is_due(last_run: Option<chrono::DateTime<Utc>>, failures: i64, interval: u64, now: chrono::DateTime<Utc>) -> bool {
+    let Some(last_run) = last_run else { return true };
+    let wait = if failures > 0 { interval.max(backoff_seconds(failures)) } else { interval };
+    (now - last_run).num_seconds() >= wait as i64
+}
+
+/// Every enabled source, for every user, whose interval and backoff window have elapsed.
+pub async fn due_syncs(db: &Db) -> AppResult<Vec<DueSync>> {
     let mut out = Vec::new();
     let now = Utc::now();
     for owner in all_user_ids(db).await? {
+        let intervals = sync_intervals_for(db, &owner).await.unwrap_or_default();
         for src in registry::enabled(db, &owner).await? {
-            let rid = sync_status_id(&owner, src.key());
-            let row: Option<SyncStatusRow> = db.select(rid).await?;
-            if let Some(row) = &row
-                && row.consecutive_failures > 0
-                    && let Some(last_run) = row.last_run.as_ref().and_then(datetime_to_chrono) {
-                        let wait = backoff_seconds(row.consecutive_failures);
-                        if (now - last_run).num_seconds() < wait as i64 {
-                            continue;
-                        }
-                    }
-            out.push(sync_source(db, encryption_key, &owner, src.key(), "poll").await);
+            let row: Option<SyncStatusRow> = db.select(sync_status_id(&owner, src.key())).await?;
+            let last_run = row.as_ref().and_then(|r| r.last_run.as_ref()).and_then(datetime_to_chrono);
+            let failures = row.map_or(0, |r| r.consecutive_failures);
+            let period = interval_for(&intervals, src.key());
+            if is_due(last_run, failures, period, now) {
+                out.push(DueSync { owner: owner.clone(), source: src.key().to_string(), period });
+            }
         }
     }
     Ok(out)
-}
-
-/// Deferred: re-embeds cache records missing an embedding. Depends on
-/// `cache.search.set_embedding` + `embeddings.service.embed`, neither ported
-/// to Rust yet. Kept as a callable stub (rather than omitted) so the public
-/// surface this module exposes still matches Python's, and so wiring it up
-/// later is a one-function change.
-pub async fn backfill_embeddings(_db: &Db, _limit: i64) -> AppResult<i64> {
-    Ok(0)
-}
-
-/// Spawns the periodic sync tasks: one `tokio::time::interval` loop per
-/// `(owner, enabled source)` pair (mirroring Python's `sched.add_job(..., id=
-/// f"sync:{owner.id}:{src.key}")`), plus one `poll_all` sweep every 5 minutes.
-/// Read-light by design per the task brief -- this is not a generic
-/// scheduler, just enough to keep sources syncing. Returns the spawned
-/// task handles so the caller (wired up separately, outside this module) can
-/// hold or abort them.
-pub async fn spawn(state: AppState) -> Vec<tokio::task::JoinHandle<()>> {
-    let mut handles = Vec::new();
-
-    let owners = all_user_ids(&state.db).await.unwrap_or_default();
-    for owner in owners {
-        let sync_intervals = sync_intervals_for(&state.db, &owner).await.unwrap_or_default();
-        let enabled_sources = registry::enabled(&state.db, &owner).await.unwrap_or_default();
-        for src in enabled_sources {
-            let interval_secs = interval_for(&sync_intervals, src.key());
-            let state = state.clone();
-            let owner = owner.clone();
-            let key = src.key().to_string();
-            handles.push(tokio::spawn(async move {
-                let mut ticker = tokio::time::interval(StdDuration::from_secs(interval_secs));
-                ticker.tick().await; // first tick is immediate; skip it to mirror an "interval" trigger's first run
-                loop {
-                    ticker.tick().await;
-                    let _ = sync_source(&state.db, &state.settings.encryption_key, &owner, &key, "poll").await;
-                }
-            }));
-        }
-    }
-
-    {
-        let state = state.clone();
-        handles.push(tokio::spawn(async move {
-            let mut ticker = tokio::time::interval(StdDuration::from_secs(300));
-            ticker.tick().await;
-            loop {
-                ticker.tick().await;
-                let _ = poll_all(&state.db, &state.settings.encryption_key).await;
-            }
-        }));
-    }
-
-    handles
 }
 
 async fn sync_intervals_for(db: &Db, owner: &RecordId) -> AppResult<Value> {
@@ -218,6 +162,18 @@ fn interval_for(sync_intervals: &Value, key: &str) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn is_due_follows_interval_and_backoff() {
+        let now = Utc::now();
+        let ago = |s: i64| Some(now - chrono::Duration::seconds(s));
+        assert!(is_due(None, 0, 900, now));
+        assert!(!is_due(ago(100), 0, 900, now));
+        assert!(is_due(ago(901), 0, 900, now));
+        // one failure backs off 1800s, longer than the 900s interval
+        assert!(!is_due(ago(901), 1, 900, now));
+        assert!(is_due(ago(1801), 1, 900, now));
+    }
 
     #[test]
     fn backoff_seconds_follows_the_fixed_schedule_and_clamps() {

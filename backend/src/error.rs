@@ -30,6 +30,9 @@ pub enum ErrorCode {
     ValidationInvalid,
     DbConflict,
     DbDuplicate,
+    JobNoHandler,
+    JobLeaseExpired,
+    JobPanicked,
     Internal,
 }
 
@@ -53,6 +56,9 @@ impl ErrorCode {
         ErrorCode::ValidationInvalid,
         ErrorCode::DbConflict,
         ErrorCode::DbDuplicate,
+        ErrorCode::JobNoHandler,
+        ErrorCode::JobLeaseExpired,
+        ErrorCode::JobPanicked,
         ErrorCode::Internal,
     ];
 
@@ -76,6 +82,9 @@ impl ErrorCode {
             ErrorCode::ValidationInvalid => "validation.invalid",
             ErrorCode::DbConflict => "db.conflict",
             ErrorCode::DbDuplicate => "db.duplicate",
+            ErrorCode::JobNoHandler => "job.no_handler",
+            ErrorCode::JobLeaseExpired => "job.lease_expired",
+            ErrorCode::JobPanicked => "job.panicked",
             ErrorCode::Internal => "internal",
         }
     }
@@ -95,7 +104,9 @@ impl ErrorCode {
             | ErrorCode::ToolNotFound
             | ErrorCode::ResourceNotFound => StatusCode::NOT_FOUND,
             ErrorCode::ConnectorNotConnected | ErrorCode::ValidationInvalid => StatusCode::BAD_REQUEST,
-            ErrorCode::Internal => StatusCode::INTERNAL_SERVER_ERROR,
+            ErrorCode::JobNoHandler | ErrorCode::JobLeaseExpired | ErrorCode::JobPanicked | ErrorCode::Internal => {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
         }
     }
 
@@ -254,7 +265,8 @@ mod tests {
                 | ErrorCode::MemoryNotFound | ErrorCode::ChatThreadNotFound | ErrorCode::ConnectorNotFound
                 | ErrorCode::ConnectorNotConnected | ErrorCode::SourceNotFound | ErrorCode::ToolNotFound
                 | ErrorCode::ResourceNotFound | ErrorCode::ValidationInvalid | ErrorCode::DbConflict
-                | ErrorCode::DbDuplicate | ErrorCode::Internal => {}
+                | ErrorCode::DbDuplicate | ErrorCode::JobNoHandler | ErrorCode::JobLeaseExpired | ErrorCode::JobPanicked
+                | ErrorCode::Internal => {}
             }
         }
     }
