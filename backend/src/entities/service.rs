@@ -342,9 +342,34 @@ fn same_vault(a: &EntityRow, b: &EntityRow) -> AppResult<()> {
 // Core CRUD
 // ---------------------------------------------------------------------------
 
+/// Whether a failed write lost a race to a concurrent one: a UNIQUE index
+/// rejected it, or SurrealDB aborted the conflicting transaction.
+fn is_write_conflict(e: &surrealdb::Error) -> bool {
+    let msg = e.to_string();
+    msg.contains("already contains") || msg.contains("can be retried")
+}
+
+/// The `table` entity in `vault` whose name or an alias is `needle`
+/// (lowercased), a name match first.
+async fn find_entity(db: &Db, table: &str, vault: &RecordId, needle: &str) -> AppResult<Option<EntityRow>> {
+    let mut res = db
+        .query(format!(
+            "SELECT *, name_key = $needle AS by_name FROM {table} WHERE vault = $vault \
+             AND (name_key = $needle OR $needle IN aliases.map(|$a| string::lowercase($a))) \
+             ORDER BY by_name DESC, created_at LIMIT 1"
+        ))
+        .bind(("vault", vault.clone()))
+        .bind(("needle", needle.to_string()))
+        .await?;
+    let rows: Vec<EntityRow> = res.take(0)?;
+    Ok(rows.into_iter().next())
+}
+
 /// Find-or-create a `kind` entity in the resolved vault, matched
 /// case-insensitively against existing `name`/`aliases`. New aliases are
-/// merged onto a match rather than creating a duplicate row.
+/// merged onto a match rather than creating a duplicate row. Concurrent
+/// calls for one name return one entity: the `(vault, name_key)` UNIQUE
+/// index rejects the second CREATE, which then returns the winner's row.
 pub async fn upsert_entity(
     db: &Db,
     owner: &RecordId,
@@ -356,46 +381,46 @@ pub async fn upsert_entity(
     let table = kind_table(kind)?;
     let vault = resolve_vault(db, owner, vault_id).await?;
     let aliases = aliases.unwrap_or_default();
-    let needle = name.trim().to_lowercase();
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(AppError::bad_request("entity name can't be empty"));
+    }
+    let needle = name.to_lowercase();
 
-    let mut res =
-        db.query(format!("SELECT * FROM {table} WHERE vault = $vault")).bind(("vault", vault.clone())).await?;
-    let rows: Vec<EntityRow> = res.take(0)?;
-
-    for row in rows {
-        let mut known: HashSet<String> = row.aliases.iter().map(|a| a.to_lowercase()).collect();
-        known.insert(row.name.to_lowercase());
-        if known.contains(&needle) {
-            let existing: HashSet<String> = row.aliases.iter().cloned().collect();
-            let mut merged: Vec<String> = existing.union(&aliases.iter().cloned().collect()).cloned().collect();
-            merged.sort();
-            if merged.iter().collect::<HashSet<_>>() != existing.iter().collect::<HashSet<_>>() {
-                let mut updated = db
-                    .query("UPDATE $id SET aliases = $aliases, updated_at = time::now() RETURN AFTER")
-                    .bind(("id", row.id.clone()))
-                    .bind(("aliases", merged))
-                    .await?;
-                let updated_rows: Vec<EntityRow> = updated.take(0)?;
-                let updated_row =
-                    updated_rows.into_iter().next().ok_or_else(|| AppError::internal("entity update returned no row"))?;
-                return Ok(entity_out(table, &updated_row));
+    let mut found = find_entity(db, table, &vault, &needle).await?;
+    if found.is_none() {
+        let mut created = db
+            .query(format!(
+                "CREATE {table} SET owner = $owner, vault = $vault, name = $name, aliases = $aliases RETURN AFTER"
+            ))
+            .bind(("owner", owner.clone()))
+            .bind(("vault", vault.clone()))
+            .bind(("name", name.to_string()))
+            .bind(("aliases", aliases.clone()))
+            .await?;
+        match created.take::<Vec<EntityRow>>(0) {
+            Ok(rows) => {
+                let row = rows.into_iter().next().ok_or_else(|| AppError::internal("entity insert returned no row"))?;
+                return Ok(entity_out(table, &row));
             }
-            return Ok(entity_out(table, &row));
+            Err(e) if is_write_conflict(&e) => found = find_entity(db, table, &vault, &needle).await?,
+            Err(e) => return Err(e.into()),
         }
     }
+    let row = found.ok_or_else(|| AppError::internal("entity vanished during a concurrent write"))?;
 
-    let mut created = db
-        .query(format!(
-            "CREATE {table} SET owner = $owner, vault = $vault, name = $name, aliases = $aliases RETURN AFTER"
-        ))
-        .bind(("owner", owner.clone()))
-        .bind(("vault", vault))
-        .bind(("name", name.to_string()))
+    let existing: HashSet<String> = row.aliases.iter().cloned().collect();
+    if aliases.iter().all(|a| existing.contains(a)) {
+        return Ok(entity_out(table, &row));
+    }
+    let mut updated = db
+        .query("UPDATE $id SET aliases = array::sort(array::union(aliases, $aliases)), updated_at = time::now() RETURN AFTER")
+        .bind(("id", row.id.clone()))
         .bind(("aliases", aliases))
         .await?;
-    let created_rows: Vec<EntityRow> = created.take(0)?;
-    let created_row = created_rows.into_iter().next().ok_or_else(|| AppError::internal("entity insert returned no row"))?;
-    Ok(entity_out(table, &created_row))
+    let updated_rows: Vec<EntityRow> = updated.take(0)?;
+    let updated_row = updated_rows.into_iter().next().ok_or_else(|| AppError::internal("entity update returned no row"))?;
+    Ok(entity_out(table, &updated_row))
 }
 
 /// `source_record_id` is optional -- an automatic extraction path always ties
@@ -432,27 +457,10 @@ pub async fn add_memory(
         ));
     }
 
-    // One observation per subject (consolidation reads LIMIT 1): writing another
-    // one -- e.g. an MCP agent doing the consolidating -- revises it in place.
+    // One observation per subject: writing another one -- e.g. an MCP agent
+    // doing the consolidating -- revises it in place.
     if mem_type == "observation" {
-        let mut res = db
-            .query(r#"SELECT * FROM memory WHERE subject = $subject AND type = "observation" LIMIT 1"#)
-            .bind(("subject", subject_id.clone()))
-            .await?;
-        let existing: Vec<MemoryRow> = res.take(0)?;
-        if let Some(existing) = existing.into_iter().next() {
-            let mut res = db
-                .query(
-                    "UPDATE $id SET text = $text, version = version + 1, status = \"fresh\", \
-                     updated_at = time::now() RETURN AFTER",
-                )
-                .bind(("id", existing.id))
-                .bind(("text", text.to_string()))
-                .await?;
-            let rows: Vec<MemoryRow> = res.take(0)?;
-            let row = rows.into_iter().next().ok_or_else(|| AppError::internal("observation update returned no row"))?;
-            return Ok(memory_out(&row, None));
-        }
+        return save_observation(db, owner, &subject_row.vault, subject_id, text, None).await;
     }
 
     let source = source_record_id.map(|r| cache_record_rid(owner, r));
@@ -478,6 +486,54 @@ pub async fn add_memory(
     }
 
     Ok(memory_out(&memory, None))
+}
+
+/// Creates or revises `subject`'s one observation, marking it fresh.
+/// `lineage` (the raw facts it was built from) replaces `source_memories` and
+/// `proof_count` when given; an agent-written belief (`None`) leaves them.
+/// The `memory_observation_unique` index makes a concurrent second CREATE
+/// fail; that writer then revises the row that won instead.
+pub(crate) async fn save_observation(
+    db: &Db,
+    owner: &RecordId,
+    vault: &RecordId,
+    subject: &RecordId,
+    text: &str,
+    lineage: Option<Vec<RecordId>>,
+) -> AppResult<MemoryOut> {
+    let set_lineage = if lineage.is_some() { ", source_memories = $lineage, proof_count = $proof" } else { "" };
+    let update = format!(
+        "UPDATE memory SET text = $text, version += 1, status = \"fresh\", updated_at = time::now(){set_lineage} \
+         WHERE subject = $subject AND type = \"observation\" RETURN AFTER"
+    );
+    let create = format!(
+        "CREATE memory SET owner = $owner, vault = $vault, subject = $subject, text = $text, \
+         type = \"observation\", status = \"fresh\"{set_lineage} RETURN AFTER"
+    );
+    let proof = lineage.as_ref().map(|l| l.len() as i64);
+    for attempt in 0..3 {
+        for sql in [&update, &create] {
+            let mut res = db
+                .query(sql.as_str())
+                .bind(("owner", owner.clone()))
+                .bind(("vault", vault.clone()))
+                .bind(("subject", subject.clone()))
+                .bind(("text", text.to_string()))
+                .bind(("lineage", lineage.clone()))
+                .bind(("proof", proof))
+                .await?;
+            match res.take::<Vec<MemoryRow>>(0) {
+                Ok(rows) => {
+                    if let Some(row) = rows.into_iter().next() {
+                        return Ok(memory_out(&row, None));
+                    }
+                }
+                Err(e) if attempt < 2 && is_write_conflict(&e) => break,
+                Err(e) => return Err(e.into()),
+            }
+        }
+    }
+    Err(AppError::internal("observation write kept conflicting"))
 }
 
 /// Programmatic memory write -- a direct path for an agent to record a fact
@@ -575,7 +631,25 @@ pub async fn delete_memory(db: &Db, owner: &RecordId, memory_id: &RecordId) -> A
     if !accessible(db, owner, &row.vault).await? {
         return Ok(false);
     }
-    db.query("DELETE $id").bind(("id", memory_id.clone())).await?;
+    // A deleted raw fact leaves the subject's observation's lineage and makes
+    // it stale (rebuilt from the surviving facts on the next consolidation);
+    // an observation built from nothing but this fact is deleted with it.
+    db.query(
+        "BEGIN TRANSACTION; \
+         DELETE $id; \
+         IF $raw { \
+             DELETE memory WHERE subject = $subject AND type = \"observation\" AND source_memories = [$id]; \
+             UPDATE memory SET status = \"stale\", updated_at = time::now(), \
+                 source_memories = IF source_memories THEN array::complement(source_memories, [$id]) ELSE NONE END \
+                 WHERE subject = $subject AND type = \"observation\"; \
+         }; \
+         COMMIT TRANSACTION;",
+    )
+    .bind(("id", memory_id.clone()))
+    .bind(("subject", row.subject.clone()))
+    .bind(("raw", row.mem_type != "observation"))
+    .await?
+    .check()?;
     Ok(true)
 }
 
@@ -677,7 +751,7 @@ pub async fn update_entity(
         let query = format!("UPDATE $id SET {} RETURN AFTER", set_clauses.join(", "));
         let mut q = db.query(query).bind(("id", entity_id.clone()));
         if let Some(n) = name {
-            q = q.bind(("name", n.to_string()));
+            q = q.bind(("name", n.trim().to_string()));
         }
         if let Some(a) = aliases {
             q = q.bind(("aliases", a));
@@ -686,7 +760,16 @@ pub async fn update_entity(
             q = q.bind(("summary", s.to_string()));
         }
         let mut res = q.await?;
-        let rows: Vec<EntityRow> = res.take(0)?;
+        let rows: Vec<EntityRow> = match res.take(0) {
+            Err(e) if e.to_string().contains("already contains") => {
+                return Err(AppError::bad_request(format!(
+                    "another {} in this vault is already named {:?}; merge them instead",
+                    entity_id.table(),
+                    name.unwrap_or_default()
+                )))
+            }
+            r => r?,
+        };
         row = rows.into_iter().next().ok_or_else(|| AppError::internal("entity update returned no row"))?;
     }
 
@@ -710,8 +793,10 @@ pub async fn delete_entity(db: &Db, owner: &RecordId, entity_id: &RecordId) -> A
 /// Merge `loser_id` into `winner_id` -- for two entities of the same `kind`
 /// that turned out to be duplicates. Reassigns the loser's `memory` rows and
 /// `relates_to` edges (both directions) to the winner, adds the loser's name
-/// as an alias of the winner (if not already present), then deletes the
-/// loser. Returns the winner's row after the merge.
+/// and aliases as aliases of the winner, then deletes the loser -- all in one
+/// transaction ([`merge_rows`]). If both had an observation they become one
+/// stale observation, rebuilt on the next consolidation. Returns the
+/// winner's row after the merge.
 ///
 /// Errors (400) if the two ids are the same, of different kinds or vaults, or not
 /// found / `owner` isn't a member of either one's vault.
@@ -732,9 +817,8 @@ pub async fn merge_entities(
         )));
     }
 
-    let mut winner = select_entity(db, winner_id)
+    let winner = select_entity(db, winner_id)
         .await?
-        .filter(|_| true)
         .ok_or_else(|| AppError::bad_request(format!("winner entity not found: {winner_id}")))?;
     if !accessible(db, owner, &winner.vault).await? {
         return Err(AppError::bad_request(format!("winner entity not found: {winner_id}")));
@@ -747,66 +831,135 @@ pub async fn merge_entities(
     }
     same_vault(&winner, &loser)?;
 
-    db.query("UPDATE memory SET subject = $winner WHERE subject = $loser")
-        .bind(("winner", winner_id.clone()))
-        .bind(("loser", loser_id.clone()))
-        .await?;
-
-    // `relates_to` edges can't have their `in`/`out` endpoints updated in
-    // place (they're a RELATION table) -- re-create each edge pointing at
-    // the winner instead, skip self-loops this would create, and leave the
-    // (in, out, label) unique index to protect against a duplicate the
-    // winner already has, then drop all of the loser's edges.
-    let mut outgoing = db.query("SELECT * FROM relates_to WHERE in = $id").bind(("id", loser_id.clone())).await?;
-    let outgoing_rows: Vec<RelationRow> = outgoing.take(0)?;
-    for edge in outgoing_rows {
-        if edge.out_ == *winner_id {
-            continue;
-        }
-        let _ = db
-            .query("RELATE $in->relates_to->$out SET label = $label, owner = $owner, source = $source")
-            .bind(("in", winner_id.clone()))
-            .bind(("out", edge.out_))
-            .bind(("label", edge.label))
-            .bind(("owner", edge.owner))
-            .bind(("source", edge.source))
-            .await; // winner already has this edge -- unique index, safe no-op
-    }
-    let mut incoming = db.query("SELECT * FROM relates_to WHERE out = $id").bind(("id", loser_id.clone())).await?;
-    let incoming_rows: Vec<RelationRow> = incoming.take(0)?;
-    for edge in incoming_rows {
-        if edge.in_ == *winner_id {
-            continue;
-        }
-        let _ = db
-            .query("RELATE $in->relates_to->$out SET label = $label, owner = $owner, source = $source")
-            .bind(("in", edge.in_))
-            .bind(("out", winner_id.clone()))
-            .bind(("label", edge.label))
-            .bind(("owner", edge.owner))
-            .bind(("source", edge.source))
-            .await;
-    }
-    db.query("DELETE relates_to WHERE in = $id OR out = $id").bind(("id", loser_id.clone())).await?;
-
-    let mut new_aliases: HashSet<String> = winner.aliases.iter().cloned().collect();
-    if !loser.name.is_empty() {
-        new_aliases.insert(loser.name.clone());
-    }
-    let mut new_aliases: Vec<String> = new_aliases.into_iter().collect();
-    new_aliases.sort();
-
-    let mut updated = db
-        .query("UPDATE $id SET aliases = $aliases, updated_at = time::now() RETURN AFTER")
-        .bind(("id", winner_id.clone()))
-        .bind(("aliases", new_aliases))
-        .await?;
-    let updated_rows: Vec<EntityRow> = updated.take(0)?;
-    winner = updated_rows.into_iter().next().ok_or_else(|| AppError::internal("winner update returned no row"))?;
-
-    db.query("DELETE $id").bind(("id", loser_id.clone())).await?;
-
+    merge_rows(db, winner_id, loser_id, loser_names(&loser)).await?;
+    let winner = select_entity(db, winner_id).await?.ok_or_else(|| AppError::internal("winner vanished during merge"))?;
     Ok(entity_out(winner_id.table(), &winner))
+}
+
+/// What a merged-away entity leaves on the winner: its name and aliases.
+fn loser_names(loser: &EntityRow) -> Vec<String> {
+    std::iter::once(&loser.name).chain(&loser.aliases).filter(|n| !n.is_empty()).cloned().collect()
+}
+
+/// Folds every observation of `$winner` and `$loser` into the oldest one,
+/// owned by `$winner`: texts joined, lineages unioned, marked stale so the
+/// next consolidation rebuilds it from the merged raw facts. Runs inside a
+/// caller's transaction (it frees the unique observation slot first).
+const FOLD_OBSERVATIONS: &str = "\
+    LET $obs = (SELECT id, text, source_memories, created_at FROM memory \
+        WHERE (subject = $winner OR subject = $loser) AND type = \"observation\" ORDER BY created_at, id); \
+    IF array::len($obs) > 1 { \
+        DELETE array::slice($obs.id, 1); \
+        UPDATE $obs[0].id SET subject = $winner, text = array::join($obs.text, \"\\n\\n\"), version += 1, \
+            source_memories = array::distinct(array::flatten($obs.map(|$o| $o.source_memories ?? []))), \
+            status = \"stale\", updated_at = time::now(); \
+    };";
+
+/// Moves everything of `loser` onto `winner` (same kind and vault, already
+/// checked) and deletes `loser`, in ONE transaction: memories (observations
+/// folded, see [`FOLD_OBSERVATIONS`]), `relates_to` edges in both directions
+/// (re-created on the winner unless it already has that exact edge -- the
+/// only conflict that is skipped; edges between the two are dropped), and
+/// `add_aliases` onto the winner. Any failing statement rolls all of it
+/// back, so a merge never half-happens.
+async fn merge_rows(db: &Db, winner: &RecordId, loser: &RecordId, add_aliases: Vec<String>) -> AppResult<()> {
+    db.query(format!(
+        "BEGIN TRANSACTION; {FOLD_OBSERVATIONS} \
+         UPDATE memory SET subject = $winner WHERE subject = $loser; \
+         UPDATE memory SET status = \"stale\", updated_at = time::now() WHERE subject = $winner AND type = \"observation\"; \
+         FOR $e IN (SELECT * FROM relates_to WHERE in = $loser AND out NOT IN [$winner, $loser]) {{ \
+             IF array::len(SELECT id FROM relates_to WHERE in = $winner AND out = $e.out AND label = $e.label) = 0 {{ \
+                 LET $o = $e.out; \
+                 RELATE $winner->relates_to->$o SET label = $e.label, owner = $e.owner, source = $e.source, created_at = $e.created_at; \
+             }}; \
+         }}; \
+         FOR $e IN (SELECT * FROM relates_to WHERE out = $loser AND in NOT IN [$winner, $loser]) {{ \
+             IF array::len(SELECT id FROM relates_to WHERE in = $e.in AND out = $winner AND label = $e.label) = 0 {{ \
+                 LET $i = $e.in; \
+                 RELATE $i->relates_to->$winner SET label = $e.label, owner = $e.owner, source = $e.source, created_at = $e.created_at; \
+             }}; \
+         }}; \
+         DELETE relates_to WHERE in = $loser OR out = $loser; \
+         UPDATE $winner SET aliases = array::sort(array::union(aliases, $aliases)), updated_at = time::now(); \
+         DELETE $loser; \
+         COMMIT TRANSACTION;"
+    ))
+    .bind(("winner", winner.clone()))
+    .bind(("loser", loser.clone()))
+    .bind(("aliases", add_aliases))
+    .await?
+    .check()?;
+    Ok(())
+}
+
+/// Folds rows that would violate one of `db::UNIQUE_STATEMENTS`' indexes on
+/// `table`, so the index can be defined: entities sharing a vault and
+/// case-insensitive name are merged into the oldest ([`merge_rows`]), and a
+/// subject's several observations into one stale one. Runs at startup until
+/// the index exists; a no-op once it does.
+pub async fn dedupe(db: &Db, table: &str) -> AppResult<()> {
+    let index = crate::db::UNIQUE_STATEMENTS
+        .iter()
+        .find(|(t, _)| *t == table)
+        .and_then(|(_, sql)| sql.split_whitespace().nth(5))
+        .ok_or_else(|| AppError::internal(format!("no unique index for {table}")))?;
+    let mut res = db.query(format!("INFO FOR TABLE {table}")).await?;
+    let info: Option<serde_json::Value> = res.take(0)?;
+    if info.as_ref().and_then(|i| i.pointer(&format!("/indexes/{index}"))).is_some() {
+        return Ok(());
+    }
+
+    #[derive(Deserialize)]
+    struct Group {
+        ids: Vec<RecordId>,
+    }
+    #[derive(Deserialize)]
+    struct Group1 {
+        id: RecordId,
+    }
+    if table == "memory" {
+        db.query("UPDATE memory SET type = type WHERE type = \"observation\" AND obs_subject = NONE").await?.check()?;
+        let mut res = db
+            .query(
+                "SELECT subject, array::group(id) AS ids FROM memory WHERE type = \"observation\" GROUP BY subject",
+            )
+            .await?;
+        let groups: Vec<Group> = res.take(0)?;
+        #[derive(Deserialize)]
+        struct Subject {
+            subject: RecordId,
+        }
+        for g in groups.into_iter().filter(|g| g.ids.len() > 1) {
+            let s: Option<Subject> = db.select(g.ids[0].clone()).await?;
+            let Some(s) = s else { continue };
+            db.query(format!("BEGIN TRANSACTION; {FOLD_OBSERVATIONS} COMMIT TRANSACTION;"))
+                .bind(("winner", s.subject.clone()))
+                .bind(("loser", s.subject))
+                .await?
+                .check()?;
+        }
+        return Ok(());
+    }
+
+    let table = kind_table(table)?;
+    db.query(format!("UPDATE {table} SET name = name WHERE name_key = NONE")).await?.check()?;
+    let mut res = db
+        .query(format!(
+            "SELECT vault, name_key, array::group(id) AS ids FROM {table} GROUP BY vault, name_key"
+        ))
+        .await?;
+    let groups: Vec<Group> = res.take(0)?;
+    for g in groups.into_iter().filter(|g| g.ids.len() > 1) {
+        // the oldest one wins
+        let mut res = db.query("SELECT id, created_at FROM $ids ORDER BY created_at, id").bind(("ids", g.ids)).await?;
+        let ids: Vec<RecordId> = res.take::<Vec<Group1>>(0)?.into_iter().map(|r| r.id).collect();
+        let Some((winner, losers)) = ids.split_first() else { continue };
+        for loser in losers {
+            let names = select_entity(db, loser).await?.map(|r| loser_names(&r)).unwrap_or_default();
+            merge_rows(db, winner, loser, names).await?;
+        }
+    }
+    Ok(())
 }
 
 /// An entity's row plus its `memory` entries and `relates_to` edges in both

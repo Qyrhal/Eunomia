@@ -283,11 +283,11 @@ fn register_all(registry: &mut HashMap<&'static str, ToolSpec>) {
                 "query": {"type": "string"},
                 "sources": {"type": "array", "items": {"type": "string"}},
                 "types": {"type": "array", "items": {"type": "string"}},
-                "since": {"type": "string", "description": "ISO 8601"},
-                "until": {"type": "string", "description": "ISO 8601"},
+                "since": {"type": "string", "description": "ISO 8601 date or datetime"},
+                "until": {"type": "string", "description": "ISO 8601 date or datetime"},
                 "mode": {"type": "string", "enum": ["keyword", "semantic", "hybrid"]},
-                "limit": {"type": "integer"},
-                "offset": {"type": "integer"},
+                "limit": {"type": "integer", "description": "at most 100, default 20"},
+                "offset": {"type": "integer", "description": "offset + limit at most 1000; page while has_more"},
             },
             "required": ["query"],
         }),
@@ -362,8 +362,12 @@ fn register_all(registry: &mut HashMap<&'static str, ToolSpec>) {
             "type": "object",
             "properties": {
                 "type": {"type": "string"},
-                "filters": {"type": "object"},
-                "sort": {"type": "string"},
+                "filters": {
+                    "type": "object",
+                    "description": "{field: value} equality, or field__ne/__gt/__gte/__lt/__lte; fields: occurred_at, \
+ingested_at, updated_at (ISO 8601), title, type, source, id, external_id, or payload__<field>[__<subfield>]",
+                },
+                "sort": {"type": "string", "description": "a filter field, -field for descending"},
                 "limit": {"type": "integer"},
                 "offset": {"type": "integer"},
             },
@@ -432,16 +436,16 @@ fn register_all(registry: &mut HashMap<&'static str, ToolSpec>) {
         json!({
             "type": "object",
             "properties": {
-                "query": {"type": "string"},
+                "query": {"type": "string", "description": "at most 2000 characters"},
                 "time_range": {
                     "type": "array",
                     "items": {"type": "string"},
                     "minItems": 2,
                     "maxItems": 2,
-                    "description": "[since, until] ISO 8601",
+                    "description": "[since, until] ISO 8601, since <= until",
                 },
-                "limit": {"type": "integer"},
-                "max_tokens": {"type": "integer"},
+                "limit": {"type": "integer", "description": "1-100, default 20"},
+                "max_tokens": {"type": "integer", "description": "1-100000"},
                 "types": {
                     "type": "array",
                     "items": {"type": "string", "enum": ["world", "experience", "observation"]},
