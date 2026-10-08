@@ -2,7 +2,7 @@
 
 import type { Client, ClientMeta, Options as Options2, RequestResult, ServerSentEventsResult, TDataShape } from './client';
 import { client } from './client.gen';
-import type { AcceptInvitationData, AcceptInvitationErrors, AcceptInvitationResponses, AddMemoryData, AddMemoryErrors, AddMemoryResponses, AddRelationData, AddRelationErrors, AddRelationResponses, BootstrapData, BootstrapErrors, BootstrapResponses, CatalogueData, CatalogueErrors, CatalogueResponses, CheckNowData, CheckNowErrors, CheckNowResponses, CloneVaultData, CloneVaultErrors, CloneVaultResponses, CompleteOnboardingData, CompleteOnboardingErrors, CompleteOnboardingResponses, CreateEntityData, CreateEntityErrors, CreateEntityResponses, CreateThreadData, CreateThreadErrors, CreateThreadResponses, CreateTokenData, CreateTokenErrors, CreateTokenResponses, CreateVaultData, CreateVaultErrors, CreateVaultResponses, DeclineInvitationData, DeclineInvitationErrors, DeclineInvitationResponses, DeleteEntityData, DeleteEntityErrors, DeleteEntityResponses, DeleteMemoryData, DeleteMemoryErrors, DeleteMemoryResponses, DeleteThreadRouteData, DeleteThreadRouteErrors, DeleteThreadRouteResponses, DeleteTokenData, DeleteTokenErrors, DeleteTokenResponses, DeleteVaultData, DeleteVaultErrors, DeleteVaultResponses, EntityGraphData, EntityGraphErrors, EntityGraphResponses, ExportDataData, ExportDataErrors, ExportDataResponses, GetAuditData, GetAuditErrors, GetAuditResponses, GetEntityData, GetEntityErrors, GetEntityResponses, GetOneData, GetOneErrors, GetOneResponses, GetSessionsData, GetSessionsErrors, GetSessionsResponses, GetStatusData, GetStatusErrors, GetStatusResponses, GetTokensData, GetTokensErrors, GetTokensResponses, InviteMemberData, InviteMemberErrors, InviteMemberResponses, InvokeData, InvokeErrors, InvokeResponses, LeaveVaultData, LeaveVaultErrors, LeaveVaultResponses, ListAllData, ListAllErrors, ListAllResponses, ListEntitiesData, ListEntitiesErrors, ListEntitiesResponses, ListInvitationsData, ListInvitationsErrors, ListInvitationsResponses, ListMembersData, ListMembersErrors, ListMembersResponses, ListSourcesData, ListSourcesErrors, ListSourcesResponses, ListThreadsData, ListThreadsErrors, ListThreadsResponses, ListVaultsData, ListVaultsErrors, ListVaultsResponses, LoginData, LoginErrors, LoginResponses, LogoutData, LogoutErrors, LogoutResponses, MeData, MeErrors, MeResponses, MergeEntitiesData, MergeEntitiesErrors, MergeEntitiesResponses, MergeVaultsData, MergeVaultsErrors, MergeVaultsResponses, OpenaiModelsData, OpenaiModelsErrors, OpenaiModelsResponses, OpenapiJsonData, OpenapiJsonResponses, PatchSettingsData, PatchSettingsErrors, PatchSettingsResponses, PocketaiAllData, PocketaiAllErrors, PocketaiAllResponses, PocketaiDetailData, PocketaiDetailErrors, PocketaiDetailResponses, PocketaiSearchData, PocketaiSearchErrors, PocketaiSearchResponses, PocketaiSummaryData, PocketaiSummaryErrors, PocketaiSummaryResponses, PutOneData, PutOneErrors, PutOneResponses, ReadSettingsData, ReadSettingsErrors, ReadSettingsResponses, RegisterData, RegisterErrors, RegisterResponses, RemoveMemberData, RemoveMemberErrors, RemoveMemberResponses, RenameVaultData, RenameVaultErrors, RenameVaultResponses, RequestUpdateData, RequestUpdateErrors, RequestUpdateResponses, RevokeSessionRouteData, RevokeSessionRouteErrors, RevokeSessionRouteResponses, SendMessageData, SendMessageErrors, SendMessageResponse, SendMessageResponses, SnapshotData, SnapshotErrors, SnapshotResponses, SourcesStatusData, SourcesStatusErrors, SourcesStatusResponses, SourceWebhookData, SourceWebhookErrors, SourceWebhookResponses, SyncNowData, SyncNowErrors, SyncNowResponses, TestOneData, TestOneErrors, TestOneResponses, ThreadHistoryData, ThreadHistoryErrors, ThreadHistoryResponses, UpBankFinanceSummaryData, UpBankFinanceSummaryErrors, UpBankFinanceSummaryResponses, UpdateEntityData, UpdateEntityErrors, UpdateEntityResponses, UpdateMemoryData, UpdateMemoryErrors, UpdateMemoryResponses, VectorCloudData, VectorCloudErrors, VectorCloudResponses } from './types.gen';
+import type { AcceptInvitationData, AcceptInvitationErrors, AcceptInvitationResponses, AddMemoryData, AddMemoryErrors, AddMemoryResponses, AddRelationData, AddRelationErrors, AddRelationResponses, CheckForUpdateData, CheckForUpdateErrors, CheckForUpdateResponses, CloneVaultData, CloneVaultErrors, CloneVaultResponses, CompleteOnboardingData, CompleteOnboardingErrors, CompleteOnboardingResponses, CreateEntityData, CreateEntityErrors, CreateEntityResponses, CreateThreadData, CreateThreadErrors, CreateThreadResponses, CreateTokenData, CreateTokenErrors, CreateTokenResponses, CreateVaultData, CreateVaultErrors, CreateVaultResponses, DeclineInvitationData, DeclineInvitationErrors, DeclineInvitationResponses, DeleteEntityData, DeleteEntityErrors, DeleteEntityResponses, DeleteMemoryData, DeleteMemoryErrors, DeleteMemoryResponses, DeleteThreadData, DeleteThreadErrors, DeleteThreadResponses, DeleteTokenData, DeleteTokenErrors, DeleteTokenResponses, DeleteVaultData, DeleteVaultErrors, DeleteVaultResponses, ExportDataData, ExportDataErrors, ExportDataResponses, GetBootstrapData, GetBootstrapErrors, GetBootstrapResponses, GetConnectorData, GetConnectorErrors, GetConnectorResponses, GetEntityData, GetEntityErrors, GetEntityGraphData, GetEntityGraphErrors, GetEntityGraphResponses, GetEntityResponses, GetMeData, GetMeErrors, GetMeResponses, GetOpenapiData, GetOpenapiResponses, GetPocketaiAllData, GetPocketaiAllErrors, GetPocketaiAllResponses, GetPocketaiDetailData, GetPocketaiDetailErrors, GetPocketaiDetailResponses, GetPocketaiSummaryData, GetPocketaiSummaryErrors, GetPocketaiSummaryResponses, GetSettingsData, GetSettingsErrors, GetSettingsResponses, GetSnapshotData, GetSnapshotErrors, GetSnapshotResponses, GetSourcesStatusData, GetSourcesStatusErrors, GetSourcesStatusResponses, GetThreadHistoryData, GetThreadHistoryErrors, GetThreadHistoryResponses, GetUpBankFinanceSummaryData, GetUpBankFinanceSummaryErrors, GetUpBankFinanceSummaryResponses, GetUpdateStatusData, GetUpdateStatusErrors, GetUpdateStatusResponses, GetVectorCloudData, GetVectorCloudErrors, GetVectorCloudResponses, InviteMemberData, InviteMemberErrors, InviteMemberResponses, InvokeToolData, InvokeToolErrors, InvokeToolResponses, LeaveVaultData, LeaveVaultErrors, LeaveVaultResponses, ListAuditData, ListAuditErrors, ListAuditResponses, ListConnectorsData, ListConnectorsErrors, ListConnectorsResponses, ListEntitiesData, ListEntitiesErrors, ListEntitiesResponses, ListInvitationsData, ListInvitationsErrors, ListInvitationsResponses, ListMembersData, ListMembersErrors, ListMembersResponses, ListOpenaiModelsData, ListOpenaiModelsErrors, ListOpenaiModelsResponses, ListSessionsData, ListSessionsErrors, ListSessionsResponses, ListSourcesData, ListSourcesErrors, ListSourcesResponses, ListThreadsData, ListThreadsErrors, ListThreadsResponses, ListTokensData, ListTokensErrors, ListTokensResponses, ListToolsData, ListToolsErrors, ListToolsResponses, ListVaultsData, ListVaultsErrors, ListVaultsResponses, LoginData, LoginErrors, LoginResponses, LogoutData, LogoutErrors, LogoutResponses, MergeEntitiesData, MergeEntitiesErrors, MergeEntitiesResponses, MergeVaultsData, MergeVaultsErrors, MergeVaultsResponses, ReceiveSourceWebhookData, ReceiveSourceWebhookErrors, ReceiveSourceWebhookResponses, RegisterData, RegisterErrors, RegisterResponses, RemoveMemberData, RemoveMemberErrors, RemoveMemberResponses, RenameVaultData, RenameVaultErrors, RenameVaultResponses, RequestUpdateData, RequestUpdateErrors, RequestUpdateResponses, RevokeSessionData, RevokeSessionErrors, RevokeSessionResponses, SearchPocketaiData, SearchPocketaiErrors, SearchPocketaiResponses, SendMessageData, SendMessageErrors, SendMessageResponse, SendMessageResponses, SyncSourceData, SyncSourceErrors, SyncSourceResponses, TestConnectorData, TestConnectorErrors, TestConnectorResponses, UpdateConnectorData, UpdateConnectorErrors, UpdateConnectorResponses, UpdateEntityData, UpdateEntityErrors, UpdateEntityResponses, UpdateMemoryData, UpdateMemoryErrors, UpdateMemoryResponses, UpdateSettingsData, UpdateSettingsErrors, UpdateSettingsResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -21,7 +21,7 @@ export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends 
 /**
  * Page of the caller's tool-call audit log
  */
-export const getAudit = <ThrowOnError extends boolean = false>(options?: Options<GetAuditData, ThrowOnError>): RequestResult<GetAuditResponses, GetAuditErrors, ThrowOnError> => (options?.client ?? client).get<GetAuditResponses, GetAuditErrors, ThrowOnError>({
+export const listAudit = <ThrowOnError extends boolean = false>(options?: Options<ListAuditData, ThrowOnError>): RequestResult<ListAuditResponses, ListAuditErrors, ThrowOnError> => (options?.client ?? client).get<ListAuditResponses, ListAuditErrors, ThrowOnError>({
     security: [{
             in: 'cookie',
             name: 'eunomia_session',
@@ -34,7 +34,7 @@ export const getAudit = <ThrowOnError extends boolean = false>(options?: Options
 /**
  * Whether any user exists yet
  */
-export const bootstrap = <ThrowOnError extends boolean = false>(options?: Options<BootstrapData, ThrowOnError>): RequestResult<BootstrapResponses, BootstrapErrors, ThrowOnError> => (options?.client ?? client).get<BootstrapResponses, BootstrapErrors, ThrowOnError>({ url: '/api/auth/bootstrap', ...options });
+export const getBootstrap = <ThrowOnError extends boolean = false>(options?: Options<GetBootstrapData, ThrowOnError>): RequestResult<GetBootstrapResponses, GetBootstrapErrors, ThrowOnError> => (options?.client ?? client).get<GetBootstrapResponses, GetBootstrapErrors, ThrowOnError>({ url: '/api/auth/bootstrap', ...options });
 
 /**
  * Log in and start a session
@@ -56,7 +56,7 @@ export const logout = <ThrowOnError extends boolean = false>(options?: Options<L
 /**
  * The signed in user
  */
-export const me = <ThrowOnError extends boolean = false>(options?: Options<MeData, ThrowOnError>): RequestResult<MeResponses, MeErrors, ThrowOnError> => (options?.client ?? client).get<MeResponses, MeErrors, ThrowOnError>({
+export const getMe = <ThrowOnError extends boolean = false>(options?: Options<GetMeData, ThrowOnError>): RequestResult<GetMeResponses, GetMeErrors, ThrowOnError> => (options?.client ?? client).get<GetMeResponses, GetMeErrors, ThrowOnError>({
     security: [{
             in: 'cookie',
             name: 'eunomia_session',
@@ -81,7 +81,7 @@ export const register = <ThrowOnError extends boolean = false>(options: Options<
 /**
  * List active sessions
  */
-export const getSessions = <ThrowOnError extends boolean = false>(options?: Options<GetSessionsData, ThrowOnError>): RequestResult<GetSessionsResponses, GetSessionsErrors, ThrowOnError> => (options?.client ?? client).get<GetSessionsResponses, GetSessionsErrors, ThrowOnError>({
+export const listSessions = <ThrowOnError extends boolean = false>(options?: Options<ListSessionsData, ThrowOnError>): RequestResult<ListSessionsResponses, ListSessionsErrors, ThrowOnError> => (options?.client ?? client).get<ListSessionsResponses, ListSessionsErrors, ThrowOnError>({
     security: [{
             in: 'cookie',
             name: 'eunomia_session',
@@ -94,7 +94,7 @@ export const getSessions = <ThrowOnError extends boolean = false>(options?: Opti
 /**
  * Revoke a session
  */
-export const revokeSessionRoute = <ThrowOnError extends boolean = false>(options: Options<RevokeSessionRouteData, ThrowOnError>): RequestResult<RevokeSessionRouteResponses, RevokeSessionRouteErrors, ThrowOnError> => (options.client ?? client).delete<RevokeSessionRouteResponses, RevokeSessionRouteErrors, ThrowOnError>({
+export const revokeSession = <ThrowOnError extends boolean = false>(options: Options<RevokeSessionData, ThrowOnError>): RequestResult<RevokeSessionResponses, RevokeSessionErrors, ThrowOnError> => (options.client ?? client).delete<RevokeSessionResponses, RevokeSessionErrors, ThrowOnError>({
     security: [{
             in: 'cookie',
             name: 'eunomia_session',
@@ -107,7 +107,7 @@ export const revokeSessionRoute = <ThrowOnError extends boolean = false>(options
 /**
  * List API tokens
  */
-export const getTokens = <ThrowOnError extends boolean = false>(options?: Options<GetTokensData, ThrowOnError>): RequestResult<GetTokensResponses, GetTokensErrors, ThrowOnError> => (options?.client ?? client).get<GetTokensResponses, GetTokensErrors, ThrowOnError>({
+export const listTokens = <ThrowOnError extends boolean = false>(options?: Options<ListTokensData, ThrowOnError>): RequestResult<ListTokensResponses, ListTokensErrors, ThrowOnError> => (options?.client ?? client).get<ListTokensResponses, ListTokensErrors, ThrowOnError>({
     security: [{
             in: 'cookie',
             name: 'eunomia_session',
@@ -180,7 +180,7 @@ export const createThread = <ThrowOnError extends boolean = false>(options: Opti
 /**
  * Delete a chat thread
  */
-export const deleteThreadRoute = <ThrowOnError extends boolean = false>(options: Options<DeleteThreadRouteData, ThrowOnError>): RequestResult<DeleteThreadRouteResponses, DeleteThreadRouteErrors, ThrowOnError> => (options.client ?? client).delete<DeleteThreadRouteResponses, DeleteThreadRouteErrors, ThrowOnError>({
+export const deleteThread = <ThrowOnError extends boolean = false>(options: Options<DeleteThreadData, ThrowOnError>): RequestResult<DeleteThreadResponses, DeleteThreadErrors, ThrowOnError> => (options.client ?? client).delete<DeleteThreadResponses, DeleteThreadErrors, ThrowOnError>({
     security: [{
             in: 'cookie',
             name: 'eunomia_session',
@@ -210,7 +210,7 @@ export const sendMessage = <ThrowOnError extends boolean = false>(options: Optio
 /**
  * Messages in a thread
  */
-export const threadHistory = <ThrowOnError extends boolean = false>(options: Options<ThreadHistoryData, ThrowOnError>): RequestResult<ThreadHistoryResponses, ThreadHistoryErrors, ThrowOnError> => (options.client ?? client).get<ThreadHistoryResponses, ThreadHistoryErrors, ThrowOnError>({
+export const getThreadHistory = <ThrowOnError extends boolean = false>(options: Options<GetThreadHistoryData, ThrowOnError>): RequestResult<GetThreadHistoryResponses, GetThreadHistoryErrors, ThrowOnError> => (options.client ?? client).get<GetThreadHistoryResponses, GetThreadHistoryErrors, ThrowOnError>({
     security: [{
             in: 'cookie',
             name: 'eunomia_session',
@@ -223,7 +223,7 @@ export const threadHistory = <ThrowOnError extends boolean = false>(options: Opt
 /**
  * List connectors with their status
  */
-export const listAll = <ThrowOnError extends boolean = false>(options?: Options<ListAllData, ThrowOnError>): RequestResult<ListAllResponses, ListAllErrors, ThrowOnError> => (options?.client ?? client).get<ListAllResponses, ListAllErrors, ThrowOnError>({
+export const listConnectors = <ThrowOnError extends boolean = false>(options?: Options<ListConnectorsData, ThrowOnError>): RequestResult<ListConnectorsResponses, ListConnectorsErrors, ThrowOnError> => (options?.client ?? client).get<ListConnectorsResponses, ListConnectorsErrors, ThrowOnError>({
     security: [{
             in: 'cookie',
             name: 'eunomia_session',
@@ -236,7 +236,7 @@ export const listAll = <ThrowOnError extends boolean = false>(options?: Options<
 /**
  * All PocketAI recordings
  */
-export const pocketaiAll = <ThrowOnError extends boolean = false>(options?: Options<PocketaiAllData, ThrowOnError>): RequestResult<PocketaiAllResponses, PocketaiAllErrors, ThrowOnError> => (options?.client ?? client).get<PocketaiAllResponses, PocketaiAllErrors, ThrowOnError>({
+export const getPocketaiAll = <ThrowOnError extends boolean = false>(options?: Options<GetPocketaiAllData, ThrowOnError>): RequestResult<GetPocketaiAllResponses, GetPocketaiAllErrors, ThrowOnError> => (options?.client ?? client).get<GetPocketaiAllResponses, GetPocketaiAllErrors, ThrowOnError>({
     security: [{
             in: 'cookie',
             name: 'eunomia_session',
@@ -249,7 +249,7 @@ export const pocketaiAll = <ThrowOnError extends boolean = false>(options?: Opti
 /**
  * One PocketAI recording
  */
-export const pocketaiDetail = <ThrowOnError extends boolean = false>(options: Options<PocketaiDetailData, ThrowOnError>): RequestResult<PocketaiDetailResponses, PocketaiDetailErrors, ThrowOnError> => (options.client ?? client).get<PocketaiDetailResponses, PocketaiDetailErrors, ThrowOnError>({
+export const getPocketaiDetail = <ThrowOnError extends boolean = false>(options: Options<GetPocketaiDetailData, ThrowOnError>): RequestResult<GetPocketaiDetailResponses, GetPocketaiDetailErrors, ThrowOnError> => (options.client ?? client).get<GetPocketaiDetailResponses, GetPocketaiDetailErrors, ThrowOnError>({
     security: [{
             in: 'cookie',
             name: 'eunomia_session',
@@ -262,7 +262,7 @@ export const pocketaiDetail = <ThrowOnError extends boolean = false>(options: Op
 /**
  * Search PocketAI recordings
  */
-export const pocketaiSearch = <ThrowOnError extends boolean = false>(options: Options<PocketaiSearchData, ThrowOnError>): RequestResult<PocketaiSearchResponses, PocketaiSearchErrors, ThrowOnError> => (options.client ?? client).get<PocketaiSearchResponses, PocketaiSearchErrors, ThrowOnError>({
+export const searchPocketai = <ThrowOnError extends boolean = false>(options: Options<SearchPocketaiData, ThrowOnError>): RequestResult<SearchPocketaiResponses, SearchPocketaiErrors, ThrowOnError> => (options.client ?? client).get<SearchPocketaiResponses, SearchPocketaiErrors, ThrowOnError>({
     security: [{
             in: 'cookie',
             name: 'eunomia_session',
@@ -275,7 +275,7 @@ export const pocketaiSearch = <ThrowOnError extends boolean = false>(options: Op
 /**
  * PocketAI summary
  */
-export const pocketaiSummary = <ThrowOnError extends boolean = false>(options?: Options<PocketaiSummaryData, ThrowOnError>): RequestResult<PocketaiSummaryResponses, PocketaiSummaryErrors, ThrowOnError> => (options?.client ?? client).get<PocketaiSummaryResponses, PocketaiSummaryErrors, ThrowOnError>({
+export const getPocketaiSummary = <ThrowOnError extends boolean = false>(options?: Options<GetPocketaiSummaryData, ThrowOnError>): RequestResult<GetPocketaiSummaryResponses, GetPocketaiSummaryErrors, ThrowOnError> => (options?.client ?? client).get<GetPocketaiSummaryResponses, GetPocketaiSummaryErrors, ThrowOnError>({
     security: [{
             in: 'cookie',
             name: 'eunomia_session',
@@ -288,7 +288,7 @@ export const pocketaiSummary = <ThrowOnError extends boolean = false>(options?: 
 /**
  * Up Bank finance summary
  */
-export const upBankFinanceSummary = <ThrowOnError extends boolean = false>(options?: Options<UpBankFinanceSummaryData, ThrowOnError>): RequestResult<UpBankFinanceSummaryResponses, UpBankFinanceSummaryErrors, ThrowOnError> => (options?.client ?? client).get<UpBankFinanceSummaryResponses, UpBankFinanceSummaryErrors, ThrowOnError>({
+export const getUpBankFinanceSummary = <ThrowOnError extends boolean = false>(options?: Options<GetUpBankFinanceSummaryData, ThrowOnError>): RequestResult<GetUpBankFinanceSummaryResponses, GetUpBankFinanceSummaryErrors, ThrowOnError> => (options?.client ?? client).get<GetUpBankFinanceSummaryResponses, GetUpBankFinanceSummaryErrors, ThrowOnError>({
     security: [{
             in: 'cookie',
             name: 'eunomia_session',
@@ -301,7 +301,7 @@ export const upBankFinanceSummary = <ThrowOnError extends boolean = false>(optio
 /**
  * One connector
  */
-export const getOne = <ThrowOnError extends boolean = false>(options: Options<GetOneData, ThrowOnError>): RequestResult<GetOneResponses, GetOneErrors, ThrowOnError> => (options.client ?? client).get<GetOneResponses, GetOneErrors, ThrowOnError>({
+export const getConnector = <ThrowOnError extends boolean = false>(options: Options<GetConnectorData, ThrowOnError>): RequestResult<GetConnectorResponses, GetConnectorErrors, ThrowOnError> => (options.client ?? client).get<GetConnectorResponses, GetConnectorErrors, ThrowOnError>({
     security: [{
             in: 'cookie',
             name: 'eunomia_session',
@@ -314,7 +314,7 @@ export const getOne = <ThrowOnError extends boolean = false>(options: Options<Ge
 /**
  * Update a connector
  */
-export const putOne = <ThrowOnError extends boolean = false>(options: Options<PutOneData, ThrowOnError>): RequestResult<PutOneResponses, PutOneErrors, ThrowOnError> => (options.client ?? client).put<PutOneResponses, PutOneErrors, ThrowOnError>({
+export const updateConnector = <ThrowOnError extends boolean = false>(options: Options<UpdateConnectorData, ThrowOnError>): RequestResult<UpdateConnectorResponses, UpdateConnectorErrors, ThrowOnError> => (options.client ?? client).put<UpdateConnectorResponses, UpdateConnectorErrors, ThrowOnError>({
     security: [{
             in: 'cookie',
             name: 'eunomia_session',
@@ -331,7 +331,7 @@ export const putOne = <ThrowOnError extends boolean = false>(options: Options<Pu
 /**
  * Test a connector's credentials
  */
-export const testOne = <ThrowOnError extends boolean = false>(options: Options<TestOneData, ThrowOnError>): RequestResult<TestOneResponses, TestOneErrors, ThrowOnError> => (options.client ?? client).post<TestOneResponses, TestOneErrors, ThrowOnError>({
+export const testConnector = <ThrowOnError extends boolean = false>(options: Options<TestConnectorData, ThrowOnError>): RequestResult<TestConnectorResponses, TestConnectorErrors, ThrowOnError> => (options.client ?? client).post<TestConnectorResponses, TestConnectorErrors, ThrowOnError>({
     security: [{
             in: 'cookie',
             name: 'eunomia_session',
@@ -374,7 +374,7 @@ export const createEntity = <ThrowOnError extends boolean = false>(options: Opti
 /**
  * 3D projection of vault vectors
  */
-export const vectorCloud = <ThrowOnError extends boolean = false>(options?: Options<VectorCloudData, ThrowOnError>): RequestResult<VectorCloudResponses, VectorCloudErrors, ThrowOnError> => (options?.client ?? client).get<VectorCloudResponses, VectorCloudErrors, ThrowOnError>({
+export const getVectorCloud = <ThrowOnError extends boolean = false>(options?: Options<GetVectorCloudData, ThrowOnError>): RequestResult<GetVectorCloudResponses, GetVectorCloudErrors, ThrowOnError> => (options?.client ?? client).get<GetVectorCloudResponses, GetVectorCloudErrors, ThrowOnError>({
     security: [{
             in: 'cookie',
             name: 'eunomia_session',
@@ -387,7 +387,7 @@ export const vectorCloud = <ThrowOnError extends boolean = false>(options?: Opti
 /**
  * Entity graph
  */
-export const entityGraph = <ThrowOnError extends boolean = false>(options?: Options<EntityGraphData, ThrowOnError>): RequestResult<EntityGraphResponses, EntityGraphErrors, ThrowOnError> => (options?.client ?? client).get<EntityGraphResponses, EntityGraphErrors, ThrowOnError>({
+export const getEntityGraph = <ThrowOnError extends boolean = false>(options?: Options<GetEntityGraphData, ThrowOnError>): RequestResult<GetEntityGraphResponses, GetEntityGraphErrors, ThrowOnError> => (options?.client ?? client).get<GetEntityGraphResponses, GetEntityGraphErrors, ThrowOnError>({
     security: [{
             in: 'cookie',
             name: 'eunomia_session',
@@ -537,12 +537,12 @@ export const exportData = <ThrowOnError extends boolean = false>(options?: Optio
 /**
  * This document
  */
-export const openapiJson = <ThrowOnError extends boolean = false>(options?: Options<OpenapiJsonData, ThrowOnError>): RequestResult<OpenapiJsonResponses, unknown, ThrowOnError> => (options?.client ?? client).get<OpenapiJsonResponses, unknown, ThrowOnError>({ url: '/api/openapi.json', ...options });
+export const getOpenapi = <ThrowOnError extends boolean = false>(options?: Options<GetOpenapiData, ThrowOnError>): RequestResult<GetOpenapiResponses, unknown, ThrowOnError> => (options?.client ?? client).get<GetOpenapiResponses, unknown, ThrowOnError>({ url: '/api/openapi.json', ...options });
 
 /**
  * Read app settings
  */
-export const readSettings = <ThrowOnError extends boolean = false>(options?: Options<ReadSettingsData, ThrowOnError>): RequestResult<ReadSettingsResponses, ReadSettingsErrors, ThrowOnError> => (options?.client ?? client).get<ReadSettingsResponses, ReadSettingsErrors, ThrowOnError>({
+export const getSettings = <ThrowOnError extends boolean = false>(options?: Options<GetSettingsData, ThrowOnError>): RequestResult<GetSettingsResponses, GetSettingsErrors, ThrowOnError> => (options?.client ?? client).get<GetSettingsResponses, GetSettingsErrors, ThrowOnError>({
     security: [{
             in: 'cookie',
             name: 'eunomia_session',
@@ -555,7 +555,7 @@ export const readSettings = <ThrowOnError extends boolean = false>(options?: Opt
 /**
  * Update app settings
  */
-export const patchSettings = <ThrowOnError extends boolean = false>(options: Options<PatchSettingsData, ThrowOnError>): RequestResult<PatchSettingsResponses, PatchSettingsErrors, ThrowOnError> => (options.client ?? client).patch<PatchSettingsResponses, PatchSettingsErrors, ThrowOnError>({
+export const updateSettings = <ThrowOnError extends boolean = false>(options: Options<UpdateSettingsData, ThrowOnError>): RequestResult<UpdateSettingsResponses, UpdateSettingsErrors, ThrowOnError> => (options.client ?? client).patch<UpdateSettingsResponses, UpdateSettingsErrors, ThrowOnError>({
     security: [{
             in: 'cookie',
             name: 'eunomia_session',
@@ -585,7 +585,7 @@ export const completeOnboarding = <ThrowOnError extends boolean = false>(options
 /**
  * List models the configured OpenAI endpoint offers
  */
-export const openaiModels = <ThrowOnError extends boolean = false>(options?: Options<OpenaiModelsData, ThrowOnError>): RequestResult<OpenaiModelsResponses, OpenaiModelsErrors, ThrowOnError> => (options?.client ?? client).get<OpenaiModelsResponses, OpenaiModelsErrors, ThrowOnError>({
+export const listOpenaiModels = <ThrowOnError extends boolean = false>(options?: Options<ListOpenaiModelsData, ThrowOnError>): RequestResult<ListOpenaiModelsResponses, ListOpenaiModelsErrors, ThrowOnError> => (options?.client ?? client).get<ListOpenaiModelsResponses, ListOpenaiModelsErrors, ThrowOnError>({
     security: [{
             in: 'cookie',
             name: 'eunomia_session',
@@ -598,7 +598,7 @@ export const openaiModels = <ThrowOnError extends boolean = false>(options?: Opt
 /**
  * Combined snapshot of connector data
  */
-export const snapshot = <ThrowOnError extends boolean = false>(options?: Options<SnapshotData, ThrowOnError>): RequestResult<SnapshotResponses, SnapshotErrors, ThrowOnError> => (options?.client ?? client).get<SnapshotResponses, SnapshotErrors, ThrowOnError>({
+export const getSnapshot = <ThrowOnError extends boolean = false>(options?: Options<GetSnapshotData, ThrowOnError>): RequestResult<GetSnapshotResponses, GetSnapshotErrors, ThrowOnError> => (options?.client ?? client).get<GetSnapshotResponses, GetSnapshotErrors, ThrowOnError>({
     security: [{
             in: 'cookie',
             name: 'eunomia_session',
@@ -624,7 +624,7 @@ export const listSources = <ThrowOnError extends boolean = false>(options?: Opti
 /**
  * Overall sync status
  */
-export const sourcesStatus = <ThrowOnError extends boolean = false>(options?: Options<SourcesStatusData, ThrowOnError>): RequestResult<SourcesStatusResponses, SourcesStatusErrors, ThrowOnError> => (options?.client ?? client).get<SourcesStatusResponses, SourcesStatusErrors, ThrowOnError>({
+export const getSourcesStatus = <ThrowOnError extends boolean = false>(options?: Options<GetSourcesStatusData, ThrowOnError>): RequestResult<GetSourcesStatusResponses, GetSourcesStatusErrors, ThrowOnError> => (options?.client ?? client).get<GetSourcesStatusResponses, GetSourcesStatusErrors, ThrowOnError>({
     security: [{
             in: 'cookie',
             name: 'eunomia_session',
@@ -637,7 +637,7 @@ export const sourcesStatus = <ThrowOnError extends boolean = false>(options?: Op
 /**
  * Sync a source now
  */
-export const syncNow = <ThrowOnError extends boolean = false>(options: Options<SyncNowData, ThrowOnError>): RequestResult<SyncNowResponses, SyncNowErrors, ThrowOnError> => (options.client ?? client).post<SyncNowResponses, SyncNowErrors, ThrowOnError>({
+export const syncSource = <ThrowOnError extends boolean = false>(options: Options<SyncSourceData, ThrowOnError>): RequestResult<SyncSourceResponses, SyncSourceErrors, ThrowOnError> => (options.client ?? client).post<SyncSourceResponses, SyncSourceErrors, ThrowOnError>({
     security: [{
             in: 'cookie',
             name: 'eunomia_session',
@@ -650,17 +650,17 @@ export const syncNow = <ThrowOnError extends boolean = false>(options: Options<S
 /**
  * Source webhook (authenticated by the source's own signature)
  */
-export const sourceWebhook = <ThrowOnError extends boolean = false>(options: Options<SourceWebhookData, ThrowOnError>): RequestResult<SourceWebhookResponses, SourceWebhookErrors, ThrowOnError> => (options.client ?? client).post<SourceWebhookResponses, SourceWebhookErrors, ThrowOnError>({ url: '/api/sources/{key}/webhook/{owner_id}', ...options });
+export const receiveSourceWebhook = <ThrowOnError extends boolean = false>(options: Options<ReceiveSourceWebhookData, ThrowOnError>): RequestResult<ReceiveSourceWebhookResponses, ReceiveSourceWebhookErrors, ThrowOnError> => (options.client ?? client).post<ReceiveSourceWebhookResponses, ReceiveSourceWebhookErrors, ThrowOnError>({ url: '/api/sources/{key}/webhook/{owner_id}', ...options });
 
 /**
  * Names of the available tools
  */
-export const catalogue = <ThrowOnError extends boolean = false>(options?: Options<CatalogueData, ThrowOnError>): RequestResult<CatalogueResponses, CatalogueErrors, ThrowOnError> => (options?.client ?? client).get<CatalogueResponses, CatalogueErrors, ThrowOnError>({ url: '/api/tools', ...options });
+export const listTools = <ThrowOnError extends boolean = false>(options?: Options<ListToolsData, ThrowOnError>): RequestResult<ListToolsResponses, ListToolsErrors, ThrowOnError> => (options?.client ?? client).get<ListToolsResponses, ListToolsErrors, ThrowOnError>({ url: '/api/tools', ...options });
 
 /**
  * Invoke a tool
  */
-export const invoke = <ThrowOnError extends boolean = false>(options: Options<InvokeData, ThrowOnError>): RequestResult<InvokeResponses, InvokeErrors, ThrowOnError> => (options.client ?? client).post<InvokeResponses, InvokeErrors, ThrowOnError>({
+export const invokeTool = <ThrowOnError extends boolean = false>(options: Options<InvokeToolData, ThrowOnError>): RequestResult<InvokeToolResponses, InvokeToolErrors, ThrowOnError> => (options.client ?? client).post<InvokeToolResponses, InvokeToolErrors, ThrowOnError>({
     security: [{
             in: 'cookie',
             name: 'eunomia_session',
@@ -677,7 +677,7 @@ export const invoke = <ThrowOnError extends boolean = false>(options: Options<In
 /**
  * Ask the updater to check now
  */
-export const checkNow = <ThrowOnError extends boolean = false>(options?: Options<CheckNowData, ThrowOnError>): RequestResult<CheckNowResponses, CheckNowErrors, ThrowOnError> => (options?.client ?? client).post<CheckNowResponses, CheckNowErrors, ThrowOnError>({
+export const checkForUpdate = <ThrowOnError extends boolean = false>(options?: Options<CheckForUpdateData, ThrowOnError>): RequestResult<CheckForUpdateResponses, CheckForUpdateErrors, ThrowOnError> => (options?.client ?? client).post<CheckForUpdateResponses, CheckForUpdateErrors, ThrowOnError>({
     security: [{
             in: 'cookie',
             name: 'eunomia_session',
@@ -703,7 +703,7 @@ export const requestUpdate = <ThrowOnError extends boolean = false>(options?: Op
 /**
  * Updater status
  */
-export const getStatus = <ThrowOnError extends boolean = false>(options?: Options<GetStatusData, ThrowOnError>): RequestResult<GetStatusResponses, GetStatusErrors, ThrowOnError> => (options?.client ?? client).get<GetStatusResponses, GetStatusErrors, ThrowOnError>({
+export const getUpdateStatus = <ThrowOnError extends boolean = false>(options?: Options<GetUpdateStatusData, ThrowOnError>): RequestResult<GetUpdateStatusResponses, GetUpdateStatusErrors, ThrowOnError> => (options?.client ?? client).get<GetUpdateStatusResponses, GetUpdateStatusErrors, ThrowOnError>({
     security: [{
             in: 'cookie',
             name: 'eunomia_session',

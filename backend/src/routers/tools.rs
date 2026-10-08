@@ -25,6 +25,7 @@ pub fn router() -> Router<AppState> {
 }
 
 #[utoipa::path(
+    operation_id = "listTools",
     get,
     path = "/api/tools",
     tag = "tools",
@@ -41,14 +42,15 @@ async fn catalogue() -> Json<Value> {
     Json(serde_json::json!(names))
 }
 
-// ponytail: untyped response, give it a struct (see docs/architecture/foundation-plan.md 3.9)
 #[utoipa::path(
+    operation_id = "invokeTool",
     post,
     path = "/api/tools/{name}",
     tag = "tools",
     summary = "Invoke a tool",
     params(("name" = String, Path)),
     request_body(content = Object, description = "Tool arguments"),
+    // open body: each tool defines its own result shape
     responses((status = 200, body = Object), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
     security(("cookie" = []), ("bearer" = [])),
 )]
