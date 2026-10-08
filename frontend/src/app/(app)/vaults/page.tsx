@@ -492,6 +492,7 @@ function VaultInspector({
             )}
           </div>
         )}
+        {membersQuery.isError && <ErrorLine error={failure(membersQuery.error, "Could not load the members of this vault.")} />}
         {error && <ErrorLine error={error} />}
       </div>
     </aside>
@@ -545,6 +546,7 @@ function InvitationsPanel() {
     }
   }
 
+  if (invitationsQuery.isError) return <ErrorLine error={failure(invitationsQuery.error, "Could not load your invitations.")} />;
   if (!invitations || invitations.length === 0) return null;
 
   return (
@@ -1017,6 +1019,8 @@ export default function VaultsPage() {
           New org vault
         </button>
       </header>
+
+      {vaultsQuery.isError && <ErrorLine error={failure(vaultsQuery.error, "Could not load your vaults.", " Reload the page to try again.")} />}
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_380px] items-start">
         <div className="flex flex-col gap-9 min-w-0">

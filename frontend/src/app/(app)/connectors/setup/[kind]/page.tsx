@@ -10,6 +10,7 @@ import { useMe } from "@/lib/queries/auth";
 import { useConnectors, useTestConnector, useUpdateConnector } from "@/lib/queries/connectors";
 import { useSettings, useUpdateSettings } from "@/lib/queries/settings";
 import { CONNECTOR_META, CONNECTOR_ORDER, ConnectorTile, connectorStatus, type FieldDef } from "@/lib/connectorMeta";
+import ErrorLine, { failure } from "@/components/ErrorLine";
 import CopyButton from "@/components/bits/CopyButton";
 import SyncMark from "@/components/bits/SyncMark";
 import Tooltip from "@/components/bits/Tooltip";
@@ -101,7 +102,7 @@ function ConnectorSetup({ kind }: { kind: ConnectorKind }) {
   const connectorsQuery = useConnectors();
   // null while loading, undefined when the backend lists no such connector.
   const connector = connectorsQuery.data ? connectorsQuery.data.find((c) => c.kind === kind) : null;
-  const loadError = connectorsQuery.isError ? connectorsQuery.error.message : null;
+  const loadError = connectorsQuery.isError ? failure(connectorsQuery.error, "Could not load this connector.", " Reload the page once the backend is reachable.") : null;
   const updateConnector = useUpdateConnector();
   const testConnector = useTestConnector();
   const updateSettings = useUpdateSettings();
@@ -245,11 +246,7 @@ function ConnectorSetup({ kind }: { kind: ConnectorKind }) {
         </p>
       </header>
 
-      {loadError && (
-        <div className="rounded-[10px] px-4 py-3 text-[13px]" style={{ background: "var(--critical-soft)", color: "var(--critical)" }} role="alert">
-          Could not load this connector ({loadError}). Reload the page once the backend is reachable.
-        </div>
-      )}
+      {loadError && <ErrorLine error={loadError} />}
 
       {isDemo && (
         <p className="text-[13px] rounded-[10px] px-4 py-3" style={{ background: "var(--surface-raised)", color: "var(--ink-dim)" }}>

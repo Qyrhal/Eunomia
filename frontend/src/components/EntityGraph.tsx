@@ -112,7 +112,7 @@ export default function EntityGraph({
   const [vaultId, setVaultId] = useState<string | undefined>(undefined);
   const graphQuery = useEntityGraph({ kinds, vaultId });
   const graph: EntityGraphData | null = graphQuery.data ?? null;
-  const error = graphQuery.error && !graph ? graphQuery.error.message || "Could not load the entity graph." : null;
+  const error = graphQuery.error && !graph ? failure(graphQuery.error, "Could not load the entity graph.") : null;
   const myEmail = useMe().data?.email ?? null;
   const myVaults = useVaults().data ?? [];
   const createEntityMutation = useCreateEntityMutation();
@@ -356,12 +356,8 @@ export default function EntityGraph({
     return frame(
       null,
       <div className="h-full flex items-center justify-center p-4">
-        <div
-          className="max-w-sm rounded-[10px] px-4 py-3 text-[13px] flex flex-col gap-2"
-          style={{ background: "var(--critical-soft)", color: "var(--critical)" }}
-          role="alert"
-        >
-          <span>Could not load the entity graph: {error}</span>
+        <div className="max-w-sm flex flex-col gap-2">
+          <ErrorLine error={error} />
           <button type="button" className="btn btn-sm self-start" onClick={() => window.location.reload()}>
             Try again
           </button>

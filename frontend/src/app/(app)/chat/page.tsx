@@ -1,5 +1,6 @@
 "use client";
 
+import ErrorLine, { failure, type Failure } from "@/components/ErrorLine";
 import Select from "@/components/Select";
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
@@ -332,6 +333,7 @@ export default function ChatPage() {
   const [streamingText, setStreamingText] = useState("");
   const [liveSteps, setLiveSteps] = useState<ToolStep[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<Failure | null>(null);
   const [needsKey, setNeedsKey] = useState(false);
   const me = useMe().data?.email ?? null;
   const [lastSent, setLastSent] = useState("");
@@ -344,11 +346,15 @@ export default function ChatPage() {
 
   const loadHistory = useCallback((threadId: string) => {
     setMessages(null);
+    setLoadError(null);
     stickRef.current = true;
     queryClient
       .fetchQuery(historyQuery(threadId))
       .then(setMessages)
-      .catch(() => setMessages([]));
+      .catch((e) => {
+        setMessages([]);
+        setLoadError(failure(e, "Could not load this conversation."));
+      });
   }, [queryClient]);
 
   useEffect(() => {
@@ -359,7 +365,10 @@ export default function ChatPage() {
         setActiveId(list[0].id);
         loadHistory(list[0].id);
       })
-      .catch(() => {});
+      .catch((e) => {
+        setMessages([]);
+        setLoadError(failure(e, "Could not load your conversations."));
+      });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadHistory]);
 
@@ -518,8 +527,9 @@ export default function ChatPage() {
             className="transcript flex-1 min-h-0 overflow-y-auto"
           >
             <div className="max-w-[720px] mx-auto px-4 md:px-6 py-6 flex flex-col gap-7 min-h-full" aria-live="polite" aria-busy={sending}>
+              {loadError && <ErrorLine error={loadError} />}
               {turns === null && <LoadingTurns />}
-              {turns !== null && turns.length === 0 && !sending && <EmptyState onPick={(text) => send(text)} />}
+              {turns !== null && turns.length === 0 && !sending && !loadError && <EmptyState onPick={(text) => send(text)} />}
               {turns?.map((t, i) => <TurnView key={i} turn={t} me={me} />)}
               {sending && (
                 <article className="fade-in">

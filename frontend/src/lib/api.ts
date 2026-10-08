@@ -74,14 +74,19 @@ export const chat = {
       body: JSON.stringify({ message }),
     });
     if (!res.ok || !res.body) {
+      // Error bodies are RFC 9457 problem+json: detail, code, trace_id.
       let detail = `${res.status} /api/chat/threads/${threadId}`;
+      let code = `http.${res.status}`;
+      let traceId = res.headers.get("x-trace-id") ?? undefined;
       try {
         const body = await res.json();
-        if (body && typeof body.detail === "string") detail = body.detail;
+        if (typeof body?.detail === "string") detail = body.detail;
+        if (typeof body?.code === "string") code = body.code;
+        if (typeof body?.trace_id === "string") traceId = body.trace_id;
       } catch {
         // non-JSON error body, fall back to the status line above
       }
-      throw new Error(detail);
+      throw new ApiError(res.status, code, detail, traceId);
     }
 
     const reader = res.body.getReader();

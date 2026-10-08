@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { X } from "lucide-react";
+import ErrorLine, { failure } from "./ErrorLine";
 import Scene3D from "./Scene3D";
 import { useEntityCloud } from "@/lib/queries/entities";
 import { useVaults } from "@/lib/queries/vaults";
@@ -21,9 +22,9 @@ export default function VectorCloud() {
   const cloudQuery = useEntityCloud(picked);
   const data = cloudQuery.data ?? null;
   const error = vaultsQuery.isError
-    ? "Could not load your vaults."
+    ? failure(vaultsQuery.error, "Could not load your vaults.", " Reload the page to try again.")
     : cloudQuery.isError
-      ? cloudQuery.error.message || "Could not load the vector cloud."
+      ? failure(cloudQuery.error, "Could not load the vector cloud.", " Reload the page to try again.")
       : null;
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
@@ -80,8 +81,8 @@ export default function VectorCloud() {
 
       <div className="ledger relative flex-1 min-h-0 overflow-hidden" style={{ minHeight: 420 }}>
         {error ? (
-          <div className="m-4 rounded-md px-3 py-2 text-[12.5px]" style={{ color: "var(--critical)", background: "var(--critical-soft)" }}>
-            {error} Reload the page to try again.
+          <div className="m-4">
+            <ErrorLine error={error} />
           </div>
         ) : picked.length === 0 ? (
           <div className="p-10 text-center text-[13px]" style={{ color: "var(--ink-dim)" }}>

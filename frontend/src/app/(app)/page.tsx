@@ -610,6 +610,9 @@ export default function DashboardPage() {
         <Agents tokens={tokens} />
       </header>
 
+      {sourcesQuery.isError && <ErrorLine error={failure(sourcesQuery.error, "Could not load your sources.")} />}
+      {liveQuery.isError && <ErrorLine error={failure(liveQuery.error, "Could not load recent memory.")} />}
+
       <section
         aria-label="Summary"
         className="grid grid-cols-2 lg:grid-cols-4 overflow-hidden rounded-[10px]"
