@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { X } from "lucide-react";
 import Scene3D from "./Scene3D";
-import { cloud, vaults as vaultsApi, type Cloud, type Vault } from "@/lib/api";
+import { useEntityCloud } from "@/lib/queries/entities";
+import { useVaults } from "@/lib/queries/vaults";
 
 // One colour per layered vault, in pick order.
 // Series colours, never the accent: the accent marks only what is pressable or selected.
@@ -11,37 +12,20 @@ const LAYER_COLORS = ["var(--series-2)", "var(--series-1)", "var(--series-3)", "
 const AXES: [string, string, string] = ["PC1", "PC2", "PC3"];
 
 export default function VectorCloud() {
-  const [vaults, setVaults] = useState<Vault[]>([]);
-  const [picked, setPicked] = useState<string[]>([]);
-  const [data, setData] = useState<Cloud | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const vaultsQuery = useVaults();
+  const vaults = vaultsQuery.data ?? [];
+  // Until the user toggles a layer, the personal vault (or the first one) is picked.
+  const [userPicked, setPicked] = useState<string[] | null>(null);
+  const defaultVault = vaults.find((v) => v.kind === "personal") ?? vaults[0];
+  const picked = userPicked ?? (defaultVault ? [defaultVault.id] : []);
+  const cloudQuery = useEntityCloud(picked);
+  const data = cloudQuery.data ?? null;
+  const error = vaultsQuery.isError
+    ? "Could not load your vaults."
+    : cloudQuery.isError
+      ? cloudQuery.error.message || "Could not load the vector cloud."
+      : null;
   const [selectedId, setSelectedId] = useState<string | null>(null);
-
-  useEffect(() => {
-    vaultsApi
-      .list()
-      .then((r) => {
-        setVaults(r.results);
-        const personal = r.results.find((v) => v.kind === "personal") ?? r.results[0];
-        if (personal) setPicked([personal.id]);
-      })
-      .catch(() => setError("Could not load your vaults."));
-  }, []);
-
-  useEffect(() => {
-    if (picked.length === 0) return;
-    let stale = false; // a slower, older response must not overwrite a newer pick
-    cloud(picked)
-      .then((c) => {
-        if (stale) return;
-        setData(c);
-        setError(null);
-      })
-      .catch((e) => !stale && setError(e instanceof Error ? e.message : "Could not load the vector cloud."));
-    return () => {
-      stale = true;
-    };
-  }, [picked]);
 
   const colorOf = (vaultId: string) => LAYER_COLORS[Math.max(0, picked.indexOf(vaultId)) % LAYER_COLORS.length];
   const points = useMemo(
@@ -57,7 +41,7 @@ export default function VectorCloud() {
 
   function toggle(id: string) {
     setSelectedId(null);
-    setPicked((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+    setPicked(picked.includes(id) ? picked.filter((x) => x !== id) : [...picked, id]);
   }
 
   return (

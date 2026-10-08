@@ -1184,6 +1184,55 @@
         ]
       }
     },
+    "/api/debug/capsules/{trace_id}": {
+      "get": {
+        "tags": [
+          "debug"
+        ],
+        "summary": "Fetch the redacted failure capsule for a trace id (instance admin only)",
+        "operationId": "getFailureCapsule",
+        "parameters": [
+          {
+            "name": "trace_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Capsule"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/api/entities": {
       "get": {
         "tags": [
@@ -3529,6 +3578,67 @@
         "properties": {
           "has_users": {
             "type": "boolean"
+          }
+        }
+      },
+      "Capsule": {
+        "type": "object",
+        "required": [
+          "trace_id",
+          "kind",
+          "name",
+          "args",
+          "code",
+          "status",
+          "source",
+          "version",
+          "truncated",
+          "created_at"
+        ],
+        "properties": {
+          "args": {
+            "type": "object",
+            "description": "Tool arguments, or `{method, uri, body}` for a route. Secrets are masked."
+          },
+          "code": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "description": "`tool` or `route`."
+          },
+          "name": {
+            "type": "string",
+            "description": "The tool name, or `METHOD /matched/route` for a route."
+          },
+          "source": {
+            "type": "string",
+            "description": "The raw error text. Never sent to ordinary clients; admins only."
+          },
+          "status": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "trace_id": {
+            "type": "string"
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "True when `args` was cut to fit the size cap (not replayable)."
+          },
+          "user": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The caller's record id, if the request was authenticated."
+          },
+          "version": {
+            "type": "string"
           }
         }
       },

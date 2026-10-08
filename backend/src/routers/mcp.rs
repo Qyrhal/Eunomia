@@ -103,13 +103,22 @@ async fn bearer_user(state: &AppState, headers: &HeaderMap) -> Option<(User, Opt
     Some((user, scopes))
 }
 
-/// DNS-rebinding guard the spec requires: non-browser clients send no
-/// Origin; a browser must be same-origin (directly or via the frontend's
-/// proxy, which forwards the original host) or an allowed CORS origin.
+/// DNS-rebinding guard. The MCP transport spec says servers MUST validate
+/// `Origin`; the attack it prevents is a web page borrowing a victim's ambient
+/// authority (cookies, or being on a trusted network) through a rebound DNS name.
+/// `/mcp` is bearer-only, and a page cannot know the token, so a request that
+/// presents `Authorization` and no `Cookie` has no ambient authority to abuse and
+/// any origin is fine (this is what lets browser clients such as MCP Inspector
+/// connect). Any request that carries a cookie, or no bearer, must come from no
+/// browser at all, the same origin (directly or via the frontend's proxy, which
+/// forwards the original host) or an allowed CORS origin.
 fn origin_allowed(headers: &HeaderMap, cors_allowed_origins: &str) -> bool {
     let Some(origin) = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok()) else {
         return true;
     };
+    if headers.contains_key(header::AUTHORIZATION) && !headers.contains_key(header::COOKIE) {
+        return true;
+    }
     if cors_allowed_origins.split(',').map(str::trim).any(|o| o == origin) {
         return true;
     }
@@ -264,6 +273,9 @@ mod tests {
         assert!(origin_allowed(&headers(&[("origin", "http://10.0.0.5:3000"), ("x-forwarded-host", "10.0.0.5:3000")]), cors));
         assert!(origin_allowed(&headers(&[("origin", "http://localhost:8001"), ("host", "localhost:8001")]), cors));
         assert!(!origin_allowed(&headers(&[("origin", "https://evil.example"), ("host", "localhost:8001")]), cors));
+        // bearer-only browser clients (MCP Inspector) from any origin; a cookie brings the check back
+        assert!(origin_allowed(&headers(&[("origin", "https://inspector.example"), ("authorization", "Bearer x")]), cors));
+        assert!(!origin_allowed(&headers(&[("origin", "https://evil.example"), ("authorization", "Bearer x"), ("cookie", "a=b")]), cors));
     }
 
     #[test]

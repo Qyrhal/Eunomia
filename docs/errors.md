@@ -15,7 +15,7 @@ The `ErrorCode` enum is in `backend/src/error.rs`. A unit test fails if a code i
 | Code | HTTP | Meaning | Emitted by |
 |------|------|---------|------------|
 | `auth.unauthorized` | 401 | No valid session cookie or API token, or wrong email or password. | `auth.rs` (extractor), `routers/auth.rs`, `routers/mcp.rs` |
-| `auth.forbidden` | 403 | Request rejected before auth, for example a disallowed browser `Origin` on `/mcp`. | `routers/mcp.rs` |
+| `auth.forbidden` | 403 | Request rejected before auth, for example a disallowed browser `Origin` on `/mcp`, or a non-admin reading `/api/debug/capsules/{trace_id}`. | `routers/mcp.rs`, `routers/debug.rs` |
 | `auth.email_taken` | 409 | Signup with an email that already has an account. | `models_user.rs`, `routers/auth.rs` |
 | `auth.not_found` | 404 | API token or session id does not exist or is not yours. | `routers/auth.rs` |
 | `auth.scope` | 403 | The token lacks the scope this route or tool needs, or is restricted to another vault, or the route is account-level and the token is vault-restricted. | `gate.rs`, `authz.rs`, `tools/registry.rs` |

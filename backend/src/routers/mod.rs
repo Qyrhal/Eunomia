@@ -5,6 +5,7 @@ pub mod entities;
 pub mod vaults;
 pub mod settings;
 pub mod audit;
+pub mod debug;
 pub mod export;
 pub mod sources;
 pub mod tools;

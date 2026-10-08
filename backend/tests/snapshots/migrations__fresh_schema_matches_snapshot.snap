@@ -300,6 +300,20 @@ expression: info(&db).await
       "kind": {
         "kind": "NORMAL"
       },
+      "name": "failure_capsule",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      }
+    },
+    {
+      "drop": false,
+      "full": true,
+      "kind": {
+        "kind": "NORMAL"
+      },
       "name": "file",
       "permissions": {
         "create": false,

@@ -2,9 +2,8 @@
 // Mirrors `api.ts`: same base URL, cookies on every request, and a fresh
 // W3C `traceparent` per request so the backend joins the browser's trace.
 //
-// Example (typed end to end, not yet used by any page):
-//   import { me } from "@/lib/gen";
-//   const { data, error } = await me(); // data: AuthOut, error: Problem
+// Pages do not call `./gen` directly: they use the TanStack Query hooks in
+// `./queries`, whose `call()` turns the error result into an `ApiError`.
 import type { CreateClientConfig } from "./gen/client";
 import { API_URL, traceparent } from "./api";
 

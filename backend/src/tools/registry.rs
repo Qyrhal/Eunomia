@@ -1368,7 +1368,9 @@ pub async fn call(state: &AppState, owner: &RecordId, name: &str, args: Value) -
     let vault = args.get("vault_id").and_then(Value::as_str).unwrap_or("personal").to_string();
     let span = tracing::info_span!("tool.call", tool = name, vault = %vault, outcome = Empty, duration_ms = Empty);
     let started = Instant::now();
-    let mut result = run_tool(state, owner, name, spec, args).instrument(span.clone()).await;
+    let source = Default::default();
+    let captured = args.clone();
+    let mut result = crate::error::TOOL_SOURCE.scope(Arc::clone(&source), run_tool(state, owner, name, spec, args)).instrument(span.clone()).await;
 
     // Every failed tool value carries a stable `code` and the request's `trace_id`.
     if let Ok(Value::Object(map)) = &mut result
@@ -1385,7 +1387,35 @@ pub async fn call(state: &AppState, owner: &RecordId, name: &str, args: Value) -
     span.record("outcome", outcome);
     span.record("duration_ms", started.elapsed().as_secs_f64() * 1000.0);
     span.in_scope(|| tracing::info!(outcome, "tool call"));
+    let source = source.lock().unwrap().take();
+    record_failure(state, owner, name, captured, &result, source).await;
     result
+}
+
+/// A capsule for any failure but bad input, so `eunomia replay` can reproduce it.
+async fn record_failure(state: &AppState, owner: &RecordId, name: &str, args: Value, result: &AppResult<Value>, source: Option<String>) {
+    let (code, text) = match result {
+        Ok(v) if v.get("error").is_some() => {
+            let code = v.get("code").and_then(Value::as_str).and_then(|c| ErrorCode::ALL.iter().find(|e| e.as_str() == c));
+            (code.copied().unwrap_or(ErrorCode::ValidationInvalid), v["error"].as_str().unwrap_or_default().to_string())
+        }
+        Err(e) => (e.code, e.source.clone().unwrap_or_else(|| e.message.clone())),
+        Ok(_) => return,
+    };
+    if code == ErrorCode::ValidationInvalid {
+        return;
+    }
+    let status = code.default_status().as_u16();
+    let failure = crate::capsules::Failure {
+        kind: "tool",
+        name: name.to_string(),
+        user: Some(owner.to_string()),
+        args,
+        code,
+        status,
+        source: source.unwrap_or(text),
+    };
+    crate::capsules::record(&state.db, failure).await;
 }
 
 async fn run_tool(state: &AppState, owner: &RecordId, name: &str, spec: &ToolSpec, args: Value) -> AppResult<Value> {

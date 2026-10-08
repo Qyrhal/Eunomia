@@ -3,7 +3,9 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { BookOpen, CornerDownLeft, FileText, FolderGit2, LayoutDashboard, MessageSquare, Plug, Search, Settings, Share2, User, Vault } from "lucide-react";
-import { sources, tools, type EntityKind, type EntitySummary, type SourceRow, type ToolHit } from "@/lib/api";
+import type { EntityKind } from "@/lib/types";
+import { useSources } from "@/lib/queries/sources";
+import { usePaletteSearch } from "@/lib/queries/tools";
 
 type IconType = React.ComponentType<{ size?: number; color?: string; strokeWidth?: number }>;
 type Item = { key: string; label: string; sub?: string; icon: IconType; go: () => void };
@@ -60,17 +62,9 @@ export default function CommandPalette() {
 function Palette({ onClose }: { onClose: () => void }) {
   const [query, setQuery] = useState("");
   const [index, setIndex] = useState(0);
-  const [rows, setRows] = useState<SourceRow[]>([]);
-  const [entityHits, setEntityHits] = useState<EntitySummary[]>([]);
-  const [recordHits, setRecordHits] = useState<ToolHit[]>([]);
+  const rows = useSources().data ?? [];
+  const [debounced, setDebounced] = useState("");
   const router = useRouter();
-
-  useEffect(() => {
-    sources
-      .list()
-      .then(setRows)
-      .catch(() => setRows([]));
-  }, []);
 
   // Data search, debounced -- only fires once the nav/connector match is
   // worth supplementing, i.e. the query is long enough to be meaningful.
@@ -78,18 +72,10 @@ function Palette({ onClose }: { onClose: () => void }) {
   const searching = q.length >= SEARCH_MIN_LENGTH;
   useEffect(() => {
     if (!searching) return;
-    const timer = setTimeout(() => {
-      tools
-        .call("entities_search", { query: q, limit: SEARCH_LIMIT })
-        .then((res) => setEntityHits("results" in res ? (res.results as EntitySummary[]) : []))
-        .catch(() => setEntityHits([]));
-      tools
-        .search({ query: q, limit: SEARCH_LIMIT })
-        .then((res) => setRecordHits("results" in res ? res.results : []))
-        .catch(() => setRecordHits([]));
-    }, SEARCH_DEBOUNCE_MS);
+    const timer = setTimeout(() => setDebounced(q), SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(timer);
   }, [q, searching]);
+  const { entities: entityHits, records: recordHits } = usePaletteSearch(debounced, SEARCH_LIMIT, debounced !== "");
 
   const connectorItems: Item[] = rows
     .filter((r) => r.connected)

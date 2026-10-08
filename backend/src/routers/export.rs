@@ -111,7 +111,7 @@ struct UserEmailRow {
 
 /// `owner`'s personal vault -- the implicit scope for an export, matching
 /// `vaults/service.py::default_vault_id`.
-async fn resolve_personal_vault(db: &Db, owner: &RecordId) -> AppResult<RecordId> {
+pub(crate) async fn resolve_personal_vault(db: &Db, owner: &RecordId) -> AppResult<RecordId> {
     let mut res = store::app::EXPORT_PERSONAL_VAULT
         .on(db)
         .bind(("user", owner.clone()))
@@ -156,7 +156,22 @@ fn datetime_str(d: &Option<Datetime>) -> Value {
     security(("cookie" = []), ("bearer" = [])),
 )]
 async fn export_data(State(state): State<AppState>, user: User) -> AppResult<Response> {
-    let db = &state.db;
+    let document = build_export(&state.db, &user).await?;
+    let body = serde_json::to_string_pretty(&document).map_err(|e| AppError::internal(e.to_string()))?;
+
+    Ok((
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "application/json".to_string()),
+            (header::CONTENT_DISPOSITION, "attachment; filename=\"eunomia-export.json\"".to_string()),
+        ],
+        body,
+    )
+        .into_response())
+}
+
+/// The export document for `user`'s personal vault. Shared with `eunomia replay`.
+pub async fn build_export(db: &Db, user: &User) -> AppResult<Value> {
     let vault = resolve_personal_vault(db, &user.id).await?;
 
     // Pass 1: gather every entity + its memory/relations, collecting the
@@ -304,24 +319,12 @@ async fn export_data(State(state): State<AppState>, user: User) -> AppResult<Res
         })
         .collect();
 
-    let document = json!({
+    Ok(json!({
         "exported_at": Utc::now().to_rfc3339(),
         "user": { "id": user.id.to_string(), "email": user.email },
         "entities": entities_out,
         "chat_history": chat_history,
-    });
-
-    let body = serde_json::to_string_pretty(&document).map_err(|e| AppError::internal(e.to_string()))?;
-
-    Ok((
-        StatusCode::OK,
-        [
-            (header::CONTENT_TYPE, "application/json".to_string()),
-            (header::CONTENT_DISPOSITION, "attachment; filename=\"eunomia-export.json\"".to_string()),
-        ],
-        body,
-    )
-        .into_response())
+    }))
 }
 
 #[derive(utoipa::OpenApi)]

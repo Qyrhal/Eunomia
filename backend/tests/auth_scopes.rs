@@ -32,6 +32,9 @@ async fn send(
         None => req.body(Body::empty()),
     }
     .unwrap();
+    // the socket peer is the frontend proxy on the compose network
+    let mut req = req;
+    req.extensions_mut().insert(axum::extract::ConnectInfo(std::net::SocketAddr::from(([172, 18, 0, 2], 4000))));
     let resp = router.clone().oneshot(req).await.unwrap();
     let (status, headers) = (resp.status(), resp.headers().clone());
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
@@ -525,26 +528,46 @@ async fn login_is_limited_per_client_address_with_retry_after() {
     let from = |ip: &str| vec![("x-forwarded-for", ip.to_string())];
 
     for _ in 0..3 {
-        let (status, _, _) = send(&router, "POST", "/api/auth/login", Some(creds.clone()), &from("10.0.0.1")).await;
+        let (status, _, _) = send(&router, "POST", "/api/auth/login", Some(creds.clone()), &from("203.0.113.1")).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
     }
-    let (status, headers, body) = send(&router, "POST", "/api/auth/login", Some(creds.clone()), &from("10.0.0.1")).await;
+    let (status, headers, body) = send(&router, "POST", "/api/auth/login", Some(creds.clone()), &from("203.0.113.1")).await;
     assert_eq!((status, body["code"].as_str()), (StatusCode::TOO_MANY_REQUESTS, Some("rate.limited")));
     assert_eq!(headers[header::CONTENT_TYPE], "application/problem+json");
     assert!(headers[header::RETRY_AFTER].to_str().unwrap().parse::<u64>().unwrap() >= 1);
     assert!(body["trace_id"].is_string());
     // registration shares the auth limit; another address is unaffected
-    let (status, _, _) = send(&router, "POST", "/api/auth/register", Some(creds.clone()), &from("10.0.0.1")).await;
+    let (status, _, _) = send(&router, "POST", "/api/auth/register", Some(creds.clone()), &from("203.0.113.1")).await;
     assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
-    let (status, _, _) = send(&router, "POST", "/api/auth/login", Some(creds), &from("10.0.0.2")).await;
+    let (status, _, _) = send(&router, "POST", "/api/auth/login", Some(creds), &from("203.0.113.2")).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn forwarded_for_from_an_untrusted_peer_cannot_dodge_the_limit() {
+    let app = TestApp::new().await;
+    let router = app_with_limits(&app, RateConfig { auth_per_min: 2, ..RateConfig::default() });
+    let creds = json!({"email": "tester@example.com", "password": "wrong-password"});
+    let mut last = StatusCode::OK;
+    for i in 0..3 {
+        let mut req = Request::builder()
+            .method("POST")
+            .uri("/api/auth/login")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header("x-forwarded-for", format!("10.1.1.{i}"))
+            .body(Body::from(creds.to_string()))
+            .unwrap();
+        req.extensions_mut().insert(axum::extract::ConnectInfo(std::net::SocketAddr::from(([203, 0, 113, 7], 4000))));
+        last = router.clone().oneshot(req).await.unwrap().status();
+    }
+    assert_eq!(last, StatusCode::TOO_MANY_REQUESTS);
 }
 
 #[tokio::test]
 async fn guessing_tokens_is_throttled_by_address() {
     let app = TestApp::new().await;
     let router = app_with_limits(&app, RateConfig { auth_per_min: 2, ..RateConfig::default() });
-    let h = |t: &str| vec![("authorization", format!("Bearer {t}")), ("x-forwarded-for", "10.9.9.9".to_string())];
+    let h = |t: &str| vec![("authorization", format!("Bearer {t}")), ("x-forwarded-for", "203.0.113.9".to_string())];
     for _ in 0..2 {
         let (status, _, _) = send(&router, "GET", "/api/auth/me", None, &h("guess")).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
@@ -559,7 +582,7 @@ async fn guessing_tokens_is_throttled_by_address() {
 #[tokio::test]
 async fn requests_are_limited_per_token_and_per_user() {
     let app = TestApp::new().await;
-    let router = app_with_limits(&app, RateConfig { token_per_min: 3, user_per_min: 5, auth_per_min: 100 });
+    let router = app_with_limits(&app, RateConfig { token_per_min: 3, user_per_min: 5, auth_per_min: 100, ..RateConfig::default() });
     let other = token(&app, scopes::ALL, None).await;
 
     for _ in 0..3 {

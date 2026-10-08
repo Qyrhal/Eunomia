@@ -17,6 +17,7 @@ use tracing::Instrument;
 use crate::db::Db;
 
 pub mod app;
+pub mod capsules;
 pub mod cache;
 pub mod entities;
 pub mod jobs;
@@ -91,5 +92,5 @@ impl<'a> IntoFuture for Q<'a> {
 
 /// Every static statement, for the `every_query_executes` test.
 pub fn all() -> Vec<&'static Stmt> {
-    [app::ALL, cache::ALL, entities::ALL, jobs::ALL, vaults::ALL].concat()
+    [app::ALL, capsules::ALL, cache::ALL, entities::ALL, jobs::ALL, vaults::ALL].concat()
 }

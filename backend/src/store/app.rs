@@ -58,6 +58,8 @@ pub const ALL: &[&Stmt] = &[
     &OAUTH_CLIENT_PRUNE,
     &OAUTH_CODE_CREATE,
     &OAUTH_CODE_TAKE,
+    &OAUTH_CODE_REDEEMED,
+    &OAUTH_CODE_LINK_GRANT,
     &OAUTH_GRANT_CREATE,
     &OAUTH_GRANT_LIST,
     &OAUTH_GRANT_DELETE,
@@ -312,8 +314,20 @@ pub const OAUTH_CODE_CREATE: Stmt = Stmt::new(
      code_challenge = $code_challenge, scope = $scope, resource = $resource, expires_at = time::now() + 60s",
 );
 
-/// Single use: reading a code deletes it.
-pub const OAUTH_CODE_TAKE: Stmt = Stmt::new("app.oauth_code_take", "DELETE oauth_code WHERE code_hash = $code_hash RETURN BEFORE");
+/// Single use: the first redemption marks the row (it is kept, see `OAUTH_PRUNE`); a second finds nothing here.
+pub const OAUTH_CODE_TAKE: Stmt = Stmt::new(
+    "app.oauth_code_take",
+    "UPDATE oauth_code SET redeemed_at = time::now() WHERE code_hash = $code_hash AND redeemed_at IS NONE RETURN BEFORE",
+);
+
+/// The marker of an already redeemed code: who owns it and which grant it produced (none if redemption failed).
+pub const OAUTH_CODE_REDEEMED: Stmt = Stmt::new(
+    "app.oauth_code_redeemed",
+    "SELECT owner, grant_id FROM oauth_code WHERE code_hash = $code_hash AND redeemed_at IS NOT NONE LIMIT 1",
+);
+
+pub const OAUTH_CODE_LINK_GRANT: Stmt =
+    Stmt::new("app.oauth_code_link_grant", "UPDATE oauth_code SET grant_id = $grant_id WHERE code_hash = $code_hash");
 
 pub const OAUTH_GRANT_CREATE: Stmt = Stmt::new(
     "app.oauth_grant_create",
@@ -362,7 +376,7 @@ pub const OAUTH_TOKENS_DELETE_FAMILY: Stmt =
 
 pub const OAUTH_PRUNE: Stmt = Stmt::new(
     "app.oauth_prune",
-    "DELETE oauth_token WHERE expires_at < time::now() - 1d; DELETE oauth_code WHERE expires_at < time::now()",
+    "DELETE oauth_token WHERE expires_at < time::now() - 1d; DELETE oauth_code WHERE expires_at < time::now() - 10m",
 );
 
 // --- auth ---

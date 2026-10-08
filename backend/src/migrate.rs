@@ -13,6 +13,8 @@ pub const MIGRATIONS: &[(u32, &str, &str)] = &[
     (3, "auth", include_str!("../migrations/tenant/0003_auth.surql")),
     (4, "oauth", include_str!("../migrations/tenant/0004_oauth.surql")),
     (5, "jobs", include_str!("../migrations/tenant/0005_jobs.surql")),
+    (6, "oauth_code_redeemed", include_str!("../migrations/tenant/0006_oauth_code_redeemed.surql")),
+    (7, "capsules", include_str!("../migrations/tenant/0007_capsules.surql")),
     (8, "v3_indexes", include_str!("../migrations/tenant/0008_v3_indexes.surql")),
 ];
 

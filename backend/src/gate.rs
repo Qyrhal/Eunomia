@@ -78,7 +78,7 @@ pub fn explicit_class(method: &Method, path: &str) -> Option<Class> {
         ["api", "connectors", ..] | ["api", "snapshot"] => Account(scopes::CONNECTORS),
         ["api", "sources", _, "webhook", _] => Public,
         ["api", "sources", ..] => Account(scopes::CONNECTORS),
-        ["api", "settings" | "export" | "update" | "audit" | "chat" | "oauth", ..] => Account(scopes::VAULTS_ADMIN),
+        ["api", "settings" | "debug" | "export" | "update" | "audit" | "chat" | "oauth", ..] => Account(scopes::VAULTS_ADMIN),
         // OAuth endpoints for MCP clients: public, so limited per client address like login
         ["oauth", "token" | "register" | "revoke"] => AuthAttempt,
         ["api", ..] => return None,
@@ -99,18 +99,10 @@ impl Gate {
     }
 }
 
-fn client_ip(req: &Request) -> String {
-    // ponytail: X-Forwarded-For is client-controlled when nothing trusted sits in
-    // front; behind the bundled frontend proxy it is the real address. Pin it to a
-    // trusted-proxy list if the backend is ever exposed directly.
-    req.headers()
-        .get("x-forwarded-for")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.split(',').next())
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .or_else(|| req.extensions().get::<ConnectInfo<SocketAddr>>().map(|c| c.0.ip().to_string()))
-        .unwrap_or_else(|| "unknown".to_string())
+fn client_ip(req: &Request, trusted: &[crate::ratelimit::Cidr]) -> String {
+    let peer = req.extensions().get::<ConnectInfo<SocketAddr>>().map(|c| c.0.ip());
+    let xff = req.headers().get("x-forwarded-for").and_then(|v| v.to_str().ok());
+    crate::ratelimit::client_addr(peer, xff, trusted)
 }
 
 fn rate_limited(wait_secs: u64) -> Response {
@@ -137,7 +129,7 @@ pub async fn gate(State(g): State<Gate>, mut req: Request, next: Next) -> Respon
     match class {
         Class::Public => return next.run(req).await,
         Class::AuthAttempt => {
-            if let Err(wait) = g.limiter.check(&format!("auth:{}", client_ip(&req)), g.limits.auth_per_min) {
+            if let Err(wait) = g.limiter.check(&format!("auth:{}", client_ip(&req, &g.limits.trusted_proxies)), g.limits.auth_per_min) {
                 return rate_limited(wait);
             }
             return next.run(req).await;
@@ -145,7 +137,7 @@ pub async fn gate(State(g): State<Gate>, mut req: Request, next: Next) -> Respon
         _ => {}
     }
 
-    let ip = client_ip(&req);
+    let ip = client_ip(&req, &g.limits.trusted_proxies);
     let mcp = class == Class::Mcp;
     let presented = auth::bearer_token(req.headers()).is_some() || (!mcp && auth::session_token(req.headers()).is_some());
     let target = format!("{} {}", req.method(), req.uri().path());

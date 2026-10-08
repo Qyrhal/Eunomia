@@ -22,4 +22,7 @@ Every test layer, from cheapest to most destructive. Run the first four on every
 
 ## Seeing a failure
 
+For a failure in a running instance (a trace id from the UI or an MCP error), see [debugging.md](debugging.md): `eunomia replay <trace_id>` re-runs it and `--emit-test` writes the failing test.
+
+
 Fuzz crashes are saved under `backend/fuzz/artifacts/<target>/`; replay with `cargo +nightly fuzz run <target> <file>`. Chaos leaves k6 output in `/tmp/fw-chaos-k6.log`. k6 prints per-threshold pass or fail at the end of every run.
