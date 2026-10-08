@@ -22,6 +22,8 @@ pub struct RateConfig {
     pub webhook_per_min: u32,
     /// Peers whose `X-Forwarded-For` is believed (`TRUSTED_PROXIES`).
     pub trusted_proxies: Vec<Cidr>,
+    /// Hostnames in `TRUSTED_PROXIES` (the compose service `frontend`), resolved by the gate.
+    pub trusted_hosts: Vec<String>,
 }
 
 /// An address range such as `172.16.0.0/12`; a bare address is a single host.
@@ -69,6 +71,37 @@ fn parse_cidrs(list: &str) -> Vec<Cidr> {
     list.split(',').filter(|s| !s.trim().is_empty()).filter_map(Cidr::parse).collect()
 }
 
+/// `TRUSTED_PROXIES` entries: CIDRs (or bare addresses) and hostnames. `none` and anything that is
+/// neither a CIDR nor a plausible hostname trusts nobody.
+pub fn parse_trusted(list: &str) -> (Vec<Cidr>, Vec<String>) {
+    let (mut cidrs, mut hosts) = (Vec::new(), Vec::new());
+    for entry in list.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+        if let Some(c) = Cidr::parse(entry) {
+            cidrs.push(c);
+        } else if entry != "none" && entry.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.' || c == '_') {
+            hosts.push(entry.to_string());
+        }
+    }
+    (cidrs, hosts)
+}
+
+/// The configured ranges plus the addresses the hostnames last resolved to.
+pub fn effective_trusted(cidrs: &[Cidr], resolved: &[IpAddr]) -> Vec<Cidr> {
+    cidrs.iter().copied().chain(resolved.iter().filter_map(|ip| Cidr::parse(&ip.to_string()))).collect()
+}
+
+/// Resolve `hosts` now; `None` if none resolved (so the caller keeps its last good answer).
+pub async fn resolve_hosts(hosts: &[String]) -> Option<Vec<IpAddr>> {
+    let mut out = Vec::new();
+    for h in hosts {
+        match tokio::net::lookup_host((h.as_str(), 0)).await {
+            Ok(addrs) => out.extend(addrs.map(|a| a.ip())),
+            Err(e) => tracing::warn!(host = %h, error = %e, "TRUSTED_PROXIES: could not resolve, keeping the last answer"),
+        }
+    }
+    (!out.is_empty()).then_some(out)
+}
+
 /// The client behind `peer`: with an untrusted (or unknown) peer, the peer
 /// itself and `X-Forwarded-For` is ignored; with a trusted one, the right-most
 /// `X-Forwarded-For` entry that is not itself a trusted proxy.
@@ -89,7 +122,7 @@ pub fn client_addr(peer: Option<IpAddr>, forwarded_for: Option<&str>, trusted: &
 
 impl Default for RateConfig {
     fn default() -> Self {
-        RateConfig { user_per_min: 1200, token_per_min: 600, auth_per_min: 20, webhook_per_min: 120, trusted_proxies: parse_cidrs(DEFAULT_TRUSTED_PROXIES) }
+        RateConfig { user_per_min: 1200, token_per_min: 600, auth_per_min: 20, webhook_per_min: 120, trusted_proxies: parse_cidrs(DEFAULT_TRUSTED_PROXIES), trusted_hosts: Vec::new() }
     }
 }
 
@@ -105,8 +138,12 @@ impl RateConfig {
             webhook_per_min: get("RATE_LIMIT_WEBHOOK_PER_MIN", d.webhook_per_min),
             // unset or blank: the defaults; any value with no valid range (say `none`) trusts nobody
             trusted_proxies: match std::env::var("TRUSTED_PROXIES") {
-                Ok(v) if !v.trim().is_empty() => parse_cidrs(&v),
+                Ok(v) if !v.trim().is_empty() => parse_trusted(&v).0,
                 _ => d.trusted_proxies,
+            },
+            trusted_hosts: match std::env::var("TRUSTED_PROXIES") {
+                Ok(v) if !v.trim().is_empty() => parse_trusted(&v).1,
+                _ => d.trusted_hosts,
             },
         }
     }
@@ -168,6 +205,26 @@ mod tests {
         for _ in 0..50 {
             assert!(rl.check("free", 0).is_ok());
         }
+    }
+
+    #[test]
+    fn trusted_proxies_split_into_cidrs_and_hostnames() {
+        let (cidrs, hosts) = parse_trusted("frontend, 10.0.0.0/8,203.0.113.5 ,proxy.internal,none,bad host!");
+        assert_eq!(cidrs.len(), 2);
+        assert_eq!(hosts, ["frontend", "proxy.internal"]);
+        assert_eq!(parse_trusted("none"), (vec![], vec![]));
+    }
+
+    #[test]
+    fn a_resolved_hostname_is_trusted_and_a_stale_one_is_not() {
+        let ip = |s: &str| Some(s.parse::<IpAddr>().unwrap());
+        let resolved: Vec<IpAddr> = vec!["172.19.0.4".parse().unwrap()];
+        let trusted = effective_trusted(&parse_trusted("frontend").0, &resolved);
+        assert_eq!(client_addr(ip("172.19.0.4"), Some("203.0.113.9"), &trusted), "203.0.113.9");
+        // a neighbour on the same bridge is not the frontend
+        assert_eq!(client_addr(ip("172.19.0.5"), Some("203.0.113.9"), &trusted), "172.19.0.5");
+        // before the first resolution nothing is trusted
+        assert_eq!(client_addr(ip("172.19.0.4"), Some("203.0.113.9"), &effective_trusted(&[], &[])), "172.19.0.4");
     }
 
     #[test]

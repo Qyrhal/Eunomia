@@ -93,11 +93,41 @@ pub struct Gate {
     state: AppState,
     limits: Arc<RateConfig>,
     limiter: Arc<RateLimiter>,
+    /// Addresses the `TRUSTED_PROXIES` hostnames resolve to, refreshed every minute.
+    resolved: Arc<std::sync::RwLock<Vec<std::net::IpAddr>>>,
 }
 
 impl Gate {
     pub fn new(state: AppState, limits: RateConfig) -> Self {
-        Gate { state, limits: Arc::new(limits), limiter: Arc::new(RateLimiter::default()) }
+        let resolved = Arc::new(std::sync::RwLock::new(Vec::new()));
+        if !limits.trusted_hosts.is_empty() {
+            // first answer before serving (boot only, a few DNS lookups), then keep it fresh
+            let first: Vec<_> = limits
+                .trusted_hosts
+                .iter()
+                .filter_map(|h| std::net::ToSocketAddrs::to_socket_addrs(&(h.as_str(), 0)).ok())
+                .flatten()
+                .map(|a| a.ip())
+                .collect();
+            *resolved.write().unwrap_or_else(|e| e.into_inner()) = first;
+            if let Ok(rt) = tokio::runtime::Handle::try_current() {
+                let (hosts, slot) = (limits.trusted_hosts.clone(), resolved.clone());
+                rt.spawn(async move {
+                    loop {
+                        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                        if let Some(ips) = crate::ratelimit::resolve_hosts(&hosts).await {
+                            *slot.write().unwrap_or_else(|e| e.into_inner()) = ips;
+                        }
+                    }
+                });
+            }
+        }
+        Gate { state, limits: Arc::new(limits), limiter: Arc::new(RateLimiter::default()), resolved }
+    }
+
+    fn trusted(&self) -> Vec<crate::ratelimit::Cidr> {
+        let resolved = self.resolved.read().unwrap_or_else(|e| e.into_inner());
+        crate::ratelimit::effective_trusted(&self.limits.trusted_proxies, &resolved)
     }
 }
 
@@ -131,13 +161,13 @@ pub async fn gate(State(g): State<Gate>, mut req: Request, next: Next) -> Respon
     match class {
         Class::Public => return next.run(req).await,
         Class::Webhook => {
-            if let Err(wait) = g.limiter.check(&format!("webhook:{}", client_ip(&req, &g.limits.trusted_proxies)), g.limits.webhook_per_min) {
+            if let Err(wait) = g.limiter.check(&format!("webhook:{}", client_ip(&req, &g.trusted())), g.limits.webhook_per_min) {
                 return rate_limited(wait);
             }
             return next.run(req).await;
         }
         Class::AuthAttempt => {
-            if let Err(wait) = g.limiter.check(&format!("auth:{}", client_ip(&req, &g.limits.trusted_proxies)), g.limits.auth_per_min) {
+            if let Err(wait) = g.limiter.check(&format!("auth:{}", client_ip(&req, &g.trusted())), g.limits.auth_per_min) {
                 return rate_limited(wait);
             }
             return next.run(req).await;
@@ -145,7 +175,7 @@ pub async fn gate(State(g): State<Gate>, mut req: Request, next: Next) -> Respon
         _ => {}
     }
 
-    let ip = client_ip(&req, &g.limits.trusted_proxies);
+    let ip = client_ip(&req, &g.trusted());
     // each call may make the server fetch the client's metadata document: limit it like a login
     if req.uri().path() == "/oauth/authorize"
         && let Err(wait) = g.limiter.check(&format!("authorize:{ip}"), g.limits.auth_per_min)
