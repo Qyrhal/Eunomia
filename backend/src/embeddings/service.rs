@@ -5,14 +5,19 @@
 //!
 //! Backend is selected by `settings.embeddings_backend` (env-only, never a
 //! DB-backed setting -- see `config.rs`):
-//!   - `"openai"` -- real OpenAI embeddings API call, model
-//!     `text-embedding-3-small`, batched.
+//!   - `"openai"` -- an OpenAI-compatible embeddings API (the owner's
+//!     provider, see `embeddings::provider`), with the owner's selected
+//!     `embedding_model`, batched.
 //!   - `"stub"`   -- deterministic SHA256-derived vector, zero network, for
 //!     tests.
 //!
+//! The vector index is fixed at [`DIM`] dimensions: a model that returns
+//! anything else is rejected, never stored.
+//!
 //! Results are memoized in the `embed_cache` SurrealDB table, keyed by
-//! HMAC(ENCRYPTION_KEY, "backend:model:text") -- ported from
-//! `embeddings/service.py`'s `_hmac`.
+//! HMAC(ENCRYPTION_KEY, spec + text), where the [`EmbedSpec`] is the
+//! provider origin, model and dimension -- so two providers never share a
+//! vector for the same text.
 //!
 //! Ported from `embeddings/service.py`.
 
@@ -24,13 +29,16 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 use surrealdb::RecordId;
 
+use super::provider::{self, Provider};
 use crate::config::Settings;
 use crate::db::Db;
 use crate::error::{AppError, AppResult};
 
 pub const DIM: usize = 1536;
 const BATCH: usize = 64;
-const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
+pub const DEFAULT_MODEL: &str = "text-embedding-3-small";
+/// api.openai.com models that return [`DIM`]-dimension vectors.
+const OPENAI_MODELS: &[&str] = &["text-embedding-3-small", "text-embedding-ada-002"];
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -59,6 +67,40 @@ fn embed_stub(texts: &[String]) -> Vec<Vec<f32>> {
     texts.iter().map(|t| stub_vec(t)).collect()
 }
 
+/// What a vector was made with. Identical text only shares a cached vector
+/// under the same spec; the dimension is always [`DIM`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct EmbedSpec {
+    pub origin: String,
+    pub model: String,
+}
+
+impl EmbedSpec {
+    fn cache_key(&self, secret: &str, text: &str) -> String {
+        hmac_hex(secret, &format!("{}\n{}\n{DIM}\n{text}", self.origin, self.model))
+    }
+}
+
+/// The model `p`'s owner selected ("" = [`DEFAULT_MODEL`]).
+pub fn model_for(p: &Provider) -> &str {
+    let m = p.embedding_model.trim();
+    if m.is_empty() { DEFAULT_MODEL } else { m }
+}
+
+/// On api.openai.com only [`DIM`]-dimension models are accepted. Other
+/// endpoints' models can't be known up front; a wrong dimension is
+/// rejected when the response arrives.
+pub fn check_model(base_url: &str, model: &str) -> Result<(), String> {
+    if provider::same_url(base_url, provider::OPENAI_BASE_URL) && !OPENAI_MODELS.contains(&model) {
+        return Err(format!(
+            "embedding model `{model}` isn't supported: Eunomia's vector index is {DIM}-dimensional, \
+             so on api.openai.com use {}",
+            OPENAI_MODELS.join(" or ")
+        ));
+    }
+    Ok(())
+}
+
 #[derive(Debug, Deserialize)]
 struct EmbeddingDatum {
     index: usize,
@@ -71,20 +113,45 @@ struct EmbeddingsResponse {
     data: Vec<EmbeddingDatum>,
 }
 
-/// Calls `{base_url}/embeddings`, batched `BATCH` at a time, re-sorting each
-/// batch's response by `index` (the API doesn't guarantee response order
-/// matches request order). Mirrors `embeddings/service.py`'s `_embed_openai`.
-async fn embed_openai(texts: &[String], base_url: &str, api_key: &str) -> AppResult<Vec<Vec<f32>>> {
-    let client = reqwest::Client::new();
-    let url = format!("{}/embeddings", base_url.trim_end_matches('/'));
-    let auth_key = if api_key.is_empty() { "not-needed" } else { api_key };
+/// One vector per input, in input order: exactly `n` items, every index in
+/// range and unique, every vector [`DIM`]-long with finite components.
+fn order_response(data: Vec<EmbeddingDatum>, n: usize) -> Result<Vec<Vec<f32>>, String> {
+    if data.len() != n {
+        return Err(format!("embeddings response has {} vectors for {n} inputs", data.len()));
+    }
+    let mut slots: Vec<Option<Vec<f32>>> = vec![None; n];
+    for d in data {
+        let slot = slots.get_mut(d.index).ok_or_else(|| format!("embeddings response index {} out of range", d.index))?;
+        if slot.is_some() {
+            return Err(format!("embeddings response repeats index {}", d.index));
+        }
+        if d.embedding.len() != DIM {
+            return Err(format!(
+                "embedding model returned {}-dimension vectors; Eunomia's index needs {DIM} -- choose a {DIM}-dimension model in Settings",
+                d.embedding.len()
+            ));
+        }
+        if !d.embedding.iter().all(|x| x.is_finite()) {
+            return Err("embeddings response contains non-finite values".to_string());
+        }
+        *slot = Some(d.embedding);
+    }
+    Ok(slots.into_iter().flatten().collect())
+}
+
+/// Calls `{base_url}/embeddings`, batched `BATCH` at a time. Every batch is
+/// validated before anything is returned. Mirrors `embeddings/service.py`'s
+/// `_embed_openai`.
+async fn embed_openai(texts: &[String], p: &Provider, model: &str) -> AppResult<Vec<Vec<f32>>> {
+    let client = provider::client();
+    let url = p.url("embeddings");
 
     let mut out = Vec::with_capacity(texts.len());
     for chunk in texts.chunks(BATCH) {
         let resp = client
             .post(&url)
-            .bearer_auth(auth_key)
-            .json(&json!({ "model": "text-embedding-3-small", "input": chunk }))
+            .bearer_auth(p.bearer())
+            .json(&json!({ "model": model, "input": chunk }))
             .send()
             .await
             .map_err(|e| AppError::internal(format!("OpenAI embeddings request failed: {e}")))?;
@@ -95,59 +162,17 @@ async fn embed_openai(texts: &[String], base_url: &str, api_key: &str) -> AppRes
             return Err(AppError::internal(format!("OpenAI embeddings HTTP {status}: {body}")));
         }
 
-        let mut parsed: EmbeddingsResponse = resp
+        let parsed: EmbeddingsResponse = resp
             .json()
             .await
             .map_err(|e| AppError::internal(format!("invalid OpenAI embeddings response: {e}")))?;
-        parsed.data.sort_by_key(|d| d.index);
-        out.extend(parsed.data.into_iter().map(|d| d.embedding));
-    }
-
-    for v in &out {
-        if v.len() != DIM {
-            return Err(AppError::internal(format!("OpenAI returned dim {}, expected {DIM}.", v.len())));
-        }
+        out.extend(order_response(parsed.data, chunk.len()).map_err(AppError::internal)?);
     }
     Ok(out)
 }
 
 pub fn dim() -> usize {
     DIM
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct AppSettingsOpenaiRow {
-    #[serde(default)]
-    openai_api_key_encrypted: String,
-    #[serde(default)]
-    openai_base_url: String,
-}
-
-/// Resolve `(base_url, api_key)` for `owner`'s OpenAI-compatible backend.
-pub(crate) async fn resolve_openai_for_owner(
-    db: &Db,
-    owner: &RecordId,
-    env_api_key: &Option<String>,
-    encryption_key: &str,
-) -> AppResult<(String, String)> {
-    let rid = RecordId::from_table_key("app_settings", owner.key().clone());
-    let row: Option<AppSettingsOpenaiRow> = db.select(rid).await?;
-    let row = row.unwrap_or_default();
-
-    let base_url = if row.openai_base_url.is_empty() { DEFAULT_OPENAI_BASE_URL.to_string() } else { row.openai_base_url };
-    let key = if !row.openai_api_key_encrypted.is_empty() {
-        crate::connectors::crypto::decrypt_or_plaintext(encryption_key, &row.openai_api_key_encrypted)
-    } else {
-        env_api_key.clone().unwrap_or_default()
-    };
-    Ok((base_url, key))
-}
-
-/// True if there's enough to make a real OpenAI-compatible call: a
-/// non-default `base_url` (a self-hosted server may not need a key), or a
-/// key for the default api.openai.com endpoint (which always needs one).
-pub fn endpoint_configured(base_url: &str, api_key: &str) -> bool {
-    !api_key.is_empty() || base_url != DEFAULT_OPENAI_BASE_URL
 }
 
 /// Whether embeddings can run for `owner` right now. Without them the
@@ -158,9 +183,12 @@ pub async fn available(db: &Db, settings: &Settings, owner: &RecordId) -> bool {
     if settings.embeddings_backend != "openai" {
         return true; // "stub": hermetic tests
     }
-    match resolve_openai_for_owner(db, owner, &settings.openai_api_key, &settings.encryption_key).await {
-        Ok((base_url, key)) => endpoint_configured(&base_url, &key),
-        Err(_) => false,
+    match provider::resolve(db, settings, owner).await {
+        Ok(p) => p.configured(),
+        Err(e) => {
+            tracing::warn!("model provider unavailable for {owner}: {}", e.message);
+            false
+        }
     }
 }
 
@@ -177,21 +205,29 @@ struct EmbedCacheRow {
 }
 
 /// Embed `texts`, using the SurrealDB-backed memo (`embed_cache`) for ones
-/// seen before.
+/// seen before under the same [`EmbedSpec`]. Nothing is cached unless the
+/// whole response validated.
 ///
-/// `owner`, if given, resolves that user's OpenAI base_url/key (per-user
-/// override of the env-level default) -- omit it only for owner-less call
-/// sites, which fall back to the env settings exactly as before. Mirrors
-/// `embeddings/service.py`'s `embed`.
+/// `owner`, if given, resolves that user's provider and model; owner-less
+/// call sites use the server's provider. Mirrors `embeddings/service.py`'s
+/// `embed`.
 pub async fn embed(db: &Db, settings: &Settings, texts: &[String], owner: Option<&RecordId>) -> AppResult<Vec<Vec<f32>>> {
     if texts.is_empty() {
         return Ok(Vec::new());
     }
 
-    let backend = settings.embeddings_backend.as_str();
-    let model = if backend == "openai" { "text-embedding-3-small" } else { "stub" };
-    let keys: Vec<String> =
-        texts.iter().map(|t| hmac_hex(&settings.encryption_key, &format!("{backend}:{model}:{t}"))).collect();
+    let (spec, prov) = if settings.embeddings_backend == "openai" {
+        let p = match owner {
+            Some(o) => provider::resolve(db, settings, o).await?,
+            None => provider::server(settings),
+        };
+        let model = model_for(&p).to_string();
+        check_model(&p.base_url, &model).map_err(AppError::bad_request)?;
+        (EmbedSpec { origin: p.base_url.trim_end_matches('/').to_string(), model }, Some(p))
+    } else {
+        (EmbedSpec { origin: "stub".to_string(), model: "stub".to_string() }, None)
+    };
+    let keys: Vec<String> = texts.iter().map(|t| spec.cache_key(&settings.encryption_key, t)).collect();
 
     let mut res = db
         .query("SELECT text_hmac, vector FROM embed_cache WHERE text_hmac IN $keys")
@@ -203,14 +239,9 @@ pub async fn embed(db: &Db, settings: &Settings, texts: &[String], owner: Option
     let missing_idx: Vec<usize> = keys.iter().enumerate().filter(|(_, k)| !cached.contains_key(*k)).map(|(i, _)| i).collect();
     if !missing_idx.is_empty() {
         let fresh_texts: Vec<String> = missing_idx.iter().map(|&i| texts[i].clone()).collect();
-        let vecs = if backend == "openai" {
-            let (base_url, api_key) = match owner {
-                Some(o) => resolve_openai_for_owner(db, o, &settings.openai_api_key, &settings.encryption_key).await?,
-                None => (DEFAULT_OPENAI_BASE_URL.to_string(), settings.openai_api_key.clone().unwrap_or_default()),
-            };
-            embed_openai(&fresh_texts, &base_url, &api_key).await?
-        } else {
-            embed_stub(&fresh_texts)
+        let vecs = match &prov {
+            Some(p) => embed_openai(&fresh_texts, p, &spec.model).await?,
+            None => embed_stub(&fresh_texts),
         };
 
         for (i, v) in missing_idx.into_iter().zip(vecs.into_iter()) {
@@ -231,11 +262,62 @@ pub async fn embed(db: &Db, settings: &Settings, texts: &[String], owner: Option
 mod tests {
     use super::*;
 
+    fn datum(index: usize, embedding: Vec<f32>) -> EmbeddingDatum {
+        EmbeddingDatum { index, embedding }
+    }
+
     #[test]
-    fn endpoint_needs_a_key_only_for_the_default_openai_url() {
-        assert!(!endpoint_configured(DEFAULT_OPENAI_BASE_URL, ""));
-        assert!(endpoint_configured(DEFAULT_OPENAI_BASE_URL, "sk-abc"));
-        assert!(endpoint_configured("http://localhost:11434/v1", ""));
+    fn response_is_reordered_by_index() {
+        let out = order_response(vec![datum(1, vec![2.0; DIM]), datum(0, vec![1.0; DIM])], 2).unwrap();
+        assert_eq!(out[0][0], 1.0);
+        assert_eq!(out[1][0], 2.0);
+    }
+
+    #[test]
+    fn missing_duplicate_and_out_of_range_indexes_are_rejected() {
+        assert!(order_response(vec![datum(0, vec![1.0; DIM])], 2).is_err(), "missing");
+        assert!(order_response(vec![datum(0, vec![1.0; DIM]), datum(0, vec![1.0; DIM])], 2).is_err(), "duplicate");
+        assert!(order_response(vec![datum(0, vec![1.0; DIM]), datum(2, vec![1.0; DIM])], 2).is_err(), "out of range");
+        assert!(order_response((0..3).map(|i| datum(i, vec![1.0; DIM])).collect(), 2).is_err(), "too many");
+    }
+
+    #[test]
+    fn wrong_dimension_and_non_finite_vectors_are_rejected() {
+        let e = order_response(vec![datum(0, vec![1.0; 768])], 1).unwrap_err();
+        assert!(e.contains("768"), "{e}");
+        let mut v = vec![1.0; DIM];
+        v[7] = f32::NAN;
+        assert!(order_response(vec![datum(0, v)], 1).is_err());
+        let mut v = vec![1.0; DIM];
+        v[7] = f32::INFINITY;
+        assert!(order_response(vec![datum(0, v)], 1).is_err());
+    }
+
+    #[test]
+    fn the_cache_key_depends_on_provider_and_model() {
+        let a = EmbedSpec { origin: "http://a.example/v1".into(), model: "m".into() };
+        let b = EmbedSpec { origin: "http://b.example/v1".into(), model: "m".into() };
+        let c = EmbedSpec { origin: "http://a.example/v1".into(), model: "other".into() };
+        assert_eq!(a.cache_key("k", "same text"), a.cache_key("k", "same text"));
+        assert_ne!(a.cache_key("k", "same text"), b.cache_key("k", "same text"));
+        assert_ne!(a.cache_key("k", "same text"), c.cache_key("k", "same text"));
+    }
+
+    #[test]
+    fn selected_model_is_used_and_defaults_when_blank() {
+        let p = |m: &str| Provider { base_url: "http://x/v1".into(), api_key: String::new(), embedding_model: m.into() };
+        assert_eq!(model_for(&p("")), DEFAULT_MODEL);
+        assert_eq!(model_for(&p(" nomic-embed ")), "nomic-embed");
+    }
+
+    #[test]
+    fn unsupported_openai_models_are_rejected() {
+        assert!(check_model(provider::OPENAI_BASE_URL, "text-embedding-3-small").is_ok());
+        assert!(check_model(provider::OPENAI_BASE_URL, "text-embedding-ada-002").is_ok());
+        assert!(check_model(provider::OPENAI_BASE_URL, "text-embedding-3-large").is_err());
+        assert!(check_model(provider::OPENAI_BASE_URL, "gpt-4o-mini").is_err());
+        // other endpoints: checked by dimension when the vectors arrive
+        assert!(check_model("http://localhost:11434/v1", "anything").is_ok());
     }
 
     #[test]

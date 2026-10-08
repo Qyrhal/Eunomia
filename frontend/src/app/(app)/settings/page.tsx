@@ -513,6 +513,7 @@ function Settings() {
   const [models, setModels] = useState<string[]>([]);
   const [modelsError, setModelsError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
 
   useEffect(() => {
@@ -541,7 +542,14 @@ function Settings() {
       embedding_model: modelInput.trim(),
     };
     if (apiKeyInput) payload.openai_api_key = apiKeyInput;
-    const updated = await settingsApi.update(payload);
+    let updated: AppSettings;
+    try {
+      updated = await settingsApi.update(payload);
+    } catch (e) {
+      setSaveError(e instanceof Error ? e.message : String(e));
+      return;
+    }
+    setSaveError(null);
     setSettings(updated);
     setApiKeyInput("");
     setSaved(true);
@@ -632,7 +640,7 @@ function Settings() {
             </label>
 
             <label className="text-[13px] flex flex-col gap-1.5" style={{ color: "var(--ink-dim)" }}>
-              Model
+              Embedding model
               {models.length > 0 ? (
                 <select
                   className="field px-3 py-2.5 text-[13.5px] font-mono"
@@ -669,6 +677,11 @@ function Settings() {
           >
             {saved ? "Saved" : "Save settings"}
           </button>
+          {saveError && (
+            <p role="alert" className="text-[12.5px]" style={{ color: "var(--critical)" }}>
+              {saveError}
+            </p>
+          )}
         </div>
       )}
 
