@@ -1,27 +1,42 @@
 name: Release images
 
+# Builds backend + frontend for linux/amd64 and linux/arm64 on native runners
+# (no QEMU: an emulated Rust release build takes ages), then joins each pair
+# into one multi-arch tag, so `docker compose pull` gets the right image on
+# x86 servers, Apple Silicon, Raspberry Pi, Graviton, etc.
 on:
   push:
     tags: ['v*']
   workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to (re)build, e.g. v1.2.0
+        required: true
+      latest:
+        description: Also move the `latest` tag to it
+        type: boolean
+        default: true
 
 permissions:
   contents: read
   packages: write
 
+env:
+  TAG: ${{ inputs.tag || github.ref_name }}
+
 jobs:
-  images:
-    runs-on: ubuntu-latest
+  build:
     strategy:
       matrix:
-        include:
-          - name: backend
-            context: ./backend
-            build-contexts: docs=./docs
-          - name: frontend
-            context: ./frontend
+        image: [backend, frontend]
+        arch: [amd64, arm64]
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - uses: docker/setup-buildx-action@v3
 
       - uses: docker/login-action@v3
         with:
@@ -31,10 +46,35 @@ jobs:
 
       - uses: docker/build-push-action@v6
         with:
-          context: ${{ matrix.context }}
+          context: ./${{ matrix.image }}
+          platforms: linux/${{ matrix.arch }}
           push: true
-          build-args: APP_VERSION=${{ github.ref_name }}
-          build-contexts: ${{ matrix.build-contexts }}
-          tags: |
-            ghcr.io/qyrhal/eunomia-${{ matrix.name }}:latest
-            ghcr.io/qyrhal/eunomia-${{ matrix.name }}:${{ github.ref_name }}
+          provenance: false # plain per-arch manifests, so they can be joined below
+          build-args: APP_VERSION=${{ env.TAG }}
+          build-contexts: docs=./docs
+          tags: ghcr.io/qyrhal/eunomia-${{ matrix.image }}:${{ env.TAG }}-${{ matrix.arch }}
+
+  manifest:
+    needs: build
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        image: [backend, frontend]
+    steps:
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Join amd64 + arm64 into one tag
+        env:
+          IMAGE: ghcr.io/qyrhal/eunomia-${{ matrix.image }}
+          LATEST: ${{ github.event_name == 'push' || inputs.latest }}
+        run: |
+          tags=(-t "$IMAGE:$TAG")
+          [ "$LATEST" = "true" ] && tags+=(-t "$IMAGE:latest")
+          docker buildx imagetools create "${tags[@]}" "$IMAGE:$TAG-amd64" "$IMAGE:$TAG-arm64"
+          docker buildx imagetools inspect "$IMAGE:$TAG"

@@ -1,5 +1,9 @@
 # Installation
 
+Runs on Linux and macOS (Windows: inside WSL), on both **amd64** (x86-64) and
+**arm64** (Apple Silicon, Raspberry Pi 4/5, Ampere/Graviton). The images are
+multi-arch, so Docker pulls the native one.
+
 ## The installer
 
 ```bash
