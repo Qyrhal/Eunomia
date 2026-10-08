@@ -14,7 +14,9 @@ services:
       - rocksdb:/data/eunomia.db
     # No host port: only the backend talks to the DB, over the compose network.
     volumes:
-      - eunomia-surreal-data:/data
+      # scripts/upgrade-surreal-v3.sh sets SURREAL_DATA_VOLUME=eunomia-surreal-data-v3
+      # in .env once the 2.x data has been moved to a fresh 3.x volume.
+      - ${SURREAL_DATA_VOLUME:-eunomia-surreal-data}:/data
     healthcheck:
       test: ["CMD", "/surreal", "isready", "--endpoint", "http://localhost:8000"]
       interval: 5s
@@ -102,4 +104,5 @@ services:
 
 volumes:
   eunomia-surreal-data:
+  eunomia-surreal-data-v3:
   eunomia-backups:

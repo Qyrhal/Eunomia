@@ -66,6 +66,8 @@ main() {
     exit 1
   fi
 
+  local prev_ref
+  prev_ref="$(git rev-parse HEAD 2>/dev/null)"
   if ! { git fetch --depth 1 origin tag "$latest" --quiet && git checkout --quiet "$latest"; } 2>"$status_dir/.last-error"; then
     write_status "$status_dir" "$current" "$latest" false "$(cat "$status_dir/.last-error")"
     exit 1
@@ -80,6 +82,25 @@ main() {
   if ! grep -q '^BACKUP_ENCRYPTION_KEY=.' .env; then
     sed -i.bak '/^BACKUP_ENCRYPTION_KEY=/d' .env && rm -f .env.bak
     echo "BACKUP_ENCRYPTION_KEY=$(head -c 32 /dev/urandom | base64 | tr -d '\n')" >> .env
+  fi
+
+  # A release that pins SurrealDB 3.x over a running 2.x needs its data moved
+  # first (export, fresh volume, verify; see docs/upgrading-to-surrealdb-3.md).
+  # The script rolls itself back on failure, so here we only undo the checkout
+  # to let "Update now" be retried. It can run for a long time: keep the lock fresh.
+  local new_major old_major
+  new_major="$(docker compose config --images 2>/dev/null | sed -n 's#^surrealdb/surrealdb:v\{0,1\}\([0-9][0-9]*\)\..*#\1#p' | head -1)"
+  old_major="$(docker inspect -f '{{.Config.Image}}' "$(docker compose ps -q surrealdb 2>/dev/null | head -1)" 2>/dev/null | sed -n 's#.*:v\{0,1\}\([0-9][0-9]*\)\..*#\1#p')"
+  if [ "$new_major" = 3 ] && [ "$old_major" = 2 ]; then
+    ( while sleep 60; do touch "$status_dir/.lock"; done ) & local keepalive=$!; disown "$keepalive"
+    bash scripts/upgrade-surreal-v3.sh >> "$status_dir/upgrade.log" 2>&1; local rc=$?
+    kill "$keepalive" 2>/dev/null
+    if [ "$rc" -ne 0 ]; then
+      git checkout --quiet "$prev_ref" 2>/dev/null
+      sed -i.bak "s#^EUNOMIA_IMAGE_TAG=.*#EUNOMIA_IMAGE_TAG=$current#" .env && rm -f .env.bak
+      write_status "$status_dir" "$current" "$latest" false "SurrealDB 3 upgrade failed and was rolled back, nothing changed: $(tail -3 "$status_dir/upgrade.log")"
+      exit 1
+    fi
   fi
 
   # Everything except the updater itself (recreating it here would kill this
