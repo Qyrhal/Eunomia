@@ -22,6 +22,7 @@ pub fn registry() -> Registry {
         .register(kind::EXTRACT, extract_record)
         .register(kind::CONSOLIDATE, consolidate_subject)
         .register(kind::PRUNE_CAPSULES, prune_capsules)
+        .register(kind::PRUNE_AUTH, prune_auth)
         .register(kind::MIGRATE_TENANT, migrate_tenant)
 }
 
@@ -145,6 +146,11 @@ pub async fn enqueue_extract(state: &OrgState, owner: &RecordId, record_id: &str
 /// Failure capsules older than 7 days, and all but the newest 1000.
 async fn prune_capsules(state: AppState, _job: Job) -> Result<(), JobError> {
     Ok(crate::capsules::prune_default(&state.control).await?)
+}
+
+/// Audit events past `AUDIT_RETENTION_DAYS` and sessions expired for `SESSION_RETENTION_DAYS`.
+async fn prune_auth(state: AppState, _job: Job) -> Result<(), JobError> {
+    Ok(crate::audit::prune_default(&state.control).await?)
 }
 
 /// Bring one org's database to the latest tenant schema. Idempotent: migrating a current database is a no-op.

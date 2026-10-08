@@ -200,7 +200,7 @@ pub async fn accessible_vault_ids(db: &OrgDb, user_id: &RecordId) -> AppResult<V
         .bind(("user", user_id.clone()))
         .await?;
     let rows: Vec<Row> = res.take(0)?;
-    let only = authz::restricted_vault();
+    let only = authz::restricted_vault()?;
     Ok(rows.into_iter().map(|r| r.vault).filter(|v| only.as_ref().is_none_or(|o| o == v)).collect())
 }
 
@@ -208,7 +208,7 @@ pub async fn accessible_vault_ids(db: &OrgDb, user_id: &RecordId) -> AppResult<V
 /// doesn't pass `vault_id`, so existing single-user callers need no changes.
 pub async fn default_vault_id(db: &OrgDb, user_id: &RecordId) -> AppResult<RecordId> {
     // a vault-restricted token's default scope is its vault, not the personal one
-    if let Some(only) = authz::restricted_vault() {
+    if let Some(only) = authz::restricted_vault()? {
         authz::ensure_member(db, user_id, &only).await?;
         return Ok(only);
     }
@@ -241,7 +241,7 @@ pub async fn list_my_vaults(db: &OrgDb, user_id: &RecordId) -> AppResult<Vec<Vau
         .bind(("user", user_id.clone()))
         .await?;
     let rows: Vec<Row> = res.take(0)?;
-    let only = authz::restricted_vault();
+    let only = authz::restricted_vault()?;
     Ok(rows
         .into_iter()
         .filter(|r| only.as_ref().is_none_or(|o| o == &r.vault.id))
@@ -369,7 +369,7 @@ pub async fn list_my_invitations(db: &OrgDb, user_id: &RecordId) -> AppResult<Ve
         .bind(("user", user_id.clone()))
         .await?;
     let rows: Vec<Row> = res.take(0)?;
-    let only = authz::restricted_vault();
+    let only = authz::restricted_vault()?;
     Ok(rows
         .into_iter()
         .filter(|r| only.as_ref().is_none_or(|o| o == &r.vault.id))

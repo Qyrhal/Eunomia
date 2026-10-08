@@ -11,7 +11,7 @@
 
 use crate::rid::RecordIdExt;
 use axum::{
-    extract::State,
+    extract::{Extension, State},
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::post,
@@ -20,7 +20,8 @@ use axum::{
 use serde_json::{json, Value};
 
 use crate::error::{AppError, ErrorCode};
-use crate::models_user::{self, User};
+use crate::auth::Authn;
+use crate::models_user::User;
 use crate::state::AppState;
 use crate::tools::registry;
 
@@ -42,7 +43,7 @@ async fn method_not_allowed() -> Response {
     (StatusCode::METHOD_NOT_ALLOWED, [(header::ALLOW, "POST")]).into_response()
 }
 
-async fn handle(State(state): State<AppState>, headers: HeaderMap, body: String) -> Response {
+async fn handle(State(state): State<AppState>, authn: Option<Extension<Authn>>, headers: HeaderMap, body: String) -> Response {
     if !origin_allowed(&headers, &state.settings.cors_allowed_origins) {
         return AppError::coded(ErrorCode::AuthForbidden, "origin not allowed").into_response();
     }
@@ -50,7 +51,7 @@ async fn handle(State(state): State<AppState>, headers: HeaderMap, body: String)
         && !SUPPORTED_VERSIONS.contains(&v) {
             return AppError::bad_request(format!("unsupported MCP-Protocol-Version {v}")).into_response();
         }
-    let Some((user, granted)) = bearer_user(&state, &headers).await else {
+    let Some((user, granted)) = gate_user(authn) else {
         let presented = headers.contains_key(header::AUTHORIZATION);
         let err = AppError::unauthorized("missing or invalid access token: connect with OAuth or create a personal API token on the Eunomia dashboard");
         return ([(header::WWW_AUTHENTICATE, crate::oauth::www_authenticate(&state.settings, presented))], err).into_response();
@@ -89,18 +90,13 @@ async fn handle(State(state): State<AppState>, headers: HeaderMap, body: String)
     }
 }
 
-/// The caller, plus the scopes an OAuth token was limited to (`None` for a personal API token).
-async fn bearer_user(state: &AppState, headers: &HeaderMap) -> Option<(User, Option<Vec<String>>)> {
-    let value = headers.get(header::AUTHORIZATION)?.to_str().ok()?;
-    let token = value.strip_prefix("Bearer ").or_else(|| value.strip_prefix("bearer "))?.trim();
-    let (user, scopes) = if crate::oauth::is_access_token(token) {
-        let (user, scopes) = crate::oauth::verify_access_token(state, token).await?;
-        (user, Some(scopes))
-    } else {
-        (models_user::verify_api_token(&state.control, token).await.ok().flatten()?, None)
-    };
-    crate::telemetry::record_user(&user.id.to_string());
-    Some((user, scopes))
+/// The caller the gate already authenticated, plus the scopes an OAuth token was limited to
+/// (`None` for a personal API token). No second token lookup.
+fn gate_user(authn: Option<Extension<Authn>>) -> Option<(User, Option<Vec<String>>)> {
+    let Extension(a) = authn?;
+    let granted = (a.caller.actor.kind == "oauth").then(|| a.caller.scopes.clone());
+    crate::telemetry::record_user(&a.user.id.to_string());
+    Some((a.user, granted))
 }
 
 /// DNS-rebinding guard. The MCP transport spec says servers MUST validate

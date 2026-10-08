@@ -1,7 +1,7 @@
 //! Append-only security ledger (`audit_event`). One row per auth event and per
 //! mutating tool call: who (user, token or OAuth client), what, on which target,
 //! the outcome code and the request's trace id. Nothing in the app updates or
-//! deletes these rows, and the store only has a CREATE statement for them.
+//! deletes these rows except [`prune`], which applies the retention window.
 //! Writes are best effort: a failure is logged, never surfaced to the caller.
 
 use surrealdb::types::RecordId;
@@ -52,4 +52,22 @@ pub async fn record(db: &ControlDb, e: Event<'_>) {
 pub async fn record_as_caller(db: &ControlDb, user: &RecordId, action: &str, target: &str, outcome: &str) {
     let actor = crate::authz::current().map(|c| c.actor).unwrap_or_else(|| Actor { kind: "user", id: user.to_string() });
     record(db, Event { user: Some(user), actor: &actor, action, target, outcome, detail: "" }).await;
+}
+
+fn days_from_env(key: &str, default: u32) -> u32 {
+    std::env::var(key).ok().and_then(|v| v.trim().parse().ok()).unwrap_or(default)
+}
+
+/// Deletes audit rows older than `AUDIT_RETENTION_DAYS` (default 365, `0` keeps them forever) and
+/// sessions that expired more than `SESSION_RETENTION_DAYS` (default 7) ago.
+pub async fn prune_default(db: &ControlDb) -> crate::error::AppResult<()> {
+    prune(db, days_from_env("AUDIT_RETENTION_DAYS", 365), days_from_env("SESSION_RETENTION_DAYS", 7)).await
+}
+
+pub async fn prune(db: &ControlDb, audit_days: u32, session_days: u32) -> crate::error::AppResult<()> {
+    if audit_days > 0 {
+        store::control::AUDIT_PRUNE.on(db).bind(("age", format!("{audit_days}d"))).await?.check()?;
+    }
+    store::control::SESSION_PRUNE.on(db).bind(("age", format!("{session_days}d"))).await?.check()?;
+    Ok(())
 }

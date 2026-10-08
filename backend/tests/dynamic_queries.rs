@@ -272,6 +272,8 @@ fn dynamic_names_in_source() -> BTreeSet<String> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn every_dynamic_builder_runs_in_every_combination() {
+    // the replay step needs stored arguments (the default keeps only a hash and shape)
+    unsafe { std::env::set_var("CAPSULE_ARGS", "redacted") };
     let app = TestApp::new().await;
     plant_records(&app).await;
     cache_searches(&app).await;

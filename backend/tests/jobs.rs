@@ -341,7 +341,7 @@ async fn stale_observation_reconciler_picks_up_work() {
         .unwrap();
     let w = |text: &str, ty: &str| {
         let args = json!({"subject_name": "Alice", "subject_kind": "person", "text": text, "type": ty});
-        eunomia_backend::tools::registry::call(&state, &user, "memory_write", args)
+        common::sys(eunomia_backend::tools::registry::call(&state, &user, "memory_write", args))
     };
     w("likes tea", "world").await.unwrap();
     w("Alice likes tea.", "observation").await.unwrap();

@@ -51,7 +51,7 @@ async fn token(app: &TestApp, granted: &[&str], vault: Option<&RecordId>) -> Str
 }
 
 async fn org_vault(app: &TestApp) -> RecordId {
-    rid::parse(&vaults::create_vault(&app.db().await, &app.user.id, "Team", "org").await.unwrap().id).unwrap()
+    rid::parse(&common::sys(vaults::create_vault(&app.db().await, &app.user.id, "Team", "org")).await.unwrap().id).unwrap()
 }
 
 /// A JSON-RPC `tools/call` over `/mcp`; returns (isError, tool value).
@@ -175,7 +175,7 @@ async fn token_creation_validates_and_cannot_escalate() {
     }
     // a vault the creator is not in
     let other = common::register(&app.state, "other@example.com").await;
-    let theirs = vaults::default_vault_id(&app.db().await, &other.id).await.unwrap();
+    let theirs = common::sys(vaults::default_vault_id(&app.db().await, &other.id)).await.unwrap();
     let (status, _, body) = send(
         &app.router,
         "POST",
@@ -199,7 +199,7 @@ async fn token_creation_validates_and_cannot_escalate() {
 async fn vault_restricted_token_is_confined_to_its_vault() {
     let app = TestApp::new().await;
     let org = org_vault(&app).await;
-    let personal = vaults::default_vault_id(&app.db().await, &app.user.id).await.unwrap();
+    let personal = common::sys(vaults::default_vault_id(&app.db().await, &app.user.id)).await.unwrap();
     // personal data the restricted token must never see
     app.tool("memory_write", json!({"subject_name": "Secret", "subject_kind": "person", "text": "in personal"})).await;
 
@@ -271,14 +271,14 @@ async fn vault_restricted_token_is_confined_to_its_vault() {
 async fn restricted_token_loses_access_when_removed_from_its_vault() {
     let app = TestApp::new().await;
     let other = common::register(&app.state, "o@example.com").await;
-    let theirs: RecordId = rid::parse(&vaults::create_vault(&app.db().await, &other.id, "Theirs", "org").await.unwrap().id).unwrap();
-    vaults::invite_member(&app.db().await, app.control(), &other.id, &theirs, &app.user.email, "member").await.unwrap();
-    vaults::accept_invitation(&app.db().await, &app.user.id, &theirs).await.unwrap();
+    let theirs: RecordId = rid::parse(&common::sys(vaults::create_vault(&app.db().await, &other.id, "Theirs", "org")).await.unwrap().id).unwrap();
+    common::sys(vaults::invite_member(&app.db().await, app.control(), &other.id, &theirs, &app.user.email, "member")).await.unwrap();
+    common::sys(vaults::accept_invitation(&app.db().await, &app.user.id, &theirs)).await.unwrap();
     let t = token(&app, scopes::ALL, Some(&theirs)).await;
 
     let (status, _, _) = send(&app.router, "GET", "/api/entities", None, &bearer(&t)).await;
     assert_eq!(status, StatusCode::OK);
-    vaults::remove_member(&app.db().await, app.control(), &other.id, &theirs, &app.user.email).await.unwrap();
+    common::sys(vaults::remove_member(&app.db().await, app.control(), &other.id, &theirs, &app.user.email)).await.unwrap();
     let (status, _, body) = send(&app.router, "GET", "/api/entities", None, &bearer(&t)).await;
     assert_eq!((status, body["code"].as_str()), (StatusCode::FORBIDDEN, Some("vault.forbidden")));
 }
@@ -491,6 +491,11 @@ async fn audit_events_cover_auth_and_tool_calls_with_trace_ids() {
 fn audit_event_is_append_only_in_the_store() {
     for stmt in eunomia_backend::store::all() {
         let sql = stmt.sql.to_lowercase();
+        // retention is the one deletion: a plain age cut-off, nothing else
+        if stmt.name == "app.audit_prune" {
+            assert!(sql.starts_with("delete audit_event where created_at < time::now()"), "{}", stmt.sql);
+            continue;
+        }
         if sql.contains("audit_event") {
             assert!(sql.trim_start().starts_with("create audit_event"), "{} touches audit_event: {}", stmt.name, stmt.sql);
         }

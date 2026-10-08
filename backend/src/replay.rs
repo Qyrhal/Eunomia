@@ -34,11 +34,23 @@ pub struct Report {
     pub reproduced: bool,
 }
 
+const NO_ARGS: &str = "This capsule has no arguments: the server kept only a hash and shape of them (CAPSULE_ARGS=off, the default). \
+Set CAPSULE_ARGS=redacted on the server to capture them for the next failure, or use `--emit-test` to get a test skeleton with the shape.";
+
 /// Loads the capsule from `src`, rebuilds the caller's data in a scratch database and re-runs the call.
 pub async fn replay(src: &AppState, settings: &Settings, trace_id: &str) -> AppResult<Report> {
+    // an operator command, not a request: it acts as the system
+    crate::authz::as_system(replay_as_system(src, settings, trace_id)).await
+}
+
+async fn replay_as_system(src: &AppState, settings: &Settings, trace_id: &str) -> AppResult<Report> {
     let capsule = capsules::get(&src.control, trace_id).await?.ok_or_else(|| AppError::not_found(format!("No failure capsule for trace {trace_id}.")))?;
     if capsule.truncated {
         return Err(AppError::bad_request("The capsule was cut to fit the size cap, so it cannot be replayed."));
+    }
+
+    if !capsule.args_stored() {
+        return Err(AppError::bad_request(NO_ARGS));
     }
 
     let scratch_settings = Settings { surreal_url: "mem://".into(), surreal_ns: "replay".into(), surreal_db: "replay".into(), ..settings.clone() };
@@ -167,16 +179,18 @@ async fn run(state: &AppState, capsule: &Capsule, user: Option<&User>) -> AppRes
 /// A Rust integration-test skeleton for `backend/tests/` that fails while the bug is still there.
 pub fn emit_test(c: &Capsule) -> String {
     let short: String = c.trace_id.chars().take(8).collect();
-    let args = serde_json::to_string_pretty(&c.args).unwrap_or_default();
+    let stored = c.args_stored();
+    let args = serde_json::to_string_pretty(if stored { &c.args } else { &c.args["shape"] }).unwrap_or_default();
     let (call, check) = if c.kind == "tool" {
         (
-            format!("    let out = registry::call(&app.state, &app.user, {:?}, json!({args})).await;\n    let code = match &out {{\n        Ok(v) => v.get(\"code\").and_then(|c| c.as_str()).unwrap_or(\"ok\").to_string(),\n        Err(e) => e.code.as_str().to_string(),\n    }};", c.name),
+            format!("    let out = eunomia_backend::authz::as_system(registry::call(&app.state, &app.user, {:?}, json!({args}))).await;\n    let code = match &out {{\n        Ok(v) => v.get(\"code\").and_then(|c| c.as_str()).unwrap_or(\"ok\").to_string(),\n        Err(e) => e.code.as_str().to_string(),\n    }};", c.name),
             "code",
         )
     } else {
-        let method = c.args["method"].as_str().unwrap_or("GET");
-        let uri = c.args["uri"].as_str().unwrap_or("/");
-        let body = if c.args["body"].is_null() { "None".to_string() } else { format!("Some(json!({}))", serde_json::to_string_pretty(&c.args["body"]).unwrap_or_default()) };
+        // without stored arguments the capsule name (`METHOD /matched/route`) is all that is known
+        let (name_method, name_route) = c.name.split_once(' ').unwrap_or(("GET", "/"));
+        let (method, uri) = if stored { (c.args["method"].as_str().unwrap_or("GET"), c.args["uri"].as_str().unwrap_or("/")) } else { (name_method, name_route) };
+        let body = if !stored || c.args["body"].is_null() { "None".to_string() } else { format!("Some(json!({}))", serde_json::to_string_pretty(&c.args["body"]).unwrap_or_default()) };
         (format!("    let (status, out) = app.http({method:?}, {uri:?}, {body}, true).await;\n    let code = out[\"code\"].as_str().unwrap_or(\"ok\").to_string();\n    let _ = status;"), "code")
     };
     format!(
@@ -188,11 +202,13 @@ pub fn emit_test(c: &Capsule) -> String {
          #[tokio::test]\n\
          async fn replay_{short}() {{\n\
          \x20   let app = TestApp::new().await;\n\
+         {no_args}\
          \x20   // TODO: seed what the failure needs (run `eunomia replay {trace}` to see the caller's data shape).\n\
          {call}\n\
          \x20   // Fails while the bug exists; it passes once the call stops failing with {code}.\n\
          \x20   assert_ne!({check}, {code:?}, \"still failing: {name}\");\n\
          }}\n",
+        no_args = if stored { "" } else { "\x20   // Arguments were NOT stored (CAPSULE_ARGS=off): the values below are only the shape, replace them with real ones.\n" },
         trace = c.trace_id,
         code = c.code,
         version = c.version,
@@ -211,6 +227,14 @@ pub async fn cli(args: &[String], settings: &Settings) -> i32 {
         Ok(d) => d,
         Err(e) => return fail(format!("cannot connect to the database: {}", e.source.unwrap_or(e.message))),
     };
+    if emit
+        && let Ok(Some(c)) = capsules::get(&src.control, trace_id).await
+        && !c.args_stored()
+    {
+        eprintln!("note: {NO_ARGS}");
+        print!("{}", emit_test(&c));
+        return 0;
+    }
     match replay(&src, settings, trace_id).await {
         Err(e) => fail(format!("{}: {}", e.code.as_str(), e.source.unwrap_or(e.message))),
         Ok(r) if emit => {

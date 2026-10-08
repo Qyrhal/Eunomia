@@ -181,7 +181,7 @@ async fn the_move_carries_a_2x_export_into_one_org_and_is_a_noop_the_second_time
     // the app works on it as the moved user
     let user = eunomia_backend::models_user::load_user(&state.control, owner, "a@b.c".into()).await.unwrap();
     assert_eq!(user.org, org);
-    let out = eunomia_backend::tools::registry::call(&state, &user, "entities_search", json!({"query": "Ann"})).await.unwrap();
+    let out = common::sys(eunomia_backend::tools::registry::call(&state, &user, "entities_search", json!({"query": "Ann"}))).await.unwrap();
     assert_eq!(out["results"].as_array().unwrap().len(), 1, "{out}");
 
     // the old database keeps its rows (it was only brought to schema 8 in place)

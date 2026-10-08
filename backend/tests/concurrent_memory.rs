@@ -21,7 +21,7 @@ async fn concurrent_memory_writes_keep_exact_counts() {
             for i in 0..PER_TASK {
                 for (kind, text) in [("world", format!("fact {t}-{i}")), ("observation", format!("belief {t}-{i}"))] {
                     let args = json!({"subject_name":"Alice","subject_kind":"person","text":text,"type":kind});
-                    let out = registry::call(&state, &user, "memory_write", args).await;
+                    let out = common::sys(registry::call(&state, &user, "memory_write", args)).await;
                     match out {
                         Ok(v) if v.get("error").is_none() => {}
                         other => errors.push(format!("{other:?}")),

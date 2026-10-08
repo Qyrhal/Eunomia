@@ -15,6 +15,12 @@ use http_body_util::BodyExt;
 use serde_json::Value;
 use tower::ServiceExt;
 
+/// Runs service code as the system: direct calls into services have no request credential, and an
+/// authorization check with none in scope fails closed.
+pub async fn sys<F: std::future::Future>(f: F) -> F::Output {
+    eunomia_backend::authz::as_system(f).await
+}
+
 pub const PASSWORD: &str = "correct-horse-battery";
 
 pub struct TestApp {
@@ -104,7 +110,20 @@ impl TestApp {
 
     /// Call a registry tool as the test user (the same choke point REST and MCP use).
     pub async fn tool(&self, name: &str, args: Value) -> Value {
-        registry::call(&self.state, &self.user, name, args).await.expect("tool call")
+        eunomia_backend::authz::as_system(registry::call(&self.state, &self.user, name, args)).await.expect("tool call")
+    }
+
+    /// Log in as the test user the way the browser does; the `name=value` cookie pair.
+    pub async fn session_cookie(&self) -> String {
+        let body = serde_json::json!({ "email": self.user.email, "password": PASSWORD });
+        let (_, set_cookie) = http(&self.router, "POST", "/api/auth/login", Some(body), None, None).await;
+        set_cookie.expect("login sets a cookie").split(';').next().unwrap().to_string()
+    }
+
+    /// One HTTP request as the logged-in browser session (not a token).
+    pub async fn http_session(&self, method: &str, path: &str, body: Option<Value>) -> (StatusCode, Value) {
+        let cookie = self.session_cookie().await;
+        http(&self.router, method, path, body, None, Some(&cookie)).await.0
     }
 
     /// One HTTP request against the real router. `auth` adds the Bearer token.

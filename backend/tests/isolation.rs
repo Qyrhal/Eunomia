@@ -146,7 +146,7 @@ fn canary(who: &str) -> String {
 }
 
 async fn call(state: &AppState, user: &User, tool: &str, args: Value) -> Value {
-    registry::call(state, user, tool, args).await.unwrap_or_else(|e| panic!("{tool}: {}", e.message))
+    common::sys(registry::call(state, user, tool, args)).await.unwrap_or_else(|e| panic!("{tool}: {}", e.message))
 }
 
 async fn raw(router: &Router, method: &str, path: &str, body: Option<Value>, bearer: Option<&str>, ua: Option<&str>) -> (u16, String) {
@@ -274,7 +274,7 @@ async fn plant(state: &AppState, router: &Router, name: &'static str, user: User
     ids.trace = trace.clone();
     eunomia_backend::telemetry::with_trace_id(
         trace,
-        registry::call(state, &user, "entity_update", json!({"entity_id": "person:nobody", "summary": format!("{canary} capsule")})),
+        common::sys(registry::call(state, &user, "entity_update", json!({"entity_id": "person:nobody", "summary": format!("{canary} capsule")}))),
     )
     .await
     .unwrap();
@@ -445,7 +445,7 @@ async fn attack(w: &World, attacker: &Org, victim: &Org, victim_must_stay_unchan
     let mut called = Vec::new();
     for (name, spec) in tools {
         let args = tool_args(name, &spec.schema, victim);
-        let out = match registry::call(&w.state, &attacker.user, name, args.clone()).await {
+        let out = match common::sys(registry::call(&w.state, &attacker.user, name, args.clone())).await {
             Ok(v) => v.to_string(),
             Err(e) => error_text(&e),
         };
@@ -657,7 +657,7 @@ async fn mutation_check_removing_one_filter_turns_the_suite_red() {
         async move {
             let body = match call {
                 Call::Route(path) => raw(&w.router, "GET", &path, None, Some(&token), None).await.1,
-                Call::Tool(name, args) => registry::call(&w.state, &user, name, args).await.map(|v| v.to_string()).unwrap_or_default(),
+                Call::Tool(name, args) => common::sys(registry::call(&w.state, &user, name, args)).await.map(|v| v.to_string()).unwrap_or_default(),
             };
             secrets.iter().any(|s| body.contains(s.as_str()))
         }

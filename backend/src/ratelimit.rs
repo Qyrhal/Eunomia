@@ -18,6 +18,9 @@ pub struct RateConfig {
     pub token_per_min: u32,
     /// Login, signup and failed-credential attempts per minute per client address.
     pub auth_per_min: u32,
+    /// `/oauth/token` refresh grants per minute per client and address (`RATE_LIMIT_REFRESH_PER_MIN`).
+    /// Many users behind one address refresh through the same client; code exchange stays on `auth_per_min`.
+    pub refresh_per_min: u32,
     /// Source webhook deliveries per minute per client address (`RATE_LIMIT_WEBHOOK_PER_MIN`).
     pub webhook_per_min: u32,
     /// Peers whose `X-Forwarded-For` is believed (`TRUSTED_PROXIES`).
@@ -120,9 +123,16 @@ pub fn client_addr(peer: Option<IpAddr>, forwarded_for: Option<&str>, trusted: &
         .to_string()
 }
 
+/// True when the request reached a trusted proxy over https: the peer is trusted and the
+/// right-most `X-Forwarded-Proto` is `https`. An untrusted peer cannot claim it.
+pub fn forwarded_https(peer: Option<IpAddr>, forwarded_proto: Option<&str>, trusted: &[Cidr]) -> bool {
+    peer.is_some_and(|p| trusted.iter().any(|c| c.contains(p)))
+        && forwarded_proto.and_then(|v| v.rsplit(',').next()).is_some_and(|p| p.trim().eq_ignore_ascii_case("https"))
+}
+
 impl Default for RateConfig {
     fn default() -> Self {
-        RateConfig { user_per_min: 1200, token_per_min: 600, auth_per_min: 20, webhook_per_min: 120, trusted_proxies: parse_cidrs(DEFAULT_TRUSTED_PROXIES), trusted_hosts: Vec::new() }
+        RateConfig { user_per_min: 1200, token_per_min: 600, auth_per_min: 20, refresh_per_min: 300, webhook_per_min: 120, trusted_proxies: parse_cidrs(DEFAULT_TRUSTED_PROXIES), trusted_hosts: Vec::new() }
     }
 }
 
@@ -135,6 +145,7 @@ impl RateConfig {
             user_per_min: get("RATE_LIMIT_USER_PER_MIN", d.user_per_min),
             token_per_min: get("RATE_LIMIT_TOKEN_PER_MIN", d.token_per_min),
             auth_per_min: get("RATE_LIMIT_AUTH_PER_MIN", d.auth_per_min),
+            refresh_per_min: get("RATE_LIMIT_REFRESH_PER_MIN", d.refresh_per_min),
             webhook_per_min: get("RATE_LIMIT_WEBHOOK_PER_MIN", d.webhook_per_min),
             // unset or blank: the defaults; any value with no valid range (say `none`) trusts nobody
             trusted_proxies: match std::env::var("TRUSTED_PROXIES") {

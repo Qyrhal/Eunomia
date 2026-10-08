@@ -112,7 +112,7 @@ async fn attempt(state: &AppState, registry: &Registry, cfg: &WorkerConfig, job:
         let err = JobError::permanent(ErrorCode::JobNoHandler, format!("no handler for job kind {:?}", job.kind));
         return finish(state, cfg, job, Err(err)).await;
     };
-    let work = AssertUnwindSafe(async { handler(state.clone(), job.clone()).await }).catch_unwind();
+    let work = AssertUnwindSafe(crate::authz::as_system(async { handler(state.clone(), job.clone()).await })).catch_unwind();
     let outcome = tokio::select! {
         r = work => Some(r),
         _ = keep_lease(state, cfg, job) => None,

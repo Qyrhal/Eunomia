@@ -18,7 +18,8 @@ use serde::Deserialize;
 use surrealdb::types::RecordId;
 use crate::rid::RecordIdExt;
 
-use crate::pool::OrgDb;
+use crate::models_user::User;
+use crate::pool::{ControlDb, OrgDb};
 use crate::error::{AppError, AppResult, ErrorCode};
 use crate::scopes;
 use crate::store;
@@ -128,6 +129,12 @@ impl Caller {
         Caller { actor: Actor { kind: "user", id: user_id.to_string() }, scopes: scopes::ALL.iter().map(|s| s.to_string()).collect(), vault: None }
     }
 
+    /// Server-initiated work with no request behind it (jobs, boot, replay):
+    /// every scope, every vault. Request code never gets this by default.
+    pub fn system() -> Self {
+        Caller { actor: Actor { kind: "system", id: "system".into() }, scopes: scopes::ALL.iter().map(|s| s.to_string()).collect(), vault: None }
+    }
+
     /// `memory:write` implies `memory:read` (see `scopes::allows`).
     pub fn allows(&self, scope: &str) -> bool {
         scopes::allows(&self.scopes, scope)
@@ -143,30 +150,53 @@ pub async fn with_caller<F: Future>(caller: Caller, fut: F) -> F::Output {
     CALLER.scope(caller, fut).await
 }
 
-/// The current request's credential. `None` outside a request (background
-/// jobs, tests of services), which means unrestricted.
+/// The current task's credential, if any. Only for reading who is acting
+/// (audit); checks use [`caller`], which fails closed.
 pub fn current() -> Option<Caller> {
     CALLER.try_with(Caller::clone).ok()
 }
 
+/// The credential for an authorization check. No credential in scope means a
+/// task was spawned without [`with_caller`] (or non-request code forgot
+/// `Caller::system()`): refuse loudly instead of treating it as unrestricted.
+pub fn caller() -> AppResult<Caller> {
+    current().ok_or_else(|| {
+        tracing::error!("authorization check ran with no caller in scope: a spawned task lost the request credential");
+        AppError::internal("no credential in scope for an authorization check")
+    })
+}
+
+/// Runs `fut` as the system (jobs, boot, replay, tests of services).
+pub async fn as_system<F: Future>(fut: F) -> F::Output {
+    with_caller(Caller::system(), fut).await
+}
+
 /// 403 `auth.scope` unless the current credential carries `scope`.
 pub fn require_scope(scope: &str) -> AppResult<()> {
-    match current() {
-        Some(c) if !c.allows(scope) => {
-            Err(AppError::coded(ErrorCode::AuthScope, format!("this token does not have the {scope} scope")))
-        }
-        _ => Ok(()),
+    if caller()?.allows(scope) {
+        Ok(())
+    } else {
+        Err(AppError::coded(ErrorCode::AuthScope, format!("this token does not have the {scope} scope")))
+    }
+}
+
+/// 403 `auth.scope` unless the request came from a browser session (not a token
+/// or an OAuth client): for routes that mint or manage credentials.
+pub fn require_session() -> AppResult<()> {
+    match caller()?.actor.kind {
+        "user" | "system" => Ok(()),
+        _ => Err(AppError::coded(ErrorCode::AuthScope, "this route needs a browser session, not a token")),
     }
 }
 
 /// The vault the current token is restricted to, if any.
-pub fn restricted_vault() -> Option<RecordId> {
-    current().and_then(|c| c.vault)
+pub fn restricted_vault() -> AppResult<Option<RecordId>> {
+    Ok(caller()?.vault)
 }
 
 /// 403 `auth.scope` if the current token is restricted to a vault other than `vault`.
 pub fn check_vault(vault: &RecordId) -> AppResult<()> {
-    match restricted_vault() {
+    match restricted_vault()? {
         Some(only) if &only != vault => {
             Err(AppError::coded(ErrorCode::AuthScope, format!("this token is restricted to vault {}", only.to_string())))
         }
@@ -178,10 +208,23 @@ pub fn check_vault(vault: &RecordId) -> AppResult<()> {
 /// data outside the restricted vault (new, cloned or merged vaults) or are not
 /// about a vault at all.
 pub fn require_unrestricted() -> AppResult<()> {
-    match restricted_vault() {
+    match restricted_vault()? {
         Some(only) => Err(AppError::coded(ErrorCode::AuthScope, format!("this token is restricted to vault {}", only.to_string()))),
         None => Ok(()),
     }
+}
+
+/// An email listed in `EUNOMIA_ADMIN_EMAILS` (comma separated): an operator of the whole instance.
+pub fn is_operator(user: &User) -> bool {
+    std::env::var("EUNOMIA_ADMIN_EMAILS")
+        .unwrap_or_default()
+        .split(',')
+        .any(|e| !e.trim().is_empty() && e.trim().eq_ignore_ascii_case(&user.email))
+}
+
+/// Admin = the instance's first user, or an operator.
+pub async fn is_admin(db: &ControlDb, user: &User) -> AppResult<bool> {
+    Ok(is_operator(user) || crate::capsules::first_user(db).await?.as_ref() == Some(&user.id))
 }
 
 #[derive(Deserialize, SurrealValue)]
@@ -264,8 +307,14 @@ mod tests {
     async fn restriction_and_scope_checks_follow_the_current_caller() {
         let v1: RecordId = crate::rid::parse("vault:one").unwrap();
         let v2: RecordId = crate::rid::parse("vault:two").unwrap();
-        // no caller: unrestricted
-        assert!(check_vault(&v1).is_ok() && require_scope(scopes::VAULTS_ADMIN).is_ok() && require_unrestricted().is_ok());
+        // no caller: fails closed
+        assert_eq!(check_vault(&v1).unwrap_err().code, ErrorCode::Internal);
+        assert_eq!(require_scope(scopes::MEMORY_READ).unwrap_err().code, ErrorCode::Internal);
+        assert_eq!(require_unrestricted().unwrap_err().code, ErrorCode::Internal);
+        as_system(async {
+            assert!(check_vault(&v1).is_ok() && require_scope(scopes::VAULTS_ADMIN).is_ok() && require_unrestricted().is_ok() && require_session().is_ok());
+        })
+        .await;
 
         let caller = Caller {
             actor: Actor { kind: "token", id: "api_token:x".into() },
@@ -278,6 +327,7 @@ mod tests {
             assert!(require_scope(scopes::MEMORY_READ).is_ok());
             assert_eq!(require_scope(scopes::MEMORY_WRITE).unwrap_err().code, ErrorCode::AuthScope);
             assert_eq!(require_unrestricted().unwrap_err().code, ErrorCode::AuthScope);
+            assert_eq!(require_session().unwrap_err().code, ErrorCode::AuthScope);
         })
         .await;
     }

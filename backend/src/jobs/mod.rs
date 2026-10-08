@@ -31,6 +31,8 @@ pub mod kind {
     pub const EXTRACT: &str = "extract";
     pub const CONSOLIDATE: &str = "consolidate";
     pub const PRUNE_CAPSULES: &str = "prune_capsules";
+    /// Audit rows past their retention and long-expired sessions.
+    pub const PRUNE_AUTH: &str = "prune_auth";
     /// Bring one org's database to the latest tenant schema (the per-org fan-out of a migration).
     pub const MIGRATE_TENANT: &str = "migrate_tenant";
 }

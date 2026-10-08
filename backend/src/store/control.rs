@@ -43,6 +43,8 @@ pub const ALL: &[&ControlStmt] = &[
     &OAUTH_TOKENS_DELETE_FAMILY,
     &OAUTH_PRUNE,
     &AUDIT_EVENT_CREATE,
+    &AUDIT_PRUNE,
+    &SESSION_PRUNE,
     &ORG_OF_USER,
     &ORG_FIRST_OWNER,
     &ORG_MEMBERS,
@@ -134,13 +136,13 @@ pub const OAUTH_CLIENT_UPSERT: ControlStmt = ControlStmt::new(
      redirect_uris = $redirect_uris, kind = $kind, fetched_at = time::now(), expires_at = $expires_at",
 );
 
-/// A registered (DCR) client is dropped after 7 days if nobody ever authorized it, and after 30 days
+/// A registered (DCR) client is dropped after 24 hours if nobody ever authorized it, and after 30 days
 /// without use (`fetched_at` is bumped on every token issue) even if someone did, so open registration
 /// cannot grow the table forever. Existing grants keep refreshing: refresh does not look the client up.
 pub const OAUTH_CLIENT_PRUNE: ControlStmt = ControlStmt::new(
     "app.oauth_client_prune",
     "DELETE oauth_client WHERE kind = 'dcr' AND (fetched_at < time::now() - 30d \
-     OR (fetched_at < time::now() - 7d AND client_id NOT IN (SELECT VALUE client_id FROM oauth_grant)))",
+     OR (fetched_at < time::now() - 24h AND client_id NOT IN (SELECT VALUE client_id FROM oauth_grant)))",
 );
 
 pub const OAUTH_CLIENT_TOUCH: ControlStmt =
@@ -226,6 +228,16 @@ pub const AUDIT_EVENT_CREATE: ControlStmt = ControlStmt::new(
     "app.audit_event_create",
     "CREATE audit_event SET user = $user, actor_kind = $actor_kind, actor_id = $actor_id, action = $action, \
      target = $target, outcome = $outcome, trace_id = $trace_id, detail = $detail",
+);
+
+/// Retention only: the one place the app deletes `audit_event` rows (see `audit::prune`).
+pub const AUDIT_PRUNE: ControlStmt = ControlStmt::new("app.audit_prune", "DELETE audit_event WHERE created_at < time::now() - <duration>$age");
+
+/// Sessions that expired, or were revoked and last seen, longer than `$age` ago.
+pub const SESSION_PRUNE: ControlStmt = ControlStmt::new(
+    "app.session_prune",
+    "DELETE session WHERE (expires_at != NONE AND expires_at < time::now() - <duration>$age) \
+     OR (revoked = true AND last_seen_at < time::now() - <duration>$age)",
 );
 
 // orgs and memberships

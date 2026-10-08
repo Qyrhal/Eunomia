@@ -162,9 +162,14 @@ async fn send_message(
 
     let (tx, rx) = mpsc::channel::<ChatEvent>(EVENT_CHANNEL_CAPACITY);
     let state_for_task = state.clone();
-    tokio::spawn(async move {
-        service::send_stream(state_for_task, user, rid, body.message, tx).await;
-    });
+    // a spawned task starts with no task-locals: carry the credential (scope and vault
+    // restriction for the model's tool calls) and the trace id across
+    let caller = crate::authz::caller()?;
+    let trace_id = crate::telemetry::current_trace_id();
+    tokio::spawn(crate::authz::with_caller(
+        caller,
+        crate::telemetry::with_trace_id(trace_id, service::send_stream(state_for_task, user, rid, body.message, tx)),
+    ));
 
     let stream = ReceiverStream::new(rx).map(|event| {
         let data = serde_json::to_string(&event).unwrap_or_else(|_| "{}".to_string());
