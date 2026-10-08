@@ -10,3 +10,4 @@ pub mod sources;
 pub mod tools;
 pub mod update;
 pub mod mcp;
+pub mod oauth;

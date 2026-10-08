@@ -18,7 +18,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use surrealdb::types::RecordId;
 use crate::rid::RecordIdExt;
@@ -97,29 +97,77 @@ async fn record_counts(state: &AppState, owner: &RecordId) -> AppResult<std::col
     Ok(rows.into_iter().map(|r| (r.source, r.count)).collect())
 }
 
-fn status_out(row: Option<&SyncStatusRow>) -> Value {
+#[derive(Serialize, utoipa::ToSchema)]
+struct SyncStatusOut {
+    cursor: String,
+    #[schema(value_type = Option<String>)]
+    last_run: Option<surrealdb::types::Datetime>,
+    #[schema(value_type = Option<String>)]
+    last_ok: Option<surrealdb::types::Datetime>,
+    last_error: String,
+    consecutive_failures: i64,
+}
+
+#[derive(Serialize, utoipa::ToSchema)]
+struct SourceOut {
+    key: &'static str,
+    label: &'static str,
+    provider: &'static str,
+    record_types: &'static [&'static str],
+    connected: bool,
+    sync_status: SyncStatusOut,
+    record_count: i64,
+}
+
+/// Outcome of a sync or webhook ingest: an ingest report, or `source` + `error`
+/// when the sync failed. Schema only: the handlers pass the report through.
+#[derive(Serialize, utoipa::ToSchema)]
+#[allow(dead_code)]
+struct SyncReport {
+    source: String,
+    written: Option<i64>,
+    skipped: Option<i64>,
+    failed: Option<i64>,
+    errors: Option<Vec<String>>,
+    error: Option<String>,
+}
+
+/// Body of the webhook route: `{"status": "ignored"}` or an ingest report with
+/// `status: "ok"`. Schema only.
+#[derive(Serialize, utoipa::ToSchema)]
+#[allow(dead_code)]
+struct WebhookOut {
+    status: String,
+    source: Option<String>,
+    written: Option<i64>,
+    skipped: Option<i64>,
+    failed: Option<i64>,
+    errors: Option<Vec<String>>,
+}
+
+fn status_out(row: Option<&SyncStatusRow>) -> SyncStatusOut {
     match row {
-        None => json!({"cursor": "", "last_run": Value::Null, "last_ok": Value::Null, "last_error": "", "consecutive_failures": 0}),
-        Some(row) => json!({
-            "cursor": row.cursor,
-            "last_run": row.last_run,
-            "last_ok": row.last_ok,
-            "last_error": row.last_error,
-            "consecutive_failures": row.consecutive_failures,
-        }),
+        None => SyncStatusOut { cursor: String::new(), last_run: None, last_ok: None, last_error: String::new(), consecutive_failures: 0 },
+        Some(row) => SyncStatusOut {
+            cursor: row.cursor.clone(),
+            last_run: row.last_run,
+            last_ok: row.last_ok,
+            last_error: row.last_error.clone(),
+            consecutive_failures: row.consecutive_failures,
+        },
     }
 }
 
-// ponytail: untyped response, give it a struct (see docs/architecture/foundation-plan.md 3.9)
 #[utoipa::path(
+    operation_id = "listSources",
     get,
     path = "/api/sources",
     tag = "sources",
     summary = "List sources with sync status",
-    responses((status = 200, body = Vec<Object>), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    responses((status = 200, body = Vec<SourceOut>), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
     security(("cookie" = []), ("bearer" = [])),
 )]
-async fn list_sources(State(state): State<AppState>, user: User) -> AppResult<Json<Vec<Value>>> {
+async fn list_sources(State(state): State<AppState>, user: User) -> AppResult<Json<Vec<SourceOut>>> {
     let statuses = sync_status_rows(&state, &user.id).await?;
     let enabled_keys: std::collections::HashSet<&'static str> =
         registry::enabled(&state.db, &user.id).await?.iter().map(|s| s.key()).collect();
@@ -129,43 +177,42 @@ async fn list_sources(State(state): State<AppState>, user: User) -> AppResult<Js
         registry::all()
             .iter()
             .map(|src| {
-                json!({
-                    "key": src.key(),
-                    "label": src.label(),
-                    "provider": src.provider_key(),
-                    "record_types": src.record_types(),
-                    "connected": enabled_keys.contains(src.key()),
-                    "sync_status": status_out(statuses.get(src.key())),
-                    "record_count": counts.get(src.key()).copied().unwrap_or(0),
-                })
+                SourceOut {
+                    key: src.key(),
+                    label: src.label(),
+                    provider: src.provider_key(),
+                    record_types: src.record_types(),
+                    connected: enabled_keys.contains(src.key()),
+                    sync_status: status_out(statuses.get(src.key())),
+                    record_count: counts.get(src.key()).copied().unwrap_or(0),
+                }
             })
             .collect(),
     ))
 }
 
-// ponytail: untyped response, give it a struct (see docs/architecture/foundation-plan.md 3.9)
 #[utoipa::path(
+    operation_id = "getSourcesStatus",
     get,
     path = "/api/sources/status",
     tag = "sources",
     summary = "Overall sync status",
-    responses((status = 200, body = Object), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    responses((status = 200, body = std::collections::HashMap<String, SyncStatusOut>), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
     security(("cookie" = []), ("bearer" = [])),
 )]
-async fn sources_status(State(state): State<AppState>, user: User) -> AppResult<Json<Value>> {
+async fn sources_status(State(state): State<AppState>, user: User) -> AppResult<Json<std::collections::HashMap<String, SyncStatusOut>>> {
     let statuses = sync_status_rows(&state, &user.id).await?;
-    let out: serde_json::Map<String, Value> = statuses.iter().map(|(k, v)| (k.clone(), status_out(Some(v)))).collect();
-    Ok(Json(Value::Object(out)))
+    Ok(Json(statuses.iter().map(|(k, v)| (k.clone(), status_out(Some(v)))).collect()))
 }
 
-// ponytail: untyped response, give it a struct (see docs/architecture/foundation-plan.md 3.9)
 #[utoipa::path(
+    operation_id = "syncSource",
     post,
     path = "/api/sources/{key}/sync",
     tag = "sources",
     summary = "Sync a source now",
     params(("key" = String, Path)),
-    responses((status = 200, body = Object), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    responses((status = 200, body = SyncReport), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
     security(("cookie" = []), ("bearer" = [])),
 )]
 async fn sync_now(State(state): State<AppState>, user: User, Path(key): Path<String>) -> AppResult<Json<Value>> {
@@ -176,14 +223,14 @@ async fn sync_now(State(state): State<AppState>, user: User, Path(key): Path<Str
     Ok(Json(report))
 }
 
-// ponytail: untyped response, give it a struct (see docs/architecture/foundation-plan.md 3.9)
 #[utoipa::path(
+    operation_id = "receiveSourceWebhook",
     post,
     path = "/api/sources/{key}/webhook/{owner_id}",
     tag = "sources",
     summary = "Source webhook (authenticated by the source's own signature)",
     params(("key" = String, Path), ("owner_id" = String, Path)),
-    responses((status = 200, body = Object), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    responses((status = 200, body = WebhookOut), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
     security(()),
 )]
 async fn source_webhook(
@@ -237,7 +284,7 @@ mod tests {
 
     #[test]
     fn status_out_defaults_for_a_missing_row() {
-        let v = status_out(None);
+        let v = serde_json::to_value(status_out(None)).unwrap();
         assert_eq!(v["cursor"], "");
         assert_eq!(v["consecutive_failures"], 0);
         assert!(v["last_run"].is_null());

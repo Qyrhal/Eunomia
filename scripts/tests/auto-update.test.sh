@@ -17,7 +17,19 @@ cp "$REAL_SCRIPT" "$TMP/src/scripts/auto-update.sh"
   && echo two > compose.yml && git_ commit -qam v1.1 && git tag v1.1.0)
 git clone -q --branch v1.0.0 "file://$TMP/src" "$TMP/repo" 2>/dev/null
 printf 'JWT_SECRET=x\nEUNOMIA_IMAGE_TAG=v1.0.0\n' > "$TMP/repo/.env"
-printf '#!/bin/sh\necho "$@" >> "%s/docker.log"\n' "$TMP" > "$TMP/bin/docker"; chmod +x "$TMP/bin/docker"
+# Besides logging, the shim answers the three queries the SurrealDB 3 hook makes:
+# the compose file's images ($TMP/images) and the running surrealdb image ($TMP/running).
+cat > "$TMP/bin/docker" <<SHIM
+#!/bin/sh
+echo "\$@" >> "$TMP/docker.log"
+case "\$*" in
+  "compose config --images") cat "$TMP/images" 2>/dev/null ;;
+  "compose ps -q surrealdb") [ -f "$TMP/running" ] && echo fakecid ;;
+  inspect*) cat "$TMP/running" 2>/dev/null ;;
+esac
+exit 0
+SHIM
+chmod +x "$TMP/bin/docker"
 update() { EUNOMIA_DIR="$TMP/repo" PATH="$TMP/bin:$PATH" bash "$TMP/repo/scripts/auto-update.sh"; }
 S="$TMP/repo/update-status"
 
@@ -70,6 +82,27 @@ check "refuses over local changes" test "$(field error)" != none
 check "error says why" grep -q 'local changes' "$S/status.json"
 check "local edit survives" test "$(cat "$TMP/repo/compose.yml")" = mine
 (cd "$TMP/repo" && git checkout -q compose.yml)
+
+# 4b. SurrealDB 3 hook: a release pinning 3.x over a running 2.x runs the upgrade
+# script before pulling, and a failed upgrade leaves the install on the old release
+(cd "$TMP/src" && mkdir -p scripts && printf '#!/bin/sh\necho UPGRADE >> "%s/docker.log"\nexit $(cat "%s/upgrade_rc")\n' "$TMP" "$TMP" > scripts/upgrade-surreal-v3.sh \
+  && echo four > compose.yml && git_ add -A && git_ commit -qm v1.3 && git tag v1.3.0)
+echo surrealdb/surrealdb:v3.3.0 > "$TMP/images"; echo surrealdb/surrealdb:v2.7.0 > "$TMP/running"
+echo 1 > "$TMP/upgrade_rc"; : > "$TMP/docker.log"; touch "$S/requested"; update
+check "failed upgrade: ran before anything else" grep -qx UPGRADE "$TMP/docker.log"
+check "failed upgrade: nothing pulled" bash -c "! grep -q 'compose pull' '$TMP/docker.log'"
+check "failed upgrade: checkout put back" test "$(cat "$TMP/repo/compose.yml")" = two
+check "failed upgrade: .env back on the old release" grep -q '^EUNOMIA_IMAGE_TAG=v1.1.0$' "$TMP/repo/.env"
+check "failed upgrade: status says why" grep -q 'upgrade failed' "$S/status.json"
+echo 0 > "$TMP/upgrade_rc"; : > "$TMP/docker.log"; touch "$S/requested"; update
+check "upgrade runs once, before the pull" bash -c "[ \$(grep -c UPGRADE '$TMP/docker.log') = 1 ] && [ \$(grep -n UPGRADE '$TMP/docker.log' | cut -d: -f1) -lt \$(grep -n 'compose pull' '$TMP/docker.log' | cut -d: -f1) ]"
+check "upgraded release is applied" test "$(cat "$TMP/repo/compose.yml")" = four
+echo surrealdb/surrealdb:v3.3.0 > "$TMP/running"
+(cd "$TMP/src" && echo five > compose.yml && git_ commit -qam v1.4 && git tag v1.4.0)
+: > "$TMP/docker.log"; touch "$S/requested"; update
+check "already on 3.x: no upgrade" bash -c "! grep -q UPGRADE '$TMP/docker.log'"
+check "already on 3.x: still updates" test "$(cat "$TMP/repo/compose.yml")" = five
+rm -f "$TMP/images" "$TMP/running"
 
 # 5. GitHub unreachable is reported
 rm -f "$S/status.json"; (cd "$TMP/repo" && git remote set-url origin "file://$TMP/nowhere")

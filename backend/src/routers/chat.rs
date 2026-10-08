@@ -57,6 +57,7 @@ fn parse_thread_id(thread_id: &str) -> AppResult<RecordId> {
 }
 
 #[utoipa::path(
+    operation_id = "listThreads",
     get,
     path = "/api/chat/threads",
     tag = "chat",
@@ -69,6 +70,7 @@ async fn list_threads(State(state): State<AppState>, user: User) -> AppResult<Js
 }
 
 #[utoipa::path(
+    operation_id = "createThread",
     post,
     path = "/api/chat/threads",
     tag = "chat",
@@ -86,6 +88,7 @@ async fn create_thread(
 }
 
 #[utoipa::path(
+    operation_id = "deleteThread",
     delete,
     path = "/api/chat/threads/{thread_id}",
     tag = "chat",
@@ -108,6 +111,7 @@ async fn delete_thread_route(
 }
 
 #[utoipa::path(
+    operation_id = "getThreadHistory",
     get,
     path = "/api/chat/threads/{thread_id}/history",
     tag = "chat",
@@ -127,6 +131,7 @@ async fn thread_history(
 }
 
 #[utoipa::path(
+    operation_id = "sendMessage",
     post,
     path = "/api/chat/threads/{thread_id}",
     tag = "chat",

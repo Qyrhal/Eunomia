@@ -470,9 +470,12 @@ const AGENTS_SHOWN = 6;
 // Same pattern as age(): read the clock at render, refreshed by the 60s poll.
 const isLive = (iso: string | null) => iso !== null && Date.now() - new Date(iso).getTime() < LIVE_WINDOW_MS;
 
+// An expired token can no longer write; same clock-at-render pattern as isLive.
+const isExpired = (iso: string | null) => iso !== null && new Date(iso).getTime() <= Date.now();
+
 /** Who can write to this memory right now: the user's API tokens, by name, as multiplayer cursors. */
 function Agents({ tokens }: { tokens: ApiToken[] | null | "error" }) {
-  const sorted = Array.isArray(tokens) ? [...tokens].sort((a, b) => (b.last_used_at ?? "").localeCompare(a.last_used_at ?? "")) : [];
+  const sorted = Array.isArray(tokens) ? tokens.filter((t) => !isExpired(t.expires_at)).sort((a, b) => (b.last_used_at ?? "").localeCompare(a.last_used_at ?? "")) : [];
   return (
     <section aria-labelledby="agents-title" className="flex flex-wrap items-end gap-x-4 gap-y-2 min-h-8">
       <span id="agents-title" className="label pb-[3px]">

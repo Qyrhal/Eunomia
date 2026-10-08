@@ -129,14 +129,14 @@ struct CloudQuery {
 }
 
 /// 3D PCA projection of the vectors in one or more vaults -- see `cache::cloud`.
-// ponytail: untyped response, give it a struct (see docs/architecture/foundation-plan.md 3.9)
 #[utoipa::path(
+    operation_id = "getVectorCloud",
     get,
     path = "/api/entities/cloud",
     tag = "entities",
     summary = "3D projection of vault vectors",
     params(CloudQuery),
-    responses((status = 200, body = Object), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    responses((status = 200, body = crate::cache::cloud::Cloud), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
     security(("cookie" = []), ("bearer" = [])),
 )]
 async fn vector_cloud(
@@ -166,14 +166,14 @@ fn known_kind_or_400(kind: &str) -> AppResult<()> {
     Ok(())
 }
 
-// ponytail: untyped response, give it a struct (see docs/architecture/foundation-plan.md 3.9)
 #[utoipa::path(
+    operation_id = "listEntities",
     get,
     path = "/api/entities",
     tag = "entities",
     summary = "List entities",
     params(ListQuery),
-    responses((status = 200, body = Object), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    responses((status = 200, body = service::ListEntitiesOut), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
     security(("cookie" = []), ("bearer" = [])),
 )]
 async fn list_entities(
@@ -191,14 +191,14 @@ async fn list_entities(
     ))
 }
 
-// ponytail: untyped response, give it a struct (see docs/architecture/foundation-plan.md 3.9)
 #[utoipa::path(
+    operation_id = "getEntityGraph",
     get,
     path = "/api/entities/graph",
     tag = "entities",
     summary = "Entity graph",
     params(GraphQuery, ("kinds" = Option<Vec<String>>, Query, description = "Repeated or comma separated entity kinds")),
-    responses((status = 200, body = Object), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    responses((status = 200, body = service::GraphOut), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
     security(("cookie" = []), ("bearer" = [])),
 )]
 async fn entity_graph(
@@ -219,14 +219,14 @@ async fn entity_graph(
     Ok(Json(service::graph(&state.db, &user.id, kinds.as_deref(), vault_rid.as_ref()).await?))
 }
 
-// ponytail: untyped response, give it a struct (see docs/architecture/foundation-plan.md 3.9)
 #[utoipa::path(
+    operation_id = "createEntity",
     post,
     path = "/api/entities",
     tag = "entities",
     summary = "Create or upsert an entity",
     request_body = EntityCreate,
-    responses((status = 200, body = Object), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    responses((status = 200, body = service::EntityOut), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
     security(("cookie" = []), ("bearer" = [])),
 )]
 async fn create_entity(
@@ -249,15 +249,15 @@ struct MemoryUpdate {
     mem_type: Option<String>,
 }
 
-// ponytail: untyped response, give it a struct (see docs/architecture/foundation-plan.md 3.9)
 #[utoipa::path(
+    operation_id = "updateMemory",
     patch,
     path = "/api/entities/memory/{memory_id}",
     tag = "entities",
     summary = "Edit a memory",
     params(("memory_id" = String, Path)),
     request_body = MemoryUpdate,
-    responses((status = 200, body = Object), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    responses((status = 200, body = service::MemoryOut), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
     security(("cookie" = []), ("bearer" = [])),
 )]
 async fn update_memory(
@@ -272,6 +272,7 @@ async fn update_memory(
 }
 
 #[utoipa::path(
+    operation_id = "deleteMemory",
     delete,
     path = "/api/entities/memory/{memory_id}",
     tag = "entities",
@@ -293,14 +294,14 @@ async fn delete_memory(
     Ok(Json(json!({ "deleted": true })))
 }
 
-// ponytail: untyped response, give it a struct (see docs/architecture/foundation-plan.md 3.9)
 #[utoipa::path(
+    operation_id = "getEntity",
     get,
     path = "/api/entities/{entity_id}",
     tag = "entities",
     summary = "One entity with its memories and relations",
     params(("entity_id" = String, Path)),
-    responses((status = 200, body = Object), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    responses((status = 200, body = service::EntityDetail), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
     security(("cookie" = []), ("bearer" = [])),
 )]
 async fn get_entity(
@@ -313,15 +314,15 @@ async fn get_entity(
     entity.map(Json).ok_or_else(|| AppError::coded(ErrorCode::EntityNotFound, "not found"))
 }
 
-// ponytail: untyped response, give it a struct (see docs/architecture/foundation-plan.md 3.9)
 #[utoipa::path(
+    operation_id = "updateEntity",
     patch,
     path = "/api/entities/{entity_id}",
     tag = "entities",
     summary = "Edit an entity",
     params(("entity_id" = String, Path)),
     request_body = EntityUpdate,
-    responses((status = 200, body = Object), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    responses((status = 200, body = service::EntityOut), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
     security(("cookie" = []), ("bearer" = [])),
 )]
 async fn update_entity(
@@ -338,6 +339,7 @@ async fn update_entity(
 }
 
 #[utoipa::path(
+    operation_id = "deleteEntity",
     delete,
     path = "/api/entities/{entity_id}",
     tag = "entities",
@@ -359,15 +361,15 @@ async fn delete_entity(
     Ok(Json(json!({ "deleted": true })))
 }
 
-// ponytail: untyped response, give it a struct (see docs/architecture/foundation-plan.md 3.9)
 #[utoipa::path(
+    operation_id = "addMemory",
     post,
     path = "/api/entities/{entity_id}/memory",
     tag = "entities",
     summary = "Add a memory to an entity",
     params(("entity_id" = String, Path)),
     request_body = MemoryCreate,
-    responses((status = 200, body = Object), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    responses((status = 200, body = service::MemoryOut), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
     security(("cookie" = []), ("bearer" = [])),
 )]
 async fn add_memory(
@@ -383,15 +385,15 @@ async fn add_memory(
     Ok(Json(service::add_memory(&state.db, &user.id, &rid, &body.text, None, &body.mem_type).await?))
 }
 
-// ponytail: untyped response, give it a struct (see docs/architecture/foundation-plan.md 3.9)
 #[utoipa::path(
+    operation_id = "addRelation",
     post,
     path = "/api/entities/{entity_id}/relations",
     tag = "entities",
     summary = "Relate two entities",
     params(("entity_id" = String, Path)),
     request_body = RelationCreate,
-    responses((status = 200, body = Object), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    responses((status = 200, body = service::RelationOut), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
     security(("cookie" = []), ("bearer" = [])),
 )]
 async fn add_relation(
@@ -411,15 +413,15 @@ async fn add_relation(
     Ok(Json(service::add_relation(&state.db, &user.id, &rid, &to_rid, &body.label, None).await?))
 }
 
-// ponytail: untyped response, give it a struct (see docs/architecture/foundation-plan.md 3.9)
 #[utoipa::path(
+    operation_id = "mergeEntities",
     post,
     path = "/api/entities/{entity_id}/merge",
     tag = "entities",
     summary = "Merge a duplicate entity into this one",
     params(("entity_id" = String, Path)),
     request_body = MergeRequest,
-    responses((status = 200, body = Object), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    responses((status = 200, body = service::EntityOut), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
     security(("cookie" = []), ("bearer" = [])),
 )]
 async fn merge_entities(

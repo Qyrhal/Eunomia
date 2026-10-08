@@ -52,19 +52,47 @@ pub const ALL: &[&Stmt] = &[
     &SOURCES_SYNC_FAILED,
     &SOURCES_SYNC_INTERVALS,
     &SOURCES_UP_BY_TYPE,
+    // --- oauth ---
+    &OAUTH_CLIENT_GET,
+    &OAUTH_CLIENT_UPSERT,
+    &OAUTH_CLIENT_PRUNE,
+    &OAUTH_CODE_CREATE,
+    &OAUTH_CODE_TAKE,
+    &OAUTH_GRANT_CREATE,
+    &OAUTH_GRANT_LIST,
+    &OAUTH_GRANT_DELETE,
+    &OAUTH_GRANT_TOUCH,
+    &OAUTH_TOKEN_CREATE,
+    &OAUTH_TOKEN_BY_HASH,
+    &OAUTH_TOKEN_SPEND,
+    &OAUTH_TOKEN_DELETE,
+    &OAUTH_TOKENS_DELETE_FAMILY,
+    &OAUTH_PRUNE,
+    // --- auth ---
+    &AUDIT_EVENT_CREATE,
 ];
 
 // auth sessions and users
 
 pub const AUTH_SESSION_CREATE: Stmt =
-    Stmt::new("app.auth_session_create", "CREATE session SET owner = $owner, sid = $sid, user_agent = $user_agent");
+    Stmt::new(
+    "app.auth_session_create",
+    "CREATE session SET owner = $owner, sid = $sid, user_agent = $user_agent, expires_at = $expires_at",
+);
 
 pub const AUTH_SESSION_FIND: Stmt = Stmt::new(
     "app.auth_session_find",
-    "SELECT * FROM session WHERE sid = $sid AND owner = $owner AND revoked = false LIMIT 1",
+    "SELECT *, (expires_at != NONE AND expires_at <= time::now()) AS expired FROM session \
+     WHERE sid = $sid AND owner = $owner AND revoked = false LIMIT 1",
 );
 
-pub const AUTH_SESSION_TOUCH: Stmt = Stmt::new("app.auth_session_touch", "UPDATE $id SET last_seen_at = time::now()");
+/// Slides `expires_at` forward, but only when it is more than an hour behind
+/// `$new_exp` (so at most one extension per hour of use).
+pub const AUTH_SESSION_TOUCH: Stmt = Stmt::new(
+    "app.auth_session_touch",
+    "UPDATE $id SET last_seen_at = time::now(), \
+     expires_at = IF expires_at = NONE OR expires_at < $threshold THEN $new_exp ELSE expires_at END",
+);
 
 pub const AUTH_SESSION_REVOKE_BY_SID: Stmt =
     Stmt::new("app.auth_session_revoke_by_sid", "UPDATE session SET revoked = true WHERE sid = $sid");
@@ -92,17 +120,22 @@ pub const AUTH_USER_ONBOARDED: Stmt = Stmt::new("app.auth_user_onboarded", "UPDA
 
 pub const AUTH_TOKEN_CREATE: Stmt = Stmt::new(
     "app.auth_token_create",
-    "CREATE api_token SET owner = $owner, name = $name, token_hash = $hash RETURN AFTER",
+    "CREATE api_token SET owner = $owner, name = $name, token_hash = $hash, scopes = $scopes, \
+     vault = $vault, expires_at = $expires_at RETURN AFTER",
 );
 
 pub const AUTH_TOKEN_LIST: Stmt = Stmt::new(
     "app.auth_token_list",
-    "SELECT id, name, created_at, last_used_at FROM api_token \
+    "SELECT id, name, created_at, last_used_at, scopes, vault, expires_at FROM api_token \
      WHERE owner = $owner ORDER BY created_at DESC",
 );
 
 pub const AUTH_TOKEN_BY_HASH: Stmt =
-    Stmt::new("app.auth_token_by_hash", "SELECT * FROM api_token WHERE token_hash = $hash LIMIT 1");
+    Stmt::new(
+        "app.auth_token_by_hash",
+        "SELECT *, (expires_at != NONE AND expires_at <= time::now()) AS expired FROM api_token \
+         WHERE token_hash = $hash LIMIT 1",
+    );
 
 pub const AUTH_TOKEN_TOUCH: Stmt = Stmt::new("app.auth_token_touch", "UPDATE $id SET last_used_at = time::now()");
 
@@ -254,4 +287,89 @@ pub const SOURCES_SYNC_INTERVALS: Stmt = Stmt::new(
 pub const SOURCES_UP_BY_TYPE: Stmt = Stmt::new(
     "app.sources_up_by_type",
     "SELECT title, external_id, occurred_at, payload FROM cache_record WHERE owner = $owner AND type = $type ORDER BY occurred_at DESC LIMIT $limit",
+);
+
+// --- oauth ---
+
+pub const OAUTH_CLIENT_GET: Stmt = Stmt::new("app.oauth_client_get", "SELECT * FROM oauth_client WHERE client_id = $client_id LIMIT 1");
+
+pub const OAUTH_CLIENT_UPSERT: Stmt = Stmt::new(
+    "app.oauth_client_upsert",
+    "UPSERT $id SET client_id = $client_id, name = $name, logo_uri = $logo_uri, client_uri = $client_uri, \
+     redirect_uris = $redirect_uris, kind = $kind, fetched_at = time::now(), expires_at = $expires_at",
+);
+
+/// Registered clients nobody ever authorized are dropped after a week, so open registration cannot grow the table forever.
+pub const OAUTH_CLIENT_PRUNE: Stmt = Stmt::new(
+    "app.oauth_client_prune",
+    "DELETE oauth_client WHERE kind = 'dcr' AND fetched_at < time::now() - 7d \
+     AND client_id NOT IN (SELECT VALUE client_id FROM oauth_grant)",
+);
+
+pub const OAUTH_CODE_CREATE: Stmt = Stmt::new(
+    "app.oauth_code_create",
+    "CREATE oauth_code SET code_hash = $code_hash, owner = $owner, client_id = $client_id, redirect_uri = $redirect_uri, \
+     code_challenge = $code_challenge, scope = $scope, resource = $resource, expires_at = time::now() + 60s",
+);
+
+/// Single use: reading a code deletes it.
+pub const OAUTH_CODE_TAKE: Stmt = Stmt::new("app.oauth_code_take", "DELETE oauth_code WHERE code_hash = $code_hash RETURN BEFORE");
+
+pub const OAUTH_GRANT_CREATE: Stmt = Stmt::new(
+    "app.oauth_grant_create",
+    "CREATE oauth_grant SET owner = $owner, client_id = $client_id, client_name = $client_name, \
+     client_logo = $client_logo, scope = $scope, resource = $resource",
+);
+
+pub const OAUTH_GRANT_LIST: Stmt = Stmt::new(
+    "app.oauth_grant_list",
+    "SELECT id, client_id, client_name, client_logo, scope, created_at, last_used_at FROM oauth_grant \
+     WHERE owner = $owner ORDER BY created_at DESC",
+);
+
+/// Returns the deleted row only when `$owner` owns it; callers then drop the tokens.
+pub const OAUTH_GRANT_DELETE: Stmt =
+    Stmt::new("app.oauth_grant_delete", "DELETE oauth_grant WHERE id = $id AND owner = $owner RETURN BEFORE");
+
+pub const OAUTH_GRANT_TOUCH: Stmt = Stmt::new(
+    "app.oauth_grant_touch",
+    "UPDATE $id SET last_used_at = time::now() WHERE last_used_at IS NONE OR last_used_at < time::now() - 1m",
+);
+
+pub const OAUTH_TOKEN_CREATE: Stmt = Stmt::new(
+    "app.oauth_token_create",
+    "CREATE oauth_token SET kind = $kind, token_hash = $token_hash, family = $family, expires_at = time::now() + <duration> $ttl",
+);
+
+/// Joins the family so one query serves both bearer verification and refresh.
+pub const OAUTH_TOKEN_BY_HASH: Stmt = Stmt::new(
+    "app.oauth_token_by_hash",
+    "SELECT id, kind, family, expires_at < time::now() AS expired, used_at, family.owner AS owner, \
+     family.client_id AS client_id, family.scope AS scope, family.resource AS resource \
+     FROM oauth_token WHERE token_hash = $token_hash LIMIT 1",
+);
+
+/// Marks a refresh token spent. Empty result means it was already spent (a race or a replay).
+pub const OAUTH_TOKEN_SPEND: Stmt = Stmt::new(
+    "app.oauth_token_spend",
+    "UPDATE oauth_token SET used_at = time::now() WHERE id = $id AND used_at IS NONE RETURN BEFORE",
+);
+
+pub const OAUTH_TOKEN_DELETE: Stmt = Stmt::new("app.oauth_token_delete", "DELETE $id");
+
+pub const OAUTH_TOKENS_DELETE_FAMILY: Stmt =
+    Stmt::new("app.oauth_tokens_delete_family", "DELETE oauth_token WHERE family = $family");
+
+pub const OAUTH_PRUNE: Stmt = Stmt::new(
+    "app.oauth_prune",
+    "DELETE oauth_token WHERE expires_at < time::now() - 1d; DELETE oauth_code WHERE expires_at < time::now()",
+);
+
+// --- auth ---
+
+/// Append-only: this module only ever creates audit_event rows.
+pub const AUDIT_EVENT_CREATE: Stmt = Stmt::new(
+    "app.audit_event_create",
+    "CREATE audit_event SET user = $user, actor_kind = $actor_kind, actor_id = $actor_id, action = $action, \
+     target = $target, outcome = $outcome, trace_id = $trace_id, detail = $detail",
 );

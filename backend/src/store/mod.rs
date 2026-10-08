@@ -19,6 +19,7 @@ use crate::db::Db;
 pub mod app;
 pub mod cache;
 pub mod entities;
+pub mod jobs;
 pub mod vaults;
 
 pub struct Stmt {
@@ -90,5 +91,5 @@ impl<'a> IntoFuture for Q<'a> {
 
 /// Every static statement, for the `every_query_executes` test.
 pub fn all() -> Vec<&'static Stmt> {
-    [app::ALL, cache::ALL, entities::ALL, vaults::ALL].concat()
+    [app::ALL, cache::ALL, entities::ALL, jobs::ALL, vaults::ALL].concat()
 }

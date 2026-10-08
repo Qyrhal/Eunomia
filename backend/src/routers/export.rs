@@ -145,8 +145,9 @@ fn datetime_str(d: &Option<Datetime>) -> Value {
     json!(d)
 }
 
-// ponytail: untyped response, give it a struct (see docs/architecture/foundation-plan.md 3.9)
+// open body: a downloadable dump (Content-Disposition attachment), not consumed through the typed client
 #[utoipa::path(
+    operation_id = "exportData",
     get,
     path = "/api/export",
     tag = "export",

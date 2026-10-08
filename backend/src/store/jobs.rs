@@ -1,0 +1,120 @@
+//! Statements for the job queue (docs/architecture/jobs.md). See the module docs in store/mod.rs.
+
+use super::Stmt;
+
+pub const ALL: &[&Stmt] = &[
+    &ENQUEUE,
+    &CLAIM,
+    &HEARTBEAT,
+    &COMPLETE,
+    &FAIL,
+    &RELEASE_WORKER,
+    &REAP_POISONED,
+    &PRUNE_DONE,
+    &LEADER_ACQUIRE,
+    &LEADER_RELEASE,
+    &EMBED_BACKLOG,
+    &STALE_OBSERVATIONS,
+    &OBSERVATION_MARK_FRESH,
+];
+
+/// Idempotent: the record id is derived from the key, and IGNORE turns a second
+/// insert (id or unique-index collision) into an empty result.
+pub const ENQUEUE: Stmt = Stmt::new(
+    "jobs.enqueue",
+    "INSERT IGNORE INTO job { id: $id, kind: $kind, owner: $owner, payload: $payload, idempotency_key: $key, \
+     run_at: $run_at, max_attempts: $max_attempts, traceparent: $traceparent } RETURN VALUE id",
+);
+
+/// One transaction: pick candidates (expired leases first, then ready), skip owners at their
+/// running cap, and take them with a conditional UPDATE. Two workers racing for a row conflict
+/// on commit (retried by `tx::with_retry`) and the loser re-reads, so a row is claimed once.
+/// The cap is soft: one claim batch can overshoot it.
+pub const CLAIM: Stmt = Stmt::new(
+    "jobs.claim",
+    "BEGIN TRANSACTION; \
+     LET $full = (SELECT VALUE owner FROM (SELECT owner, count() AS n FROM job \
+         WHERE status = 'running' AND locked_until >= time::now() GROUP BY owner) WHERE n >= $cap); \
+     LET $expired = (SELECT VALUE id FROM job WHERE status = 'running' AND locked_until < time::now() \
+         AND attempts < max_attempts AND owner NOT IN $full LIMIT $n); \
+     LET $ready = (SELECT VALUE id FROM job WHERE status = 'ready' AND run_at <= time::now() \
+         AND owner NOT IN $full LIMIT $n); \
+     UPDATE array::slice(array::concat($expired, $ready), 0, $n) \
+         SET status = 'running', locked_by = $worker, locked_until = time::now() + <duration>$lease, \
+             attempts += 1, updated_at = time::now() \
+         WHERE (status = 'ready' AND run_at <= time::now()) OR (status = 'running' AND locked_until < time::now()) \
+         RETURN AFTER; \
+     COMMIT TRANSACTION;",
+);
+
+/// Returns a row only while this worker still holds the lease.
+pub const HEARTBEAT: Stmt = Stmt::new(
+    "jobs.heartbeat",
+    "UPDATE $id SET locked_until = time::now() + <duration>$lease, updated_at = time::now() \
+     WHERE status = 'running' AND locked_by = $worker RETURN VALUE id",
+);
+
+pub const COMPLETE: Stmt = Stmt::new(
+    "jobs.complete",
+    "UPDATE $id SET status = 'done', locked_by = NONE, locked_until = NONE, last_error_code = NONE, updated_at = time::now() \
+     WHERE status = 'running' AND locked_by = $worker RETURN VALUE id",
+);
+
+/// Back to `ready` after `$delay`, or `dead` when `$dead` or the attempts are used up.
+pub const FAIL: Stmt = Stmt::new(
+    "jobs.fail",
+    "UPDATE $id SET status = IF $dead OR attempts >= max_attempts THEN 'dead' ELSE 'ready' END, \
+         run_at = time::now() + <duration>$delay, last_error_code = $code, \
+         locked_by = NONE, locked_until = NONE, updated_at = time::now() \
+     WHERE status = 'running' AND locked_by = $worker RETURN status",
+);
+
+/// Graceful shutdown: hand back what this worker still holds without burning an attempt.
+pub const RELEASE_WORKER: Stmt = Stmt::new(
+    "jobs.release_worker",
+    "UPDATE job SET status = 'ready', run_at = time::now(), attempts = math::max([attempts - 1, 0]), \
+         locked_by = NONE, locked_until = NONE, updated_at = time::now() \
+     WHERE status = 'running' AND locked_by = $worker RETURN VALUE id",
+);
+
+/// A job whose every lease expired is a crash loop: dead-letter it instead of reclaiming forever.
+pub const REAP_POISONED: Stmt = Stmt::new(
+    "jobs.reap_poisoned",
+    "UPDATE job SET status = 'dead', last_error_code = 'job.lease_expired', locked_by = NONE, locked_until = NONE, \
+         updated_at = time::now() \
+     WHERE status = 'running' AND locked_until < time::now() AND attempts >= max_attempts RETURN VALUE id",
+);
+
+pub const PRUNE_DONE: Stmt = Stmt::new(
+    "jobs.prune_done",
+    "DELETE job WHERE status = 'done' AND updated_at < time::now() - <duration>$age RETURN NONE",
+);
+
+/// Take or renew the scheduler lease; a row back means this candidate is the leader.
+pub const LEADER_ACQUIRE: Stmt = Stmt::new(
+    "jobs.leader_acquire",
+    "UPDATE job_leader:scheduler SET holder = $worker, until = time::now() + <duration>$ttl \
+     WHERE holder = $worker OR until < time::now() RETURN VALUE holder",
+);
+
+pub const LEADER_RELEASE: Stmt = Stmt::new(
+    "jobs.leader_release",
+    "UPDATE job_leader:scheduler SET holder = NONE, until = d\"1970-01-01T00:00:00Z\" WHERE holder = $worker RETURN VALUE holder",
+);
+
+// --- reconcilers: cheap "is there work" probes ---
+
+pub const EMBED_BACKLOG: Stmt = Stmt::new(
+    "jobs.embed_backlog",
+    "SELECT id, title, body_text FROM cache_record WHERE owner = $owner AND deleted = false AND embedding IS NONE \
+     AND string::len(string::trim(string::concat(title, body_text))) > 0 LIMIT $limit",
+);
+
+pub const STALE_OBSERVATIONS: Stmt = Stmt::new(
+    "jobs.stale_observations",
+    "SELECT owner, subject FROM memory WHERE type = 'observation' AND status = 'stale' LIMIT $limit",
+);
+
+/// Consolidation found nothing new for a stale observation: it is up to date.
+pub const OBSERVATION_MARK_FRESH: Stmt =
+    Stmt::new("jobs.observation_mark_fresh", "UPDATE $id SET status = 'fresh' WHERE status = 'stale'");

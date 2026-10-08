@@ -1,6 +1,6 @@
 ---
 source: tests/migrations.rs
-assertion_line: 39
+assertion_line: 46
 expression: info(&db).await
 ---
 {
@@ -29,7 +29,7 @@ expression: info(&db).await
   "tables": [
     {
       "drop": false,
-      "id": 2,
+      "schemafull": true,
       "kind": {
         "kind": "NORMAL"
       },
@@ -40,11 +40,28 @@ expression: info(&db).await
         "select": false,
         "update": false
       },
-      "schemafull": true
+      "indexes": [
+        {
+          "cols": [
+            "token_hash"
+          ],
+          "index": "UNIQUE",
+          "name": "api_token_hash_unique",
+          "table": "api_token"
+        },
+        {
+          "cols": [
+            "owner"
+          ],
+          "index": "",
+          "name": "api_token_owner_idx",
+          "table": "api_token"
+        }
+      ]
     },
     {
       "drop": false,
-      "id": 4,
+      "schemafull": true,
       "kind": {
         "kind": "NORMAL"
       },
@@ -55,11 +72,53 @@ expression: info(&db).await
         "select": false,
         "update": false
       },
-      "schemafull": true
+      "indexes": [
+        {
+          "cols": [
+            "owner"
+          ],
+          "index": "UNIQUE",
+          "name": "app_settings_owner_unique",
+          "table": "app_settings"
+        }
+      ]
     },
     {
       "drop": false,
-      "id": 21,
+      "schemafull": true,
+      "kind": {
+        "kind": "NORMAL"
+      },
+      "name": "audit_event",
+      "permissions": {
+        "create": true,
+        "delete": false,
+        "select": true,
+        "update": false
+      },
+      "indexes": [
+        {
+          "cols": [
+            "trace_id"
+          ],
+          "index": "",
+          "name": "audit_event_trace_idx",
+          "table": "audit_event"
+        },
+        {
+          "cols": [
+            "user",
+            "created_at"
+          ],
+          "index": "",
+          "name": "audit_event_user_idx",
+          "table": "audit_event"
+        }
+      ]
+    },
+    {
+      "drop": false,
+      "schemafull": true,
       "kind": {
         "kind": "NORMAL"
       },
@@ -70,11 +129,21 @@ expression: info(&db).await
         "select": false,
         "update": false
       },
-      "schemafull": true
+      "indexes": [
+        {
+          "cols": [
+            "owner",
+            "created_at"
+          ],
+          "index": "",
+          "name": "audit_log_owner_idx",
+          "table": "audit_log"
+        }
+      ]
     },
     {
       "drop": false,
-      "id": 9,
+      "schemafull": true,
       "kind": {
         "kind": "NORMAL"
       },
@@ -85,11 +154,61 @@ expression: info(&db).await
         "select": false,
         "update": false
       },
-      "schemafull": true
+      "indexes": [
+        {
+          "cols": [
+            "body_text"
+          ],
+          "index": "FULLTEXT ANALYZER cache_text_analyzer BM25(1.2,0.75) HIGHLIGHTS",
+          "name": "cache_record_body_fts",
+          "table": "cache_record"
+        },
+        {
+          "cols": [
+            "embedding"
+          ],
+          "index": "HNSW DIMENSION 1536 DIST COSINE TYPE F32 EFC 150 M 12 M0 24 LM 0.40242960438184466f",
+          "name": "cache_record_embedding_idx",
+          "table": "cache_record"
+        },
+        {
+          "cols": [
+            "occurred_at"
+          ],
+          "index": "",
+          "name": "cache_record_occurred",
+          "table": "cache_record"
+        },
+        {
+          "cols": [
+            "owner"
+          ],
+          "index": "",
+          "name": "cache_record_owner_idx",
+          "table": "cache_record"
+        },
+        {
+          "cols": [
+            "source",
+            "type"
+          ],
+          "index": "",
+          "name": "cache_record_source_type",
+          "table": "cache_record"
+        },
+        {
+          "cols": [
+            "title"
+          ],
+          "index": "FULLTEXT ANALYZER cache_text_analyzer BM25(1.2,0.75) HIGHLIGHTS",
+          "name": "cache_record_title_fts",
+          "table": "cache_record"
+        }
+      ]
     },
     {
       "drop": false,
-      "id": 20,
+      "schemafull": true,
       "kind": {
         "kind": "NORMAL"
       },
@@ -100,11 +219,30 @@ expression: info(&db).await
         "select": false,
         "update": false
       },
-      "schemafull": true
+      "indexes": [
+        {
+          "cols": [
+            "owner",
+            "created_at"
+          ],
+          "index": "",
+          "name": "chat_message_owner_idx",
+          "table": "chat_message"
+        },
+        {
+          "cols": [
+            "thread_id",
+            "created_at"
+          ],
+          "index": "",
+          "name": "chat_message_thread_idx",
+          "table": "chat_message"
+        }
+      ]
     },
     {
       "drop": false,
-      "id": 19,
+      "schemafull": true,
       "kind": {
         "kind": "NORMAL"
       },
@@ -115,11 +253,21 @@ expression: info(&db).await
         "select": false,
         "update": false
       },
-      "schemafull": true
+      "indexes": [
+        {
+          "cols": [
+            "owner",
+            "updated_at"
+          ],
+          "index": "",
+          "name": "chat_thread_owner_idx",
+          "table": "chat_thread"
+        }
+      ]
     },
     {
       "drop": false,
-      "id": 7,
+      "schemafull": true,
       "kind": {
         "kind": "NORMAL"
       },
@@ -130,11 +278,21 @@ expression: info(&db).await
         "select": false,
         "update": false
       },
-      "schemafull": true
+      "indexes": [
+        {
+          "cols": [
+            "owner",
+            "kind"
+          ],
+          "index": "UNIQUE",
+          "name": "connector_owner_kind_unique",
+          "table": "connector"
+        }
+      ]
     },
     {
       "drop": false,
-      "id": 22,
+      "schemafull": true,
       "kind": {
         "kind": "NORMAL"
       },
@@ -145,11 +303,20 @@ expression: info(&db).await
         "select": false,
         "update": false
       },
-      "schemafull": true
+      "indexes": [
+        {
+          "cols": [
+            "text_hmac"
+          ],
+          "index": "UNIQUE",
+          "name": "embed_cache_hmac_unique",
+          "table": "embed_cache"
+        }
+      ]
     },
     {
       "drop": false,
-      "id": 15,
+      "schemafull": true,
       "kind": {
         "kind": "NORMAL"
       },
@@ -160,11 +327,87 @@ expression: info(&db).await
         "select": false,
         "update": false
       },
-      "schemafull": true
+      "indexes": [
+        {
+          "cols": [
+            "vault",
+            "name"
+          ],
+          "index": "",
+          "name": "file_vault_name_idx",
+          "table": "file"
+        },
+        {
+          "cols": [
+            "vault",
+            "name"
+          ],
+          "index": "UNIQUE",
+          "name": "file_vault_name_unique",
+          "table": "file"
+        }
+      ]
     },
     {
       "drop": false,
-      "id": 10,
+      "schemafull": true,
+      "kind": {
+        "kind": "NORMAL"
+      },
+      "name": "job",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      },
+      "indexes": [
+        {
+          "cols": [
+            "idempotency_key"
+          ],
+          "index": "UNIQUE",
+          "name": "job_idempotency_unique",
+          "table": "job"
+        },
+        {
+          "cols": [
+            "status",
+            "locked_until"
+          ],
+          "index": "",
+          "name": "job_lease_idx",
+          "table": "job"
+        },
+        {
+          "cols": [
+            "status",
+            "run_at"
+          ],
+          "index": "",
+          "name": "job_ready_idx",
+          "table": "job"
+        }
+      ]
+    },
+    {
+      "drop": false,
+      "schemafull": true,
+      "kind": {
+        "kind": "NORMAL"
+      },
+      "name": "job_leader",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      },
+      "indexes": []
+    },
+    {
+      "drop": false,
+      "schemafull": true,
       "kind": {
         "enforced": false,
         "in": [
@@ -182,11 +425,22 @@ expression: info(&db).await
         "select": false,
         "update": false
       },
-      "schemafull": true
+      "indexes": [
+        {
+          "cols": [
+            "in",
+            "out",
+            "rel"
+          ],
+          "index": "UNIQUE",
+          "name": "linked_to_unique",
+          "table": "linked_to"
+        }
+      ]
     },
     {
       "drop": false,
-      "id": 13,
+      "schemafull": true,
       "kind": {
         "kind": "NORMAL"
       },
@@ -197,11 +451,30 @@ expression: info(&db).await
         "select": false,
         "update": false
       },
-      "schemafull": true
+      "indexes": [
+        {
+          "cols": [
+            "vault",
+            "name"
+          ],
+          "index": "",
+          "name": "location_vault_name_idx",
+          "table": "location"
+        },
+        {
+          "cols": [
+            "vault",
+            "name"
+          ],
+          "index": "UNIQUE",
+          "name": "location_vault_name_unique",
+          "table": "location"
+        }
+      ]
     },
     {
       "drop": false,
-      "id": 17,
+      "schemafull": true,
       "kind": {
         "kind": "NORMAL"
       },
@@ -212,11 +485,149 @@ expression: info(&db).await
         "select": false,
         "update": false
       },
-      "schemafull": true
+      "indexes": [
+        {
+          "cols": [
+            "subject"
+          ],
+          "index": "",
+          "name": "memory_subject_idx",
+          "table": "memory"
+        },
+        {
+          "cols": [
+            "text"
+          ],
+          "index": "FULLTEXT ANALYZER cache_text_analyzer BM25(1.2,0.75)",
+          "name": "memory_text_fts_idx",
+          "table": "memory"
+        },
+        {
+          "cols": [
+            "type",
+            "status"
+          ],
+          "index": "",
+          "name": "memory_type_status_idx",
+          "table": "memory"
+        },
+        {
+          "cols": [
+            "vault"
+          ],
+          "index": "",
+          "name": "memory_vault_idx",
+          "table": "memory"
+        }
+      ]
     },
     {
       "drop": false,
-      "id": 12,
+      "schemafull": true,
+      "kind": {
+        "kind": "NORMAL"
+      },
+      "name": "oauth_client",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      },
+      "indexes": [
+        {
+          "cols": [
+            "client_id"
+          ],
+          "index": "UNIQUE",
+          "name": "oauth_client_id_unique",
+          "table": "oauth_client"
+        }
+      ]
+    },
+    {
+      "drop": false,
+      "schemafull": true,
+      "kind": {
+        "kind": "NORMAL"
+      },
+      "name": "oauth_code",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      },
+      "indexes": [
+        {
+          "cols": [
+            "code_hash"
+          ],
+          "index": "UNIQUE",
+          "name": "oauth_code_hash_unique",
+          "table": "oauth_code"
+        }
+      ]
+    },
+    {
+      "drop": false,
+      "schemafull": true,
+      "kind": {
+        "kind": "NORMAL"
+      },
+      "name": "oauth_grant",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      },
+      "indexes": [
+        {
+          "cols": [
+            "owner"
+          ],
+          "index": "",
+          "name": "oauth_grant_owner_idx",
+          "table": "oauth_grant"
+        }
+      ]
+    },
+    {
+      "drop": false,
+      "schemafull": true,
+      "kind": {
+        "kind": "NORMAL"
+      },
+      "name": "oauth_token",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      },
+      "indexes": [
+        {
+          "cols": [
+            "family"
+          ],
+          "index": "",
+          "name": "oauth_token_family_idx",
+          "table": "oauth_token"
+        },
+        {
+          "cols": [
+            "token_hash"
+          ],
+          "index": "UNIQUE",
+          "name": "oauth_token_hash_unique",
+          "table": "oauth_token"
+        }
+      ]
+    },
+    {
+      "drop": false,
+      "schemafull": true,
       "kind": {
         "kind": "NORMAL"
       },
@@ -227,11 +638,30 @@ expression: info(&db).await
         "select": false,
         "update": false
       },
-      "schemafull": true
+      "indexes": [
+        {
+          "cols": [
+            "vault",
+            "name"
+          ],
+          "index": "",
+          "name": "organisation_vault_name_idx",
+          "table": "organisation"
+        },
+        {
+          "cols": [
+            "vault",
+            "name"
+          ],
+          "index": "UNIQUE",
+          "name": "organisation_vault_name_unique",
+          "table": "organisation"
+        }
+      ]
     },
     {
       "drop": false,
-      "id": 11,
+      "schemafull": true,
       "kind": {
         "kind": "NORMAL"
       },
@@ -242,11 +672,30 @@ expression: info(&db).await
         "select": false,
         "update": false
       },
-      "schemafull": true
+      "indexes": [
+        {
+          "cols": [
+            "vault",
+            "name"
+          ],
+          "index": "",
+          "name": "person_vault_name_idx",
+          "table": "person"
+        },
+        {
+          "cols": [
+            "vault",
+            "name"
+          ],
+          "index": "UNIQUE",
+          "name": "person_vault_name_unique",
+          "table": "person"
+        }
+      ]
     },
     {
       "drop": false,
-      "id": 18,
+      "schemafull": true,
       "kind": {
         "enforced": false,
         "in": [
@@ -274,11 +723,22 @@ expression: info(&db).await
         "select": false,
         "update": false
       },
-      "schemafull": true
+      "indexes": [
+        {
+          "cols": [
+            "in",
+            "out",
+            "label"
+          ],
+          "index": "UNIQUE",
+          "name": "relates_to_unique",
+          "table": "relates_to"
+        }
+      ]
     },
     {
       "drop": false,
-      "id": 14,
+      "schemafull": true,
       "kind": {
         "kind": "NORMAL"
       },
@@ -289,11 +749,30 @@ expression: info(&db).await
         "select": false,
         "update": false
       },
-      "schemafull": true
+      "indexes": [
+        {
+          "cols": [
+            "vault",
+            "name"
+          ],
+          "index": "",
+          "name": "repository_vault_name_idx",
+          "table": "repository"
+        },
+        {
+          "cols": [
+            "vault",
+            "name"
+          ],
+          "index": "UNIQUE",
+          "name": "repository_vault_name_unique",
+          "table": "repository"
+        }
+      ]
     },
     {
       "drop": false,
-      "id": 3,
+      "schemafull": true,
       "kind": {
         "kind": "NORMAL"
       },
@@ -304,11 +783,28 @@ expression: info(&db).await
         "select": false,
         "update": false
       },
-      "schemafull": true
+      "indexes": [
+        {
+          "cols": [
+            "owner"
+          ],
+          "index": "",
+          "name": "session_owner_idx",
+          "table": "session"
+        },
+        {
+          "cols": [
+            "sid"
+          ],
+          "index": "UNIQUE",
+          "name": "session_sid_unique",
+          "table": "session"
+        }
+      ]
     },
     {
       "drop": false,
-      "id": 16,
+      "schemafull": true,
       "kind": {
         "kind": "NORMAL"
       },
@@ -319,11 +815,30 @@ expression: info(&db).await
         "select": false,
         "update": false
       },
-      "schemafull": true
+      "indexes": [
+        {
+          "cols": [
+            "vault",
+            "name"
+          ],
+          "index": "",
+          "name": "symbol_vault_name_idx",
+          "table": "symbol"
+        },
+        {
+          "cols": [
+            "vault",
+            "name"
+          ],
+          "index": "UNIQUE",
+          "name": "symbol_vault_name_unique",
+          "table": "symbol"
+        }
+      ]
     },
     {
       "drop": false,
-      "id": 8,
+      "schemafull": true,
       "kind": {
         "kind": "NORMAL"
       },
@@ -334,11 +849,11 @@ expression: info(&db).await
         "select": false,
         "update": false
       },
-      "schemafull": true
+      "indexes": []
     },
     {
       "drop": false,
-      "id": 1,
+      "schemafull": true,
       "kind": {
         "kind": "NORMAL"
       },
@@ -349,11 +864,20 @@ expression: info(&db).await
         "select": false,
         "update": false
       },
-      "schemafull": true
+      "indexes": [
+        {
+          "cols": [
+            "email"
+          ],
+          "index": "UNIQUE",
+          "name": "user_email_unique",
+          "table": "user"
+        }
+      ]
     },
     {
       "drop": false,
-      "id": 5,
+      "schemafull": true,
       "kind": {
         "kind": "NORMAL"
       },
@@ -364,11 +888,11 @@ expression: info(&db).await
         "select": false,
         "update": false
       },
-      "schemafull": true
+      "indexes": []
     },
     {
       "drop": false,
-      "id": 6,
+      "schemafull": true,
       "kind": {
         "kind": "NORMAL"
       },
@@ -379,7 +903,25 @@ expression: info(&db).await
         "select": false,
         "update": false
       },
-      "schemafull": true
+      "indexes": [
+        {
+          "cols": [
+            "vault",
+            "user"
+          ],
+          "index": "UNIQUE",
+          "name": "vault_member_unique",
+          "table": "vault_member"
+        },
+        {
+          "cols": [
+            "user"
+          ],
+          "index": "",
+          "name": "vault_member_user_idx",
+          "table": "vault_member"
+        }
+      ]
     }
   ],
   "users": []

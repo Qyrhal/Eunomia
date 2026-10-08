@@ -26,7 +26,10 @@ use surrealdb::types::RecordId;
 use crate::rid::RecordIdExt;
 use tracing::{field::Empty, Instrument};
 
+use crate::audit::{self, Event};
+use crate::authz;
 use crate::db::Db;
+use crate::scopes;
 use crate::store;
 use crate::error::{AppError, AppResult, ErrorCode};
 use crate::state::AppState;
@@ -73,6 +76,12 @@ pub fn is_read_only(name: &str) -> bool {
 /// (`destructiveHint`) so they can ask before running them.
 pub fn is_destructive(name: &str) -> bool {
     matches!(name, "memory_delete" | "entity_delete" | "entity_merge" | "vault_delete" | "vault_remove_member" | "vault_leave")
+}
+
+/// Tools over the user's raw synced source records, which belong to no vault:
+/// a vault-restricted token may not use them.
+fn reads_source_records(name: &str) -> bool {
+    matches!(name, "search" | "get" | "list" | "links")
 }
 
 /// What each tool does, for the model choosing between them (chat agent and
@@ -136,14 +145,24 @@ fn summarize_args(args: &Value) -> String {
     summary
 }
 
-async fn record_audit(db: &Db, owner: &RecordId, tool_name: &str, args: &Value, outcome: &str) {
+/// The owner-facing `audit_log` row (what `GET /api/audit` shows) plus the
+/// append-only `audit_event` row with the actor, the outcome code and the trace id.
+async fn record_audit(db: &Db, owner: &RecordId, tool_name: &str, args: &Value, outcome: &str, code: &str) {
+    let summary = summarize_args(args);
     let _ = store::cache::RECORD_AUDIT
         .on(db)
         .bind(("owner", owner.clone()))
         .bind(("tool_name", tool_name.to_string()))
-        .bind(("args_summary", summarize_args(args)))
+        .bind(("args_summary", summary.clone()))
         .bind(("outcome", outcome.to_string()))
         .await;
+    record_event(db, owner, tool_name, code, &summary).await;
+}
+
+async fn record_event(db: &Db, owner: &RecordId, tool_name: &str, code: &str, detail: &str) {
+    let actor = authz::current().map(|c| c.actor).unwrap_or(authz::Actor { kind: "user", id: owner.to_string() });
+    let action = format!("tool.{tool_name}");
+    audit::record(db, Event { user: Some(owner), actor: &actor, action: &action, target: "", outcome: code, detail }).await;
 }
 
 /// The process-wide tool registry. A `OnceLock<HashMap<..>>` rather than
@@ -1338,6 +1357,14 @@ pub async fn call(state: &AppState, owner: &RecordId, name: &str, args: Value) -
         return Ok(AppError::coded(ErrorCode::ToolNotFound, format!("unknown tool {name}")).to_tool_value());
     };
 
+    let needed = authz::require_scope(scopes::for_tool(name, is_read_only(name))).and_then(|()| {
+        if reads_source_records(name) { authz::require_unrestricted() } else { Ok(()) }
+    });
+    if let Err(e) = needed {
+        record_event(&state.db, owner, name, e.code.as_str(), "").await;
+        return Err(e);
+    }
+
     let vault = args.get("vault_id").and_then(Value::as_str).unwrap_or("personal").to_string();
     let span = tracing::info_span!("tool.call", tool = name, vault = %vault, outcome = Empty, duration_ms = Empty);
     let started = Instant::now();
@@ -1367,18 +1394,32 @@ async fn run_tool(state: &AppState, owner: &RecordId, name: &str, spec: &ToolSpe
     }
 
     let result = (spec.handler)(state, owner, args.clone()).await;
-    let outcome = match &result {
-        Ok(v) if v.get("error").is_some() => "error",
-        Ok(_) => "ok",
-        Err(_) => "error",
+    let (outcome, code) = match &result {
+        Ok(v) if v.get("error").is_some() => ("error", v.get("code").and_then(Value::as_str).unwrap_or("error")),
+        Ok(_) => ("ok", "ok"),
+        Err(e) => ("error", e.code.as_str()),
     };
-    record_audit(&state.db, owner, name, &args, outcome).await;
+    record_audit(&state.db, owner, name, &args, outcome, code).await;
     result
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_tool_has_the_intended_scope() {
+        for name in all_tools().keys() {
+            let want = if is_read_only(name) {
+                scopes::MEMORY_READ
+            } else if name.starts_with("vault_") {
+                scopes::VAULTS_ADMIN
+            } else {
+                scopes::MEMORY_WRITE
+            };
+            assert_eq!(scopes::for_tool(name, is_read_only(name)), want, "{name}");
+        }
+    }
 
     #[test]
     fn read_only_tools_match_python_set_exactly() {

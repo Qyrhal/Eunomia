@@ -50,14 +50,22 @@ async fn handle(State(state): State<AppState>, headers: HeaderMap, body: String)
         && !SUPPORTED_VERSIONS.contains(&v) {
             return AppError::bad_request(format!("unsupported MCP-Protocol-Version {v}")).into_response();
         }
-    let Some(user) = bearer_user(&state, &headers).await else {
-        let err = AppError::unauthorized("missing or invalid API token -- create one on the Eunomia dashboard");
-        return ([(header::WWW_AUTHENTICATE, "Bearer")], err).into_response();
+    let Some((user, granted)) = bearer_user(&state, &headers).await else {
+        let presented = headers.contains_key(header::AUTHORIZATION);
+        let err = AppError::unauthorized("missing or invalid access token: connect with OAuth or create a personal API token on the Eunomia dashboard");
+        return ([(header::WWW_AUTHENTICATE, crate::oauth::www_authenticate(&state.settings, presented))], err).into_response();
     };
 
     let Ok(message) = serde_json::from_str::<Value>(&body) else {
         return (StatusCode::BAD_REQUEST, Json(error_response(Value::Null, -32700, ErrorCode::ValidationInvalid, "Parse error"))).into_response();
     };
+
+    // OAuth tokens carry scopes; personal API tokens are unrestricted here.
+    if let Some(granted) = &granted
+        && let Some(denied) = crate::oauth::scope_challenge(&state.settings, &message, granted)
+    {
+        return denied;
+    }
 
     let replies: Vec<Value> = match &message {
         Value::Array(batch) if !batch.is_empty() => {
@@ -81,12 +89,18 @@ async fn handle(State(state): State<AppState>, headers: HeaderMap, body: String)
     }
 }
 
-async fn bearer_user(state: &AppState, headers: &HeaderMap) -> Option<User> {
+/// The caller, plus the scopes an OAuth token was limited to (`None` for a personal API token).
+async fn bearer_user(state: &AppState, headers: &HeaderMap) -> Option<(User, Option<Vec<String>>)> {
     let value = headers.get(header::AUTHORIZATION)?.to_str().ok()?;
-    let token = value.strip_prefix("Bearer ").or_else(|| value.strip_prefix("bearer "))?;
-    let user = models_user::verify_api_token(&state.db, token.trim()).await.ok().flatten()?;
+    let token = value.strip_prefix("Bearer ").or_else(|| value.strip_prefix("bearer "))?.trim();
+    let (user, scopes) = if crate::oauth::is_access_token(token) {
+        let (user, scopes) = crate::oauth::verify_access_token(state, token).await?;
+        (user, Some(scopes))
+    } else {
+        (models_user::verify_api_token(&state.db, token).await.ok().flatten()?, None)
+    };
     crate::telemetry::record_user(&user.id.to_string());
-    Some(user)
+    Some((user, scopes))
 }
 
 /// DNS-rebinding guard the spec requires: non-browser clients send no
@@ -283,6 +297,7 @@ mod tests {
             log_level: "INFO".into(),
             update_status_dir: String::new(),
             bind_addr: String::new(),
+            public_url: "http://localhost:8001".into(),
         };
         AppState(std::sync::Arc::new(AppStateInner { db: crate::db::Db::init(), settings }))
     }

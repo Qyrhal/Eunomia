@@ -224,7 +224,8 @@ pub async fn upsert(db: &Db, owner: &RecordId, env: &Envelope) -> AppResult<(Cac
         .bind(("body_text", env.body_text.clone()))
         .bind(("occurred_at", env.occurred_at))
         .bind(("url", env.url.clone()))
-        .bind(("payload", env.payload.clone()))
+        // 3.x rejects NULL for the `object` field; an envelope without a payload means "none".
+        .bind(("payload", if env.payload.is_null() { json!({}) } else { env.payload.clone() }))
         .bind(("content_hash", h))
         .bind(("ingested_at", Datetime::from(chrono::Utc::now())))
         .bind(("updated_at", Datetime::from(chrono::Utc::now())))

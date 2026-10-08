@@ -4,10 +4,35 @@ export type ClientOptions = {
     baseUrl: `${string}://${string}` | (string & {});
 };
 
+export type AuditEntry = {
+    args_summary: string;
+    created_at?: string | null;
+    id: string;
+    outcome: string;
+    tool_name: string;
+};
+
+export type AuditPage = {
+    has_more: boolean;
+    results: Array<AuditEntry>;
+    total: number;
+};
+
 export type AuthOut = {
     email: string;
     id: string;
     onboarded: boolean;
+};
+
+export type AuthzParams = {
+    client_id?: string;
+    code_challenge?: string;
+    code_challenge_method?: string;
+    redirect_uri?: string;
+    resource?: string | null;
+    response_type?: string;
+    scope?: string | null;
+    state?: string | null;
 };
 
 export type BootstrapOut = {
@@ -18,10 +43,88 @@ export type ChatRequest = {
     message: string;
 };
 
+export type CloneOut = {
+    created_at?: string | null;
+    entities_copied: number;
+    id: string;
+    kind: string;
+    name: string;
+};
+
+export type Cloud = {
+    points: Array<CloudPoint>;
+    /**
+     * "semantic" (model embeddings) or "lexical" (hashed words, no model)
+     */
+    space: string;
+};
+
+export type CloudPoint = {
+    id: string;
+    /**
+     * "record", or the memory's type (world/experience/observation)
+     */
+    kind: string;
+    label: string;
+    vault: string;
+    x: number;
+    y: number;
+    z: number;
+};
+
+export type ConnectorOut = {
+    /**
+     * Connector-specific settings (open object).
+     */
+    config: {
+        [key: string]: unknown;
+    };
+    credentials_set: boolean;
+    enabled: boolean;
+    kind: string;
+    updated_at: string;
+};
+
 export type ConnectorUpdateBody = {
     config?: unknown;
     credentials?: unknown;
     enabled?: boolean | null;
+};
+
+export type ConsentClient = {
+    client_uri?: string | null;
+    logo_uri?: string | null;
+    name: string;
+};
+
+export type ConsentDecision = AuthzParams & {
+    approve: boolean;
+};
+
+export type ConsentInfo = {
+    client: ConsentClient;
+    /**
+     * True when the redirect goes to this computer only (localhost); the page warns about it.
+     */
+    loopback: boolean;
+    /**
+     * Host the user is sent back to after deciding.
+     */
+    redirect_host: string;
+    scopes: Array<ConsentScope>;
+    user_email: string;
+};
+
+export type ConsentResult = {
+    /**
+     * Send the browser here: the client's redirect URI with the code (or the denial).
+     */
+    redirect_to: string;
+};
+
+export type ConsentScope = {
+    description: string;
+    scope: string;
 };
 
 export type Credentials = {
@@ -44,10 +147,95 @@ export type EntityCreate = {
     vault_id?: string | null;
 };
 
+export type EntityDetail = {
+    aliases: Array<string>;
+    id: string;
+    kind: string;
+    memory: Array<MemoryOut>;
+    name: string;
+    owner_email?: string | null;
+    relations: Array<RelationOut>;
+    summary: string;
+};
+
+export type EntityOut = {
+    aliases: Array<string>;
+    id: string;
+    kind: string;
+    name: string;
+    summary: string;
+};
+
 export type EntityUpdate = {
     aliases?: Array<string> | null;
     name?: string | null;
     summary?: string | null;
+};
+
+export type FinanceAccount = {
+    balance: string;
+    name: string;
+};
+
+export type FinanceSummary = {
+    accounts: Array<FinanceAccount>;
+    balance: number;
+    recent_transactions: Array<FinanceTransaction>;
+    spend_by_category: Array<SpendByCategory>;
+    spend_by_day: Array<SpendByDay>;
+};
+
+export type FinanceTransaction = {
+    amount: string;
+    created_at: string;
+    description: string;
+};
+
+export type Grant = {
+    client_id: string;
+    client_logo?: string | null;
+    client_name: string;
+    created_at: string;
+    id: string;
+    last_used_at?: string | null;
+    scope: Array<string>;
+};
+
+export type GraphEdge = {
+    label: string;
+    owner_email?: string | null;
+    source: string;
+    target: string;
+};
+
+export type GraphNode = {
+    id: string;
+    kind: string;
+    name: string;
+    owner_email?: string | null;
+};
+
+export type GraphOut = {
+    edges: Array<GraphEdge>;
+    nodes: Array<GraphNode>;
+};
+
+export type InvitationList = {
+    results: Array<InvitationOut>;
+};
+
+export type InvitationOut = {
+    created_at?: string | null;
+    role: string;
+    vault_id: string;
+    vault_kind: string;
+    vault_name: string;
+};
+
+export type InviteOut = {
+    role: string;
+    user_email: string;
+    vault_id: string;
 };
 
 export type InviteRequest = {
@@ -59,14 +247,58 @@ export type LeftBody = {
     left: boolean;
 };
 
+export type ListEntitiesOut = {
+    has_more: boolean;
+    results: Array<EntityOut>;
+    total: number;
+};
+
+export type MemberList = {
+    results: Array<MemberOut>;
+};
+
+export type MemberOut = {
+    email: string;
+    role: string;
+};
+
 export type MemoryCreate = {
     text: string;
     type?: string;
 };
 
+export type MemoryOut = {
+    created_at: string;
+    id: string;
+    owner?: string | null;
+    owner_email?: string | null;
+    proof_count: number;
+    source?: string | null;
+    source_memories?: Array<string> | null;
+    status?: string | null;
+    subject: string;
+    text: string;
+    type: string;
+    updated_at?: string | null;
+    vault: string;
+    version: number;
+};
+
 export type MemoryUpdate = {
     text?: string | null;
     type?: string | null;
+};
+
+export type MergeOut = {
+    created_at?: string | null;
+    /**
+     * Entities in the merged vault (duplicates across the two sources count once).
+     */
+    entities: number;
+    id: string;
+    kind: string;
+    merged_from: Array<string>;
+    name: string;
 };
 
 export type MergeRequest = {
@@ -83,8 +315,27 @@ export type MessageOut = {
     }> | null;
 };
 
+export type ModelsOut = {
+    /**
+     * Null on success.
+     */
+    error?: string | null;
+    models: Array<string>;
+};
+
 export type OkBody = {
     ok: boolean;
+};
+
+export type PocketaiSummary = {
+    recent_recordings: Array<RecentRecording>;
+    recordings_count: number;
+    tag_breakdown: Array<TagCount>;
+    total_duration_minutes: number;
+};
+
+export type PocketaiWeek = {
+    recordings_count: number;
 };
 
 /**
@@ -108,9 +359,28 @@ export type Problem = {
     type: string;
 };
 
+export type RecentRecording = {
+    duration_minutes: number;
+    recorded_at?: string | null;
+    tags: Array<string>;
+    title: string;
+};
+
 export type RelationCreate = {
     label: string;
     to_id: string;
+};
+
+export type RelationOut = {
+    created_at?: string | null;
+    direction?: string | null;
+    id: string;
+    in: string;
+    label: string;
+    out: string;
+    owner?: string | null;
+    owner_email?: string | null;
+    source?: string | null;
 };
 
 export type RemovedBody = {
@@ -122,6 +392,27 @@ export type SessionOut = {
     id: string;
     last_seen_at: string;
     user_agent: string;
+};
+
+export type SettingsOut = {
+    embedding_model: string;
+    memory_skill: string;
+    memory_skill_custom: boolean;
+    observations_mission: string;
+    openai_api_key_set: boolean;
+    openai_base_url: string;
+    /**
+     * Open map of source key to sync interval seconds.
+     */
+    sync_intervals: {
+        [key: string]: unknown;
+    };
+    /**
+     * Open UI theme preferences.
+     */
+    theme: {
+        [key: string]: unknown;
+    };
 };
 
 export type SettingsUpdate = {
@@ -137,6 +428,68 @@ export type SettingsUpdate = {
     theme?: unknown;
 };
 
+/**
+ * Each side is null when that connector is not connected or its call failed.
+ */
+export type SnapshotOut = {
+    pocketai?: null | PocketaiWeek;
+    up_bank?: null | WeekSummary;
+};
+
+export type SourceOut = {
+    connected: boolean;
+    key: string;
+    label: string;
+    provider: string;
+    record_count: number;
+    record_types: Array<string>;
+    sync_status: SyncStatusOut;
+};
+
+export type SpendByCategory = {
+    amount: number;
+    category: string;
+};
+
+export type SpendByDay = {
+    amount: number;
+    day: string;
+};
+
+/**
+ * Outcome of a sync or webhook ingest: an ingest report, or `source` + `error`
+ * when the sync failed. Schema only: the handlers pass the report through.
+ */
+export type SyncReport = {
+    error?: string | null;
+    errors?: Array<string> | null;
+    failed?: number | null;
+    skipped?: number | null;
+    source: string;
+    written?: number | null;
+};
+
+export type SyncStatusOut = {
+    consecutive_failures: number;
+    cursor: string;
+    last_error: string;
+    last_ok?: string | null;
+    last_run?: string | null;
+};
+
+export type TagCount = {
+    count: number;
+    tag: string;
+};
+
+export type TestOut = {
+    /**
+     * Present only when the ping failed with an error.
+     */
+    error?: string | null;
+    ok: boolean;
+};
+
 export type ThreadCreate = {
     title?: string | null;
 };
@@ -149,23 +502,71 @@ export type ThreadOut = {
 };
 
 export type TokenCreate = {
+    /**
+     * RFC 3339 timestamp in the future. Omit for a token that never expires.
+     */
+    expires_at?: string | null;
     name: string;
+    /**
+     * Any of `memory:read`, `memory:write`, `vaults:admin`, `connectors`. Defaults
+     * to all of them. Cannot exceed the creating credential's own scopes.
+     */
+    scopes?: Array<string> | null;
+    /**
+     * Restrict the token to one vault you belong to.
+     */
+    vault_id?: string | null;
 };
 
 export type TokenCreated = {
+    expires_at?: string | null;
     id: string;
     name: string;
+    scopes: Array<string>;
     /**
      * Shown once, never retrievable again.
      */
     token: string;
+    vault_id?: string | null;
 };
 
 export type TokenOut = {
     created_at?: string | null;
+    /**
+     * `null` for a token that never expires.
+     */
+    expires_at?: string | null;
     id: string;
     last_used_at?: string | null;
     name: string;
+    scopes: Array<string>;
+    vault_id?: string | null;
+};
+
+/**
+ * Body of `POST /update/request` and `/update/check`.
+ */
+export type UpdateAck = {
+    configured: boolean;
+    /**
+     * Present only when the updater is configured.
+     */
+    requested?: boolean | null;
+};
+
+/**
+ * Documents the body of `GET /update/status`. The handler merges the on-disk
+ * `status.json` written by `scripts/auto-update.sh` verbatim, so every field
+ * except `configured` is absent when the updater is not configured.
+ */
+export type UpdateStatus = {
+    applying?: boolean | null;
+    checked_at?: string | null;
+    configured: boolean;
+    current_version?: string | null;
+    error?: string | null;
+    latest_version?: string | null;
+    update_available?: boolean | null;
 };
 
 export type VaultClone = {
@@ -178,17 +579,54 @@ export type VaultCreate = {
     name: string;
 };
 
+export type VaultList = {
+    results: Array<VaultWithRole>;
+};
+
 export type VaultMerge = {
     kind?: string;
     name?: string | null;
     vault_ids: Array<string>;
 };
 
+export type VaultOut = {
+    created_at?: string | null;
+    id: string;
+    kind: string;
+    name: string;
+};
+
 export type VaultRename = {
     name: string;
 };
 
-export type GetAuditData = {
+export type VaultWithRole = {
+    created_at?: string | null;
+    id: string;
+    kind: string;
+    name: string;
+    role: string;
+};
+
+/**
+ * Body of the webhook route: `{"status": "ignored"}` or an ingest report with
+ * `status: "ok"`. Schema only.
+ */
+export type WebhookOut = {
+    errors?: Array<string> | null;
+    failed?: number | null;
+    skipped?: number | null;
+    source?: string | null;
+    status: string;
+    written?: number | null;
+};
+
+export type WeekSummary = {
+    spent: number;
+    transaction_count: number;
+};
+
+export type ListAuditData = {
     body?: never;
     path?: never;
     query?: {
@@ -198,44 +636,42 @@ export type GetAuditData = {
     url: '/api/audit';
 };
 
-export type GetAuditErrors = {
+export type ListAuditErrors = {
     /**
      * Error
      */
     default: Problem;
 };
 
-export type GetAuditError = GetAuditErrors[keyof GetAuditErrors];
+export type ListAuditError = ListAuditErrors[keyof ListAuditErrors];
 
-export type GetAuditResponses = {
-    200: {
-        [key: string]: unknown;
-    };
+export type ListAuditResponses = {
+    200: AuditPage;
 };
 
-export type GetAuditResponse = GetAuditResponses[keyof GetAuditResponses];
+export type ListAuditResponse = ListAuditResponses[keyof ListAuditResponses];
 
-export type BootstrapData = {
+export type GetBootstrapData = {
     body?: never;
     path?: never;
     query?: never;
     url: '/api/auth/bootstrap';
 };
 
-export type BootstrapErrors = {
+export type GetBootstrapErrors = {
     /**
      * Error
      */
     default: Problem;
 };
 
-export type BootstrapError = BootstrapErrors[keyof BootstrapErrors];
+export type GetBootstrapError = GetBootstrapErrors[keyof GetBootstrapErrors];
 
-export type BootstrapResponses = {
+export type GetBootstrapResponses = {
     200: BootstrapOut;
 };
 
-export type BootstrapResponse = BootstrapResponses[keyof BootstrapResponses];
+export type GetBootstrapResponse = GetBootstrapResponses[keyof GetBootstrapResponses];
 
 export type LoginData = {
     body: Credentials;
@@ -281,27 +717,27 @@ export type LogoutResponses = {
 
 export type LogoutResponse = LogoutResponses[keyof LogoutResponses];
 
-export type MeData = {
+export type GetMeData = {
     body?: never;
     path?: never;
     query?: never;
     url: '/api/auth/me';
 };
 
-export type MeErrors = {
+export type GetMeErrors = {
     /**
      * Error
      */
     default: Problem;
 };
 
-export type MeError = MeErrors[keyof MeErrors];
+export type GetMeError = GetMeErrors[keyof GetMeErrors];
 
-export type MeResponses = {
+export type GetMeResponses = {
     200: AuthOut;
 };
 
-export type MeResponse = MeResponses[keyof MeResponses];
+export type GetMeResponse = GetMeResponses[keyof GetMeResponses];
 
 export type RegisterData = {
     body: Credentials;
@@ -325,29 +761,29 @@ export type RegisterResponses = {
 
 export type RegisterResponse = RegisterResponses[keyof RegisterResponses];
 
-export type GetSessionsData = {
+export type ListSessionsData = {
     body?: never;
     path?: never;
     query?: never;
     url: '/api/auth/sessions';
 };
 
-export type GetSessionsErrors = {
+export type ListSessionsErrors = {
     /**
      * Error
      */
     default: Problem;
 };
 
-export type GetSessionsError = GetSessionsErrors[keyof GetSessionsErrors];
+export type ListSessionsError = ListSessionsErrors[keyof ListSessionsErrors];
 
-export type GetSessionsResponses = {
+export type ListSessionsResponses = {
     200: Array<SessionOut>;
 };
 
-export type GetSessionsResponse = GetSessionsResponses[keyof GetSessionsResponses];
+export type ListSessionsResponse = ListSessionsResponses[keyof ListSessionsResponses];
 
-export type RevokeSessionRouteData = {
+export type RevokeSessionData = {
     body?: never;
     path: {
         session_id: string;
@@ -356,42 +792,42 @@ export type RevokeSessionRouteData = {
     url: '/api/auth/sessions/{session_id}';
 };
 
-export type RevokeSessionRouteErrors = {
+export type RevokeSessionErrors = {
     /**
      * Error
      */
     default: Problem;
 };
 
-export type RevokeSessionRouteError = RevokeSessionRouteErrors[keyof RevokeSessionRouteErrors];
+export type RevokeSessionError = RevokeSessionErrors[keyof RevokeSessionErrors];
 
-export type RevokeSessionRouteResponses = {
+export type RevokeSessionResponses = {
     200: OkBody;
 };
 
-export type RevokeSessionRouteResponse = RevokeSessionRouteResponses[keyof RevokeSessionRouteResponses];
+export type RevokeSessionResponse = RevokeSessionResponses[keyof RevokeSessionResponses];
 
-export type GetTokensData = {
+export type ListTokensData = {
     body?: never;
     path?: never;
     query?: never;
     url: '/api/auth/tokens';
 };
 
-export type GetTokensErrors = {
+export type ListTokensErrors = {
     /**
      * Error
      */
     default: Problem;
 };
 
-export type GetTokensError = GetTokensErrors[keyof GetTokensErrors];
+export type ListTokensError = ListTokensErrors[keyof ListTokensErrors];
 
-export type GetTokensResponses = {
+export type ListTokensResponses = {
     200: Array<TokenOut>;
 };
 
-export type GetTokensResponse = GetTokensResponses[keyof GetTokensResponses];
+export type ListTokensResponse = ListTokensResponses[keyof ListTokensResponses];
 
 export type CreateTokenData = {
     body: TokenCreate;
@@ -483,7 +919,7 @@ export type CreateThreadResponses = {
 
 export type CreateThreadResponse = CreateThreadResponses[keyof CreateThreadResponses];
 
-export type DeleteThreadRouteData = {
+export type DeleteThreadData = {
     body?: never;
     path: {
         thread_id: string;
@@ -492,20 +928,20 @@ export type DeleteThreadRouteData = {
     url: '/api/chat/threads/{thread_id}';
 };
 
-export type DeleteThreadRouteErrors = {
+export type DeleteThreadErrors = {
     /**
      * Error
      */
     default: Problem;
 };
 
-export type DeleteThreadRouteError = DeleteThreadRouteErrors[keyof DeleteThreadRouteErrors];
+export type DeleteThreadError = DeleteThreadErrors[keyof DeleteThreadErrors];
 
-export type DeleteThreadRouteResponses = {
+export type DeleteThreadResponses = {
     200: OkBody;
 };
 
-export type DeleteThreadRouteResponse = DeleteThreadRouteResponses[keyof DeleteThreadRouteResponses];
+export type DeleteThreadResponse = DeleteThreadResponses[keyof DeleteThreadResponses];
 
 export type SendMessageData = {
     body: ChatRequest;
@@ -534,7 +970,7 @@ export type SendMessageResponses = {
 
 export type SendMessageResponse = SendMessageResponses[keyof SendMessageResponses];
 
-export type ThreadHistoryData = {
+export type GetThreadHistoryData = {
     body?: never;
     path: {
         thread_id: string;
@@ -543,46 +979,44 @@ export type ThreadHistoryData = {
     url: '/api/chat/threads/{thread_id}/history';
 };
 
-export type ThreadHistoryErrors = {
+export type GetThreadHistoryErrors = {
     /**
      * Error
      */
     default: Problem;
 };
 
-export type ThreadHistoryError = ThreadHistoryErrors[keyof ThreadHistoryErrors];
+export type GetThreadHistoryError = GetThreadHistoryErrors[keyof GetThreadHistoryErrors];
 
-export type ThreadHistoryResponses = {
+export type GetThreadHistoryResponses = {
     200: Array<MessageOut>;
 };
 
-export type ThreadHistoryResponse = ThreadHistoryResponses[keyof ThreadHistoryResponses];
+export type GetThreadHistoryResponse = GetThreadHistoryResponses[keyof GetThreadHistoryResponses];
 
-export type ListAllData = {
+export type ListConnectorsData = {
     body?: never;
     path?: never;
     query?: never;
     url: '/api/connectors';
 };
 
-export type ListAllErrors = {
+export type ListConnectorsErrors = {
     /**
      * Error
      */
     default: Problem;
 };
 
-export type ListAllError = ListAllErrors[keyof ListAllErrors];
+export type ListConnectorsError = ListConnectorsErrors[keyof ListConnectorsErrors];
 
-export type ListAllResponses = {
-    200: Array<{
-        [key: string]: unknown;
-    }>;
+export type ListConnectorsResponses = {
+    200: Array<ConnectorOut>;
 };
 
-export type ListAllResponse = ListAllResponses[keyof ListAllResponses];
+export type ListConnectorsResponse = ListConnectorsResponses[keyof ListConnectorsResponses];
 
-export type PocketaiAllData = {
+export type GetPocketaiAllData = {
     body?: never;
     path?: never;
     query?: {
@@ -591,24 +1025,24 @@ export type PocketaiAllData = {
     url: '/api/connectors/pocketai/all';
 };
 
-export type PocketaiAllErrors = {
+export type GetPocketaiAllErrors = {
     /**
      * Error
      */
     default: Problem;
 };
 
-export type PocketaiAllError = PocketaiAllErrors[keyof PocketaiAllErrors];
+export type GetPocketaiAllError = GetPocketaiAllErrors[keyof GetPocketaiAllErrors];
 
-export type PocketaiAllResponses = {
+export type GetPocketaiAllResponses = {
     200: {
         [key: string]: unknown;
     };
 };
 
-export type PocketaiAllResponse = PocketaiAllResponses[keyof PocketaiAllResponses];
+export type GetPocketaiAllResponse = GetPocketaiAllResponses[keyof GetPocketaiAllResponses];
 
-export type PocketaiDetailData = {
+export type GetPocketaiDetailData = {
     body?: never;
     path: {
         recording_id: string;
@@ -617,24 +1051,24 @@ export type PocketaiDetailData = {
     url: '/api/connectors/pocketai/detail/{recording_id}';
 };
 
-export type PocketaiDetailErrors = {
+export type GetPocketaiDetailErrors = {
     /**
      * Error
      */
     default: Problem;
 };
 
-export type PocketaiDetailError = PocketaiDetailErrors[keyof PocketaiDetailErrors];
+export type GetPocketaiDetailError = GetPocketaiDetailErrors[keyof GetPocketaiDetailErrors];
 
-export type PocketaiDetailResponses = {
+export type GetPocketaiDetailResponses = {
     200: {
         [key: string]: unknown;
     };
 };
 
-export type PocketaiDetailResponse = PocketaiDetailResponses[keyof PocketaiDetailResponses];
+export type GetPocketaiDetailResponse = GetPocketaiDetailResponses[keyof GetPocketaiDetailResponses];
 
-export type PocketaiSearchData = {
+export type SearchPocketaiData = {
     body?: never;
     path?: never;
     query: {
@@ -643,24 +1077,24 @@ export type PocketaiSearchData = {
     url: '/api/connectors/pocketai/search';
 };
 
-export type PocketaiSearchErrors = {
+export type SearchPocketaiErrors = {
     /**
      * Error
      */
     default: Problem;
 };
 
-export type PocketaiSearchError = PocketaiSearchErrors[keyof PocketaiSearchErrors];
+export type SearchPocketaiError = SearchPocketaiErrors[keyof SearchPocketaiErrors];
 
-export type PocketaiSearchResponses = {
+export type SearchPocketaiResponses = {
     200: {
         [key: string]: unknown;
     };
 };
 
-export type PocketaiSearchResponse = PocketaiSearchResponses[keyof PocketaiSearchResponses];
+export type SearchPocketaiResponse = SearchPocketaiResponses[keyof SearchPocketaiResponses];
 
-export type PocketaiSummaryData = {
+export type GetPocketaiSummaryData = {
     body?: never;
     path?: never;
     query?: {
@@ -669,24 +1103,22 @@ export type PocketaiSummaryData = {
     url: '/api/connectors/pocketai/summary';
 };
 
-export type PocketaiSummaryErrors = {
+export type GetPocketaiSummaryErrors = {
     /**
      * Error
      */
     default: Problem;
 };
 
-export type PocketaiSummaryError = PocketaiSummaryErrors[keyof PocketaiSummaryErrors];
+export type GetPocketaiSummaryError = GetPocketaiSummaryErrors[keyof GetPocketaiSummaryErrors];
 
-export type PocketaiSummaryResponses = {
-    200: {
-        [key: string]: unknown;
-    };
+export type GetPocketaiSummaryResponses = {
+    200: PocketaiSummary;
 };
 
-export type PocketaiSummaryResponse = PocketaiSummaryResponses[keyof PocketaiSummaryResponses];
+export type GetPocketaiSummaryResponse = GetPocketaiSummaryResponses[keyof GetPocketaiSummaryResponses];
 
-export type UpBankFinanceSummaryData = {
+export type GetUpBankFinanceSummaryData = {
     body?: never;
     path?: never;
     query?: {
@@ -695,24 +1127,22 @@ export type UpBankFinanceSummaryData = {
     url: '/api/connectors/up_bank/finance-summary';
 };
 
-export type UpBankFinanceSummaryErrors = {
+export type GetUpBankFinanceSummaryErrors = {
     /**
      * Error
      */
     default: Problem;
 };
 
-export type UpBankFinanceSummaryError = UpBankFinanceSummaryErrors[keyof UpBankFinanceSummaryErrors];
+export type GetUpBankFinanceSummaryError = GetUpBankFinanceSummaryErrors[keyof GetUpBankFinanceSummaryErrors];
 
-export type UpBankFinanceSummaryResponses = {
-    200: {
-        [key: string]: unknown;
-    };
+export type GetUpBankFinanceSummaryResponses = {
+    200: FinanceSummary;
 };
 
-export type UpBankFinanceSummaryResponse = UpBankFinanceSummaryResponses[keyof UpBankFinanceSummaryResponses];
+export type GetUpBankFinanceSummaryResponse = GetUpBankFinanceSummaryResponses[keyof GetUpBankFinanceSummaryResponses];
 
-export type GetOneData = {
+export type GetConnectorData = {
     body?: never;
     path: {
         kind: string;
@@ -721,24 +1151,22 @@ export type GetOneData = {
     url: '/api/connectors/{kind}';
 };
 
-export type GetOneErrors = {
+export type GetConnectorErrors = {
     /**
      * Error
      */
     default: Problem;
 };
 
-export type GetOneError = GetOneErrors[keyof GetOneErrors];
+export type GetConnectorError = GetConnectorErrors[keyof GetConnectorErrors];
 
-export type GetOneResponses = {
-    200: {
-        [key: string]: unknown;
-    };
+export type GetConnectorResponses = {
+    200: ConnectorOut;
 };
 
-export type GetOneResponse = GetOneResponses[keyof GetOneResponses];
+export type GetConnectorResponse = GetConnectorResponses[keyof GetConnectorResponses];
 
-export type PutOneData = {
+export type UpdateConnectorData = {
     body: ConnectorUpdateBody;
     path: {
         kind: string;
@@ -747,24 +1175,22 @@ export type PutOneData = {
     url: '/api/connectors/{kind}';
 };
 
-export type PutOneErrors = {
+export type UpdateConnectorErrors = {
     /**
      * Error
      */
     default: Problem;
 };
 
-export type PutOneError = PutOneErrors[keyof PutOneErrors];
+export type UpdateConnectorError = UpdateConnectorErrors[keyof UpdateConnectorErrors];
 
-export type PutOneResponses = {
-    200: {
-        [key: string]: unknown;
-    };
+export type UpdateConnectorResponses = {
+    200: ConnectorOut;
 };
 
-export type PutOneResponse = PutOneResponses[keyof PutOneResponses];
+export type UpdateConnectorResponse = UpdateConnectorResponses[keyof UpdateConnectorResponses];
 
-export type TestOneData = {
+export type TestConnectorData = {
     body?: never;
     path: {
         kind: string;
@@ -773,22 +1199,20 @@ export type TestOneData = {
     url: '/api/connectors/{kind}/test';
 };
 
-export type TestOneErrors = {
+export type TestConnectorErrors = {
     /**
      * Error
      */
     default: Problem;
 };
 
-export type TestOneError = TestOneErrors[keyof TestOneErrors];
+export type TestConnectorError = TestConnectorErrors[keyof TestConnectorErrors];
 
-export type TestOneResponses = {
-    200: {
-        [key: string]: unknown;
-    };
+export type TestConnectorResponses = {
+    200: TestOut;
 };
 
-export type TestOneResponse = TestOneResponses[keyof TestOneResponses];
+export type TestConnectorResponse = TestConnectorResponses[keyof TestConnectorResponses];
 
 export type ListEntitiesData = {
     body?: never;
@@ -812,9 +1236,7 @@ export type ListEntitiesErrors = {
 export type ListEntitiesError = ListEntitiesErrors[keyof ListEntitiesErrors];
 
 export type ListEntitiesResponses = {
-    200: {
-        [key: string]: unknown;
-    };
+    200: ListEntitiesOut;
 };
 
 export type ListEntitiesResponse = ListEntitiesResponses[keyof ListEntitiesResponses];
@@ -836,14 +1258,12 @@ export type CreateEntityErrors = {
 export type CreateEntityError = CreateEntityErrors[keyof CreateEntityErrors];
 
 export type CreateEntityResponses = {
-    200: {
-        [key: string]: unknown;
-    };
+    200: EntityOut;
 };
 
 export type CreateEntityResponse = CreateEntityResponses[keyof CreateEntityResponses];
 
-export type VectorCloudData = {
+export type GetVectorCloudData = {
     body?: never;
     path?: never;
     query?: {
@@ -855,24 +1275,22 @@ export type VectorCloudData = {
     url: '/api/entities/cloud';
 };
 
-export type VectorCloudErrors = {
+export type GetVectorCloudErrors = {
     /**
      * Error
      */
     default: Problem;
 };
 
-export type VectorCloudError = VectorCloudErrors[keyof VectorCloudErrors];
+export type GetVectorCloudError = GetVectorCloudErrors[keyof GetVectorCloudErrors];
 
-export type VectorCloudResponses = {
-    200: {
-        [key: string]: unknown;
-    };
+export type GetVectorCloudResponses = {
+    200: Cloud;
 };
 
-export type VectorCloudResponse = VectorCloudResponses[keyof VectorCloudResponses];
+export type GetVectorCloudResponse = GetVectorCloudResponses[keyof GetVectorCloudResponses];
 
-export type EntityGraphData = {
+export type GetEntityGraphData = {
     body?: never;
     path?: never;
     query?: {
@@ -885,22 +1303,20 @@ export type EntityGraphData = {
     url: '/api/entities/graph';
 };
 
-export type EntityGraphErrors = {
+export type GetEntityGraphErrors = {
     /**
      * Error
      */
     default: Problem;
 };
 
-export type EntityGraphError = EntityGraphErrors[keyof EntityGraphErrors];
+export type GetEntityGraphError = GetEntityGraphErrors[keyof GetEntityGraphErrors];
 
-export type EntityGraphResponses = {
-    200: {
-        [key: string]: unknown;
-    };
+export type GetEntityGraphResponses = {
+    200: GraphOut;
 };
 
-export type EntityGraphResponse = EntityGraphResponses[keyof EntityGraphResponses];
+export type GetEntityGraphResponse = GetEntityGraphResponses[keyof GetEntityGraphResponses];
 
 export type DeleteMemoryData = {
     body?: never;
@@ -945,9 +1361,7 @@ export type UpdateMemoryErrors = {
 export type UpdateMemoryError = UpdateMemoryErrors[keyof UpdateMemoryErrors];
 
 export type UpdateMemoryResponses = {
-    200: {
-        [key: string]: unknown;
-    };
+    200: MemoryOut;
 };
 
 export type UpdateMemoryResponse = UpdateMemoryResponses[keyof UpdateMemoryResponses];
@@ -995,9 +1409,7 @@ export type GetEntityErrors = {
 export type GetEntityError = GetEntityErrors[keyof GetEntityErrors];
 
 export type GetEntityResponses = {
-    200: {
-        [key: string]: unknown;
-    };
+    200: EntityDetail;
 };
 
 export type GetEntityResponse = GetEntityResponses[keyof GetEntityResponses];
@@ -1021,9 +1433,7 @@ export type UpdateEntityErrors = {
 export type UpdateEntityError = UpdateEntityErrors[keyof UpdateEntityErrors];
 
 export type UpdateEntityResponses = {
-    200: {
-        [key: string]: unknown;
-    };
+    200: EntityOut;
 };
 
 export type UpdateEntityResponse = UpdateEntityResponses[keyof UpdateEntityResponses];
@@ -1047,9 +1457,7 @@ export type AddMemoryErrors = {
 export type AddMemoryError = AddMemoryErrors[keyof AddMemoryErrors];
 
 export type AddMemoryResponses = {
-    200: {
-        [key: string]: unknown;
-    };
+    200: MemoryOut;
 };
 
 export type AddMemoryResponse = AddMemoryResponses[keyof AddMemoryResponses];
@@ -1073,9 +1481,7 @@ export type MergeEntitiesErrors = {
 export type MergeEntitiesError = MergeEntitiesErrors[keyof MergeEntitiesErrors];
 
 export type MergeEntitiesResponses = {
-    200: {
-        [key: string]: unknown;
-    };
+    200: EntityOut;
 };
 
 export type MergeEntitiesResponse = MergeEntitiesResponses[keyof MergeEntitiesResponses];
@@ -1099,9 +1505,7 @@ export type AddRelationErrors = {
 export type AddRelationError = AddRelationErrors[keyof AddRelationErrors];
 
 export type AddRelationResponses = {
-    200: {
-        [key: string]: unknown;
-    };
+    200: RelationOut;
 };
 
 export type AddRelationResponse = AddRelationResponses[keyof AddRelationResponses];
@@ -1130,14 +1534,113 @@ export type ExportDataResponses = {
 
 export type ExportDataResponse = ExportDataResponses[keyof ExportDataResponses];
 
-export type OpenapiJsonData = {
+export type GetOauthConsentData = {
+    body?: never;
+    path?: never;
+    query?: {
+        response_type?: string;
+        client_id?: string;
+        redirect_uri?: string;
+        code_challenge?: string;
+        code_challenge_method?: string;
+        state?: string;
+        scope?: string;
+        resource?: string;
+    };
+    url: '/api/oauth/consent';
+};
+
+export type GetOauthConsentErrors = {
+    /**
+     * Error
+     */
+    default: Problem;
+};
+
+export type GetOauthConsentError = GetOauthConsentErrors[keyof GetOauthConsentErrors];
+
+export type GetOauthConsentResponses = {
+    200: ConsentInfo;
+};
+
+export type GetOauthConsentResponse = GetOauthConsentResponses[keyof GetOauthConsentResponses];
+
+export type DecideOauthConsentData = {
+    body: ConsentDecision;
+    path?: never;
+    query?: never;
+    url: '/api/oauth/consent';
+};
+
+export type DecideOauthConsentErrors = {
+    /**
+     * Error
+     */
+    default: Problem;
+};
+
+export type DecideOauthConsentError = DecideOauthConsentErrors[keyof DecideOauthConsentErrors];
+
+export type DecideOauthConsentResponses = {
+    200: ConsentResult;
+};
+
+export type DecideOauthConsentResponse = DecideOauthConsentResponses[keyof DecideOauthConsentResponses];
+
+export type ListOauthGrantsData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/oauth/grants';
+};
+
+export type ListOauthGrantsErrors = {
+    /**
+     * Error
+     */
+    default: Problem;
+};
+
+export type ListOauthGrantsError = ListOauthGrantsErrors[keyof ListOauthGrantsErrors];
+
+export type ListOauthGrantsResponses = {
+    200: Array<Grant>;
+};
+
+export type ListOauthGrantsResponse = ListOauthGrantsResponses[keyof ListOauthGrantsResponses];
+
+export type RevokeOauthGrantData = {
+    body?: never;
+    path: {
+        grant_id: string;
+    };
+    query?: never;
+    url: '/api/oauth/grants/{grant_id}';
+};
+
+export type RevokeOauthGrantErrors = {
+    /**
+     * Error
+     */
+    default: Problem;
+};
+
+export type RevokeOauthGrantError = RevokeOauthGrantErrors[keyof RevokeOauthGrantErrors];
+
+export type RevokeOauthGrantResponses = {
+    200: DeletedBody;
+};
+
+export type RevokeOauthGrantResponse = RevokeOauthGrantResponses[keyof RevokeOauthGrantResponses];
+
+export type GetOpenapiData = {
     body?: never;
     path?: never;
     query?: never;
     url: '/api/openapi.json';
 };
 
-export type OpenapiJsonResponses = {
+export type GetOpenapiResponses = {
     /**
      * OpenAPI 3.1 document
      */
@@ -1146,55 +1649,51 @@ export type OpenapiJsonResponses = {
     };
 };
 
-export type OpenapiJsonResponse = OpenapiJsonResponses[keyof OpenapiJsonResponses];
+export type GetOpenapiResponse = GetOpenapiResponses[keyof GetOpenapiResponses];
 
-export type ReadSettingsData = {
+export type GetSettingsData = {
     body?: never;
     path?: never;
     query?: never;
     url: '/api/settings';
 };
 
-export type ReadSettingsErrors = {
+export type GetSettingsErrors = {
     /**
      * Error
      */
     default: Problem;
 };
 
-export type ReadSettingsError = ReadSettingsErrors[keyof ReadSettingsErrors];
+export type GetSettingsError = GetSettingsErrors[keyof GetSettingsErrors];
 
-export type ReadSettingsResponses = {
-    200: {
-        [key: string]: unknown;
-    };
+export type GetSettingsResponses = {
+    200: SettingsOut;
 };
 
-export type ReadSettingsResponse = ReadSettingsResponses[keyof ReadSettingsResponses];
+export type GetSettingsResponse = GetSettingsResponses[keyof GetSettingsResponses];
 
-export type PatchSettingsData = {
+export type UpdateSettingsData = {
     body: SettingsUpdate;
     path?: never;
     query?: never;
     url: '/api/settings';
 };
 
-export type PatchSettingsErrors = {
+export type UpdateSettingsErrors = {
     /**
      * Error
      */
     default: Problem;
 };
 
-export type PatchSettingsError = PatchSettingsErrors[keyof PatchSettingsErrors];
+export type UpdateSettingsError = UpdateSettingsErrors[keyof UpdateSettingsErrors];
 
-export type PatchSettingsResponses = {
-    200: {
-        [key: string]: unknown;
-    };
+export type UpdateSettingsResponses = {
+    200: SettingsOut;
 };
 
-export type PatchSettingsResponse = PatchSettingsResponses[keyof PatchSettingsResponses];
+export type UpdateSettingsResponse = UpdateSettingsResponses[keyof UpdateSettingsResponses];
 
 export type CompleteOnboardingData = {
     body?: never;
@@ -1218,53 +1717,49 @@ export type CompleteOnboardingResponses = {
 
 export type CompleteOnboardingResponse = CompleteOnboardingResponses[keyof CompleteOnboardingResponses];
 
-export type OpenaiModelsData = {
+export type ListOpenaiModelsData = {
     body?: never;
     path?: never;
     query?: never;
     url: '/api/settings/openai-models';
 };
 
-export type OpenaiModelsErrors = {
+export type ListOpenaiModelsErrors = {
     /**
      * Error
      */
     default: Problem;
 };
 
-export type OpenaiModelsError = OpenaiModelsErrors[keyof OpenaiModelsErrors];
+export type ListOpenaiModelsError = ListOpenaiModelsErrors[keyof ListOpenaiModelsErrors];
 
-export type OpenaiModelsResponses = {
-    200: {
-        [key: string]: unknown;
-    };
+export type ListOpenaiModelsResponses = {
+    200: ModelsOut;
 };
 
-export type OpenaiModelsResponse = OpenaiModelsResponses[keyof OpenaiModelsResponses];
+export type ListOpenaiModelsResponse = ListOpenaiModelsResponses[keyof ListOpenaiModelsResponses];
 
-export type SnapshotData = {
+export type GetSnapshotData = {
     body?: never;
     path?: never;
     query?: never;
     url: '/api/snapshot';
 };
 
-export type SnapshotErrors = {
+export type GetSnapshotErrors = {
     /**
      * Error
      */
     default: Problem;
 };
 
-export type SnapshotError = SnapshotErrors[keyof SnapshotErrors];
+export type GetSnapshotError = GetSnapshotErrors[keyof GetSnapshotErrors];
 
-export type SnapshotResponses = {
-    200: {
-        [key: string]: unknown;
-    };
+export type GetSnapshotResponses = {
+    200: SnapshotOut;
 };
 
-export type SnapshotResponse = SnapshotResponses[keyof SnapshotResponses];
+export type GetSnapshotResponse = GetSnapshotResponses[keyof GetSnapshotResponses];
 
 export type ListSourcesData = {
     body?: never;
@@ -1283,38 +1778,36 @@ export type ListSourcesErrors = {
 export type ListSourcesError = ListSourcesErrors[keyof ListSourcesErrors];
 
 export type ListSourcesResponses = {
-    200: Array<{
-        [key: string]: unknown;
-    }>;
+    200: Array<SourceOut>;
 };
 
 export type ListSourcesResponse = ListSourcesResponses[keyof ListSourcesResponses];
 
-export type SourcesStatusData = {
+export type GetSourcesStatusData = {
     body?: never;
     path?: never;
     query?: never;
     url: '/api/sources/status';
 };
 
-export type SourcesStatusErrors = {
+export type GetSourcesStatusErrors = {
     /**
      * Error
      */
     default: Problem;
 };
 
-export type SourcesStatusError = SourcesStatusErrors[keyof SourcesStatusErrors];
+export type GetSourcesStatusError = GetSourcesStatusErrors[keyof GetSourcesStatusErrors];
 
-export type SourcesStatusResponses = {
+export type GetSourcesStatusResponses = {
     200: {
-        [key: string]: unknown;
+        [key: string]: SyncStatusOut;
     };
 };
 
-export type SourcesStatusResponse = SourcesStatusResponses[keyof SourcesStatusResponses];
+export type GetSourcesStatusResponse = GetSourcesStatusResponses[keyof GetSourcesStatusResponses];
 
-export type SyncNowData = {
+export type SyncSourceData = {
     body?: never;
     path: {
         key: string;
@@ -1323,24 +1816,22 @@ export type SyncNowData = {
     url: '/api/sources/{key}/sync';
 };
 
-export type SyncNowErrors = {
+export type SyncSourceErrors = {
     /**
      * Error
      */
     default: Problem;
 };
 
-export type SyncNowError = SyncNowErrors[keyof SyncNowErrors];
+export type SyncSourceError = SyncSourceErrors[keyof SyncSourceErrors];
 
-export type SyncNowResponses = {
-    200: {
-        [key: string]: unknown;
-    };
+export type SyncSourceResponses = {
+    200: SyncReport;
 };
 
-export type SyncNowResponse = SyncNowResponses[keyof SyncNowResponses];
+export type SyncSourceResponse = SyncSourceResponses[keyof SyncSourceResponses];
 
-export type SourceWebhookData = {
+export type ReceiveSourceWebhookData = {
     body?: never;
     path: {
         key: string;
@@ -1350,46 +1841,44 @@ export type SourceWebhookData = {
     url: '/api/sources/{key}/webhook/{owner_id}';
 };
 
-export type SourceWebhookErrors = {
+export type ReceiveSourceWebhookErrors = {
     /**
      * Error
      */
     default: Problem;
 };
 
-export type SourceWebhookError = SourceWebhookErrors[keyof SourceWebhookErrors];
+export type ReceiveSourceWebhookError = ReceiveSourceWebhookErrors[keyof ReceiveSourceWebhookErrors];
 
-export type SourceWebhookResponses = {
-    200: {
-        [key: string]: unknown;
-    };
+export type ReceiveSourceWebhookResponses = {
+    200: WebhookOut;
 };
 
-export type SourceWebhookResponse = SourceWebhookResponses[keyof SourceWebhookResponses];
+export type ReceiveSourceWebhookResponse = ReceiveSourceWebhookResponses[keyof ReceiveSourceWebhookResponses];
 
-export type CatalogueData = {
+export type ListToolsData = {
     body?: never;
     path?: never;
     query?: never;
     url: '/api/tools';
 };
 
-export type CatalogueErrors = {
+export type ListToolsErrors = {
     /**
      * Error
      */
     default: Problem;
 };
 
-export type CatalogueError = CatalogueErrors[keyof CatalogueErrors];
+export type ListToolsError = ListToolsErrors[keyof ListToolsErrors];
 
-export type CatalogueResponses = {
+export type ListToolsResponses = {
     200: Array<string>;
 };
 
-export type CatalogueResponse = CatalogueResponses[keyof CatalogueResponses];
+export type ListToolsResponse = ListToolsResponses[keyof ListToolsResponses];
 
-export type InvokeData = {
+export type InvokeToolData = {
     /**
      * Tool arguments
      */
@@ -1403,46 +1892,44 @@ export type InvokeData = {
     url: '/api/tools/{name}';
 };
 
-export type InvokeErrors = {
+export type InvokeToolErrors = {
     /**
      * Error
      */
     default: Problem;
 };
 
-export type InvokeError = InvokeErrors[keyof InvokeErrors];
+export type InvokeToolError = InvokeToolErrors[keyof InvokeToolErrors];
 
-export type InvokeResponses = {
+export type InvokeToolResponses = {
     200: {
         [key: string]: unknown;
     };
 };
 
-export type InvokeResponse = InvokeResponses[keyof InvokeResponses];
+export type InvokeToolResponse = InvokeToolResponses[keyof InvokeToolResponses];
 
-export type CheckNowData = {
+export type CheckForUpdateData = {
     body?: never;
     path?: never;
     query?: never;
     url: '/api/update/check';
 };
 
-export type CheckNowErrors = {
+export type CheckForUpdateErrors = {
     /**
      * Error
      */
     default: Problem;
 };
 
-export type CheckNowError = CheckNowErrors[keyof CheckNowErrors];
+export type CheckForUpdateError = CheckForUpdateErrors[keyof CheckForUpdateErrors];
 
-export type CheckNowResponses = {
-    200: {
-        [key: string]: unknown;
-    };
+export type CheckForUpdateResponses = {
+    200: UpdateAck;
 };
 
-export type CheckNowResponse = CheckNowResponses[keyof CheckNowResponses];
+export type CheckForUpdateResponse = CheckForUpdateResponses[keyof CheckForUpdateResponses];
 
 export type RequestUpdateData = {
     body?: never;
@@ -1461,36 +1948,32 @@ export type RequestUpdateErrors = {
 export type RequestUpdateError = RequestUpdateErrors[keyof RequestUpdateErrors];
 
 export type RequestUpdateResponses = {
-    200: {
-        [key: string]: unknown;
-    };
+    200: UpdateAck;
 };
 
 export type RequestUpdateResponse = RequestUpdateResponses[keyof RequestUpdateResponses];
 
-export type GetStatusData = {
+export type GetUpdateStatusData = {
     body?: never;
     path?: never;
     query?: never;
     url: '/api/update/status';
 };
 
-export type GetStatusErrors = {
+export type GetUpdateStatusErrors = {
     /**
      * Error
      */
     default: Problem;
 };
 
-export type GetStatusError = GetStatusErrors[keyof GetStatusErrors];
+export type GetUpdateStatusError = GetUpdateStatusErrors[keyof GetUpdateStatusErrors];
 
-export type GetStatusResponses = {
-    200: {
-        [key: string]: unknown;
-    };
+export type GetUpdateStatusResponses = {
+    200: UpdateStatus;
 };
 
-export type GetStatusResponse = GetStatusResponses[keyof GetStatusResponses];
+export type GetUpdateStatusResponse = GetUpdateStatusResponses[keyof GetUpdateStatusResponses];
 
 export type ListVaultsData = {
     body?: never;
@@ -1509,9 +1992,7 @@ export type ListVaultsErrors = {
 export type ListVaultsError = ListVaultsErrors[keyof ListVaultsErrors];
 
 export type ListVaultsResponses = {
-    200: {
-        [key: string]: unknown;
-    };
+    200: VaultList;
 };
 
 export type ListVaultsResponse = ListVaultsResponses[keyof ListVaultsResponses];
@@ -1533,9 +2014,7 @@ export type CreateVaultErrors = {
 export type CreateVaultError = CreateVaultErrors[keyof CreateVaultErrors];
 
 export type CreateVaultResponses = {
-    200: {
-        [key: string]: unknown;
-    };
+    200: VaultOut;
 };
 
 export type CreateVaultResponse = CreateVaultResponses[keyof CreateVaultResponses];
@@ -1557,9 +2036,7 @@ export type ListInvitationsErrors = {
 export type ListInvitationsError = ListInvitationsErrors[keyof ListInvitationsErrors];
 
 export type ListInvitationsResponses = {
-    200: {
-        [key: string]: unknown;
-    };
+    200: InvitationList;
 };
 
 export type ListInvitationsResponse = ListInvitationsResponses[keyof ListInvitationsResponses];
@@ -1581,9 +2058,7 @@ export type MergeVaultsErrors = {
 export type MergeVaultsError = MergeVaultsErrors[keyof MergeVaultsErrors];
 
 export type MergeVaultsResponses = {
-    200: {
-        [key: string]: unknown;
-    };
+    200: MergeOut;
 };
 
 export type MergeVaultsResponse = MergeVaultsResponses[keyof MergeVaultsResponses];
@@ -1631,9 +2106,7 @@ export type RenameVaultErrors = {
 export type RenameVaultError = RenameVaultErrors[keyof RenameVaultErrors];
 
 export type RenameVaultResponses = {
-    200: {
-        [key: string]: unknown;
-    };
+    200: VaultOut;
 };
 
 export type RenameVaultResponse = RenameVaultResponses[keyof RenameVaultResponses];
@@ -1657,9 +2130,7 @@ export type CloneVaultErrors = {
 export type CloneVaultError = CloneVaultErrors[keyof CloneVaultErrors];
 
 export type CloneVaultResponses = {
-    200: {
-        [key: string]: unknown;
-    };
+    200: CloneOut;
 };
 
 export type CloneVaultResponse = CloneVaultResponses[keyof CloneVaultResponses];
@@ -1683,9 +2154,7 @@ export type AcceptInvitationErrors = {
 export type AcceptInvitationError = AcceptInvitationErrors[keyof AcceptInvitationErrors];
 
 export type AcceptInvitationResponses = {
-    200: {
-        [key: string]: unknown;
-    };
+    200: VaultWithRole;
 };
 
 export type AcceptInvitationResponse = AcceptInvitationResponses[keyof AcceptInvitationResponses];
@@ -1757,9 +2226,7 @@ export type ListMembersErrors = {
 export type ListMembersError = ListMembersErrors[keyof ListMembersErrors];
 
 export type ListMembersResponses = {
-    200: {
-        [key: string]: unknown;
-    };
+    200: MemberList;
 };
 
 export type ListMembersResponse = ListMembersResponses[keyof ListMembersResponses];
@@ -1783,9 +2250,7 @@ export type InviteMemberErrors = {
 export type InviteMemberError = InviteMemberErrors[keyof InviteMemberErrors];
 
 export type InviteMemberResponses = {
-    200: {
-        [key: string]: unknown;
-    };
+    200: InviteOut;
 };
 
 export type InviteMemberResponse = InviteMemberResponses[keyof InviteMemberResponses];

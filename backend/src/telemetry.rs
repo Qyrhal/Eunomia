@@ -38,6 +38,41 @@ pub fn current_trace_id() -> String {
     TRACE_ID.try_with(String::clone).unwrap_or_else(|_| new_trace_id())
 }
 
+/// The current trace as a W3C `traceparent`, stored on a job row so every
+/// attempt links back to the request that enqueued it.
+pub fn current_traceparent() -> String {
+    let (mut trace, mut span_id, mut flags) = (current_trace_id(), format!("{:016x}", rand::random::<u64>() | 1), 1u8);
+    if OTEL_ON.load(Ordering::Relaxed) {
+        let sc = tracing::Span::current().context().span().span_context().clone();
+        if sc.is_valid() {
+            (trace, span_id, flags) = (sc.trace_id().to_string(), sc.span_id().to_string(), sc.trace_flags().to_u8());
+        }
+    }
+    format!("00-{trace}-{span_id}-{flags:02x}")
+}
+
+/// The trace id inside a `traceparent`, if it is valid.
+pub fn trace_id_of(traceparent: &str) -> Option<String> {
+    parse_traceparent(traceparent).map(|t| t.trace_id)
+}
+
+/// Adds an OpenTelemetry span link from `span` to the span in `traceparent` (no-op when OTLP is off).
+pub fn link_span(span: &tracing::Span, traceparent: &str) {
+    if !OTEL_ON.load(Ordering::Relaxed) {
+        return;
+    }
+    if let Some(i) = parse_traceparent(traceparent)
+        && let (Ok(t), Ok(p)) = (TraceId::from_hex(&i.trace_id), SpanId::from_hex(&i.parent_id))
+    {
+        span.add_link(SpanContext::new(t, p, TraceFlags::new(i.flags), true, TraceState::default()));
+    }
+}
+
+/// Runs `f` with `trace_id` as the current trace id, so store queries and error bodies carry it.
+pub async fn with_trace_id<F: std::future::Future>(trace_id: String, f: F) -> F::Output {
+    TRACE_ID.scope(trace_id, f).await
+}
+
 /// Records the authenticated user on the request span and its closing log line.
 pub fn record_user(user_id: &str) {
     tracing::Span::current().record("user_id", user_id);

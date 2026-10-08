@@ -88,6 +88,20 @@ expression: info(&db).await
       "kind": {
         "kind": "NORMAL"
       },
+      "name": "audit_event",
+      "permissions": {
+        "create": true,
+        "delete": false,
+        "select": true,
+        "update": false
+      }
+    },
+    {
+      "drop": false,
+      "full": true,
+      "kind": {
+        "kind": "NORMAL"
+      },
       "name": "audit_log",
       "permissions": {
         "create": false,
@@ -318,6 +332,34 @@ expression: info(&db).await
       "drop": false,
       "schemafull": true,
       "kind": {
+        "kind": "NORMAL"
+      },
+      "name": "job",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      }
+    },
+    {
+      "drop": false,
+      "full": true,
+      "kind": {
+        "kind": "NORMAL"
+      },
+      "name": "job_leader",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      }
+    },
+    {
+      "drop": false,
+      "full": true,
+      "kind": {
         "enforced": false,
         "in": [
           "cache_record"
@@ -424,6 +466,62 @@ expression: info(&db).await
     {
       "drop": false,
       "schemafull": true,
+      "kind": {
+        "kind": "NORMAL"
+      },
+      "name": "oauth_client",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      }
+    },
+    {
+      "drop": false,
+      "full": true,
+      "kind": {
+        "kind": "NORMAL"
+      },
+      "name": "oauth_code",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      }
+    },
+    {
+      "drop": false,
+      "full": true,
+      "kind": {
+        "kind": "NORMAL"
+      },
+      "name": "oauth_grant",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      }
+    },
+    {
+      "drop": false,
+      "full": true,
+      "kind": {
+        "kind": "NORMAL"
+      },
+      "name": "oauth_token",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      }
+    },
+    {
+      "drop": false,
+      "full": true,
       "kind": {
         "kind": "NORMAL"
       },

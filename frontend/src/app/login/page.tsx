@@ -7,6 +7,12 @@ import { Loader2 } from "lucide-react";
 import { auth } from "@/lib/api";
 import AuthShell, { FormError, LABEL, RevealToggle } from "./AuthShell";
 
+/** Where to go after signing in: `?next=` when it is a same-site path (the OAuth consent page), else the dashboard. */
+function nextPath(): string {
+  const next = new URLSearchParams(window.location.search).get("next");
+  return next && next.startsWith("/") && !next.startsWith("//") && !next.includes("\\") ? next : "/";
+}
+
 export default function LoginPage() {
   const router = useRouter();
   const [email, setEmail] = useState("");
@@ -21,7 +27,7 @@ export default function LoginPage() {
     setError(null);
     try {
       await auth.login(email, password);
-      router.replace("/");
+      router.replace(nextPath());
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not sign in. Check your email and password, then try again.");
       setBusy(false);

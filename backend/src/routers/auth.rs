@@ -15,7 +15,10 @@ use serde_json::json;
 use surrealdb::types::{Datetime, RecordId};
 use crate::rid::RecordIdExt;
 
+use crate::audit::{self, Event};
 use crate::auth::{self, SESSION_COOKIE};
+use crate::authz;
+use crate::scopes;
 use crate::error::{AppError, AppResult, ErrorCode};
 use crate::store;
 use crate::models_user::{self, User};
@@ -47,6 +50,10 @@ struct TokenCreated {
     name: String,
     /// Shown once, never retrievable again.
     token: String,
+    scopes: Vec<String>,
+    vault_id: Option<String>,
+    #[schema(value_type = Option<String>)]
+    expires_at: Option<Datetime>,
 }
 
 #[derive(Serialize, utoipa::ToSchema)]
@@ -63,6 +70,16 @@ struct Credentials {
 #[derive(Deserialize, utoipa::ToSchema)]
 struct TokenCreate {
     name: String,
+    /// Any of `memory:read`, `memory:write`, `vaults:admin`, `connectors`. Defaults
+    /// to all of them. Cannot exceed the creating credential's own scopes.
+    #[serde(default)]
+    scopes: Option<Vec<String>>,
+    /// Restrict the token to one vault you belong to.
+    #[serde(default)]
+    vault_id: Option<String>,
+    /// RFC 3339 timestamp in the future. Omit for a token that never expires.
+    #[serde(default)]
+    expires_at: Option<String>,
 }
 
 fn user_agent_from(headers: &HeaderMap) -> Option<String> {
@@ -83,6 +100,7 @@ fn session_cookie_header(token: &str) -> String {
 }
 
 #[utoipa::path(
+    operation_id = "register",
     post,
     path = "/api/auth/register",
     tag = "auth",
@@ -108,6 +126,7 @@ async fn register(
 
     let token = auth::start_session(&state.db, &state.settings.jwt_secret, &user, user_agent_from(&headers).as_deref())
         .await?;
+    audit::record_as_caller(&state.db, &user.id, "auth.register", "", "ok").await;
 
     let body = AuthOut { id: user.id.to_string(), email: user.email, onboarded: false };
     Ok((
@@ -119,6 +138,7 @@ async fn register(
 }
 
 #[utoipa::path(
+    operation_id = "login",
     post,
     path = "/api/auth/login",
     tag = "auth",
@@ -132,12 +152,23 @@ async fn login(
     headers: HeaderMap,
     Json(body): Json<Credentials>,
 ) -> AppResult<Response> {
-    let user = models_user::authenticate(&state.db, &body.email, &body.password)
-        .await?
-        .ok_or_else(|| AppError::unauthorized("Invalid email or password."))?;
+    let Some(user) = models_user::authenticate(&state.db, &body.email, &body.password).await? else {
+        let email = models_user::normalize_email(&body.email);
+        let event = Event {
+            user: None,
+            actor: &audit::anonymous(),
+            action: "auth.login",
+            target: "",
+            outcome: ErrorCode::AuthUnauthorized.as_str(),
+            detail: &email,
+        };
+        audit::record(&state.db, event).await;
+        return Err(AppError::unauthorized("Invalid email or password."));
+    };
 
     let token = auth::start_session(&state.db, &state.settings.jwt_secret, &user, user_agent_from(&headers).as_deref())
         .await?;
+    audit::record_as_caller(&state.db, &user.id, "auth.login", "", "ok").await;
     let onboarded = onboarded(&state, &user).await?;
 
     let body = AuthOut { id: user.id.to_string(), email: user.email, onboarded };
@@ -150,6 +181,7 @@ async fn login(
 }
 
 #[utoipa::path(
+    operation_id = "logout",
     post,
     path = "/api/auth/logout",
     tag = "auth",
@@ -170,6 +202,7 @@ async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Response {
 }
 
 #[utoipa::path(
+    operation_id = "getMe",
     get,
     path = "/api/auth/me",
     tag = "auth",
@@ -183,6 +216,7 @@ async fn me(State(state): State<AppState>, user: User) -> AppResult<Json<AuthOut
 }
 
 #[utoipa::path(
+    operation_id = "createToken",
     post,
     path = "/api/auth/tokens",
     tag = "auth",
@@ -200,8 +234,55 @@ async fn create_token(
         let trimmed = body.name.trim();
         if trimmed.is_empty() { "API token".to_string() } else { trimmed.to_string() }
     };
-    let result = models_user::create_api_token(&state.db, &user.id, &name).await?;
-    Ok(Json(TokenCreated { id: result.id.to_string(), name: result.name, token: result.token }))
+    let scopes: Vec<String> = match body.scopes {
+        None => scopes::ALL.iter().map(|s| s.to_string()).collect(),
+        Some(s) if s.is_empty() => return Err(AppError::bad_request("Choose at least one scope.")),
+        Some(mut s) => {
+            if let Some(bad) = s.iter().find(|n| !scopes::is_known(n)) {
+                return Err(AppError::bad_request(format!("Unknown scope {bad:?}.")));
+            }
+            s.sort();
+            s.dedup();
+            s
+        }
+    };
+    // a token cannot hand out more than it holds
+    for s in &scopes {
+        authz::require_scope(s)?;
+    }
+    let vault = match body.vault_id.as_deref().filter(|v| !v.is_empty()) {
+        None => None,
+        Some(v) => {
+            let rid: RecordId = crate::rid::parse(v)
+                .ok()
+                .filter(|r: &RecordId| r.table() == "vault")
+                .ok_or_else(|| AppError::coded(ErrorCode::VaultNotFound, "Vault not found."))?;
+            authz::ensure_member(&state.db, &user.id, &rid).await?;
+            Some(rid)
+        }
+    };
+    let expires_at = match body.expires_at.as_deref().filter(|v| !v.is_empty()) {
+        None => None,
+        Some(v) => {
+            let at = chrono::DateTime::parse_from_rfc3339(v)
+                .map_err(|_| AppError::bad_request("expires_at must be an RFC 3339 timestamp."))?
+                .with_timezone(&chrono::Utc);
+            if at <= chrono::Utc::now() {
+                return Err(AppError::bad_request("expires_at must be in the future."));
+            }
+            Some(Datetime::from(at))
+        }
+    };
+    let result = models_user::create_api_token_with(&state.db, &user.id, &name, &scopes, vault.as_ref(), expires_at).await?;
+    audit::record_as_caller(&state.db, &user.id, "auth.token_create", &result.id.to_string(), "ok").await;
+    Ok(Json(TokenCreated {
+        id: result.id.to_string(),
+        name: result.name,
+        token: result.token,
+        scopes: result.scopes,
+        vault_id: result.vault.map(|v| v.to_string()),
+        expires_at: result.expires_at,
+    }))
 }
 
 #[derive(Serialize, utoipa::ToSchema)]
@@ -212,9 +293,15 @@ struct TokenOut {
     created_at: Option<Datetime>,
     #[schema(value_type = Option<String>)]
     last_used_at: Option<Datetime>,
+    scopes: Vec<String>,
+    vault_id: Option<String>,
+    /// `null` for a token that never expires.
+    #[schema(value_type = Option<String>)]
+    expires_at: Option<Datetime>,
 }
 
 #[utoipa::path(
+    operation_id = "listTokens",
     get,
     path = "/api/auth/tokens",
     tag = "auth",
@@ -231,12 +318,16 @@ async fn get_tokens(State(state): State<AppState>, user: User) -> AppResult<Json
                 name: r.name,
                 created_at: Some(r.created_at),
                 last_used_at: r.last_used_at,
+                scopes: r.scopes.into_iter().filter(|s| scopes::is_known(s)).collect(),
+                vault_id: r.vault.map(|v| v.to_string()),
+                expires_at: r.expires_at,
             })
             .collect(),
     ))
 }
 
 #[utoipa::path(
+    operation_id = "deleteToken",
     delete,
     path = "/api/auth/tokens/{token_id}",
     tag = "auth",
@@ -255,6 +346,7 @@ async fn delete_token(
     if !ok {
         return Err(AppError::coded(ErrorCode::AuthNotFound, "Token not found."));
     }
+    audit::record_as_caller(&state.db, &user.id, "auth.token_revoke", &rid.to_string(), "ok").await;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -279,6 +371,7 @@ struct SessionOut {
 }
 
 #[utoipa::path(
+    operation_id = "listSessions",
     get,
     path = "/api/auth/sessions",
     tag = "auth",
@@ -305,6 +398,7 @@ async fn get_sessions(State(state): State<AppState>, user: User) -> AppResult<Js
 }
 
 #[utoipa::path(
+    operation_id = "revokeSession",
     delete,
     path = "/api/auth/sessions/{session_id}",
     tag = "auth",
@@ -333,6 +427,7 @@ async fn revoke_session_route(
 }
 
 #[utoipa::path(
+    operation_id = "getBootstrap",
     get,
     path = "/api/auth/bootstrap",
     tag = "auth",

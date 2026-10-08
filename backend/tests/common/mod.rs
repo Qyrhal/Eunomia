@@ -46,6 +46,7 @@ pub fn test_settings() -> Settings {
         log_level: "WARN".into(),
         update_status_dir: "/nonexistent".into(),
         bind_addr: "127.0.0.1:0".into(),
+        public_url: "http://localhost:8001".into(),
     }
 }
 

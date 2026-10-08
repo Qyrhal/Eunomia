@@ -10,14 +10,21 @@ use crate::db::Db;
 pub const MIGRATIONS: &[(u32, &str, &str)] = &[
     (1, "baseline", include_str!("../migrations/tenant/0001_baseline.surql")),
     (2, "entity_name_unique", include_str!("../migrations/tenant/0002_entity_name_unique.surql")),
-    (6, "v3_indexes", include_str!("../migrations/tenant/0006_v3_indexes.surql")),
+    (3, "auth", include_str!("../migrations/tenant/0003_auth.surql")),
+    (4, "oauth", include_str!("../migrations/tenant/0004_oauth.surql")),
+    (5, "jobs", include_str!("../migrations/tenant/0005_jobs.surql")),
+    (8, "v3_indexes", include_str!("../migrations/tenant/0008_v3_indexes.surql")),
 ];
 
-/// sha256 of the SurrealDB 2.x `0001_baseline.surql` (it defined MTREE and SEARCH ANALYZER
-/// indexes, which 3.x rejects). The file was rewritten to be 3.x-valid, which changed its
-/// checksum, but an install upgraded with `surreal v2 export --v3` arrives carrying the ledger row
-/// recorded by the old file. Accept it; `0006_v3_indexes` redefines what the old file made.
-const LEGACY_BASELINE_CHECKSUM: &str = "31199597d8ffdb899e26dd741ec3886f6af03467f65710f4c7a1db2bfc3ce5a5";
+/// Checksums of migration files as they were applied on SurrealDB 2.x, before being rewritten to
+/// 3.x-valid syntax (0001: MTREE and SEARCH ANALYZER indexes moved to the v3 indexes migration;
+/// 0005: `FLEXIBLE TYPE` became `TYPE ... FLEXIBLE`). An install upgraded with
+/// `surreal v2 export --v3` arrives carrying the ledger rows recorded by the old files, so accept
+/// them; the v3 indexes migration redefines whatever the converter produced.
+const LEGACY_CHECKSUMS: &[(u32, &str)] = &[
+    (1, "31199597d8ffdb899e26dd741ec3886f6af03467f65710f4c7a1db2bfc3ce5a5"),
+    (5, "7227cfd0e1a0f672f6938c4bada0b9d7c720e42ff06ff7d8d93bfd11f231acd2"),
+];
 
 const LEDGER: &str = "DEFINE TABLE IF NOT EXISTS _migration SCHEMAFULL;
 DEFINE FIELD IF NOT EXISTS version ON _migration TYPE int;
@@ -77,7 +84,7 @@ pub async fn apply_up_to(db: &Db, max: u32) -> surrealdb::Result<()> {
     for &(version, name, sql) in MIGRATIONS.iter().filter(|m| m.0 <= max) {
         let sum = checksum(sql);
         if let Some(a) = applied.iter().find(|a| a.version == version) {
-            if a.checksum != sum && !(version == 1 && a.checksum == LEGACY_BASELINE_CHECKSUM) {
+            if a.checksum != sum && !LEGACY_CHECKSUMS.contains(&(version, a.checksum.as_str())) {
                 return Err(surrealdb::Error::thrown(format!(
                     "migration {version:04}_{name} was edited after it was applied (checksum {} != {sum}). \
                      Applied migrations are immutable: revert the file and add a new migration instead.",

@@ -6,8 +6,7 @@
 
 use surrealdb::types::SurrealValue;
 use axum::{extract::{Query, State}, routing::get, Json, Router};
-use serde::Deserialize;
-use serde_json::{json, Value};
+use serde::{Deserialize, Serialize};
 use surrealdb::types::{Datetime, RecordId};
 use crate::rid::RecordIdExt;
 
@@ -49,27 +48,44 @@ struct CountRow {
     count: i64,
 }
 
+#[derive(Serialize, utoipa::ToSchema)]
+struct AuditEntry {
+    id: String,
+    tool_name: String,
+    args_summary: String,
+    outcome: String,
+    #[schema(value_type = Option<String>)]
+    created_at: Option<Datetime>,
+}
+
+#[derive(Serialize, utoipa::ToSchema)]
+struct AuditPage {
+    results: Vec<AuditEntry>,
+    total: i64,
+    has_more: bool,
+}
+
 /// Pure pagination check, factored out for testing: are there more rows
 /// beyond what this page already returned?
 fn has_more(offset: i64, returned: usize, total: i64) -> bool {
     offset + (returned as i64) < total
 }
 
-// ponytail: untyped response, give it a struct (see docs/architecture/foundation-plan.md 3.9)
 #[utoipa::path(
+    operation_id = "listAudit",
     get,
     path = "/api/audit",
     tag = "audit",
     summary = "Page of the caller's tool-call audit log",
     params(AuditQuery),
-    responses((status = 200, body = Object), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    responses((status = 200, body = AuditPage), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
     security(("cookie" = []), ("bearer" = [])),
 )]
 async fn get_audit(
     State(state): State<AppState>,
     user: User,
     Query(q): Query<AuditQuery>,
-) -> AppResult<Json<Value>> {
+) -> AppResult<Json<AuditPage>> {
     let mut res = store::app::AUDIT_LIST
         .on(&state.db)
         .bind(("owner", user.id.clone()))
@@ -85,24 +101,19 @@ async fn get_audit(
     let counts: Vec<CountRow> = count_res.take(0)?;
     let total = counts.first().map(|c| c.count).unwrap_or(0);
 
-    let results: Vec<Value> = rows
-        .iter()
-        .map(|r| {
-            json!({
-                "id": r.id.to_string(),
-                "tool_name": r.tool_name,
-                "args_summary": r.args_summary,
-                "outcome": r.outcome,
-                "created_at": &r.created_at,
-            })
+    let results: Vec<AuditEntry> = rows
+        .into_iter()
+        .map(|r| AuditEntry {
+            id: r.id.to_string(),
+            tool_name: r.tool_name,
+            args_summary: r.args_summary,
+            outcome: r.outcome,
+            created_at: r.created_at,
         })
         .collect();
 
-    Ok(Json(json!({
-        "results": results,
-        "total": total,
-        "has_more": has_more(q.offset, results.len(), total),
-    })))
+    let has_more = has_more(q.offset, results.len(), total);
+    Ok(Json(AuditPage { results, total, has_more }))
 }
 
 #[derive(utoipa::OpenApi)]
