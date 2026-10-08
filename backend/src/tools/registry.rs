@@ -18,12 +18,14 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
+use std::time::Instant;
 
 use serde_json::{json, Value};
 use surrealdb::RecordId;
+use tracing::{field::Empty, Instrument};
 
 use crate::db::Db;
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult, ErrorCode};
 use crate::state::AppState;
 
 /// A registered tool handler: owner-scoped, takes the raw JSON args object,
@@ -197,7 +199,7 @@ fn parse_opt_rid(field: &str, value: &Option<String>) -> Result<Option<RecordId>
 fn to_tool_value<T: serde::Serialize>(result: AppResult<T>) -> Value {
     match result {
         Ok(v) => serde_json::to_value(v).unwrap_or_else(|e| json!({ "error": e.to_string() })),
-        Err(e) => json!({ "error": e.message }),
+        Err(e) => e.to_tool_value(),
     }
 }
 
@@ -589,8 +591,8 @@ fn register_all(registry: &mut HashMap<&'static str, ToolSpec>) {
                 };
                 match entities_tools::entities_get(&state.db, owner, &rid).await {
                     Ok(Some(entity)) => Ok(serde_json::to_value(entity).unwrap_or_else(|e| json!({ "error": e.to_string() }))),
-                    Ok(None) => Ok(json!({ "error": "not found" })),
-                    Err(e) => Ok(json!({ "error": e.message })),
+                    Ok(None) => Ok(crate::error::AppError::coded(crate::error::ErrorCode::EntityNotFound, "not found").to_tool_value()),
+                    Err(e) => Ok(e.to_tool_value()),
                 }
             })
         }),
@@ -861,7 +863,7 @@ fn register_all(registry: &mut HashMap<&'static str, ToolSpec>) {
                 };
                 let result =
                     entities_tools::memory_update(&state.db, owner, &rid, a.text.as_deref(), a.mem_type.as_deref()).await;
-                Ok(to_tool_value(result.and_then(|m| m.ok_or_else(|| crate::error::AppError::not_found("memory not found")))))
+                Ok(to_tool_value(result.and_then(|m| m.ok_or_else(|| crate::error::AppError::coded(crate::error::ErrorCode::MemoryNotFound, "memory not found")))))
             })
         }),
     );
@@ -904,7 +906,7 @@ fn register_all(registry: &mut HashMap<&'static str, ToolSpec>) {
                     &state.db, owner, &rid, a.name.as_deref(), a.aliases, a.summary.as_deref(),
                 )
                 .await;
-                Ok(to_tool_value(result.and_then(|e| e.ok_or_else(|| crate::error::AppError::not_found("entity not found")))))
+                Ok(to_tool_value(result.and_then(|e| e.ok_or_else(|| crate::error::AppError::coded(crate::error::ErrorCode::EntityNotFound, "entity not found")))))
             })
         }),
     );
@@ -1333,9 +1335,33 @@ pub async fn list_audit(db: &Db, owner: &RecordId, limit: i64, offset: i64) -> A
 pub async fn call(state: &AppState, owner: &RecordId, name: &str, args: Value) -> AppResult<Value> {
     let tools = all_tools();
     let Some(spec) = tools.get(name) else {
-        return Ok(json!({ "error": format!("unknown tool {name}") }));
+        return Ok(AppError::coded(ErrorCode::ToolNotFound, format!("unknown tool {name}")).to_tool_value());
     };
 
+    let vault = args.get("vault_id").and_then(Value::as_str).unwrap_or("personal").to_string();
+    let span = tracing::info_span!("tool.call", tool = name, vault = %vault, outcome = Empty, duration_ms = Empty);
+    let started = Instant::now();
+    let mut result = run_tool(state, owner, name, spec, args).instrument(span.clone()).await;
+
+    // Every failed tool value carries a stable `code` and the request's `trace_id`.
+    if let Ok(Value::Object(map)) = &mut result
+        && map.contains_key("error")
+    {
+        map.entry("code").or_insert_with(|| ErrorCode::ValidationInvalid.as_str().into());
+        map.entry("trace_id").or_insert_with(|| crate::telemetry::current_trace_id().into());
+    }
+    let outcome = match &result {
+        Ok(v) if v.get("error").is_some() => v.get("code").and_then(Value::as_str).unwrap_or("error"),
+        Ok(_) => "ok",
+        Err(e) => e.code.as_str(),
+    };
+    span.record("outcome", outcome);
+    span.record("duration_ms", started.elapsed().as_secs_f64() * 1000.0);
+    span.in_scope(|| tracing::info!(outcome, "tool call"));
+    result
+}
+
+async fn run_tool(state: &AppState, owner: &RecordId, name: &str, spec: &ToolSpec, args: Value) -> AppResult<Value> {
     if is_read_only(name) {
         return (spec.handler)(state, owner, args).await;
     }

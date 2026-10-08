@@ -23,7 +23,7 @@ use crate::connectors::clients::{
     PocketAIClient, SlackClient, SpotifyClient, StripeClient, TodoistClient, UpBankClient,
 };
 use crate::connectors::service::{self, Connector, CONNECTOR_KINDS};
-use crate::error::{AppError, AppResult};
+use crate::error::{AppError, AppResult, ErrorCode};
 use crate::models_user::User;
 use crate::state::AppState;
 
@@ -113,7 +113,7 @@ fn require_known_kind(kind: &str) -> AppResult<()> {
     if CONNECTOR_KINDS.contains(&kind) {
         Ok(())
     } else {
-        Err(AppError::not_found("unknown connector"))
+        Err(AppError::coded(ErrorCode::ConnectorNotFound, "unknown connector"))
     }
 }
 
@@ -163,7 +163,7 @@ async fn up_bank_finance_summary(
     let creds = service::credentials_for(&state.db, &state.settings.encryption_key, &user.id, "up_bank").await?;
     let has_token = creds.get("personal_access_token").and_then(|v| v.as_str()).map(|s| !s.is_empty()).unwrap_or(false);
     if !row.enabled || !has_token {
-        return Err(AppError::bad_request("Up Bank is not connected"));
+        return Err(AppError::coded(ErrorCode::ConnectorNotConnected, "Up Bank is not connected"));
     }
     let since = Utc::now() - Duration::days(q.days);
     let summary = UpBankClient::new(&creds).finance_summary(&since.to_rfc3339()).await?;
@@ -175,7 +175,7 @@ async fn pocketai_client_or_400(state: &AppState, user: &User) -> AppResult<Pock
     let creds = service::credentials_for(&state.db, &state.settings.encryption_key, &user.id, "pocketai").await?;
     let has_key = creds.get("api_key").and_then(|v| v.as_str()).map(|s| !s.is_empty()).unwrap_or(false);
     if !row.enabled || !has_key {
-        return Err(AppError::bad_request("PocketAI is not connected"));
+        return Err(AppError::coded(ErrorCode::ConnectorNotConnected, "PocketAI is not connected"));
     }
     let base_url = row.config.get("base_url").and_then(|v| v.as_str());
     Ok(PocketAIClient::new(&creds, base_url))

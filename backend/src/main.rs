@@ -6,9 +6,8 @@ use eunomia_backend::state::{AppState, AppStateInner};
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt::init();
-
     let settings = Settings::load();
+    let _otel = eunomia_backend::telemetry::init(&settings.log_level);
     let conn = db::connect(&settings).await.expect("failed to connect to SurrealDB");
     db::ensure_schema(&conn, &settings).await.expect("failed to apply schema");
 

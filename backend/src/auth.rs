@@ -115,6 +115,7 @@ where
             && let Ok(value) = auth_header.to_str()
                 && let Some(token) = value.strip_prefix("Bearer ").or_else(|| value.strip_prefix("bearer "))
                     && let Some(user) = models_user::verify_api_token(&app_state.db, token).await? {
+                        crate::telemetry::record_user(&user.id.to_string());
                         return Ok(user);
                     }
 
@@ -124,6 +125,7 @@ where
                     && let Some(user) =
                         user_from_jwt(&app_state.db, &app_state.settings.jwt_secret, &session_token).await
                     {
+                        crate::telemetry::record_user(&user.id.to_string());
                         return Ok(user);
                     }
 

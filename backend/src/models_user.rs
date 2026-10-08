@@ -72,7 +72,7 @@ pub async fn register_user(db: &Db, email: &str, password: &str) -> AppResult<Us
     }
     let existing: Vec<IdRow> = res.take(0)?;
     if !existing.is_empty() {
-        return Err(AppError::new(axum::http::StatusCode::CONFLICT, "A user with that email already exists."));
+        return Err(AppError::coded(crate::error::ErrorCode::AuthEmailTaken, "A user with that email already exists."));
     }
 
     let password_hash = bcrypt::hash(password, bcrypt::DEFAULT_COST)
