@@ -1,9 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
 import Link from "next/link";
 import { ChevronRight, Search, X } from "lucide-react";
-import { connectors as connectorsApi, sources as sourcesApi, type Connector, type SourceRow } from "@/lib/api";
+import type { Connector, SourceRow } from "@/lib/types";
+import { useConnectors } from "@/lib/queries/connectors";
+import { useSources } from "@/lib/queries/sources";
 import { CONNECTOR_META, CONNECTOR_ORDER, ConnectorTile, connectorStatus, kindForSource, relativeTime } from "@/lib/connectorMeta";
 import { isLiveSource, sourceHealth } from "@/lib/sourceState";
 import Tooltip from "@/components/bits/Tooltip";
@@ -30,23 +32,19 @@ function matches(q: string, label: string, description = "") {
 }
 
 export default function ConnectorsPage() {
-  const [connectors, setConnectors] = useState<Connector[] | null>(null);
-  const [sourceRows, setSourceRows] = useState<SourceRow[]>([]);
-  const [error, setError] = useState<string | null>(null);
+  const connectorsQuery = useConnectors();
+  const sourcesQuery = useSources();
+  const connectors = connectorsQuery.data ?? null;
+  // Sources only add sync health; the page still works if that call fails.
+  const sourceRows: SourceRow[] = sourcesQuery.data ?? [];
+  const error = connectorsQuery.isError ? connectorsQuery.error.message : null;
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
 
-  const load = useCallback(() => {
-    // Sources only add sync health; the page still works if that call fails.
-    Promise.all([connectorsApi.list(), sourcesApi.list().catch(() => [] as SourceRow[])])
-      .then(([list, rows]) => {
-        setError(null);
-        setConnectors(list);
-        setSourceRows(rows);
-      })
-      .catch((e: Error) => setError(e.message));
-  }, []);
-  useEffect(load, [load]);
+  const load = () => {
+    connectorsQuery.refetch();
+    sourcesQuery.refetch();
+  };
 
   const byKind = Object.fromEntries((connectors ?? []).map((c) => [c.kind, c]));
   const bySource = Object.fromEntries(sourceRows.map((s) => [s.key, s]));

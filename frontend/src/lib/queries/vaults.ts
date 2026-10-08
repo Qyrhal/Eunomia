@@ -1,0 +1,83 @@
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  acceptInvitation,
+  cloneVault,
+  createVault,
+  declineInvitation,
+  deleteVault,
+  inviteMember,
+  leaveVault,
+  listInvitations,
+  listMembers,
+  listVaults,
+  mergeVaults,
+  removeMember,
+  renameVault,
+} from "@/lib/gen";
+import type { Vault, VaultInvitation, VaultKind, VaultMember, VaultRole } from "@/lib/types";
+import { call } from "./client";
+import { entityKeys } from "./entities";
+
+export const vaultKeys = {
+  all: ["vaults"] as const,
+  list: () => [...vaultKeys.all, "list"] as const,
+  members: (id: string) => [...vaultKeys.all, "members", id] as const,
+  invitations: () => [...vaultKeys.all, "invitations"] as const,
+};
+
+export const useVaults = () =>
+  useQuery({
+    queryKey: vaultKeys.list(),
+    queryFn: async () => (await call(listVaults())).results as Vault[],
+  });
+
+export const useVaultMembers = (id: string, enabled = true) =>
+  useQuery({
+    queryKey: vaultKeys.members(id),
+    queryFn: async () => (await call(listMembers({ path: { vault_id: id } }))).results as VaultMember[],
+    enabled,
+  });
+
+export const useInvitations = () =>
+  useQuery({
+    queryKey: vaultKeys.invitations(),
+    queryFn: async () => (await call(listInvitations())).results as VaultInvitation[],
+  });
+
+// Vault changes reshape what the entity graph and cloud can show (clone, merge, delete, accept), so those refresh too.
+const useVaultMutation = <V, R>(fn: (v: V) => Promise<R>) => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: fn,
+    onSuccess: () => Promise.all([qc.invalidateQueries({ queryKey: vaultKeys.all }), qc.invalidateQueries({ queryKey: entityKeys.all })]),
+  });
+};
+
+export const useCreateVault = () =>
+  useVaultMutation(({ name, kind = "org" }: { name: string; kind?: VaultKind }) => call(createVault({ body: { name, kind } })));
+export const useRenameVault = () =>
+  useVaultMutation(({ id, name }: { id: string; name: string }) => call(renameVault({ path: { vault_id: id }, body: { name } })));
+export const useDeleteVault = () => useVaultMutation((id: string) => call(deleteVault({ path: { vault_id: id } })));
+export const useInviteMember = () =>
+  useVaultMutation(({ id, email, role = "member" }: { id: string; email: string; role?: VaultRole }) =>
+    call(inviteMember({ path: { vault_id: id }, body: { email, role } })),
+  );
+export const useRemoveMember = () =>
+  useVaultMutation(({ id, email }: { id: string; email: string }) => call(removeMember({ path: { vault_id: id, email } })));
+export const useLeaveVault = () => useVaultMutation((id: string) => call(leaveVault({ path: { vault_id: id } })));
+// Accepting does not refresh by itself: the page plays its join animation first, then calls `useRefreshVaults()`.
+export const useAcceptInvitation = () => useMutation({ mutationFn: (id: string) => call(acceptInvitation({ path: { vault_id: id } })) });
+export function useRefreshVaults() {
+  const qc = useQueryClient();
+  return () => Promise.all([qc.invalidateQueries({ queryKey: vaultKeys.all }), qc.invalidateQueries({ queryKey: entityKeys.all })]);
+}
+export const useDeclineInvitation = () => useVaultMutation((id: string) => call(declineInvitation({ path: { vault_id: id } })));
+export const useCloneVault = () =>
+  useVaultMutation(({ id, name, kind = "org" }: { id: string; name?: string; kind?: VaultKind }) =>
+    call(cloneVault({ path: { vault_id: id }, body: { name, kind } })),
+  );
+// Copies both into a NEW vault; the originals are untouched.
+export const useMergeVaults = () =>
+  useVaultMutation(({ a, b, name }: { a: string; b: string; name?: string }) =>
+    call(mergeVaults({ body: { vault_ids: [a, b], name: name || undefined } })),
+  );

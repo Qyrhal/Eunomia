@@ -122,7 +122,8 @@ pub async fn record(db: &Db, f: Failure) {
     let budget = MAX_CAPSULE_BYTES.saturating_sub(used);
     let (args, truncated) = if args.len() > budget { (cut(&args, budget).to_string(), true) } else { (args, false) };
 
-    let res = store::capsules::INSERT
+    let res: Result<(), String> = async {
+        store::capsules::INSERT
         .on(db)
         .bind(("id", RecordId::from_table_key("failure_capsule", trace_id.clone())))
         .bind(("trace_id", trace_id))
@@ -136,7 +137,12 @@ pub async fn record(db: &Db, f: Failure) {
         .bind(("version", version))
         .bind(("truncated", truncated))
         .await
-        .and_then(|r| r.check());
+        .map_err(|e| e.to_string())?
+        .check()
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+    .await;
     if let Err(e) = res {
         tracing::warn!(error = %e, "recording a failure capsule failed");
     }

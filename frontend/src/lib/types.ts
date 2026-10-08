@@ -1,0 +1,131 @@
+// Domain types the pages use. They narrow the generated client's looser
+// shapes (string kinds become unions); the query hooks cast to them.
+
+export type Me = { id: string; email: string; onboarded: boolean };
+
+export type ConnectorKind =
+  | "up_bank"
+  | "pocketai"
+  | "open_connector"
+  | "github"
+  | "slack"
+  | "notion"
+  | "linear"
+  | "gmail"
+  | "google_calendar"
+  | "discord"
+  | "spotify"
+  | "todoist"
+  | "stripe";
+
+export type Connector = {
+  kind: ConnectorKind;
+  enabled: boolean;
+  config: Record<string, unknown>;
+  credentials_set: boolean;
+  updated_at: string | null;
+};
+
+export type ConnectorUpdate = Partial<{
+  enabled: boolean;
+  config: Record<string, unknown>;
+  credentials: Record<string, string>;
+}>;
+
+export type Snapshot = {
+  up_bank: { transaction_count: number; spent: number } | null;
+  pocketai: { recordings_count: number } | null;
+};
+
+export type SyncStatus = {
+  cursor: string;
+  last_run: string | null;
+  last_ok: string | null;
+  last_error: string;
+  consecutive_failures: number;
+};
+
+export type SourceRow = {
+  key: string;
+  label: string;
+  provider: string;
+  record_types: string[];
+  connected: boolean;
+  sync_status: SyncStatus;
+  record_count: number;
+};
+
+// A record as the generic `search`/`list` tools summarise it (no payload).
+export type ToolHit = {
+  id: string;
+  source: string;
+  type: string;
+  title: string;
+  snippet: string;
+  occurred_at: string | null;
+  url: string | null;
+};
+
+// A record as the generic `get` tool returns it in full.
+export type ToolRecord = ToolHit & {
+  external_id: string;
+  body_text: string;
+  payload: Record<string, unknown>;
+};
+
+export type EntityKind = "person" | "organisation" | "location" | "repository" | "file" | "symbol";
+
+export type EntitySummary = {
+  id: string;
+  kind: EntityKind;
+  name: string;
+  aliases: string[];
+  summary: string;
+};
+
+export type EntityMemory = { id: string; text: string; created_at?: string; source?: string; owner_email: string | null };
+export type EntityRelation = {
+  id: string;
+  in: string;
+  out: string;
+  label: string;
+  direction: "in" | "out";
+  owner_email: string | null;
+};
+
+export type EntityDetail = EntitySummary & {
+  owner_email: string | null;
+  memory: EntityMemory[];
+  relations: EntityRelation[];
+};
+
+export type EntityGraphNode = { id: string; kind: EntityKind; name: string; owner_email: string | null };
+export type EntityGraphEdge = { source: string; target: string; label: string; owner_email: string | null };
+export type EntityGraph = { nodes: EntityGraphNode[]; edges: EntityGraphEdge[] };
+
+export type VaultRole = "owner" | "member";
+export type VaultKind = "personal" | "org";
+
+export type Vault = { id: string; name: string; kind: VaultKind; created_at: string | null; role: VaultRole };
+export type VaultMember = { email: string; role: VaultRole };
+export type VaultInvitation = {
+  vault_id: string;
+  vault_name: string;
+  vault_kind: VaultKind;
+  role: VaultRole;
+  created_at: string | null;
+};
+
+export type CloudPoint = { id: string; vault: string; kind: string; label: string; x: number; y: number; z: number };
+export type Cloud = { space: "semantic" | "lexical"; points: CloudPoint[] };
+
+export type ChatToolCall = { id: string; type: "function"; function: { name: string; arguments: string } };
+
+export type ChatMessage = {
+  role: "user" | "assistant" | "tool";
+  content: string;
+  tool_calls?: ChatToolCall[] | null;
+  created_at?: string;
+};
+
+export type ChatThread = { id: string; title: string; created_at: string | null; updated_at: string | null };

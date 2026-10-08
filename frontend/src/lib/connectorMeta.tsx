@@ -14,7 +14,7 @@ import {
   Plug2,
   Workflow,
 } from "lucide-react";
-import type { Connector } from "@/lib/api";
+import type { Connector } from "@/lib/types";
 
 export type FieldDef = { key: string; label: string; placeholder: string; secret: boolean };
 

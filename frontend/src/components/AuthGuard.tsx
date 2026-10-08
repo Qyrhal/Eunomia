@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
-import { auth } from "@/lib/api";
+import { useQueryClient } from "@tanstack/react-query";
+import { bootstrapQuery, meQuery } from "@/lib/queries/auth";
 
 /** Gates every page under the `(app)` route group behind a session check.
  * No session (401 from `/api/auth/me`) sends a fresh visitor to `/register`
@@ -12,11 +13,12 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
   const [ready, setReady] = useState(false);
+  const queryClient = useQueryClient();
 
   useEffect(() => {
     let cancelled = false;
-    auth
-      .me()
+    queryClient
+      .fetchQuery(meQuery())
       .then((me) => {
         if (cancelled) return;
         if (!me.onboarded) {
@@ -27,7 +29,7 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
       })
       .catch(async () => {
         if (cancelled) return;
-        const { has_users } = await auth.bootstrap().catch(() => ({ has_users: true }));
+        const { has_users } = await queryClient.fetchQuery(bootstrapQuery()).catch(() => ({ has_users: true }));
         router.replace(has_users ? "/login" : "/register");
       });
     return () => {

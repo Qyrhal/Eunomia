@@ -11,15 +11,15 @@ import {
   settings as settingsApi,
   update as updateApi,
   oauth,
-  vaults as vaultsApi,
   type ApiToken,
   type OAuthGrant,
   type AppSettings,
   type Scope,
   type Session,
   type UpdateStatus,
-  type Vault,
 } from "@/lib/api";
+import { useVaults } from "@/lib/queries/vaults";
+import type { Vault } from "@/lib/types";
 import CopyButton from "@/components/bits/CopyButton";
 import DecryptReveal from "@/components/bits/DecryptReveal";
 import Tooltip from "@/components/bits/Tooltip";
@@ -157,7 +157,7 @@ const EXPIRY_OPTIONS = [
 
 function TokensSection() {
   const [tokens, setTokens] = useState<ApiToken[] | null>(null);
-  const [vaultList, setVaultList] = useState<Vault[]>([]);
+  const vaultList: Vault[] = useVaults().data ?? [];
   const [name, setName] = useState("");
   const [scopes, setScopes] = useState<Scope[]>(SCOPES.map((s) => s.id));
   const [vaultId, setVaultId] = useState("");
@@ -169,7 +169,6 @@ function TokensSection() {
   const load = () => auth.tokens.list().then(setTokens).catch(() => setTokens([]));
   useEffect(() => {
     load();
-    vaultsApi.list().then((r) => setVaultList(r.results)).catch(() => setVaultList([]));
   }, []);
 
   const vaultName = (id: string) => vaultList.find((v) => v.id === id)?.name ?? id;

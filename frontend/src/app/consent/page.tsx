@@ -3,7 +3,9 @@
 import ErrorLine, { failure, type Failure } from "@/components/ErrorLine";
 import { useEffect, useState } from "react";
 import { Loader2, ShieldAlert } from "lucide-react";
-import { oauth, auth, type ConsentInfo } from "@/lib/api";
+import { oauth, type ConsentInfo } from "@/lib/api";
+import { getMe } from "@/lib/gen";
+import { call } from "@/lib/queries/client";
 import EunomiaMark from "@/components/EunomiaMark";
 import ThemeToggle from "@/components/ThemeToggle";
 import { InputModeTracker } from "@/components/bits/motion";
@@ -24,7 +26,7 @@ export default function ConsentPage() {
       .then(setInfo)
       .catch(async (e) => {
         // No session: sign in first, then come straight back here.
-        const signedIn = await auth.me().then(() => true, () => false);
+        const signedIn = await call(getMe()).then(() => true, () => false);
         if (!signedIn) {
           const back = encodeURIComponent(`/consent?${query}`);
           window.location.replace(`/login?next=${back}`);

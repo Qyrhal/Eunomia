@@ -196,7 +196,6 @@ async fn code_flow_with_pkce_issues_a_working_scoped_token() {
     assert_eq!(ok.body["expires_in"], 900);
     assert_eq!(ok.body["scope"], "memory:read memory:write");
     assert!(ok.headers[header::CACHE_CONTROL].to_str().unwrap().contains("no-store"));
-    assert_eq!(exchange(&app, &client_id, &code, VERIFIER).await.body["error"], "invalid_grant");
 
     let access = ok.body["access_token"].as_str().unwrap();
     let list = mcp(&app, access, rpc("tools/list", json!({}))).await;
@@ -204,6 +203,7 @@ async fn code_flow_with_pkce_issues_a_working_scoped_token() {
     assert!(list.body["result"]["tools"].as_array().unwrap().len() > 5);
     let call = mcp(&app, access, rpc("tools/call", json!({"name": "vault_list", "arguments": {}}))).await;
     assert_eq!(call.body["result"]["isError"], false);
+    assert_eq!(exchange(&app, &client_id, &code, VERIFIER).await.body["error"], "invalid_grant");
 }
 
 #[tokio::test]
@@ -428,4 +428,73 @@ async fn personal_api_tokens_still_work_on_mcp_and_oauth_tokens_not_on_rest() {
     let (_, t) = connect(&app, None).await;
     let r = get(&app, "/api/vaults", Some(t["access_token"].as_str().unwrap())).await;
     assert_eq!(r.status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn replaying_a_redeemed_code_revokes_the_tokens_issued_from_it() {
+    let app = TestApp::new().await;
+    let client_id = register(&app).await;
+    let code = approve(&app, authz(&client_id, None, VERIFIER)).await;
+    let ok = exchange(&app, &client_id, &code, VERIFIER).await;
+    let (access, refresh) = (ok.body["access_token"].as_str().unwrap(), ok.body["refresh_token"].as_str().unwrap());
+    assert_eq!(mcp(&app, access, rpc("ping", json!({}))).await.status, StatusCode::OK);
+
+    assert_eq!(exchange(&app, &client_id, &code, VERIFIER).await.body["error"], "invalid_grant");
+
+    assert_eq!(mcp(&app, access, rpc("ping", json!({}))).await.status, StatusCode::UNAUTHORIZED);
+    let r = form(&app, "/oauth/token", &[("grant_type", "refresh_token"), ("refresh_token", refresh), ("client_id", &client_id)]).await;
+    assert_eq!(r.body["error"], "invalid_grant");
+    let (_, apps) = app.http("GET", "/api/oauth/grants", None, true).await;
+    assert_eq!(apps.as_array().unwrap().len(), 0);
+}
+
+#[tokio::test]
+async fn browser_mcp_clients_get_credential_free_cors_and_api_stays_strict() {
+    let app = TestApp::new().await;
+    let preflight = |path: &'static str, origin: &'static str, method: &'static str| {
+        Request::builder()
+            .method("OPTIONS")
+            .uri(path)
+            .header(header::ORIGIN, origin)
+            .header("access-control-request-method", method)
+            .header("access-control-request-headers", "authorization,content-type,mcp-protocol-version")
+            .body(Body::empty())
+            .unwrap()
+    };
+    for (path, method) in [
+        ("/mcp", "POST"),
+        ("/oauth/token", "POST"),
+        ("/oauth/register", "POST"),
+        ("/oauth/revoke", "POST"),
+        ("/.well-known/oauth-authorization-server", "GET"),
+        ("/.well-known/oauth-protected-resource", "GET"),
+        ("/.well-known/oauth-protected-resource/mcp", "GET"),
+    ] {
+        let resp = app.router.clone().oneshot(preflight(path, "https://inspector.example", method)).await.unwrap();
+        assert!(resp.status().is_success(), "{path} {}", resp.status());
+        let h = resp.headers();
+        assert_eq!(h[header::ACCESS_CONTROL_ALLOW_ORIGIN], "*", "{path}");
+        assert!(!h.contains_key(header::ACCESS_CONTROL_ALLOW_CREDENTIALS), "{path}");
+    }
+    // a simple cross-origin GET of metadata also carries the header
+    let req = Request::builder().uri("/.well-known/oauth-authorization-server").header(header::ORIGIN, "https://inspector.example").body(Body::empty()).unwrap();
+    assert_eq!(app.router.clone().oneshot(req).await.unwrap().headers()[header::ACCESS_CONTROL_ALLOW_ORIGIN], "*");
+
+    // /api keeps one credentialed origin: a stranger gets no CORS grant, the app origin does
+    let resp = app.router.clone().oneshot(preflight("/api/auth/me", "https://inspector.example", "GET")).await.unwrap();
+    assert!(!resp.headers().contains_key(header::ACCESS_CONTROL_ALLOW_ORIGIN));
+    let resp = app.router.clone().oneshot(preflight("/api/auth/me", "http://localhost:3000", "GET")).await.unwrap();
+    assert_eq!(resp.headers()[header::ACCESS_CONTROL_ALLOW_ORIGIN], "http://localhost:3000");
+    assert_eq!(resp.headers()[header::ACCESS_CONTROL_ALLOW_CREDENTIALS], "true");
+
+    // a bearer-only MCP call from a foreign browser origin works
+    let req = Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header(header::ORIGIN, "https://inspector.example")
+        .header(header::AUTHORIZATION, format!("Bearer {}", app.token))
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(rpc("ping", json!({})).to_string()))
+        .unwrap();
+    assert_eq!(app.router.clone().oneshot(req).await.unwrap().status(), StatusCode::OK);
 }
