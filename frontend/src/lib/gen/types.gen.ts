@@ -349,6 +349,19 @@ export type MessageOut = {
     }> | null;
 };
 
+export type Metrics = {
+    /**
+     * Org database handles currently open in this process (the pool is capped).
+     */
+    open_org_handles: number;
+    /**
+     * Queries that ran without an org context since the process started: an unknown or unready org
+     * asked for, or a statement that reached for the other database's tables. Must stay 0; each one
+     * is also logged at error level.
+     */
+    queries_without_org_context: number;
+};
+
 export type ModelsOut = {
     /**
      * Null on success.
@@ -1271,6 +1284,28 @@ export type GetFailureCapsuleResponses = {
 };
 
 export type GetFailureCapsuleResponse = GetFailureCapsuleResponses[keyof GetFailureCapsuleResponses];
+
+export type GetMetricsData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/debug/metrics';
+};
+
+export type GetMetricsErrors = {
+    /**
+     * Error
+     */
+    default: Problem;
+};
+
+export type GetMetricsError = GetMetricsErrors[keyof GetMetricsErrors];
+
+export type GetMetricsResponses = {
+    200: Metrics;
+};
+
+export type GetMetricsResponse = GetMetricsResponses[keyof GetMetricsResponses];
 
 export type ListEntitiesData = {
     body?: never;

@@ -12,10 +12,18 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 static NO_APP_FILTERS: AtomicBool = AtomicBool::new(false);
+static REWRITTEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Statements rewritten so far (by the filter switch or a mutation): a run that rewrote none proved nothing.
+pub fn rewritten() -> u64 {
+    REWRITTEN.load(Ordering::Relaxed)
+}
 static MUTATIONS: Mutex<Vec<(String, String, String)>> = Mutex::new(Vec::new());
 
-/// The filter predicates the app puts in org-database statements.
+/// The filter predicates the app puts in org-database statements. Only a predicate is rewritten
+/// (after WHERE, AND, OR or an opening parenthesis), never an assignment (`SET vault = $vault`).
 const FILTERS: &[&str] = &["owner = $owner", "vault = $vault", "user = $user"];
+const LEADERS: &[&str] = &["WHERE ", "AND ", "OR ", "("];
 
 pub fn set_no_app_filters(on: bool) {
     NO_APP_FILTERS.store(on, Ordering::SeqCst);
@@ -34,19 +42,26 @@ pub fn clear_mutations() {
     MUTATIONS.lock().unwrap().clear();
 }
 
+// ponytail: textual rewrite of the three predicate shapes the app uses; a new filter shape needs adding to FILTERS
+// (the layer-removal runs would then show it still filtering).
 pub(crate) fn transform<'a>(name: &str, sql: &'a str, org_scope: bool) -> Cow<'a, str> {
     let mut out = Cow::Borrowed(sql);
     if org_scope && no_app_filters() {
-        for f in FILTERS {
-            if out.contains(f) {
-                out = Cow::Owned(out.replace(f, "true"));
+        for (f, lead) in FILTERS.iter().flat_map(|f| LEADERS.iter().map(move |l| (f, l))) {
+            let pat = format!("{lead}{f}");
+            if out.contains(&pat) {
+                out = Cow::Owned(out.replace(&pat, &format!("{lead}true")));
             }
         }
+    }
+    if matches!(out, Cow::Owned(_)) {
+        REWRITTEN.fetch_add(1, Ordering::Relaxed);
     }
     let muts = MUTATIONS.lock().unwrap();
     for (stmt, from, to) in muts.iter() {
         if stmt == name && out.contains(from.as_str()) {
             out = Cow::Owned(out.replace(from.as_str(), to));
+            REWRITTEN.fetch_add(1, Ordering::Relaxed);
         }
     }
     out

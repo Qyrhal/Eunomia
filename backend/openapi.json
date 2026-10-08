@@ -1233,6 +1233,45 @@
         ]
       }
     },
+    "/api/debug/metrics": {
+      "get": {
+        "tags": [
+          "debug"
+        ],
+        "summary": "Tenancy counters for this process (instance admin only)",
+        "operationId": "getMetrics",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Metrics"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/api/entities": {
       "get": {
         "tags": [
@@ -4570,6 +4609,26 @@
             "items": {
               "type": "object"
             }
+          }
+        }
+      },
+      "Metrics": {
+        "type": "object",
+        "required": [
+          "queries_without_org_context",
+          "open_org_handles"
+        ],
+        "properties": {
+          "open_org_handles": {
+            "type": "integer",
+            "description": "Org database handles currently open in this process (the pool is capped).",
+            "minimum": 0
+          },
+          "queries_without_org_context": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Queries that ran without an org context since the process started: an unknown or unready org\nasked for, or a statement that reached for the other database's tables. Must stay 0; each one\nis also logged at error level.",
+            "minimum": 0
           }
         }
       },

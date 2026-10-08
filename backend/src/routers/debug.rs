@@ -12,7 +12,36 @@ use crate::models_user::User;
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
-    Router::new().route("/debug/capsules/{trace_id}", get(get_capsule))
+    Router::new().route("/debug/capsules/{trace_id}", get(get_capsule)).route("/debug/metrics", get(get_metrics))
+}
+
+#[derive(serde::Serialize, utoipa::ToSchema)]
+pub struct Metrics {
+    /// Queries that ran without an org context since the process started: an unknown or unready org
+    /// asked for, or a statement that reached for the other database's tables. Must stay 0; each one
+    /// is also logged at error level.
+    queries_without_org_context: u64,
+    /// Org database handles currently open in this process (the pool is capped).
+    open_org_handles: usize,
+}
+
+#[utoipa::path(
+    operation_id = "getMetrics",
+    get,
+    path = "/api/debug/metrics",
+    tag = "debug",
+    summary = "Tenancy counters for this process (instance admin only)",
+    responses((status = 200, body = Metrics), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    security(("cookie" = []), ("bearer" = [])),
+)]
+async fn get_metrics(State(state): State<AppState>, user: User) -> AppResult<Json<Metrics>> {
+    if !capsules::is_admin(&state.control, &user).await? {
+        return Err(AppError::coded(ErrorCode::AuthForbidden, "Only an instance admin can read metrics."));
+    }
+    Ok(Json(Metrics {
+        queries_without_org_context: crate::pool::NO_ORG_CONTEXT.load(std::sync::atomic::Ordering::Relaxed),
+        open_org_handles: state.pool.open_handles(),
+    }))
 }
 
 #[utoipa::path(
@@ -38,5 +67,5 @@ async fn get_capsule(State(state): State<AppState>, user: User, Path(trace_id): 
 }
 
 #[derive(utoipa::OpenApi)]
-#[openapi(paths(get_capsule), components(schemas(Capsule)))]
+#[openapi(paths(get_capsule, get_metrics), components(schemas(Capsule, Metrics)))]
 pub struct Doc;
