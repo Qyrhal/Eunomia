@@ -117,6 +117,8 @@ export type RemovedBody = {
     removed: boolean;
 };
 
+export type Scope = 'memory:read' | 'memory:write' | 'vaults:admin' | 'connectors';
+
 export type SessionOut = {
     created_at: string;
     id: string;
@@ -149,23 +151,44 @@ export type ThreadOut = {
 };
 
 export type TokenCreate = {
+    /**
+     * RFC 3339 timestamp in the future. Omit for a token that never expires.
+     */
+    expires_at?: string | null;
     name: string;
+    /**
+     * Defaults to every scope. Cannot exceed the creating credential's own scopes.
+     */
+    scopes?: Array<Scope> | null;
+    /**
+     * Restrict the token to one vault you belong to.
+     */
+    vault_id?: string | null;
 };
 
 export type TokenCreated = {
+    expires_at?: string | null;
     id: string;
     name: string;
+    scopes: Array<Scope>;
     /**
      * Shown once, never retrievable again.
      */
     token: string;
+    vault_id?: string | null;
 };
 
 export type TokenOut = {
     created_at?: string | null;
+    /**
+     * `null` for a token that never expires.
+     */
+    expires_at?: string | null;
     id: string;
     last_used_at?: string | null;
     name: string;
+    scopes: Array<Scope>;
+    vault_id?: string | null;
 };
 
 export type VaultClone = {
