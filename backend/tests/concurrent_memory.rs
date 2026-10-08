@@ -8,7 +8,6 @@ use eunomia_backend::tools::registry;
 use serde_json::json;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "fails until transactions land (foundation phase 1)"]
 async fn concurrent_memory_writes_keep_exact_counts() {
     const PER_TASK: usize = 200;
     let app = TestApp::new().await;

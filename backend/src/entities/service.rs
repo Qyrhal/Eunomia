@@ -27,6 +27,7 @@ use surrealdb::{Datetime, RecordId};
 
 use crate::db::Db;
 use crate::error::{AppError, AppResult};
+use crate::tx::{lock, with_retry};
 use crate::vaults::service as vaults_service;
 
 /// Entity kinds this module manages -- mirrors `entities/service.py`'s
@@ -330,44 +331,47 @@ pub async fn upsert_entity(
     let aliases = aliases.unwrap_or_default();
     let needle = name.trim().to_lowercase();
 
-    let mut res =
-        db.query(format!("SELECT * FROM {table} WHERE vault = $vault")).bind(("vault", vault.clone())).await?;
-    let rows: Vec<EntityRow> = res.take(0)?;
+    // Read-then-write: a concurrent upsert of the same name loses on the
+    // `{table}_vault_name_unique` index, and the retry's re-read finds the winner.
+    let row = with_retry(|| async {
+        let mut res =
+            db.query(format!("SELECT * FROM {table} WHERE vault = $vault")).bind(("vault", vault.clone())).await?.check()?;
+        let rows: Vec<EntityRow> = res.take(0)?;
 
-    for row in rows {
-        let mut known: HashSet<String> = row.aliases.iter().map(|a| a.to_lowercase()).collect();
-        known.insert(row.name.to_lowercase());
-        if known.contains(&needle) {
-            let existing: HashSet<String> = row.aliases.iter().cloned().collect();
-            let mut merged: Vec<String> = existing.union(&aliases.iter().cloned().collect()).cloned().collect();
-            merged.sort();
-            if merged.iter().collect::<HashSet<_>>() != existing.iter().collect::<HashSet<_>>() {
+        for row in rows {
+            let mut known: HashSet<String> = row.aliases.iter().map(|a| a.to_lowercase()).collect();
+            known.insert(row.name.to_lowercase());
+            if known.contains(&needle) {
+                if aliases.iter().all(|a| row.aliases.contains(a)) {
+                    return Ok(row);
+                }
+                // array::union is atomic, so two alias merges cannot lose each other's update.
                 let mut updated = db
-                    .query("UPDATE $id SET aliases = $aliases, updated_at = time::now() RETURN AFTER")
+                    .query("UPDATE $id SET aliases = array::sort(array::union(aliases, $aliases)), updated_at = time::now() RETURN AFTER")
                     .bind(("id", row.id.clone()))
-                    .bind(("aliases", merged))
-                    .await?;
-                let updated_rows: Vec<EntityRow> = updated.take(0)?;
-                let updated_row =
-                    updated_rows.into_iter().next().ok_or_else(|| AppError::internal("entity update returned no row"))?;
-                return Ok(entity_out(table, &updated_row));
+                    .bind(("aliases", aliases.clone()))
+                    .await?
+                    .check()?;
+                let rows: Vec<EntityRow> = updated.take(0)?;
+                return Ok(rows.into_iter().next().unwrap_or(row));
             }
-            return Ok(entity_out(table, &row));
         }
-    }
 
-    let mut created = db
-        .query(format!(
-            "CREATE {table} SET owner = $owner, vault = $vault, name = $name, aliases = $aliases RETURN AFTER"
-        ))
-        .bind(("owner", owner.clone()))
-        .bind(("vault", vault))
-        .bind(("name", name.to_string()))
-        .bind(("aliases", aliases))
-        .await?;
-    let created_rows: Vec<EntityRow> = created.take(0)?;
-    let created_row = created_rows.into_iter().next().ok_or_else(|| AppError::internal("entity insert returned no row"))?;
-    Ok(entity_out(table, &created_row))
+        let mut created = db
+            .query(format!(
+                "CREATE {table} SET owner = $owner, vault = $vault, name = $name, aliases = $aliases RETURN AFTER"
+            ))
+            .bind(("owner", owner.clone()))
+            .bind(("vault", vault.clone()))
+            .bind(("name", name.to_string()))
+            .bind(("aliases", aliases.clone()))
+            .await?
+            .check()?;
+        let rows: Vec<EntityRow> = created.take(0)?;
+        rows.into_iter().next().ok_or_else(|| surrealdb::Error::Api(surrealdb::error::Api::Query("entity insert returned no row".into())))
+    })
+    .await?;
+    Ok(entity_out(table, &row))
 }
 
 /// `source_record_id` is optional -- an automatic extraction path always ties
@@ -404,52 +408,71 @@ pub async fn add_memory(
         ));
     }
 
-    // One observation per subject (consolidation reads LIMIT 1): writing another
-    // one -- e.g. an MCP agent doing the consolidating -- revises it in place.
-    if mem_type == "observation" {
-        let mut res = db
-            .query(r#"SELECT * FROM memory WHERE subject = $subject AND type = "observation" LIMIT 1"#)
-            .bind(("subject", subject_id.clone()))
-            .await?;
-        let existing: Vec<MemoryRow> = res.take(0)?;
-        if let Some(existing) = existing.into_iter().next() {
-            let mut res = db
-                .query(
-                    "UPDATE $id SET text = $text, version = version + 1, status = \"fresh\", \
-                     updated_at = time::now() RETURN AFTER",
-                )
-                .bind(("id", existing.id))
-                .bind(("text", text.to_string()))
-                .await?;
-            let rows: Vec<MemoryRow> = res.take(0)?;
-            let row = rows.into_iter().next().ok_or_else(|| AppError::internal("observation update returned no row"))?;
-            return Ok(memory_out(&row, None));
-        }
-    }
-
     let source = source_record_id.map(|r| cache_record_rid(owner, r));
-    let q = db
-        .query(
-            "CREATE memory SET owner = $owner, vault = $vault, subject = $subject, text = $text, \
-             type = $type, source = $source RETURN AFTER",
-        )
-        .bind(("owner", owner.clone()))
-        .bind(("vault", subject_row.vault.clone()))
-        .bind(("subject", subject_id.clone()))
-        .bind(("text", text.to_string()))
-        .bind(("type", mem_type.to_string()))
-        .bind(("source", source));
-    let mut res = q.await?;
-    let rows: Vec<MemoryRow> = res.take(0)?;
-    let memory = rows.into_iter().next().ok_or_else(|| AppError::internal("memory insert returned no row"))?;
+    let is_obs = mem_type == "observation";
+    let obs_id = observation_rid(subject_id);
 
-    if mem_type != "observation" {
-        db.query(r#"UPDATE memory SET status = "stale" WHERE subject = $subject AND type = "observation""#)
+    // One round trip, all-or-nothing. An observation is revised in place (one
+    // per subject; a new one gets a deterministic id so two racing creators
+    // collide on the key instead of making duplicates). A raw fact creates the
+    // memory and marks the subject's observation stale, skipping the write when
+    // it is already stale so concurrent fact writers do not conflict on it.
+    // The hot path only point-reads the deterministic id: a `WHERE subject`
+    // range read would conflict with every concurrent insert for the subject.
+    // The range read remains as a fallback for observations that predate
+    // deterministic ids.
+    let sql = if is_obs {
+        r#"BEGIN TRANSACTION;
+        LET $cur = (SELECT VALUE id FROM $obs_id);
+        LET $legacy = IF array::len($cur) > 0 { [] } ELSE {
+            (SELECT VALUE id FROM memory WHERE subject = $subject AND type = "observation" LIMIT 1)
+        };
+        LET $target = array::concat($cur, $legacy);
+        LET $row = IF array::len($target) > 0 {
+            (UPDATE $target[0] SET text = $text, version = version + 1, status = "fresh", updated_at = time::now() RETURN AFTER)
+        } ELSE {
+            (CREATE $obs_id SET owner = $owner, vault = $vault, subject = $subject, text = $text, type = "observation", source = $source RETURN AFTER)
+        };
+        RETURN $row;
+        COMMIT TRANSACTION;"#
+    } else {
+        r#"BEGIN TRANSACTION;
+        CREATE memory SET owner = $owner, vault = $vault, subject = $subject, text = $text, type = $type, source = $source RETURN AFTER;
+        LET $cur = (SELECT VALUE id FROM $obs_id);
+        IF array::len($cur) > 0 {
+            UPDATE $obs_id SET status = "stale" WHERE status != "stale"
+        } ELSE {
+            UPDATE memory SET status = "stale" WHERE subject = $subject AND type = "observation" AND status != "stale"
+        };
+        COMMIT TRANSACTION;"#
+    };
+    let _guard = lock(&subject_id.to_string()).await;
+    let memory = with_retry(|| async {
+        let mut res = db
+            .query(sql)
+            .bind(("owner", owner.clone()))
+            .bind(("vault", subject_row.vault.clone()))
             .bind(("subject", subject_id.clone()))
-            .await?;
-    }
+            .bind(("text", text.to_string()))
+            .bind(("type", mem_type.to_string()))
+            .bind(("source", source.clone()))
+            .bind(("obs_id", obs_id.clone()))
+            .await?
+            .check()?;
+        let rows: Vec<MemoryRow> = res.take(0)?;
+        rows.into_iter().next().ok_or_else(|| surrealdb::Error::Api(surrealdb::error::Api::Query("memory write returned no row".into())))
+    })
+    .await?;
 
     Ok(memory_out(&memory, None))
+}
+
+/// Deterministic id of a subject's observation when it is first created, so
+/// concurrent creators collide (and retry into an update) instead of leaving
+/// two observations. Older observations keep their random ids; lookups go by
+/// `subject` + `type`, never by this id.
+pub fn observation_rid(subject: &RecordId) -> RecordId {
+    RecordId::from_table_key("memory", format!("obs_{}", subject.to_string().replace(':', "_")))
 }
 
 /// Programmatic memory write -- a direct path for an agent to record a fact
@@ -680,9 +703,16 @@ pub async fn delete_entity(db: &Db, owner: &RecordId, entity_id: &RecordId) -> A
     if !accessible(db, owner, &row.vault).await? {
         return Ok(false);
     }
-    db.query("DELETE memory WHERE subject = $id").bind(("id", entity_id.clone())).await?;
-    db.query("DELETE relates_to WHERE in = $id OR out = $id").bind(("id", entity_id.clone())).await?;
-    db.query("DELETE $id").bind(("id", entity_id.clone())).await?;
+    with_retry(|| async {
+        db.query(
+            "BEGIN TRANSACTION; DELETE memory WHERE subject = $id; \
+             DELETE relates_to WHERE in = $id OR out = $id; DELETE $id; COMMIT TRANSACTION;",
+        )
+        .bind(("id", entity_id.clone()))
+        .await?
+        .check()
+    })
+    .await?;
     Ok(true)
 }
 

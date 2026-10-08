@@ -21,6 +21,7 @@ use surrealdb::{Datetime, RecordId};
 
 use crate::db::Db;
 use crate::error::{AppError, AppResult};
+use crate::tx::with_retry;
 
 /// Entity tables a vault's data can live in -- mirrors `entities/service.py`'s
 /// `KINDS` tuple and `db.rs`'s `memory.subject` record union.
@@ -122,39 +123,47 @@ struct CountRow {
 /// vault -- it's never shared by anyone else joining it as an owner-less
 /// member, only ever by the user inviting others into it.
 pub async fn create_personal_vault(db: &Db, user_id: &RecordId) -> AppResult<RecordId> {
-    let mut res = db
-        .query("CREATE vault SET name = $name, kind = \"personal\" RETURN AFTER")
-        .bind(("name", "Personal"))
-        .await?;
-    let rows: Vec<VaultRow> = res.take(0)?;
-    let vault = rows.into_iter().next().ok_or_else(|| {
-        crate::error::AppError::internal("vault insert returned no row")
-    })?;
-
-    db.query("CREATE vault_member SET vault = $vault, user = $user, role = \"owner\"")
-        .bind(("vault", vault.id.clone()))
+    // Deterministic id: a second personal vault for the same user collides on
+    // the key, so "one personal vault per user" holds even under a race.
+    let vault_id = RecordId::from_table_key("vault", format!("personal_{}", user_id.key()));
+    with_retry(|| async {
+        db.query(
+            r#"BEGIN TRANSACTION;
+            CREATE $vault SET name = "Personal", kind = "personal";
+            CREATE vault_member SET vault = $vault, user = $user, role = "owner";
+            COMMIT TRANSACTION;"#,
+        )
+        .bind(("vault", vault_id.clone()))
         .bind(("user", user_id.clone()))
-        .await?;
-
-    Ok(vault.id)
+        .await?
+        .check()
+    })
+    .await?;
+    Ok(vault_id)
 }
 
 /// Create a new vault (org, or an extra personal-style one -- a user can have
 /// several, per the product ask); creator becomes its owner.
 pub async fn create_vault(db: &Db, user_id: &RecordId, name: &str, kind: &str) -> AppResult<VaultOut> {
-    let mut res = db
-        .query("CREATE vault SET name = $name, kind = $kind RETURN AFTER")
-        .bind(("name", name.to_string()))
-        .bind(("kind", kind.to_string()))
-        .await?;
-    let rows: Vec<VaultFullRow> = res.take(0)?;
-    let vault = rows.into_iter().next().ok_or_else(|| AppError::internal("vault insert returned no row"))?;
-
-    db.query("CREATE vault_member SET vault = $vault, user = $user, role = \"owner\"")
-        .bind(("vault", vault.id.clone()))
-        .bind(("user", user_id.clone()))
-        .await?;
-
+    let vault = with_retry(|| async {
+        let mut res = db
+            .query(
+                r#"BEGIN TRANSACTION;
+                LET $v = (CREATE vault SET name = $name, kind = $kind RETURN AFTER);
+                CREATE vault_member SET vault = $v[0].id, user = $user, role = "owner";
+                RETURN $v;
+                COMMIT TRANSACTION;"#,
+            )
+            .bind(("name", name.to_string()))
+            .bind(("kind", kind.to_string()))
+            .bind(("user", user_id.clone()))
+            .await?
+            .check()?;
+        let rows: Vec<VaultFullRow> = res.take(0)?;
+        Ok(rows.into_iter().next())
+    })
+    .await?
+    .ok_or_else(|| AppError::internal("vault insert returned no row"))?;
     Ok(vault.into())
 }
 
@@ -268,8 +277,13 @@ pub async fn rename_vault(db: &Db, user_id: &RecordId, vault_id: &RecordId, name
 /// cascade if dangling vault data ever becomes a real problem).
 pub async fn delete_vault(db: &Db, user_id: &RecordId, vault_id: &RecordId) -> AppResult<()> {
     require_owner(db, user_id, vault_id).await?;
-    db.query("DELETE vault_member WHERE vault = $vault").bind(("vault", vault_id.clone())).await?;
-    db.query("DELETE $id").bind(("id", vault_id.clone())).await?;
+    with_retry(|| async {
+        db.query("BEGIN TRANSACTION; DELETE vault_member WHERE vault = $vault; DELETE $vault; COMMIT TRANSACTION;")
+            .bind(("vault", vault_id.clone()))
+            .await?
+            .check()
+    })
+    .await?;
     Ok(())
 }
 
@@ -301,7 +315,16 @@ pub async fn invite_member(
         .bind(("vault", vault_id.clone()))
         .bind(("user", invitee))
         .bind(("role", role.to_string()))
-        .await?;
+        .await?
+        .check()
+        .map_err(|e| {
+            // lost the race against a concurrent invite of the same user
+            if e.to_string().contains("already contains") {
+                AppError::bad_request(format!("{email} is already a member or has a pending invite"))
+            } else {
+                e.into()
+            }
+        })?;
     let rows: Vec<MembershipRow> = res.take(0)?;
     let member = rows.into_iter().next().ok_or_else(|| AppError::internal("vault_member insert returned no row"))?;
 
@@ -357,14 +380,23 @@ pub async fn accept_invitation(db: &Db, user_id: &RecordId, vault_id: &RecordId)
         .filter(|m| m.status == "pending")
         .ok_or_else(|| AppError::bad_request("no pending invitation for this vault"))?;
 
-    db.query("UPDATE $id SET status = \"active\"").bind(("id", m.id)).await?;
-
-    let mut res = db
-        .query("SELECT * FROM $id")
-        .bind(("id", vault_id.clone()))
-        .await?;
+    // Guarded flip plus the vault read in one transaction: a double accept, or
+    // an accept racing a decline/withdraw, activates at most once.
+    let mut res = with_retry(|| async {
+        db.query(
+            r#"BEGIN TRANSACTION;
+            LET $flipped = (UPDATE $id SET status = "active" WHERE status = "pending" RETURN AFTER);
+            RETURN IF array::len($flipped) > 0 { (SELECT * FROM $vault) } ELSE { [] };
+            COMMIT TRANSACTION;"#,
+        )
+        .bind(("id", m.id.clone()))
+        .bind(("vault", vault_id.clone()))
+        .await?
+        .check()
+    })
+    .await?;
     let rows: Vec<VaultFullRow> = res.take(0)?;
-    let vault = rows.into_iter().next().ok_or_else(|| AppError::internal("vault lookup returned no row"))?;
+    let vault = rows.into_iter().next().ok_or_else(|| AppError::bad_request("no pending invitation for this vault"))?;
     let v: VaultOut = vault.into();
     Ok(VaultWithRole { id: v.id, name: v.name, kind: v.kind, created_at: v.created_at, role: m.role })
 }
@@ -397,19 +429,26 @@ pub async fn remove_member(db: &Db, user_id: &RecordId, vault_id: &RecordId, ema
         .await?
         .ok_or_else(|| AppError::bad_request(format!("{email} is not a member or invitee")))?;
 
-    if target_membership.role == "owner" {
-        let mut res = db
-            .query("SELECT count() FROM vault_member WHERE vault = $vault AND role = \"owner\" GROUP ALL")
-            .bind(("vault", vault_id.clone()))
-            .await?;
-        let rows: Vec<CountRow> = res.take(0)?;
-        let owners = rows.first().map(|r| r.count).unwrap_or(0);
-        if owners <= 1 {
-            return Err(AppError::bad_request("cannot remove the last owner"));
-        }
-    }
-
-    db.query("DELETE $id").bind(("id", target_membership.id)).await?;
+    // Owner count check and delete in one transaction, so two concurrent
+    // removals cannot each see a second owner and strand the vault.
+    with_retry(|| async {
+        db.query(
+            r#"BEGIN TRANSACTION;
+            LET $owners = (SELECT VALUE id FROM vault_member WHERE vault = $vault AND role = "owner");
+            IF $is_owner AND array::len($owners) <= 1 { THROW "last_owner" };
+            DELETE $id;
+            COMMIT TRANSACTION;"#,
+        )
+        .bind(("vault", vault_id.clone()))
+        .bind(("is_owner", target_membership.role == "owner"))
+        .bind(("id", target_membership.id.clone()))
+        .await?
+        .check()
+    })
+    .await
+    .map_err(|e| {
+        if e.to_string().contains("last_owner") { AppError::bad_request("cannot remove the last owner") } else { e.into() }
+    })?;
     Ok(())
 }
 
@@ -706,28 +745,30 @@ pub async fn merge_vaults(
 pub async fn leave_vault(db: &Db, user_id: &RecordId, vault_id: &RecordId) -> AppResult<()> {
     let Some(m) = membership(db, vault_id, user_id).await? else { return Ok(()) };
 
-    if m.role == "owner" {
-        let mut res = db
-            .query("SELECT count() FROM vault_member WHERE vault = $vault AND user != $user GROUP ALL")
-            .bind(("vault", vault_id.clone()))
-            .bind(("user", user_id.clone()))
-            .await?;
-        let others_rows: Vec<CountRow> = res.take(0)?;
-        let others = others_rows.first().map(|r| r.count).unwrap_or(0);
-
-        let mut res = db
-            .query("SELECT count() FROM vault_member WHERE vault = $vault AND role = \"owner\" GROUP ALL")
-            .bind(("vault", vault_id.clone()))
-            .await?;
-        let owners_rows: Vec<CountRow> = res.take(0)?;
-        let owners = owners_rows.first().map(|r| r.count).unwrap_or(0);
-
-        if owners <= 1 && others > 0 {
-            return Err(AppError::bad_request("you are the last owner -- promote someone else first"));
+    with_retry(|| async {
+        db.query(
+            r#"BEGIN TRANSACTION;
+            LET $owners = (SELECT VALUE id FROM vault_member WHERE vault = $vault AND role = "owner");
+            LET $others = (SELECT VALUE id FROM vault_member WHERE vault = $vault AND user != $user);
+            IF $is_owner AND array::len($owners) <= 1 AND array::len($others) > 0 { THROW "last_owner" };
+            DELETE $id;
+            COMMIT TRANSACTION;"#,
+        )
+        .bind(("vault", vault_id.clone()))
+        .bind(("user", user_id.clone()))
+        .bind(("is_owner", m.role == "owner"))
+        .bind(("id", m.id.clone()))
+        .await?
+        .check()
+    })
+    .await
+    .map_err(|e| {
+        if e.to_string().contains("last_owner") {
+            AppError::bad_request("you are the last owner -- promote someone else first")
+        } else {
+            e.into()
         }
-    }
-
-    db.query("DELETE $id").bind(("id", m.id)).await?;
+    })?;
     Ok(())
 }
 

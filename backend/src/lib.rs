@@ -13,6 +13,7 @@ pub mod routers;
 pub mod sources;
 pub mod state;
 pub mod tools;
+pub mod tx;
 pub mod vaults;
 
 use axum::http::{header, HeaderValue, Method};

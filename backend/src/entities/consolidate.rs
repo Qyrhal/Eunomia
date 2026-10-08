@@ -29,6 +29,9 @@ use surrealdb::RecordId;
 use crate::config::Settings;
 use crate::db::Db;
 use crate::error::{AppError, AppResult};
+use crate::tx::with_retry;
+
+use super::service::observation_rid;
 
 use super::extract::{app_settings_row, resolve_openai};
 
@@ -53,6 +56,8 @@ struct ObservationRow {
     text: String,
     #[serde(default)]
     source_memories: Option<Vec<RecordId>>,
+    #[serde(default)]
+    version: i64,
 }
 
 /// The result of a successful consolidation -- just enough to let callers
@@ -198,39 +203,49 @@ pub async fn consolidate_subject(
     let source_memories: Vec<RecordId> =
         all_source_ids.iter().map(|s| s.parse()).collect::<Result<Vec<_>, _>>().map_err(|_| AppError::internal("source memory id did not round-trip"))?;
 
-    let row = match &existing {
-        None => {
-            let mut res = db
-                .query(
-                    "CREATE memory SET owner = $owner, vault = $vault, subject = $subject, text = $text, \
-                     type = \"observation\", version = 1, proof_count = $proof_count, status = \"fresh\", \
-                     source_memories = $source_memories, updated_at = time::now() RETURN AFTER",
-                )
-                .bind(("owner", owner.clone()))
-                .bind(("vault", subject_row.vault.clone()))
-                .bind(("subject", subject_id.clone()))
-                .bind(("text", belief))
-                .bind(("proof_count", fresh.len() as i64))
-                .bind(("source_memories", source_memories))
-                .await?;
-            let rows: Vec<ObservationRow> = res.take(0)?;
-            rows.into_iter().next().ok_or_else(|| AppError::internal("observation insert returned no row"))?
-        }
-        Some(existing) => {
-            let mut res = db
-                .query(
-                    "UPDATE $id SET text = $text, version = version + 1, proof_count = $proof_count, \
-                     status = \"fresh\", source_memories = $source_memories, updated_at = time::now() RETURN AFTER",
-                )
-                .bind(("id", existing.id.clone()))
-                .bind(("text", belief))
-                .bind(("proof_count", all_source_ids.len() as i64))
-                .bind(("source_memories", source_memories))
-                .await?;
-            let rows: Vec<ObservationRow> = res.take(0)?;
-            rows.into_iter().next().ok_or_else(|| AppError::internal("observation update returned no row"))?
-        }
+    // The LLM call above is too slow to hold a transaction open, so the write
+    // is optimistic: it only lands if the observation is still the one we read
+    // (same version, or still absent). Otherwise someone else revised it
+    // meanwhile; skip, and the next consolidation recomputes from the new state.
+    let (sql, proof_count) = match &existing {
+        None => (
+            r#"BEGIN TRANSACTION;
+            LET $cur = (SELECT VALUE id FROM memory WHERE subject = $subject AND type = "observation" LIMIT 1);
+            LET $row = IF array::len($cur) > 0 { [] } ELSE {
+                (CREATE $obs_id SET owner = $owner, vault = $vault, subject = $subject, text = $text,
+                    type = "observation", version = 1, proof_count = $proof_count, status = "fresh",
+                    source_memories = $source_memories, updated_at = time::now() RETURN AFTER)
+            };
+            RETURN $row;
+            COMMIT TRANSACTION;"#,
+            fresh.len() as i64,
+        ),
+        Some(_) => (
+            "UPDATE $id SET text = $text, version = version + 1, proof_count = $proof_count, \
+             status = \"fresh\", source_memories = $source_memories, updated_at = time::now() \
+             WHERE version = $expected_version RETURN AFTER",
+            all_source_ids.len() as i64,
+        ),
     };
+    let row = with_retry(|| async {
+        let mut res = db
+            .query(sql)
+            .bind(("owner", owner.clone()))
+            .bind(("vault", subject_row.vault.clone()))
+            .bind(("subject", subject_id.clone()))
+            .bind(("obs_id", observation_rid(subject_id)))
+            .bind(("id", existing.as_ref().map(|e| e.id.clone())))
+            .bind(("expected_version", existing.as_ref().map(|e| e.version)))
+            .bind(("text", belief.clone()))
+            .bind(("proof_count", proof_count))
+            .bind(("source_memories", source_memories.clone()))
+            .await?
+            .check()?;
+        let rows: Vec<ObservationRow> = res.take(0)?;
+        Ok(rows.into_iter().next())
+    })
+    .await?;
+    let Some(row) = row else { return Ok(None) };
 
     Ok(Some(ConsolidatedObservation { id: row.id.to_string(), text: row.text }))
 }
