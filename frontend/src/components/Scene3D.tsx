@@ -6,6 +6,7 @@
 // Coordinates can be any scale -- they're fitted into a unit sphere.
 
 import { useEffect, useRef, useState } from "react";
+import { Maximize, Minus, Plus } from "lucide-react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 
@@ -21,21 +22,37 @@ type Props = {
   ariaLabel: string;
   /** draw every point's label (only sensible for small graphs) */
   labels?: boolean;
+  /** floating zoom out / level / zoom in / reset bar, bottom right */
+  zoomControls?: boolean;
 };
 
 const CLICK_SLOP = 4; // px a pointer may move and still count as a click
 const MAX_LABELS = 80;
 
 // "var(--kind-person)" -> the computed color; three can't read CSS variables.
-function cssColor(c: string): THREE.Color {
+// Resolved per theme: a cache lives only for one theme pass.
+function cssColor(c: string, cache?: Map<string, THREE.Color>): THREE.Color {
+  const hit = cache?.get(c);
+  if (hit) return hit;
   const m = c.match(/^var\((--[^)]+)\)$/);
   const value = m ? getComputedStyle(document.documentElement).getPropertyValue(m[1]).trim() : c;
-  return new THREE.Color(value || "#888888");
+  const color = new THREE.Color();
+  try {
+    color.setStyle(value || "gray");
+  } catch {
+    color.set(0x888888);
+  }
+  cache?.set(c, color);
+  return color;
 }
 
-export default function Scene3D({ points, links = [], axes, selectedId, onSelect, ariaLabel, labels }: Props) {
+const START = new THREE.Vector3(1.8, 1.3, 1.8);
+
+export default function Scene3D({ points, links = [], axes, selectedId, onSelect, ariaLabel, labels, zoomControls }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
+  const zoomTextRef = useRef<HTMLSpanElement>(null);
+  const apiRef = useRef<{ zoom: (factor: number) => void; reset: () => void } | null>(null);
   const onSelectRef = useRef(onSelect);
   const selectedRef = useRef(selectedId);
   const [hover, setHover] = useState<{ label: string; x: number; y: number } | null>(null);
@@ -67,10 +84,11 @@ export default function Scene3D({ points, links = [], axes, selectedId, onSelect
 
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(50, 1, 0.01, 100);
-    camera.position.set(1.8, 1.3, 1.8);
+    camera.position.copy(START);
     const controls = new OrbitControls(camera, renderer.domElement);
+    const still = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     controls.enableDamping = true;
-    controls.autoRotate = true;
+    controls.autoRotate = !still;
     controls.autoRotateSpeed = 0.6;
     controls.minDistance = 0.4;
     controls.maxDistance = 8;
@@ -96,11 +114,10 @@ export default function Scene3D({ points, links = [], axes, selectedId, onSelect
       m4.makeScale(s, s, s).setPosition(pos[i]);
       mesh.setMatrixAt(i, m4);
     };
-    points.forEach((p, i) => {
-      place(i, 1);
-      mesh.setColorAt(i, cssColor(p.color));
-    });
+    points.forEach((_, i) => place(i, 1));
     scene.add(mesh);
+    // line materials tinted from --ink-faint, re-tinted on theme change
+    const faintLines: THREE.LineBasicMaterial[] = [];
 
     if (links.length) {
       const verts: number[] = [];
@@ -112,7 +129,9 @@ export default function Scene3D({ points, links = [], axes, selectedId, onSelect
       }
       const g = new THREE.BufferGeometry();
       g.setAttribute("position", new THREE.Float32BufferAttribute(verts, 3));
-      scene.add(new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color: cssColor("var(--ink-faint)"), transparent: true, opacity: 0.45 })));
+      const mat = new THREE.LineBasicMaterial({ transparent: true, opacity: 0.4 });
+      faintLines.push(mat);
+      scene.add(new THREE.LineSegments(g, mat));
     }
 
     // axis lines + labels at their positive ends
@@ -121,15 +140,33 @@ export default function Scene3D({ points, links = [], axes, selectedId, onSelect
       const g = new THREE.BufferGeometry();
       g.setAttribute("position", new THREE.Float32BufferAttribute([-1.15, 0, 0, 1.15, 0, 0, 0, -1.15, 0, 0, 1.15, 0, 0, 0, -1.15, 0, 0, 1.15], 3));
       // theme border colours are rgba; three ignores alpha, so opacity is set here
-      scene.add(new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color: cssColor("var(--ink-faint)"), transparent: true, opacity: 0.6 })));
-      const grid = new THREE.GridHelper(2.3, 10, cssColor("var(--ink-faint)"), cssColor("var(--ink-faint)"));
-      const gm = grid.material as THREE.Material;
+      const axisMat = new THREE.LineBasicMaterial({ transparent: true, opacity: 0.6 });
+      faintLines.push(axisMat);
+      scene.add(new THREE.LineSegments(g, axisMat));
+      const grid = new THREE.GridHelper(2.3, 10);
+      const gm = grid.material as THREE.LineBasicMaterial;
+      gm.vertexColors = false;
       gm.transparent = true;
       gm.opacity = 0.12;
+      faintLines.push(gm);
       grid.position.y = -1.15;
       scene.add(grid);
       axisEnds.push(new THREE.Vector3(1.22, 0, 0), new THREE.Vector3(0, 1.22, 0), new THREE.Vector3(0, 0, 1.22));
     }
+
+    const applyTheme = () => {
+      const cache = new Map<string, THREE.Color>();
+      points.forEach((p, i) => mesh.setColorAt(i, cssColor(p.color, cache)));
+      if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+      const faint = cssColor("var(--ink-faint)", cache);
+      faintLines.forEach((m) => {
+        m.color.copy(faint);
+        m.needsUpdate = true;
+      });
+    };
+    applyTheme();
+    const themeWatch = new MutationObserver(applyTheme);
+    themeWatch.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
 
     scene.add(new THREE.AmbientLight(0xffffff, 1.4));
     const sun = new THREE.DirectionalLight(0xffffff, 1.6);
@@ -150,6 +187,11 @@ export default function Scene3D({ points, links = [], axes, selectedId, onSelect
     const pointTags = labelled.map((i) => tag(points[i].label.length > 18 ? `${points[i].label.slice(0, 17)}…` : points[i].label));
     const axisTags = (axes ?? []).map((a) => tag(a, true));
     const selectedTag = tag("");
+    // Figma-style selection frame around the selected node
+    const selFrame = document.createElement("div");
+    selFrame.className = "frame-selected";
+    Object.assign(selFrame.style, { position: "absolute", left: "0", top: "0", display: "none" });
+    overlay.appendChild(selFrame);
 
     const size = { w: 1, h: 1 };
     const resize = () => {
@@ -171,6 +213,24 @@ export default function Scene3D({ points, links = [], axes, selectedId, onSelect
       el.style.transform = `translate(-50%, 0) translate(${((v.x + 1) / 2) * size.w}px, ${((1 - v.y) / 2) * size.h + dy}px)`;
     };
 
+    const focal = () => size.h / 2 / Math.tan((camera.fov * Math.PI) / 360);
+    const baseDistance = START.length();
+    let lastZoom = "";
+
+    apiRef.current = {
+      zoom: (factor) => {
+        controls.autoRotate = false;
+        const offset = camera.position.clone().sub(controls.target);
+        const d = THREE.MathUtils.clamp(offset.length() * factor, controls.minDistance, controls.maxDistance);
+        camera.position.copy(controls.target).add(offset.setLength(d));
+      },
+      reset: () => {
+        controls.target.set(0, 0, 0);
+        camera.position.copy(START);
+        controls.autoRotate = !still;
+      },
+    };
+
     let lastSelected: number | undefined;
     let raf = 0;
     const frame = () => {
@@ -184,12 +244,30 @@ export default function Scene3D({ points, links = [], axes, selectedId, onSelect
         lastSelected = sel;
       }
       renderer.render(scene, camera);
-      labelled.forEach((i, k) => project(pointTags[k], pos[i], 10));
+      // labels sit just under each sphere's projected edge
+      const f = focal();
+      const below = (i: number, scale = 1) => (baseSize * (points[i].size ?? 1) * scale * f) / camera.position.distanceTo(pos[i]) + 3;
+      labelled.forEach((i, k) => project(pointTags[k], pos[i], i === sel ? below(i, 1.8) + 6 : below(i)));
       axisEnds.forEach((p, k) => project(axisTags[k], p));
       if (sel !== undefined && !labelled.includes(sel)) {
         selectedTag.textContent = points[sel].label;
-        project(selectedTag, pos[sel], 12);
+        project(selectedTag, pos[sel], below(sel, 1.8) + 6);
       } else selectedTag.style.display = "none";
+      if (sel !== undefined) {
+        v.copy(pos[sel]).project(camera);
+        if (v.z > 1) selFrame.style.display = "none";
+        else {
+          const r = (baseSize * (points[sel].size ?? 1) * 1.8 * focal()) / camera.position.distanceTo(pos[sel]);
+          const box = Math.round(2 * r + 10);
+          selFrame.style.display = "block";
+          selFrame.style.width = selFrame.style.height = `${box}px`;
+          selFrame.style.transform = `translate(${((v.x + 1) / 2) * size.w - box / 2}px, ${((1 - v.y) / 2) * size.h - box / 2}px)`;
+        }
+      } else selFrame.style.display = "none";
+      if (zoomTextRef.current) {
+        const z = `${Math.round((baseDistance / camera.position.distanceTo(controls.target)) * 100)}%`;
+        if (z !== lastZoom) zoomTextRef.current.textContent = lastZoom = z;
+      }
     };
     frame();
 
@@ -226,6 +304,8 @@ export default function Scene3D({ points, links = [], axes, selectedId, onSelect
 
     return () => {
       cancelAnimationFrame(raf);
+      apiRef.current = null;
+      themeWatch.disconnect();
       ro.disconnect();
       controls.dispose();
       renderer.dispose();
@@ -241,14 +321,33 @@ export default function Scene3D({ points, links = [], axes, selectedId, onSelect
   }, [points, links, axes, labels]);
 
   return (
-    <div ref={wrapRef} className="relative w-full h-full overflow-hidden" role="img" aria-label={ariaLabel}>
-      <div ref={overlayRef} className="absolute inset-0 pointer-events-none" aria-hidden />
+    <div className="relative w-full h-full overflow-hidden">
+      <div ref={wrapRef} className="absolute inset-0" role="img" aria-label={ariaLabel}>
+        <div ref={overlayRef} className="absolute inset-0 pointer-events-none" aria-hidden />
+      </div>
       {hover && (
         <div
-          className="absolute pointer-events-none px-2 py-1 rounded-md text-[11.5px] max-w-xs"
-          style={{ left: hover.x + 12, top: hover.y + 12, background: "var(--surface-raised)", border: "1px solid var(--border)", color: "var(--ink)" }}
+          className="panel absolute pointer-events-none px-2 py-1 text-[12px] max-w-xs"
+          style={{ left: hover.x + 12, top: hover.y + 12, borderRadius: 6, color: "var(--ink)", boxShadow: "var(--shadow-pop)" }}
         >
           {hover.label}
+        </div>
+      )}
+      {zoomControls && (
+        <div className="panel absolute right-3 bottom-3 hidden md:flex items-center gap-0.5 p-1" role="group" aria-label="Zoom">
+          <button type="button" className="btn btn-ghost btn-sm btn-icon w-[26px]" aria-label="Zoom out" onClick={() => apiRef.current?.zoom(1.25)}>
+            <Minus size={14} strokeWidth={1.75} />
+          </button>
+          <span ref={zoomTextRef} className="font-mono text-[12px] w-12 text-center" style={{ color: "var(--ink-dim)" }}>
+            100%
+          </span>
+          <button type="button" className="btn btn-ghost btn-sm btn-icon w-[26px]" aria-label="Zoom in" onClick={() => apiRef.current?.zoom(0.8)}>
+            <Plus size={14} strokeWidth={1.75} />
+          </button>
+          <span className="w-px h-4 mx-0.5" style={{ background: "var(--border)" }} aria-hidden />
+          <button type="button" className="btn btn-ghost btn-sm btn-icon w-[26px]" aria-label="Reset view" title="Reset view" onClick={() => apiRef.current?.reset()}>
+            <Maximize size={14} strokeWidth={1.75} />
+          </button>
         </div>
       )}
       {/* keyboard / screen-reader access to every point */}
