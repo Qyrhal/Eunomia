@@ -146,6 +146,23 @@ echo "=== run 3: idempotent re-run ==="
 bash "$W/upgrade.sh"; rc=$?
 check "re-run on 3.x exits 0 and changes nothing" test "$rc" -eq 0 -a "$(running_image)" = "$NEW_IMG"
 
+# --- case C: surrealdb DOWN (an old updater pulled 3.x over 2.x data and the server exited). NOT YET RUN: needs Docker. ---
+echo "=== case C: recover with surrealdb stopped ==="
+docker compose down -v --remove-orphans >/dev/null 2>&1
+docker volume ls -q --filter label=com.docker.compose.project=fw-upgrade | xargs docker volume rm >/dev/null 2>&1
+printf 'JWT_SECRET=x\nENCRYPTION_KEY=y\nBACKUP_ENCRYPTION_KEY=%s\n' "$BACKUP_ENCRYPTION_KEY" > "$W/.env"
+cp "$W/compose.old" "$W/docker-compose.yml"
+docker compose up -d --wait --pull never surrealdb backup backend >/dev/null || { echo "case C stack did not start"; FAIL=$((FAIL + 1)); }
+printf 'DEFINE TABLE person SCHEMALESS;\nCREATE person:a SET name = "a";\nCREATE person:b SET name = "b";\n' | sq "$OLD_IMG" >/dev/null
+docker compose stop surrealdb backend >/dev/null
+cp "$W/compose.new" "$W/docker-compose.yml"
+EUNOMIA_SURREAL_OLD_IMAGE="$OLD_IMG" bash "$W/upgrade.sh"; rc=$?
+echo "=== case C exit code $rc ==="
+check "case C: script exits 0 with surrealdb stopped" test "$rc" -eq 0
+check "case C: 3.3 runs with the same rows" test "$(running_image)" = "$NEW_IMG" -a "$(count "$NEW_IMG" person)" = 2
+check "case C: a pre-v3 backup was written from the old server" bash -c "docker compose run --rm --no-deps -T backup list | grep -q 'pre-v3-.*surql.enc'"
+check "case C: the temporary server and copy are gone" test -z "$(docker ps -aq --filter name=fw-upgrade-v2scratch; docker volume ls -q --filter name=v2copy)"
+
 # --- case B: the REAL released install. v1.2.2 ships surrealdb:v2.3 and has NO `backup` service. ---
 # Needs Docker and the v1.2.2 tag in the checkout (CI: fetch-depth 0). Starts over from nothing.
 echo "=== case B: upgrade from the released v1.2.2 compose file ==="

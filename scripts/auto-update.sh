@@ -85,14 +85,14 @@ main() {
     sed -i.bak '/^BACKUP_ENCRYPTION_KEY=/d' .env && rm -f .env.bak
     echo "BACKUP_ENCRYPTION_KEY=$(head -c 32 /dev/urandom | base64 | tr -d '\n')" >> .env
   fi
-  # A release that pins SurrealDB 3.x over a running 2.x needs its data moved
+  # A release that pins SurrealDB 3.x over 2.x (running, or stopped: the script finds the volume itself) needs its data moved
   # first (export, fresh volume, verify; see docs/upgrading-to-surrealdb-3.md).
   # The script rolls itself back on failure, so here we only undo the checkout
   # to let "Update now" be retried. It can run for a long time: keep the lock fresh.
   local new_major old_major
   new_major="$(docker compose config --images 2>/dev/null | sed -n 's#^surrealdb/surrealdb:v\{0,1\}\([0-9][0-9]*\)\..*#\1#p' | head -1)"
   old_major="$(docker inspect -f '{{.Config.Image}}' "$(docker compose ps -q surrealdb 2>/dev/null | head -1)" 2>/dev/null | sed -n 's#.*:v\{0,1\}\([0-9][0-9]*\)\..*#\1#p')"
-  if [ "$new_major" = 3 ] && [ "$old_major" = 2 ]; then
+  if [ "$new_major" = 3 ] && [ "$old_major" != 3 ]; then
     ( while sleep 60; do touch "$status_dir/.lock"; done ) & local keepalive=$!; disown "$keepalive"
     bash scripts/upgrade-surreal-v3.sh >> "$status_dir/upgrade.log" 2>&1; local rc=$?
     kill "$keepalive" 2>/dev/null

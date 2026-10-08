@@ -132,5 +132,13 @@ rm -f "$S/status.json"; (cd "$TMP/repo" && git remote set-url origin "file://$TM
 update
 check "unreachable origin is reported" grep -q 'could not reach GitHub' "$S/status.json"
 
+# 2.x stopped (what an install looks like after an old updater broke it): the script must still be called
+(cd "$TMP/repo" && git remote set-url origin "file://$TMP/src")
+(cd "$TMP/src" && echo nine > compose.yml && git_ commit -qam v1.9 && git tag v1.9.0)
+echo surrealdb/surrealdb:v3.3.0 > "$TMP/images"; rm -f "$TMP/running"
+: > "$TMP/docker.log"; touch "$S/requested"; update
+check "surrealdb not running: upgrade script still runs" grep -qx UPGRADE "$TMP/docker.log"
+check "surrealdb not running: release applied after the upgrade" test "$(cat "$TMP/repo/compose.yml")" = nine
+rm -f "$TMP/images" "$TMP/running"
 echo "auto-update: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

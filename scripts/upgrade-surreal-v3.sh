@@ -66,22 +66,38 @@ target_image="$(compose config --images 2>/dev/null | grep '^surrealdb/surrealdb
 if [ "$(major_of "$target_image")" != 3 ]; then
   log "compose file pins $target_image, not 3.x: nothing to do"; exit 0
 fi
-if ! $running; then
+# "down": surrealdb is stopped or unhealthy. That is what an install looks like after an OLD
+# updater (one without this hook) pulled a 3.x release over 2.x data: the 3.x server refuses
+# the 2.x files and exits. Recover from the volume by name; never start anything on the original.
+health=""; $running && health="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$cid" 2>/dev/null)"
+down=false
+{ ! $running || [ "$health" = unhealthy ]; } && down=true
+if $down; then
   [ "$(envval SURREAL_DATA_VOLUME '')" = "$V3_VOLUME" ] && { log "already on $V3_VOLUME: nothing to do"; exit 0; }
-  die "surrealdb is not running. Start the stack on the old release (docker compose up -d), then re-run."
+  PROJECT="${COMPOSE_PROJECT_NAME:-$(compose config 2>/dev/null | sed -n 's/^name: //p')}"
+  [ -n "$PROJECT" ] || die "cannot work out the compose project name (set COMPOSE_PROJECT_NAME)"
+  OLD_VOLUME="$(docker volume ls -q --filter "label=com.docker.compose.volume=eunomia-surreal-data" --filter "label=com.docker.compose.project=$PROJECT" | head -1)"
+  [ -n "$OLD_VOLUME" ] || OLD_VOLUME="$(docker volume ls -q --filter "name=^${PROJECT}_eunomia-surreal-data$" | head -1)"
+  [ -n "$OLD_VOLUME" ] || { log "no ${PROJECT}_eunomia-surreal-data volume: nothing to upgrade"; exit 0; }
+  old_image="${EUNOMIA_SURREAL_OLD_IMAGE:-surrealdb/surrealdb:v2.3}"   # what v1.2.2 and v1.3.0 shipped
+  NET="${PROJECT}_default"
+  docker network inspect "$NET" >/dev/null 2>&1 || die "network $NET not found. Run: docker compose up -d backup   (then re-run)"
+  compose stop surrealdb >/dev/null 2>&1   # end any crash loop
+  log "surrealdb is down: working from a COPY of $OLD_VOLUME with $old_image (the original is never opened)"
+else
+  old_image="$(docker inspect -f '{{.Config.Image}}' "$cid")"
+  old_major="$(major_of "$old_image")"
+  [ -n "$old_major" ] || old_major="$(docker exec "$cid" /surreal version 2>/dev/null | sed -n 's/^\([0-9][0-9]*\)\..*/\1/p')"
+  case "$old_major" in
+    3) log "SurrealDB already runs 3.x ($old_image): nothing to do"; exit 0 ;;
+    2) ;;
+    *) die "cannot tell the running SurrealDB version (image $old_image)" ;;
+  esac
+  NET="$(docker inspect -f '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{"\n"}}{{end}}' "$cid" | head -1)"
+  OLD_VOLUME="$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Name}}{{end}}{{end}}' "$cid")"
+  [ -n "$OLD_VOLUME" ] || die "cannot find the data volume of the running SurrealDB"
+  PROJECT="$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project"}}' "$cid")"
 fi
-old_image="$(docker inspect -f '{{.Config.Image}}' "$cid")"
-old_major="$(major_of "$old_image")"
-[ -n "$old_major" ] || old_major="$(docker exec "$cid" /surreal version 2>/dev/null | sed -n 's/^\([0-9][0-9]*\)\..*/\1/p')"
-case "$old_major" in
-  3) log "SurrealDB already runs 3.x ($old_image): nothing to do"; exit 0 ;;
-  2) ;;
-  *) die "cannot tell the running SurrealDB version (image $old_image)" ;;
-esac
-NET="$(docker inspect -f '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{"\n"}}{{end}}' "$cid" | head -1)"
-OLD_VOLUME="$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Name}}{{end}}{{end}}' "$cid")"
-[ -n "$OLD_VOLUME" ] || die "cannot find the data volume of the running SurrealDB"
-PROJECT="$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project"}}' "$cid")"
 bid="$(compose ps -q backend 2>/dev/null | head -1)"
 base_compose="${COMPOSE_FILE:-docker-compose.yml}"
 log "upgrading SurrealDB $old_image -> $target_image (network $NET)"
@@ -136,12 +152,25 @@ count_tables() {
 ledger() { echo 'SELECT version, name, checksum FROM _migration ORDER BY version;' | sqlq "$1" | tr -d ' \n'; }
 
 # --- 2. quiesce, then the encrypted backup ---
+if $down; then
+  # the backup service reaches the DB as http://surrealdb:8000, so a temporary 2.x server on a copy answers to that name
+  docker volume create "$SCRATCH_VOLUME" >/dev/null
+  docker run --rm -v "$OLD_VOLUME:/from:ro" -v "$SCRATCH_VOLUME:/to" busybox:1.36 cp -a /from/. /to/ || die "could not copy the data volume"
+  docker run -d --name "$SCRATCH_CTR" --network "$NET" --network-alias surrealdb --user root -v "$SCRATCH_VOLUME:/data" \
+    --entrypoint /surreal "$old_image" start --user "$SURREAL_USER" --pass "$SURREAL_PASS" rocksdb:/data/eunomia.db >/dev/null \
+    || die "could not start $old_image on the copy"
+  for i in $(seq 1 60); do
+    docker run --rm --network "$NET" "$old_image" isready --endpoint http://surrealdb:8000 >/dev/null 2>&1 && break
+    [ "$i" -lt 60 ] || die "$old_image did not open the copy of the data (see: docker logs $SCRATCH_CTR). Nothing was changed."
+    sleep 2
+  done
+fi
 phase=1
 if [ -n "$bid" ]; then compose stop backend >/dev/null || die "could not stop the backend"; fi
 log "backend stopped; taking the encrypted pre-upgrade backup"
 # The backup image comes from the NEW compose file (its tag is already in .env); no `backup` service
 # needs to be running, or to have ever existed. It runs the old server's own CLI via SURREAL_BIN.
-cleanup_scratch
+$down || cleanup_scratch
 bc="$(docker create -v "$BIN_VOLUME:/o" busybox:1.36 true)" || die "could not create the CLI volume"
 oc="$(docker create "$old_image")" && docker cp "$oc:/surreal" "$T/surreal-old" >/dev/null && docker rm "$oc" >/dev/null \
   || die "could not copy the surreal binary out of $old_image"
@@ -152,6 +181,7 @@ compose run --rm --no-deps -T -v "$BIN_VOLUME:/opt/oldbin:ro" -e SURREAL_BIN=/op
 
 # --- 3. copy the data, run 2.7 on the copy, export for 3.x and convert what 3.x dropped ---
 phase=2
+if $down; then docker rm -f "$SCRATCH_CTR" >/dev/null 2>&1; docker volume rm "$SCRATCH_VOLUME" >/dev/null 2>&1; fi
 compose stop surrealdb >/dev/null || die "could not stop surrealdb"
 log "copying volume $OLD_VOLUME to $SCRATCH_VOLUME and starting $EXPORT_IMAGE on the copy"
 docker volume create "$SCRATCH_VOLUME" >/dev/null
