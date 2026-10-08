@@ -3,6 +3,55 @@
 
 export type Me = { id: string; email: string; onboarded: boolean };
 
+export type Scope = "memory:read" | "memory:write" | "vaults:admin" | "connectors";
+export type ApiToken = {
+  id: string;
+  name: string;
+  created_at: string | null;
+  last_used_at: string | null;
+  scopes: Scope[];
+  /** Set when the token is restricted to one vault. */
+  vault_id: string | null;
+  /** Null for a token that never expires. */
+  expires_at: string | null;
+};
+export type Session = { id: string; user_agent: string; created_at: string | null; last_seen_at: string | null };
+
+export type OAuthGrant = {
+  id: string;
+  client_id: string;
+  client_name: string;
+  client_logo: string | null;
+  scope: string[];
+  created_at: string;
+  last_used_at: string | null;
+};
+
+export type AppSettings = {
+  embedding_model: string;
+  sync_intervals: Record<string, number>;
+  theme: { mode?: "light" | "dark" | "system"; accent?: string };
+  openai_api_key_set: boolean;
+  openai_base_url: string;
+  observations_mission: string;
+  memory_skill: string;
+  memory_skill_custom: boolean;
+};
+
+export type OpenAiModels = { models: string[]; error: string | null };
+
+export type UpdateStatus =
+  | { configured: false }
+  | {
+      configured: true;
+      current_version: string;
+      latest_version: string;
+      update_available: boolean;
+      checked_at: string;
+      applying: boolean;
+      error: string | null;
+    };
+
 export type ConnectorKind =
   | "up_bank"
   | "pocketai"

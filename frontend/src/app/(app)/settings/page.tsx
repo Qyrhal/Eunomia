@@ -3,23 +3,23 @@
 import ErrorLine, { failure, type Failure } from "@/components/ErrorLine";
 import Select from "@/components/Select";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { Check, ChevronRight, Download, KeyRound, Monitor, Plug, RefreshCw, Trash2, X } from "lucide-react";
+import type { SettingsUpdate } from "@/lib/gen";
+import { downloadExport } from "@/lib/api";
+import { useCreateToken, useRevokeSession, useRevokeToken, useSessions, useTokens } from "@/lib/queries/auth";
+import { useOauthGrants, useRevokeOauthGrant } from "@/lib/queries/oauth";
 import {
-  auth,
-  downloadExport,
-  settings as settingsApi,
-  update as updateApi,
-  oauth,
-  type ApiToken,
-  type OAuthGrant,
-  type AppSettings,
-  type Scope,
-  type Session,
-  type UpdateStatus,
-} from "@/lib/api";
+  updateStatusQuery,
+  useCheckForUpdate,
+  useOpenAiModels,
+  useRequestUpdate,
+  useSettings,
+  useUpdateSettings,
+} from "@/lib/queries/settings";
 import { useVaults } from "@/lib/queries/vaults";
-import type { Vault } from "@/lib/types";
+import type { AppSettings, Scope, UpdateStatus, Vault } from "@/lib/types";
 import CopyButton from "@/components/bits/CopyButton";
 import DecryptReveal from "@/components/bits/DecryptReveal";
 import Tooltip from "@/components/bits/Tooltip";
@@ -156,7 +156,10 @@ const EXPIRY_OPTIONS = [
 ];
 
 function TokensSection() {
-  const [tokens, setTokens] = useState<ApiToken[] | null>(null);
+  const tokensQuery = useTokens();
+  const tokens = tokensQuery.data ?? (tokensQuery.isError ? [] : null);
+  const createToken = useCreateToken();
+  const revokeToken = useRevokeToken();
   const vaultList: Vault[] = useVaults().data ?? [];
   const [name, setName] = useState("");
   const [scopes, setScopes] = useState<Scope[]>(SCOPES.map((s) => s.id));
@@ -166,25 +169,20 @@ function TokensSection() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<Failure | null>(null);
 
-  const load = () => auth.tokens.list().then(setTokens).catch(() => setTokens([]));
-  useEffect(() => {
-    load();
-  }, []);
-
   const vaultName = (id: string) => vaultList.find((v) => v.id === id)?.name ?? id;
 
   async function create() {
     setBusy(true);
     setError(null);
     try {
-      const res = await auth.tokens.create(name.trim() || "API token", {
+      const res = await createToken.mutateAsync({
+        name: name.trim() || "API token",
         scopes,
         vault_id: vaultId || null,
         expires_at: expiryDays ? new Date(Date.now() + Number(expiryDays) * 86_400_000).toISOString() : null,
       });
       setMinted({ name: res.name, token: res.token });
       setName("");
-      await load();
     } catch (e) {
       setError(failure(e, "Could not create a token. Check that you're still signed in, then try again."));
     } finally {
@@ -195,8 +193,7 @@ function TokensSection() {
   async function revoke(id: string) {
     setError(null);
     try {
-      await auth.tokens.revoke(id);
-      await load();
+      await revokeToken.mutateAsync(id);
     } catch (e) {
       setError(failure(e, "Could not revoke that token. Reload and try again."));
     }
@@ -387,19 +384,15 @@ const SCOPE_WORDS: Record<string, string> = {
 };
 
 function ConnectedAppsSection() {
-  const [grants, setGrants] = useState<OAuthGrant[] | null>(null);
+  const grantsQuery = useOauthGrants();
+  const grants = grantsQuery.data ?? (grantsQuery.isError ? [] : null);
+  const revokeGrant = useRevokeOauthGrant();
   const [error, setError] = useState<Failure | null>(null);
-
-  const load = () => oauth.grants.list().then(setGrants).catch(() => setGrants([]));
-  useEffect(() => {
-    load();
-  }, []);
 
   async function revoke(id: string) {
     setError(null);
     try {
-      await oauth.grants.revoke(id);
-      await load();
+      await revokeGrant.mutateAsync(id);
     } catch (e) {
       setError(failure(e, "Could not disconnect that app. Reload and try again."));
     }
@@ -461,19 +454,15 @@ function ConnectedAppsSection() {
 }
 
 function SessionsSection() {
-  const [sessions, setSessions] = useState<Session[] | null>(null);
+  const sessionsQuery = useSessions();
+  const sessions = sessionsQuery.data ?? (sessionsQuery.isError ? [] : null);
+  const revokeSession = useRevokeSession();
   const [error, setError] = useState<Failure | null>(null);
-
-  const load = () => auth.sessions.list().then(setSessions).catch(() => setSessions([]));
-  useEffect(() => {
-    load();
-  }, []);
 
   async function revoke(id: string) {
     setError(null);
     try {
-      await auth.sessions.revoke(id);
-      await load();
+      await revokeSession.mutateAsync(id);
     } catch (e) {
       setError(failure(e, "Could not revoke that session. Reload and try again."));
     }
@@ -539,6 +528,9 @@ const INSTALL_CMD = "curl -fsSL https://midhunkumar05.github.io/eunomia/install.
 type Phase = "idle" | "waiting" | "applying" | "restarting";
 
 function UpdateSection() {
+  const qc = useQueryClient();
+  const requestUpdateMutation = useRequestUpdate();
+  const checkMutation = useCheckForUpdate();
   const [status, setStatus] = useState<UpdateStatus | null>(null);
   const [phase, setPhase] = useState<Phase>("idle");
   const [target, setTarget] = useState<string | null>(null);
@@ -563,8 +555,9 @@ function UpdateSection() {
 
   const load = useCallback(
     () =>
-      updateApi
-        .status()
+      // Always hit the network (staleTime 0) but share the cache with the sidebar's update badge.
+      qc
+        .fetchQuery({ ...updateStatusQuery(), staleTime: 0 })
         .then((s) => {
           setStatus(s);
           setError(null);
@@ -577,7 +570,7 @@ function UpdateSection() {
           );
         })
         .catch(() => setPhase((p) => (p === "idle" ? p : "restarting"))),
-    []
+    [qc]
   );
 
   useEffect(() => {
@@ -599,7 +592,7 @@ function UpdateSection() {
     setError(null);
     try {
       requestedAt.current = Date.now();
-      await updateApi.request();
+      await requestUpdateMutation.mutateAsync();
       setTarget(status.latest_version);
       setPhase("waiting");
     } catch (e) {
@@ -610,7 +603,7 @@ function UpdateSection() {
   async function checkNow() {
     setChecking(true);
     setCheckResult(null);
-    await updateApi.check().catch(() => {
+    await checkMutation.mutateAsync().catch(() => {
       setChecking(false);
       setCheckResult("failed");
     });
@@ -731,12 +724,14 @@ function UpdateSection() {
   );
 }
 
-function GeneralSection({ settings, onSaved }: { settings: AppSettings; onSaved: (s: AppSettings) => void }) {
+function GeneralSection({ settings }: { settings: AppSettings }) {
+  const updateSettings = useUpdateSettings();
   const [apiKeyInput, setApiKeyInput] = useState("");
   const [baseUrlInput, setBaseUrlInput] = useState(settings.openai_base_url);
   const [modelInput, setModelInput] = useState(settings.embedding_model);
-  const [models, setModels] = useState<string[]>([]);
-  const [modelsError, setModelsError] = useState<string | null>(null);
+  const modelsQuery = useOpenAiModels(settings.openai_base_url, settings.openai_api_key_set);
+  const models = modelsQuery.data?.models ?? [];
+  const modelsError = modelsQuery.data?.error ?? (modelsQuery.isError ? "Could not reach the models endpoint." : null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<Failure | null>(null);
@@ -745,19 +740,9 @@ function GeneralSection({ settings, onSaved }: { settings: AppSettings; onSaved:
   const dirty =
     apiKeyInput !== "" || baseUrlInput.trim() !== settings.openai_base_url || modelInput.trim() !== settings.embedding_model;
 
-  useEffect(() => {
-    settingsApi
-      .openaiModels()
-      .then((res) => {
-        setModels(res.models);
-        setModelsError(res.error);
-      })
-      .catch(() => setModelsError("Could not reach the models endpoint."));
-  }, [settings.openai_base_url, settings.openai_api_key_set]);
-
   async function saveSettings() {
     if (urlInvalid) return;
-    const payload: Record<string, unknown> = {
+    const payload: SettingsUpdate = {
       theme: settings.theme,
       openai_base_url: baseUrlInput.trim(),
       embedding_model: modelInput.trim(),
@@ -766,8 +751,7 @@ function GeneralSection({ settings, onSaved }: { settings: AppSettings; onSaved:
     setSaving(true);
     setError(null);
     try {
-      const updated = await settingsApi.update(payload);
-      onSaved(updated);
+      await updateSettings.mutateAsync(payload);
       setApiKeyInput("");
       setSaved(true);
       setTimeout(() => setSaved(false), 1500);
@@ -957,16 +941,10 @@ export default function SettingsPage() {
     const q = new URLSearchParams(window.location.search).get("tab");
     return isTab(q) ? q : "general";
   });
-  const [settings, setSettings] = useState<AppSettings | null>(null);
-  const [loadError, setLoadError] = useState(false);
+  const settingsQuery = useSettings();
+  const settings = settingsQuery.data ?? null;
+  const loadError = settingsQuery.isError;
   const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
-
-  useEffect(() => {
-    settingsApi
-      .get()
-      .then(setSettings)
-      .catch(() => setLoadError(true));
-  }, []);
 
   function choose(id: TabId) {
     setTab(id);
@@ -1035,7 +1013,7 @@ export default function SettingsPage() {
           </div>
 
           <div role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`} className="min-w-0 max-w-3xl">
-            {tab === "general" && <GeneralSection settings={settings} onSaved={setSettings} />}
+            {tab === "general" && <GeneralSection settings={settings} />}
             {tab === "updates" && <UpdateSection />}
             {tab === "tokens" && <TokensSection />}
             {tab === "apps" && <ConnectedAppsSection />}
