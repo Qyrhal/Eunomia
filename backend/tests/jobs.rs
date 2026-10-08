@@ -407,7 +407,8 @@ async fn job_claim_throughput() {
     assert_eq!(count(&state, "SELECT count() AS n FROM job GROUP ALL").await, JOBS as i64);
 
     // (job id, locked_until at claim) per execution, in start order
-    let execs: Arc<Mutex<Vec<(String, chrono::DateTime<chrono::Utc>)>>> = Default::default();
+    type Execs = Arc<Mutex<Vec<(String, chrono::DateTime<chrono::Utc>)>>>;
+    let execs: Execs = Default::default();
     let reg = {
         let execs = execs.clone();
         Registry::new().register("spike", move |_s, job: Job| {
@@ -447,12 +448,12 @@ async fn job_claim_throughput() {
     let elapsed = start.elapsed();
     let _ = stop.send(true);
 
+    let dead = count(&state, "SELECT count() AS n FROM job WHERE status = 'dead' GROUP ALL").await;
     let execs = execs.lock().unwrap();
     let mut by_job: HashMap<&str, Vec<chrono::DateTime<chrono::Utc>>> = HashMap::new();
     for (id, until) in execs.iter() {
         by_job.entry(id).or_default().push(*until);
     }
-    let dead = count(&state, "SELECT count() AS n FROM job WHERE status = 'dead' GROUP ALL").await;
     let mut early_dupes = 0;
     let mut reclaims = 0;
     for runs in by_job.values() {

@@ -153,6 +153,34 @@ expression: info(&db).await
       "drop": false,
       "full": true,
       "kind": {
+        "kind": "NORMAL"
+      },
+      "name": "job",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      }
+    },
+    {
+      "drop": false,
+      "full": true,
+      "kind": {
+        "kind": "NORMAL"
+      },
+      "name": "job_leader",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      }
+    },
+    {
+      "drop": false,
+      "full": true,
+      "kind": {
         "enforced": false,
         "in": [
           "cache_record"

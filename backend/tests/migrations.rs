@@ -114,7 +114,7 @@ async fn rerun_is_noop() {
     let before = info(&db).await;
     migrate::migrate(&db, &s).await.unwrap();
     assert_eq!(before, info(&db).await);
-    assert_eq!(count(&db, "_migration").await, 3);
+    assert_eq!(count(&db, "_migration").await, 4);
 }
 
 #[tokio::test]
