@@ -241,7 +241,7 @@ async fn plant(state: &AppState, router: &Router, name: &'static str, user: User
         UPSERT $sync SET owner = $u, cursor = $c, last_error = $c;
         CREATE embed_cache SET text_hmac = $c, vector = [0.5, 0.25];
         DELETE vault_member WHERE vault = $v;
-        CREATE type::record('vault_member', $c) SET vault = $v, user = $u, role = 'owner';";
+        CREATE $vm SET vault = $v, user = $u, role = 'owner';";
     let uid = user.id.clone();
     db.test_raw()
         .query(sql)
@@ -252,6 +252,7 @@ async fn plant(state: &AppState, router: &Router, name: &'static str, user: User
         .bind(("settings", surrealdb::types::RecordId::new("app_settings", uid.key().clone())))
         .bind(("sync", surrealdb::types::RecordId::new("sync_status", format!("{}:github", eunomia_backend::rid::key_string(uid.key()).unwrap()))))
         .bind(("v", eunomia_backend::rid::parse(&vault).unwrap()))
+        .bind(("vm", surrealdb::types::RecordId::new("vault_member", canary.clone())))
         .await
         .unwrap()
         .check()
@@ -282,7 +283,7 @@ async fn plant(state: &AppState, router: &Router, name: &'static str, user: User
         UPDATE $org SET name = $c;
         UPDATE $u SET api_token_hash = $c;
         DELETE membership WHERE user = $u;
-        CREATE type::record('membership', $c) SET user = $u, org = $org, role = 'owner';
+        CREATE $mem SET user = $u, org = $org, role = 'owner';
         LET $g = (CREATE oauth_grant SET owner = $u, client_id = 'client-x', client_name = $c, scope = ['memory:read'], resource = 'http://localhost:8001/mcp' RETURN VALUE id)[0];
         CREATE oauth_token SET kind = 'access', token_hash = $c, family = $g, expires_at = time::now() + 15m;
         CREATE oauth_code SET code_hash = $c, owner = $u, client_id = 'client-x', redirect_uri = 'http://localhost/cb', code_challenge = $c, scope = ['memory:read'], resource = 'http://x', expires_at = time::now() + 1m;
@@ -294,6 +295,7 @@ async fn plant(state: &AppState, router: &Router, name: &'static str, user: User
         .bind(("org", user.org.record()))
         .bind(("u", uid.clone()))
         .bind(("c", canary.clone()))
+        .bind(("mem", surrealdb::types::RecordId::new("membership", canary.clone())))
         .await
         .unwrap();
     let grant: Option<surrealdb::types::RecordId> = res.take(res.num_statements() - 1).unwrap();
@@ -408,7 +410,7 @@ fn path_value(param: &str, victim: &Org) -> String {
 /// Query strings that name the victim's data. Unknown parameters are ignored by the routes.
 fn query_string(victim: &Org) -> String {
     format!(
-        "?vault_id={v}&vault_ids={v}&query={q}&q={q}&kind=person&kinds=person&limit=50&offset=0&days=30",
+        "?vault_id={v}&vault_ids={v}&query={q}&q={q}&kind=person&kinds=person&limit=1000&offset=0&days=30",
         v = victim.ids.vault.replace(':', "%3A"),
         q = victim.word("renewal terms").replace(' ', "%20")
     )
@@ -433,7 +435,7 @@ fn error_text(e: &AppError) -> String {
 }
 
 /// `attacker` calls everything with `victim`'s ids. Returns what leaked; also asserts coverage.
-async fn attack(w: &World, attacker: &Org, victim: &Org) -> Vec<Hit> {
+async fn attack(w: &World, attacker: &Org, victim: &Org, victim_must_stay_unchanged: bool) -> Vec<Hit> {
     let mut hits = Vec::new();
     LOG.lock().unwrap().clear();
     let victim_before = secret_rows(w, victim).await;
@@ -479,6 +481,13 @@ async fn attack(w: &World, attacker: &Org, victim: &Org) -> Vec<Hit> {
                     "code_challenge": "x", "code_challenge_method": "S256", "response_type": "code",
                 })
             });
+            // the same route with only paging and kind: it runs in the attacker's default scope, where a
+            // missing filter would show the victim's rows instead of being stopped by the vault check
+            if has_query && method == "get" {
+                let plain = format!("{}?limit=1000&offset=0&kind=person&kinds=person&days=30", url.split('?').next().unwrap());
+                let (_, text) = raw(&w.router, "GET", &plain, None, Some(&attacker.token), None).await;
+                scan(&format!("GET {path} (default scope)"), &text, victim, &mut hits);
+            }
             let (status, text) = raw(&w.router, &method.to_uppercase(), &url, body, Some(&attacker.token), None).await;
             // with every filter rewritten a few routes may fail closed (500); the app is broken on purpose there
             assert!(status != 500 || no_app_filters(), "{method} {path} answered 500: {text}");
@@ -512,12 +521,14 @@ async fn attack(w: &World, attacker: &Org, victim: &Org) -> Vec<Hit> {
 
     // 4. the victim's data is exactly as it was
     let victim_after = secret_rows(w, victim).await;
-    assert_eq!(victim_before, victim_after, "{} attacking {}: the victim's rows changed", attacker.name, victim.name);
+    if victim_must_stay_unchanged {
+        assert_eq!(victim_before, victim_after, "{} attacking {}: the victim's rows changed", attacker.name, victim.name);
+    }
     hits
 }
 
 fn no_app_filters() -> bool {
-    NO_FILTERS.load(std::sync::atomic::Ordering::SeqCst)
+    NO_FILTERS.load(std::sync::atomic::Ordering::SeqCst) || filters_forced_off()
 }
 
 static NO_FILTERS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -555,8 +566,8 @@ async fn run_mode(mode: Mode) {
     let w = build(mode).await;
     assert_planted_everywhere(&w).await;
     control_group(&w).await;
-    let mut hits = attack(&w, &w.a, &w.b).await;
-    hits.extend(attack(&w, &w.b, &w.a).await);
+    let mut hits = attack(&w, &w.a, &w.b, true).await;
+    hits.extend(attack(&w, &w.b, &w.a, true).await);
     isolation::set_no_app_filters(false);
     isolation::clear_mutations();
     if mode == Mode::NoAppFilters || filters_forced_off() {
@@ -615,7 +626,7 @@ async fn mutation_check_removing_one_filter_turns_the_suite_red() {
         return;
     }
     let w = build(Mode::SharedDb).await;
-    assert!(attack(&w, &w.a, &w.b).await.is_empty(), "baseline must be clean before mutating");
+    assert!(attack(&w, &w.a, &w.b, true).await.is_empty(), "baseline must be clean before mutating");
 
     let cases = [
         // (statement, text to remove, what leaks)
@@ -625,20 +636,10 @@ async fn mutation_check_removing_one_filter_turns_the_suite_red() {
     ];
     for (stmt, from, route) in cases {
         isolation::mutate(stmt, from, "WHERE true");
-        let hits = attack_ignoring_victim_checks(&w).await;
+        let hits = attack(&w, &w.a, &w.b, false).await; // a mutated write statement may legitimately change B
         isolation::clear_mutations();
         assert!(hits.iter().any(|h| h.call.contains(route)), "removing `{from}` from {stmt} must leak through {route}, got: {}", report(&hits));
     }
-}
-
-/// [`attack`] without the "victim unchanged" assertion (a mutated write statement may legitimately change it).
-async fn attack_ignoring_victim_checks(w: &World) -> Vec<Hit> {
-    let mut hits = Vec::new();
-    for url in ["/api/chat/threads", "/api/audit", "/api/entities?kind=person&limit=100"] {
-        let (_, text) = raw(&w.router, "GET", url, None, Some(&w.a.token), None).await;
-        scan(&format!("GET {}", url.split('?').next().unwrap()), &text, &w.b, &mut hits);
-    }
-    hits
 }
 
 /// Org A's database user cannot reach org B's database, nor the control database, by any route.

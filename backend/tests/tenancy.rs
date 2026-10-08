@@ -147,9 +147,9 @@ async fn run_move(state: &eunomia_backend::state::AppState) {
 }
 
 async fn only_org(state: &eunomia_backend::state::AppState) -> OrgId {
-    let orgs: Vec<String> = state.control.test_raw().query("SELECT VALUE record::id(id) FROM org").await.unwrap().take(0).unwrap();
+    let orgs: Vec<RecordId> = state.control.test_raw().query("SELECT VALUE id FROM org").await.unwrap().take(0).unwrap();
     assert_eq!(orgs.len(), 1, "{orgs:?}");
-    OrgId::parse(&orgs[0]).unwrap()
+    OrgId::parse(&eunomia_backend::rid::key_string(&orgs[0].key).unwrap()).unwrap()
 }
 
 #[tokio::test]

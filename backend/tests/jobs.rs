@@ -407,7 +407,7 @@ async fn job_claim_throughput() {
         state
             .control
             .test_raw()
-            .query("INSERT INTO job (SELECT type::thing('user', o) AS owner, 'spike' AS kind, k AS idempotency_key, 50 AS max_attempts FROM $rows)")
+            .query("INSERT INTO job (SELECT type::record('user', o) AS owner, 'spike' AS kind, k AS idempotency_key, 50 AS max_attempts FROM $rows)")
             .bind(("rows", rows))
             .await
             .unwrap()

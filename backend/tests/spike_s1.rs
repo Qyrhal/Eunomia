@@ -68,8 +68,8 @@ async fn s1_database_per_org() {
                 })
             })
             .collect();
-        let sql = "INSERT INTO cache_record (SELECT *, <datetime>ingested_at AS ingested_at, <datetime>updated_at AS updated_at, type::record('user', 's1') AS owner FROM $rows)";
-        db.test_raw().query(sql).bind(("rows", rows)).await.expect("insert").check().expect("insert ok");
+        let sql = "INSERT INTO cache_record (SELECT *, <datetime>ingested_at AS ingested_at, <datetime>updated_at AS updated_at, $owner AS owner FROM $rows)";
+        db.test_raw().query(sql).bind(("owner", eunomia_backend::rid::parse("user:s1").unwrap())).bind(("rows", rows)).await.expect("insert").check().expect("insert ok");
         load.push(t.elapsed());
         orgs.push(org);
         if (i + 1) % 50 == 0 {
