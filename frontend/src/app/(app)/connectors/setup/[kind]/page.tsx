@@ -116,7 +116,13 @@ function ConnectorSetup({ kind }: { kind: ConnectorKind }) {
     setSyncResult(null);
     try {
       const r = await sourcesApi.sync(meta.sourceKey);
-      setSyncResult(r.error ? `Sync failed: ${String(r.error)}` : `Synced: ${r.written} new or changed, ${r.skipped} unchanged`);
+      setSyncResult(
+        r.error
+          ? `Sync failed: ${String(r.error)}`
+          : r.status === "already_running"
+            ? "A sync is already running; try again in a moment"
+            : `Synced: ${r.written} new or changed, ${r.skipped} unchanged`
+      );
     } catch (e) {
       setSyncResult(`Sync failed: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
