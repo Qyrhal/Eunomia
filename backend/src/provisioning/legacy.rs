@@ -14,7 +14,6 @@ use surrealdb::types::{RecordId, SurrealValue, Value};
 
 use super::Provisioner;
 use crate::config::Settings;
-use crate::connectors::crypto;
 use crate::error::{AppError, AppResult};
 use crate::pool::{self, ControlDb, OrgId};
 use crate::store::{self, root};
@@ -56,7 +55,7 @@ pub async fn move_if_needed(p: &Provisioner, control: &ControlDb, settings: &Set
         return Ok(());
     }
     tracing::warn!(db = %settings.surreal_db, "moving this install's single database into the org layout");
-    run(p, control, settings, OrgId::new()).await
+    run(p, control, settings, OrgId::from_label(&format!("legacy:{}:{}", settings.surreal_ns, settings.surreal_db))).await
 }
 
 fn org_of_record(r: &RecordId) -> AppResult<OrgId> {
@@ -72,15 +71,7 @@ async fn run(p: &Provisioner, control: &ControlDb, settings: &Settings, org: Org
 
     // The org and its (still `moving`) routing row first, so a crash from here on resumes.
     store::tenant::ORG_CREATE.on(control).bind(("id", org.record())).bind(("name", "Default")).await?.check()?;
-    let t = p.tenant_state(control, &org).await?;
-    let (db, pass) = match t {
-        Some(t) => (t.db, crypto::decrypt(&settings.encryption_key, &t.db_pass_enc)?),
-        None => {
-            let (db, pass) = (org.db_name(), pool::generate_db_password());
-            p.write_tenant(control, &org, &db, &pass, 0, "moving").await?;
-            (db, pass)
-        }
-    };
+    let (db, pass) = p.claim_tenant(control, &org, "moving").await?;
     p.build_database(&db, &pass).await?;
     let dst = p.session(&db).await?;
 
@@ -146,6 +137,9 @@ async fn count(db: &crate::db::Db, table: &str) -> AppResult<i64> {
     Ok(res.take::<Vec<Count>>(0)?.first().map_or(0, |c| c.count))
 }
 
+// ponytail: rows round-trip as SurrealQL values through this process, 100 at a time, and a resumed move rescans
+// from the first id (INSERT IGNORE makes that safe, not fast). Fine for self-host sizes; stream or checkpoint
+// the cursor per table if an install ever has millions of rows.
 /// Copy every row of `table` in id order, `BATCH` at a time.
 async fn copy_table(src: &crate::db::Db, dst: &crate::db::Db, table: &str, edge: bool) -> AppResult<()> {
     let mut last: Option<RecordId> = None;

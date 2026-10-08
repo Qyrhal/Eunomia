@@ -62,6 +62,8 @@ pub fn validate_credentials(email: &str, password: &str) -> AppResult<()> {
 }
 
 /// The user's home org (their oldest membership).
+// ponytail: one org per request context, no org switcher: a credential is not pinned to an org, so a
+// user in two orgs always lands in the older one. Add an org claim to sessions and tokens to lift it.
 pub async fn org_of(control: &ControlDb, user: &RecordId) -> AppResult<OrgId> {
     #[derive(Deserialize, SurrealValue)]
     struct Row {

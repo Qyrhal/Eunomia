@@ -92,15 +92,7 @@ impl Provisioner {
     /// step is idempotent, so a half-provisioned org resumes where it stopped.
     pub async fn provision_org(&self, control: &ControlDb, org: OrgId, name: &str) -> AppResult<()> {
         store::tenant::ORG_CREATE.on(control).bind(("id", org.record())).bind(("name", name.to_string())).await?.check()?;
-        let existing = self.tenant_state(control, &org).await?;
-        let (db, pass) = match existing {
-            Some(t) => (t.db, crypto::decrypt(&self.settings.encryption_key, &t.db_pass_enc)?),
-            None => {
-                let (db, pass) = (org.db_name(), pool::generate_db_password());
-                self.write_tenant(control, &org, &db, &pass, 0, "provisioning").await?;
-                (db, pass)
-            }
-        };
+        let (db, pass) = self.claim_tenant(control, &org, "provisioning").await?;
         self.build_database(&db, &pass).await?;
         self.write_tenant(control, &org, &db, &pass, crate::migrate::LATEST_TENANT, "ready").await?;
         Ok(())
@@ -139,6 +131,25 @@ impl Provisioner {
             .await?
             .check()?;
         Ok(())
+    }
+
+    /// The org's database name and password: the stored ones if the row exists (a resume, or another
+    /// process got there first), otherwise newly generated and stored encrypted before anything else.
+    pub(crate) async fn claim_tenant(&self, control: &ControlDb, org: &OrgId, status: &str) -> AppResult<(String, String)> {
+        if self.tenant_state(control, org).await?.is_none() {
+            store::tenant::CLAIM
+                .on(control)
+                .bind(("id", org.tenant_record()))
+                .bind(("org", org.record()))
+                .bind(("db", org.db_name()))
+                .bind(("db_user", DB_USER))
+                .bind(("db_pass_enc", crypto::encrypt(&self.settings.encryption_key, &pool::generate_db_password())))
+                .bind(("status", status.to_string()))
+                .await?
+                .check()?;
+        }
+        let t = self.tenant_state(control, org).await?.ok_or_else(|| AppError::internal("tenant row vanished after claim"))?;
+        Ok((t.db, crypto::decrypt(&self.settings.encryption_key, &t.db_pass_enc)?))
     }
 
     async fn tenant_state(&self, control: &ControlDb, org: &OrgId) -> AppResult<Option<TenantState>> {

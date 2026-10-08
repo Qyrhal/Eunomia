@@ -175,6 +175,7 @@ pub const TENANT_TABLES: &[&str] = &[
 /// The first table `sql` reads or writes that lives in the other database. Looks only at the word
 /// after FROM, INTO, UPDATE, DELETE, CREATE, UPSERT, TABLE and RELATE's edge, so field names that
 /// happen to equal a table name (`user`, `vault`) do not count.
+// ponytail: a word scanner, not a parser; a table named only inside a subquery after other keywords is missed.
 pub fn crossing_table(sql: &str, in_org: bool) -> Option<String> {
     let foreign = if in_org { CONTROL_TABLES } else { TENANT_TABLES };
     let words: Vec<&str> = sql.split(|c: char| c.is_whitespace() || c == ';' || c == '(' || c == ')').filter(|w| !w.is_empty()).collect();

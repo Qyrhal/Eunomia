@@ -49,6 +49,16 @@ impl OrgId {
         OrgId(Uuid::new_v4())
     }
 
+    /// A stable id derived from a label: two processes that start the same job at once agree on the
+    /// org it creates (the self-host move uses this, so a simultaneous boot cannot make two orgs).
+    pub fn from_label(label: &str) -> Self {
+        use sha2::{Digest, Sha256};
+        let hash = Sha256::digest(label.as_bytes());
+        let mut bytes = [0u8; 16];
+        bytes.copy_from_slice(&hash[..16]);
+        OrgId(Uuid::from_bytes(bytes))
+    }
+
     pub fn parse(s: &str) -> Option<Self> {
         let s = s.strip_prefix("org:").unwrap_or(s);
         Uuid::parse_str(s).ok().map(OrgId)
@@ -233,6 +243,7 @@ impl Pool {
         if let Some(db) = self.cached(org) {
             return Ok(db);
         }
+        // ponytail: two tasks missing at once each sign in and the last insert wins; the loser's session just drops.
         let route = self.route(org).await?;
         let session = session_for(&self.0.template, &self.0.ns, &route).await?;
         let db = OrgDb { raw: Arc::new(session), org: *org };
@@ -255,6 +266,7 @@ impl Pool {
         c.tick += 1;
         let tick = c.tick;
         c.map.insert(db.org, (db, tick));
+        // ponytail: eviction scans the map for the oldest tick (O(cap)); a linked LRU if the cap goes into the thousands.
         while c.map.len() > self.0.cap {
             let Some(oldest) = c.map.iter().min_by_key(|(_, (_, used))| *used).map(|(k, _)| *k) else { break };
             c.map.remove(&oldest);
