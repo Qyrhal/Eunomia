@@ -204,10 +204,7 @@ impl Provisioner {
     /// so between operations the process holds no root session (`tests/tenancy.rs`).
     #[cfg(feature = "test-support")]
     pub async fn holds_no_root_session(&self) -> bool {
-        match (*self.template).clone().query("INFO FOR ROOT").await {
-            Err(_) => true,
-            Ok(mut r) => !r.take_errors().is_empty(),
-        }
+        root(&self.template, "provisioning.probe", "INFO FOR ROOT").await.is_err()
     }
 
     /// A root session on a fresh, empty database (migration tests, the spike). Not strict.

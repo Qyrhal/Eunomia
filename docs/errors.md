@@ -22,7 +22,7 @@ The `ErrorCode` enum is in `backend/src/error.rs`. A unit test fails if a code i
 | `auth.token_expired` | 401 | The API token's `expires_at` has passed. Create a new token. | `gate.rs`, `auth.rs` |
 | `auth.session_expired` | 401 | The session cookie is past its (sliding) expiry or its JWT `exp`. Log in again. | `gate.rs`, `auth.rs` |
 | `rate.limited` | 429 | Too many requests for this user, token or (for login and signup) client address. Honour the `Retry-After` header. | `gate.rs` |
-| `tenant.denied` | 403 | The database refused a query on permissions grounds. Logged at error level; treat as a high-severity alert. | `error.rs` (DB error mapping) |
+| `tenant.denied` | 403 | The database refused a query on permissions grounds, or a statement named a table of the other database (control vs org) and was refused before it was sent. Logged at error level; treat as a high-severity alert. | `error.rs` (DB error mapping), `store/mod.rs` (`CROSSING_MARK`) |
 | `tenant.not_found` | 404 | The org has no ready database: its routing row is missing or the database is still being created or moved. | `pool.rs` |
 | `tenant.schema_behind` | 503 | The org's database is more than one schema version behind this code (below N-1). The `migrate_tenant` job brings it up; retry shortly. | `pool.rs` |
 | `tenant.provisioning_disabled` | 501 | Signup needs to create an org database, and this binary was built without the `provisioning` feature. | `models_user.rs` |
