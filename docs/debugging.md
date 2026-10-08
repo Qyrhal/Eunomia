@@ -18,11 +18,13 @@ Look the `code` up in [errors.md](errors.md): it says what the code means, wheth
 
 When a route answers 5xx, or a registry tool fails with anything but `validation.invalid`, the backend stores a **failure capsule** under that trace id: the time, the user, the route or tool name, the arguments, the error code, the raw error text and the backend version (`APP_VERSION`). Secrets are masked before storage: any key containing `token`, `secret`, `password`, `key`, `authorization` or `cookie` becomes `***`, and `Bearer ...` strings and token-like runs of 40 or more characters are masked in every string. A capsule is capped at 16 KB (a larger one is stored cut and cannot be replayed). Capsules are kept for 7 days or the newest 1000, pruned by the `prune_capsules` job.
 
-Fetch one over HTTP as an instance admin (the first user, or an email in `EUNOMIA_ADMIN_EMAILS`, comma separated):
+Capsules live in the `control` database and carry the org of the failing request. Fetch one over HTTP as an instance admin (the first user, or an email in `EUNOMIA_ADMIN_EMAILS`, comma separated). An admin sees capsules of their own org; an email in `EUNOMIA_ADMIN_EMAILS` is an operator and sees every org's:
 
 ```bash
 curl -H "Authorization: Bearer $TOKEN" https://your-host/api/debug/capsules/<trace_id>
 ```
+
+`GET /api/debug/metrics` (same admin rule) returns `queries_without_org_context`, the count of queries that ran without an org context since the process started. It must be 0; a non-zero value is logged at error level at the moment it happens (`query without org context`).
 
 ## 5. Replay it
 
@@ -32,7 +34,7 @@ On the machine that has the database (same `SURREAL_*` environment as the backen
 eunomia-backend replay <trace_id>
 ```
 
-The inside of the container is `docker compose exec backend eunomia-backend replay <trace_id>`. It reads the capsule and the capsule user's data from the real database (read only), copies that data into a throwaway in-memory database, re-runs the same tool call or route as that user, and prints the original outcome next to the replayed one. Exit code 0 means the same error code came back, 1 means it did not (the data or the code differs from when it failed), 2 means it could not run.
+The inside of the container is `docker compose exec backend eunomia-backend replay <trace_id>`. It reads the capsule from the `control` database and the capsule user's data from that user's org database (read only; it attaches without provisioning or moving anything), copies that data into a throwaway in-memory install, re-runs the same tool call or route as that user, and prints the original outcome next to the replayed one. Exit code 0 means the same error code came back, 1 means it did not (the data or the code differs from when it failed), 2 means it could not run.
 
 Limits: the replay uses the user's personal vault only, so a call that names another vault will not find it. Calls that depend on outside services (LLM, connectors) fail or skip the same way they do without keys.
 

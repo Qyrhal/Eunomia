@@ -1,14 +1,15 @@
 # Background jobs
 
-One page: how work that must not block a request (syncs, embeddings, entity extraction, consolidation) is queued, claimed and recovered. Code: `backend/src/jobs/`, SQL: `backend/src/store/jobs.rs`, schema: `backend/migrations/tenant/0005_jobs.surql`. Plan: foundation-plan section 3.6.
+One page: how work that must not block a request (syncs, embeddings, entity extraction, consolidation) is queued, claimed and recovered. Code: `backend/src/jobs/`, SQL: `backend/src/store/jobs.rs`, schema: `backend/migrations/control/0001_control.surql` (first created by tenant 0005, since moved). Plan: foundation-plan section 3.6.
 
 ## Table
 
-`job` (in the current single database; `org` is NONE until the `control` database exists, so the later move is a data copy, not a redesign).
+`job` and `job_leader` live in the `control` database. `org` is the key of the org whose database the handler works in (`NONE` for instance-level jobs such as `prune_capsules`); the handler gets that org's `OrgDb` from `state.org(&job.org_id()?)`. See [tenancy.md](tenancy.md).
 
 | Field | Meaning |
 |-------|---------|
-| `kind` | Handler name: `sync`, `embed`, `extract`, `consolidate`. |
+| `org` | Org key, or `NONE`. |
+| `kind` | Handler name: `sync`, `embed`, `extract`, `consolidate`, `prune_capsules`, `migrate_tenant`. |
 | `owner` | `record<user>`; the fairness unit. |
 | `payload` | Ids only (`{"source": "up_bank"}`, `{"record": "..."}`, `{"subject": "person:x"}`). Never content. |
 | `idempotency_key` | UNIQUE. The record id is derived from it too, so a second enqueue is a no-op. |
@@ -71,9 +72,12 @@ Every process with the worker role tries `UPDATE job_leader:scheduler ... WHERE 
 | connector sync | `sync_status.last_run`, `sync_intervals`, failure backoff | `sync` per due source | `sync:<owner>:<source>:<window>` (window = now / interval) | every tick |
 | embeddings | `cache_record` with `embedding` NONE, when an embeddings key exists | `embed` per owner | `embed:<owner>:<5 min window>` | every 10 ticks |
 | consolidation | `memory` observations with `status = 'stale'` (set by fact writes), when an LLM key exists | `consolidate` per entity | `consolidate:<subject>:<10 min window>` | every tick |
+| tenant schema | `tenant.schema_version` below the schema this code writes | `migrate_tenant` per org | `migrate_tenant:<org>:<version>` | every tick |
 | extraction | queued by ingest for each changed record (not polled) | `extract` per record | `extract:<owner>:<record>:<content hash>` | on ingest |
 
 The leader also dead-letters crash-looping jobs and prunes old done jobs (every 10 ticks). The sync schedule is the old one: a source runs every `sync_intervals[source]` seconds (default 900, `heypocket` 86400); after failures it waits the longer of the interval and the backoff table (900 s doubling-ish to 6 h). A source that never ran is due immediately. `sync_status` is written exactly as before.
+
+The sync, embedding and consolidation reconcilers run once per ready org (users come from `membership`); an org that is not ready or is more than one schema behind is skipped until its `migrate_tenant` job has run.
 
 Without an LLM or embeddings key the `extract`, `consolidate` and `embed` handlers log `... skipped: no ... key configured` and finish.
 
@@ -81,12 +85,12 @@ Without an LLM or embeddings key the `extract`, `consolidate` and `embed` handle
 
 1. Write `async fn my_job(state: AppState, job: Job) -> Result<(), JobError>` in `jobs/handlers.rs`. Re-derive what to do from the database using the ids in `job.payload`; it must be safe to run twice. Return `JobError::permanent(..)` for hopeless input, any `AppError` (via `?`) otherwise.
 2. Register it in `handlers::registry()`: `.register("my_kind", my_job)`, and add the name to `jobs::kind`.
-3. Enqueue with `jobs::enqueue(db, NewJob::new("my_kind", owner, "my_kind:<stable key>").payload(json!({...})))`, or `enqueue_lossy` where a reconciler would re-derive it anyway. Put a window in the key for periodic work.
+3. Enqueue with `jobs::enqueue(&state.control, NewJob::new("my_kind", owner, "my_kind:<stable key>").in_org(org).payload(json!({...})))`, or `enqueue_lossy` where a reconciler would re-derive it anyway. Put a window in the key for periodic work.
 4. For periodic or recovery work add a reconciler in `jobs/leader.rs` that finds the state needing work and enqueues. Add a test in `backend/tests/jobs.rs`.
 
 ## Inspect and retry dead jobs
 
-In Surreal Studio or `surreal sql` against the Eunomia namespace and database:
+In Surreal Studio or `surreal sql` against the Eunomia namespace and the `control` database:
 
 ```sql
 -- what is stuck

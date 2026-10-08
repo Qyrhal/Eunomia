@@ -49,6 +49,8 @@ their local-dev defaults in production:
 | `RATE_LIMIT_AUTH_PER_MIN` | `20` | Login, signup, OAuth token and failed-credential attempts per minute per client address (read from `X-Forwarded-For`, but only when the connecting peer is in `TRUSTED_PROXIES`). |
 | `TRUSTED_PROXIES` | loopback and private ranges (`127.0.0.0/8`, `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `::1/128`, `fc00::/7`) | Comma-separated CIDRs of proxies whose `X-Forwarded-For` is believed; the right-most address that is not itself trusted is the client. The default covers the compose network (the Next.js frontend proxies to the backend there). If the backend port is reachable directly from the internet, narrow it to your proxy's address; `none` trusts nobody (every client is its peer address). |
 | `PUBLIC_URL` | `http://localhost:8001` | The address MCP clients reach Eunomia at, no trailing slash, e.g. `https://eunomia.example.com`. Used in OAuth discovery documents and as the audience of OAuth tokens, so it must match what clients connect to. |
+| `EUNOMIA_SIGNUP_ORG` | `join` | `join`: a new user joins the install's one org (the first user of a fresh install creates it and owns it). `personal`: every signup gets an org of their own. |
+| `EUNOMIA_ORG_POOL_CAP` | `256` | How many org database sessions one process keeps open (least recently used are dropped and signed in again on demand). |
 | `BACKUP_ENCRYPTION_KEY` | none (the `backup` service will not start) | Encrypts nightly backups. On a fresh install generate it before the first `docker compose up`: `openssl rand -base64 32`, put it in `.env`, and keep a copy off the machine, since backups cannot be read without it. The installer does not create it yet; the auto-updater adds one when it updates an existing install. |
 
 ## 3. The browser only ever talks to the frontend
@@ -89,6 +91,12 @@ container from ever running at once.
 Installs from before the updater existed: run the installer once more from
 the folder that contains your install. It updates in place and keeps your
 data.
+
+## Org databases and the one-time move
+
+Each org's data lives in its own database, `org_<uuid>`, in the `SURREAL_NS` namespace; accounts, credentials and the job queue live in the `control` database. See [architecture/tenancy.md](architecture/tenancy.md). The first boot of a release with tenancy on an existing install moves the old single database (`SURREAL_DB`, default `eunomia`) into that layout automatically, copying every table in batches and refusing to finish unless the row counts match. Nothing in the old database is changed or deleted; the backend logs the `REMOVE DATABASE` command to use once you have checked the app. If the boot stops with "the data move did not verify", nothing is served from the half-moved org; fix the cause and restart (the move resumes). Take an export first, as the upgrade scripts do.
+
+`ENCRYPTION_KEY` now also protects the per-org database passwords: keep it.
 
 ## Backups
 
