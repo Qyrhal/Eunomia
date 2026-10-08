@@ -21,7 +21,7 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
-use surrealdb::RecordId;
+use surrealdb::types::RecordId;
 
 use crate::entities::service;
 use crate::error::{AppError, AppResult, ErrorCode};
@@ -156,7 +156,7 @@ async fn vector_cloud(
 }
 
 fn parse_record_id(id: &str) -> AppResult<RecordId> {
-    id.parse().map_err(|_| AppError::not_found("not found"))
+    crate::rid::parse(&id).map_err(|_| AppError::not_found("not found"))
 }
 
 fn known_kind_or_400(kind: &str) -> AppResult<()> {

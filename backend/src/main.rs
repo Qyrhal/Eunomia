@@ -17,7 +17,7 @@ async fn main() {
 
     let app = eunomia_backend::app(state);
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:8001").await.unwrap();
+    let listener = tokio::net::TcpListener::bind(&settings.bind_addr).await.expect("failed to bind BIND_ADDR");
     tracing::info!("listening on {}", listener.local_addr().unwrap());
     axum::serve(listener, app).await.unwrap();
 }

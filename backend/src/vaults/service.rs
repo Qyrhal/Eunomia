@@ -13,11 +13,13 @@
 //! unlike the Python version's `_as_rid` which accepted either -- everything
 //! here already deals in `RecordId`.
 
+use surrealdb::types::SurrealValue;
 use std::collections::{HashMap, HashSet};
 
 use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
-use surrealdb::{Datetime, RecordId};
+use surrealdb::types::{Datetime, RecordId};
+use crate::rid::RecordIdExt;
 
 use crate::db::Db;
 use crate::error::{AppError, AppResult};
@@ -28,17 +30,19 @@ use crate::tx::with_retry;
 /// `KINDS` tuple and `db.rs`'s `memory.subject` record union.
 const ENTITY_KINDS: [&str; 6] = ["person", "organisation", "location", "repository", "file", "symbol"];
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, SurrealValue)]
 struct VaultRow {
     id: RecordId,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, SurrealValue)]
 struct VaultFullRow {
     id: RecordId,
     #[serde(default)]
+    #[surreal(default)]
     name: String,
     #[serde(default = "default_kind")]
+    #[surreal(default = "default_kind")]
     kind: String,
     created_at: Option<Datetime>,
 }
@@ -101,21 +105,23 @@ pub struct CloneOut {
     pub entities_copied: usize,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, SurrealValue)]
 struct MembershipRow {
     id: RecordId,
     #[serde(default)]
+    #[surreal(default)]
     role: String,
     #[serde(default)]
+    #[surreal(default)]
     status: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, SurrealValue)]
 struct EmailLookupRow {
     id: RecordId,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, SurrealValue)]
 struct CountRow {
     count: i64,
 }
@@ -149,7 +155,7 @@ pub async fn create_vault(db: &Db, user_id: &RecordId, name: &str, kind: &str) -
             .bind(("user", user_id.clone()))
             .await?
             .check()?;
-        let rows: Vec<VaultFullRow> = res.take(0)?;
+        let rows: Vec<VaultFullRow> = res.take(store::vaults::CREATE_VAULT.slot)?;
         Ok(rows.into_iter().next())
     })
     .await?
@@ -181,7 +187,7 @@ async fn membership_any_status(db: &Db, vault_id: &RecordId, user_id: &RecordId)
 /// Every vault `user_id` belongs to (any role) -- the read/write scope passed
 /// to entity/recall lookups.
 pub async fn accessible_vault_ids(db: &Db, user_id: &RecordId) -> AppResult<Vec<RecordId>> {
-    #[derive(Deserialize)]
+    #[derive(Deserialize, SurrealValue)]
     struct Row {
         vault: RecordId,
     }
@@ -195,7 +201,7 @@ pub async fn accessible_vault_ids(db: &Db, user_id: &RecordId) -> AppResult<Vec<
 /// `user_id`'s personal vault -- the implicit scope for any tool call that
 /// doesn't pass `vault_id`, so existing single-user callers need no changes.
 pub async fn default_vault_id(db: &Db, user_id: &RecordId) -> AppResult<RecordId> {
-    #[derive(Deserialize)]
+    #[derive(Deserialize, SurrealValue)]
     struct Row {
         vault: RecordId,
     }
@@ -204,7 +210,7 @@ pub async fn default_vault_id(db: &Db, user_id: &RecordId) -> AppResult<RecordId
         .await?;
     let rows: Vec<Row> = res.take(0)?;
     rows.into_iter().next().map(|r| r.vault).ok_or_else(|| {
-        AppError::internal(format!("user {user_id} has no personal vault -- registration should have created one"))
+        AppError::internal(format!("user {} has no personal vault -- registration should have created one", user_id.to_string()))
     })
 }
 
@@ -212,7 +218,7 @@ pub async fn default_vault_id(db: &Db, user_id: &RecordId) -> AppResult<RecordId
 /// entity/memory read or write that takes an explicit `vault_id`.
 pub async fn require_membership(db: &Db, user_id: &RecordId, vault_id: &RecordId) -> AppResult<()> {
     if membership(db, vault_id, user_id).await?.is_none() {
-        return Err(AppError::new(StatusCode::FORBIDDEN, format!("not a member of vault {vault_id}")));
+        return Err(AppError::new(StatusCode::FORBIDDEN, format!("not a member of vault {}", vault_id.to_string())));
     }
     Ok(())
 }
@@ -221,12 +227,12 @@ pub async fn require_owner(db: &Db, user_id: &RecordId, vault_id: &RecordId) -> 
     let m = membership(db, vault_id, user_id).await?;
     match m {
         Some(m) if m.role == "owner" => Ok(()),
-        _ => Err(AppError::new(StatusCode::FORBIDDEN, format!("must be an owner of vault {vault_id}"))),
+        _ => Err(AppError::new(StatusCode::FORBIDDEN, format!("must be an owner of vault {}", vault_id.to_string()))),
     }
 }
 
 pub async fn list_my_vaults(db: &Db, user_id: &RecordId) -> AppResult<Vec<VaultWithRole>> {
-    #[derive(Deserialize)]
+    #[derive(Deserialize, SurrealValue)]
     struct Row {
         vault: VaultFullRow,
         role: String,
@@ -315,7 +321,7 @@ pub async fn invite_member(
 
 pub async fn list_members(db: &Db, user_id: &RecordId, vault_id: &RecordId) -> AppResult<Vec<MemberOut>> {
     require_membership(db, user_id, vault_id).await?;
-    #[derive(Deserialize)]
+    #[derive(Deserialize, SurrealValue)]
     struct Row {
         email: String,
         role: String,
@@ -330,7 +336,7 @@ pub async fn list_members(db: &Db, user_id: &RecordId, vault_id: &RecordId) -> A
 /// Pending invitations for `user_id` across every vault -- what the vaults
 /// page's invitations panel renders to accept/decline.
 pub async fn list_my_invitations(db: &Db, user_id: &RecordId) -> AppResult<Vec<InvitationOut>> {
-    #[derive(Deserialize)]
+    #[derive(Deserialize, SurrealValue)]
     struct Row {
         vault: VaultFullRow,
         role: String,
@@ -370,7 +376,7 @@ pub async fn accept_invitation(db: &Db, user_id: &RecordId, vault_id: &RecordId)
         .check()
     })
     .await?;
-    let rows: Vec<VaultFullRow> = res.take(0)?;
+    let rows: Vec<VaultFullRow> = res.take(store::vaults::ACCEPT_INVITATION.slot)?;
     let vault = rows.into_iter().next().ok_or_else(|| AppError::bad_request("no pending invitation for this vault"))?;
     let v: VaultOut = vault.into();
     Ok(VaultWithRole { id: v.id, name: v.name, kind: v.kind, created_at: v.created_at, role: m.role })
@@ -420,24 +426,30 @@ pub async fn remove_member(db: &Db, user_id: &RecordId, vault_id: &RecordId, ema
     Ok(())
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, SurrealValue)]
 struct EntityRow {
     id: RecordId,
     #[serde(default)]
+    #[surreal(default)]
     name: String,
     #[serde(default)]
+    #[surreal(default)]
     aliases: Vec<String>,
     #[serde(default)]
+    #[surreal(default)]
     summary: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, SurrealValue)]
 struct MemoryRow {
     #[serde(default)]
+    #[surreal(default)]
     text: String,
     #[serde(rename = "type", default = "default_memory_type")]
+    #[surreal(rename = "type", default = "default_memory_type")]
     mem_type: String,
     #[serde(default)]
+    #[surreal(default)]
     source: Option<RecordId>,
 }
 
@@ -445,11 +457,13 @@ fn default_memory_type() -> String {
     "world".to_string()
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, SurrealValue)]
 struct RelationRow {
     #[serde(rename = "out")]
+    #[surreal(rename = "out")]
     other: RecordId,
     #[serde(default)]
+    #[surreal(default)]
     label: String,
 }
 
@@ -468,10 +482,11 @@ async fn find_by_name(db: &Db, kind: &str, vault: &RecordId, name: &str) -> AppR
 /// an identical fact is skipped, and a second observation is appended to the
 /// existing one (one observation per subject). Returns true if handled.
 async fn fold_into_existing_memory(db: &Db, subject: &RecordId, mem: &MemoryRow) -> AppResult<bool> {
-    #[derive(Deserialize)]
+    #[derive(Deserialize, SurrealValue)]
     struct Existing {
         id: RecordId,
         #[serde(default)]
+        #[surreal(default)]
         text: String,
     }
     if mem.mem_type == "observation" {
@@ -628,11 +643,11 @@ pub async fn clone_vault(
     require_membership(db, user_id, vault_id).await?;
 
     let source: Option<VaultFullRow> = db.select(vault_id.clone()).await?;
-    let source = source.ok_or_else(|| AppError::coded(crate::error::ErrorCode::VaultNotFound, format!("vault not found: {vault_id}")))?;
+    let source = source.ok_or_else(|| AppError::coded(crate::error::ErrorCode::VaultNotFound, format!("vault not found: {}", vault_id.to_string())))?;
 
     let clone_name = name.map(str::to_string).unwrap_or_else(|| format!("{} (copy)", source.name));
     let clone = create_vault(db, user_id, &clone_name, kind).await?;
-    let clone_rid: RecordId = clone.id.parse().map_err(|_| AppError::internal("clone vault id did not round-trip"))?;
+    let clone_rid: RecordId = crate::rid::parse(&clone.id).map_err(|_| AppError::internal("clone vault id did not round-trip"))?;
 
     let copied = copy_into(db, user_id, vault_id, &clone_rid, false).await?;
 
@@ -675,12 +690,12 @@ pub async fn merge_vaults(
     require_membership(db, user_id, a).await?;
     require_membership(db, user_id, b).await?;
     let (va, vb): (Option<VaultFullRow>, Option<VaultFullRow>) = (db.select(a.clone()).await?, db.select(b.clone()).await?);
-    let va = va.ok_or_else(|| AppError::coded(crate::error::ErrorCode::VaultNotFound, format!("vault not found: {a}")))?;
-    let vb = vb.ok_or_else(|| AppError::coded(crate::error::ErrorCode::VaultNotFound, format!("vault not found: {b}")))?;
+    let va = va.ok_or_else(|| AppError::coded(crate::error::ErrorCode::VaultNotFound, format!("vault not found: {}", a.to_string())))?;
+    let vb = vb.ok_or_else(|| AppError::coded(crate::error::ErrorCode::VaultNotFound, format!("vault not found: {}", b.to_string())))?;
 
     let merged_name = name.map(str::to_string).unwrap_or_else(|| format!("{} + {}", va.name, vb.name));
     let merged = create_vault(db, user_id, &merged_name, kind).await?;
-    let dest: RecordId = merged.id.parse().map_err(|_| AppError::internal("merged vault id did not round-trip"))?;
+    let dest: RecordId = crate::rid::parse(&merged.id).map_err(|_| AppError::internal("merged vault id did not round-trip"))?;
 
     copy_into(db, user_id, a, &dest, true).await?;
     copy_into(db, user_id, b, &dest, true).await?;
@@ -737,7 +752,7 @@ mod vault_tests {
     #[test]
     fn vault_out_from_full_row_carries_fields() {
         let row = VaultFullRow {
-            id: "vault:abc".parse().unwrap(),
+            id: crate::rid::parse("vault:abc").unwrap(),
             name: "Personal".to_string(),
             kind: "personal".to_string(),
             created_at: None,

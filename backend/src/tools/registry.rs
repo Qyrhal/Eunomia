@@ -16,12 +16,14 @@
 //! still counts as "ok" for logging purposes since it's excluded from
 //! logging entirely either way.
 
+use surrealdb::types::SurrealValue;
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
 use serde_json::{json, Value};
-use surrealdb::RecordId;
+use surrealdb::types::RecordId;
+use crate::rid::RecordIdExt;
 use tracing::{field::Empty, Instrument};
 
 use crate::db::Db;
@@ -180,7 +182,7 @@ fn bad_id(field: &str, value: &str) -> Value {
 /// ...}` value (not an `Err`) on failure -- same "never raise on bad agent
 /// input" contract every tool in the Python registry follows via `@safe`.
 fn parse_rid(field: &str, value: &str) -> Result<RecordId, Value> {
-    value.parse::<RecordId>().map_err(|_| bad_id(field, value))
+    crate::rid::parse(&value).map_err(|_| bad_id(field, value))
 }
 
 fn parse_opt_rid(field: &str, value: &Option<String>) -> Result<Option<RecordId>, Value> {
@@ -1284,15 +1286,15 @@ pub fn all_tools() -> &'static HashMap<&'static str, ToolSpec> {
 /// admin/REST concern, not an agent-facing tool; an agent auditing its own
 /// writes isn't a real use case this codebase needs yet).
 pub async fn list_audit(db: &Db, owner: &RecordId, limit: i64, offset: i64) -> AppResult<Value> {
-    #[derive(serde::Deserialize)]
+    #[derive(serde::Deserialize, SurrealValue)]
     struct AuditRow {
         id: RecordId,
         tool_name: String,
         args_summary: String,
         outcome: String,
-        created_at: Option<surrealdb::Datetime>,
+        created_at: Option<surrealdb::types::Datetime>,
     }
-    #[derive(serde::Deserialize)]
+    #[derive(serde::Deserialize, SurrealValue)]
     struct CountRow {
         count: i64,
     }

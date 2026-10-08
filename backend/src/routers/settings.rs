@@ -5,6 +5,7 @@
 //! `openai_api_key` is stored AES-GCM-encrypted (`connectors::crypto`) in
 //! `openai_api_key_encrypted`; it is never returned, only `openai_api_key_set`.
 
+use surrealdb::types::SurrealValue;
 use axum::{
     extract::State,
     routing::{get, post},
@@ -12,7 +13,8 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
-use surrealdb::RecordId;
+use surrealdb::types::RecordId;
+use crate::rid::RecordIdExt;
 
 use crate::db::Db;
 use crate::store;
@@ -30,21 +32,28 @@ pub fn router() -> Router<AppState> {
         .route("/settings/openai-models", get(openai_models))
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, SurrealValue)]
 struct AppSettingsRow {
     #[serde(default)]
+    #[surreal(default)]
     embedding_model: String,
     #[serde(default)]
+    #[surreal(default)]
     sync_intervals: Value,
     #[serde(default)]
+    #[surreal(default)]
     theme: Value,
     #[serde(default)]
+    #[surreal(default)]
     openai_api_key_encrypted: String,
     #[serde(default)]
+    #[surreal(default)]
     openai_base_url: String,
     #[serde(default)]
+    #[surreal(default)]
     observations_mission: String,
     #[serde(default)]
+    #[surreal(default)]
     memory_skill: String,
 }
 

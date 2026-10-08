@@ -20,10 +20,12 @@
 //! deals in `RecordId` -- callers (routers, tools) parse path/user-supplied
 //! ids first, same convention as `vaults::service`.
 
+use surrealdb::types::SurrealValue;
 use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
-use surrealdb::{Datetime, RecordId};
+use surrealdb::types::{Datetime, RecordId};
+use crate::rid::RecordIdExt;
 
 use crate::db::Db;
 use crate::error::{AppError, AppResult};
@@ -51,7 +53,7 @@ pub fn kind_table(kind: &str) -> AppResult<&'static str> {
 }
 
 fn owner_key_string(owner: &RecordId) -> String {
-    String::try_from(owner.key().clone()).unwrap_or_else(|_| owner.to_string())
+    crate::rid::key_string(owner.key()).unwrap_or_else(|| owner.to_string())
 }
 
 /// The internal `cache_record` RecordId for a record's caller-facing id --
@@ -65,17 +67,21 @@ fn cache_record_rid(owner: &RecordId, record_id: &str) -> RecordId {
 // Row / output shapes
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, SurrealValue)]
 struct EntityRow {
     id: RecordId,
     #[serde(default)]
+    #[surreal(default)]
     owner: Option<RecordId>,
     vault: RecordId,
     #[serde(default)]
+    #[surreal(default)]
     name: String,
     #[serde(default)]
+    #[surreal(default)]
     aliases: Vec<String>,
     #[serde(default)]
+    #[surreal(default)]
     summary: String,
 }
 
@@ -98,29 +104,38 @@ fn entity_out(kind: &str, row: &EntityRow) -> EntityOut {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, SurrealValue)]
 struct MemoryRow {
     id: RecordId,
     #[serde(default)]
+    #[surreal(default)]
     owner: Option<RecordId>,
     vault: RecordId,
     subject: RecordId,
     #[serde(default)]
+    #[surreal(default)]
     text: String,
     #[serde(default)]
+    #[surreal(default)]
     source: Option<RecordId>,
     created_at: Datetime,
     #[serde(rename = "type", default = "default_memory_type")]
+    #[surreal(rename = "type", default = "default_memory_type")]
     mem_type: String,
     #[serde(default)]
+    #[surreal(default)]
     proof_count: i64,
     #[serde(default)]
+    #[surreal(default)]
     status: Option<String>,
     #[serde(default)]
+    #[surreal(default)]
     source_memories: Option<Vec<RecordId>>,
     #[serde(default)]
+    #[surreal(default)]
     updated_at: Option<Datetime>,
     #[serde(default)]
+    #[surreal(default)]
     version: i64,
 }
 
@@ -166,20 +181,26 @@ fn memory_out(row: &MemoryRow, owner_email: Option<String>) -> MemoryOut {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, SurrealValue)]
 struct RelationRow {
     id: RecordId,
     #[serde(rename = "in")]
+    #[surreal(rename = "in")]
     in_: RecordId,
     #[serde(rename = "out")]
+    #[surreal(rename = "out")]
     out_: RecordId,
     #[serde(default)]
+    #[surreal(default)]
     label: String,
     #[serde(default)]
+    #[surreal(default)]
     source: Option<RecordId>,
     #[serde(default)]
+    #[surreal(default)]
     owner: Option<RecordId>,
     #[serde(default)]
+    #[surreal(default)]
     created_at: Option<Datetime>,
 }
 
@@ -297,7 +318,7 @@ async fn emails_for(db: &Db, user_ids: Vec<Option<RecordId>>) -> AppResult<HashM
     if ids.is_empty() {
         return Ok(HashMap::new());
     }
-    #[derive(Deserialize)]
+    #[derive(Deserialize, SurrealValue)]
     struct Row {
         id: RecordId,
         email: String,
@@ -365,7 +386,7 @@ pub async fn upsert_entity(
             .await?
             .check()?;
         let rows: Vec<EntityRow> = created.take(0)?;
-        rows.into_iter().next().ok_or_else(|| surrealdb::Error::Api(surrealdb::error::Api::Query("entity insert returned no row".into())))
+        rows.into_iter().next().ok_or_else(|| surrealdb::Error::query("entity insert returned no row".into(), None))
     })
     .await?;
     Ok(entity_out(table, &row))
@@ -397,11 +418,11 @@ pub async fn add_memory(
 ) -> AppResult<MemoryOut> {
     let subject_row = select_entity(db, subject_id)
         .await?
-        .ok_or_else(|| AppError::bad_request(format!("subject entity not found: {subject_id}")))?;
+        .ok_or_else(|| AppError::bad_request(format!("subject entity not found: {}", subject_id.to_string())))?;
     if !accessible(db, owner, &subject_row.vault).await? {
         return Err(AppError::new(
             axum::http::StatusCode::FORBIDDEN,
-            format!("not a member of {}'s vault", subject_row.vault),
+            format!("not a member of {}'s vault", subject_row.vault.to_string()),
         ));
     }
 
@@ -432,8 +453,8 @@ pub async fn add_memory(
             .bind(("obs_id", obs_id.clone()))
             .await?
             .check()?;
-        let rows: Vec<MemoryRow> = res.take(0)?;
-        rows.into_iter().next().ok_or_else(|| surrealdb::Error::Api(surrealdb::error::Api::Query("memory write returned no row".into())))
+        let rows: Vec<MemoryRow> = res.take(stmt.slot)?;
+        rows.into_iter().next().ok_or_else(|| surrealdb::Error::query("memory write returned no row".into(), None))
     })
     .await?;
 
@@ -465,7 +486,7 @@ pub async fn write_memory(
 ) -> AppResult<WriteMemoryOut> {
     let entity = upsert_entity(db, owner, subject_kind, subject_name, None, vault_id).await?;
     let entity_rid: RecordId =
-        entity.id.parse().map_err(|_| AppError::internal("entity id did not round-trip"))?;
+        crate::rid::parse(&entity.id).map_err(|_| AppError::internal("entity id did not round-trip"))?;
     let memory = add_memory(db, owner, &entity_rid, text, source_record_id, mem_type).await?;
     Ok(WriteMemoryOut { entity, memory })
 }
@@ -712,15 +733,15 @@ pub async fn merge_entities(
     let mut winner = select_entity(db, winner_id)
         .await?
         .filter(|_| true)
-        .ok_or_else(|| AppError::bad_request(format!("winner entity not found: {winner_id}")))?;
+        .ok_or_else(|| AppError::bad_request(format!("winner entity not found: {}", winner_id.to_string())))?;
     if !accessible(db, owner, &winner.vault).await? {
-        return Err(AppError::bad_request(format!("winner entity not found: {winner_id}")));
+        return Err(AppError::bad_request(format!("winner entity not found: {}", winner_id.to_string())));
     }
     let loser = select_entity(db, loser_id)
         .await?
-        .ok_or_else(|| AppError::bad_request(format!("loser entity not found: {loser_id}")))?;
+        .ok_or_else(|| AppError::bad_request(format!("loser entity not found: {}", loser_id.to_string())))?;
     if !accessible(db, owner, &loser.vault).await? {
-        return Err(AppError::bad_request(format!("loser entity not found: {loser_id}")));
+        return Err(AppError::bad_request(format!("loser entity not found: {}", loser_id.to_string())));
     }
 
     q::REASSIGN_MEMORIES
@@ -976,7 +997,7 @@ pub async fn upsert_code_entity(
         return Err(AppError::bad_request(format!("unknown code kind {kind:?}")));
     }
     let mut entity = upsert_entity(db, owner, kind, name, None, vault_id).await?;
-    let entity_rid: RecordId = entity.id.parse().map_err(|_| AppError::internal("entity id did not round-trip"))?;
+    let entity_rid: RecordId = crate::rid::parse(&entity.id).map_err(|_| AppError::internal("entity id did not round-trip"))?;
 
     if let Some(summary) = summary {
         let mut updated = q::SET_SUMMARY

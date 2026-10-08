@@ -21,6 +21,8 @@ pub struct Settings {
     pub cors_allowed_origins: String,
     pub log_level: String,
     pub update_status_dir: String,
+    /// `host:port` the HTTP server binds. `BIND_ADDR`, else `0.0.0.0:$PORT` (PORT defaults to 8001).
+    pub bind_addr: String,
 }
 
 fn env_or(key: &str, default: &str) -> String {
@@ -56,6 +58,7 @@ impl Settings {
             cors_allowed_origins: env_or("CORS_ALLOWED_ORIGINS", "http://localhost:3000"),
             log_level: env_or("LOG_LEVEL", "INFO"),
             update_status_dir: env_or("UPDATE_STATUS_DIR", "/update-status"),
+            bind_addr: env::var("BIND_ADDR").unwrap_or_else(|_| format!("0.0.0.0:{}", env_or("PORT", "8001"))),
         }
     }
 }

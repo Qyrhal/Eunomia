@@ -11,6 +11,7 @@
 //! substring match rather than `cache.search`'s hybrid BM25+embedding search,
 //! since the embedding half (`embeddings.service`) isn't ported either.
 
+use surrealdb::types::SurrealValue;
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
 use serde::Deserialize;
@@ -142,15 +143,19 @@ async fn client_for(ctx: &SourceCtx<'_>, src: &HeyPocketSource) -> AppResult<Poc
     Ok(PocketAIClient::new(&creds, base.as_deref()))
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, SurrealValue)]
 pub(crate) struct CachedRecording {
     #[serde(default)]
+    #[surreal(default)]
     title: String,
     #[serde(default)]
-    occurred_at: Option<surrealdb::Datetime>,
+    #[surreal(default)]
+    occurred_at: Option<surrealdb::types::Datetime>,
     #[serde(default)]
+    #[surreal(default)]
     url: String,
     #[serde(default)]
+    #[surreal(default)]
     payload: Value,
 }
 
@@ -159,12 +164,12 @@ async fn cached_recordings(ctx: &SourceCtx<'_>, days: i64) -> AppResult<Vec<Cach
     let mut res = store::app::SOURCES_HEYPOCKET_RECENT
         .on(ctx.db)
         .bind(("owner", ctx.owner.clone()))
-        .bind(("since", surrealdb::Datetime::from(since)))
+        .bind(("since", surrealdb::types::Datetime::from(since)))
         .await?;
     Ok(res.take(0)?)
 }
 
-fn iso(dt: &Option<surrealdb::Datetime>) -> Option<String> {
+fn iso(dt: &Option<surrealdb::types::Datetime>) -> Option<String> {
     dt.as_ref().and_then(datetime_to_chrono).map(|d| d.to_rfc3339())
 }
 

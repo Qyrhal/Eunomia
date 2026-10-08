@@ -1,13 +1,15 @@
 //! Authentication: a browser JWT cookie or a personal API token header, both
 //! resolving to the same [`User`]. Ported from `app/auth.py`.
 
+use surrealdb::types::SurrealValue;
 use axum::{
     extract::{FromRef, FromRequestParts},
     http::request::Parts,
 };
 use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
-use surrealdb::RecordId;
+use surrealdb::types::RecordId;
+use crate::rid::RecordIdExt;
 
 use crate::db::Db;
 use crate::store;
@@ -63,9 +65,9 @@ async fn user_from_jwt(db: &Db, secret: &str, token: &str) -> Option<User> {
     )
     .ok()?;
     let claims = data.claims;
-    let rid: RecordId = claims.sub.parse().ok()?;
+    let rid: RecordId = crate::rid::parse(&claims.sub).ok()?;
 
-    #[derive(Deserialize)]
+    #[derive(Deserialize, SurrealValue)]
     struct SessionRow {
         id: RecordId,
     }
@@ -147,7 +149,7 @@ mod tests {
     use super::*;
 
     fn test_user() -> User {
-        User { id: "user:abc123".parse().unwrap(), email: "a@example.com".to_string() }
+        User { id: crate::rid::parse("user:abc123").unwrap(), email: "a@example.com".to_string() }
     }
 
     #[test]

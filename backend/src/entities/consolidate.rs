@@ -19,12 +19,14 @@
 //!
 //! Ported from `entities/consolidate.py`.
 
+use surrealdb::types::SurrealValue;
 use std::collections::HashSet;
 use std::time::Duration;
 
 use serde::Deserialize;
 use serde_json::{json, Value};
-use surrealdb::RecordId;
+use surrealdb::types::RecordId;
+use crate::rid::RecordIdExt;
 
 use crate::config::Settings;
 use crate::db::Db;
@@ -39,25 +41,28 @@ use super::extract::{app_settings_row, resolve_openai};
 pub const DEFAULT_MISSION: &str = "Observations are stable facts about people and relationships: preferences, skills, roles, \
 recurring patterns, and how they change over time. Ignore ephemeral or one-off details.";
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, SurrealValue)]
 struct SubjectRow {
     vault: RecordId,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, SurrealValue)]
 struct RawMemoryRow {
     id: RecordId,
     text: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, SurrealValue)]
 struct ObservationRow {
     id: RecordId,
     #[serde(default)]
+    #[surreal(default)]
     text: String,
     #[serde(default)]
+    #[surreal(default)]
     source_memories: Option<Vec<RecordId>>,
     #[serde(default)]
+    #[surreal(default)]
     version: i64,
 }
 
@@ -194,7 +199,7 @@ pub async fn consolidate_subject(
     let belief = match call_llm(db, settings, owner, &mission, current_belief.as_deref(), &fact_texts).await {
         Ok(b) => b,
         Err(e) => {
-            tracing::warn!("consolidation LLM call failed for {}: {}", subject_id, e.message);
+            tracing::warn!("consolidation LLM call failed for {}: {}", subject_id.to_string(), e.message);
             return Ok(None);
         }
     };
@@ -202,7 +207,7 @@ pub async fn consolidate_subject(
     let mut all_source_ids: Vec<String> = already_consolidated.into_iter().collect();
     all_source_ids.extend(fresh.iter().map(|(id, _)| id.clone()));
     let source_memories: Vec<RecordId> =
-        all_source_ids.iter().map(|s| s.parse()).collect::<Result<Vec<_>, _>>().map_err(|_| AppError::internal("source memory id did not round-trip"))?;
+        all_source_ids.iter().map(|s| crate::rid::parse(&s)).collect::<Result<Vec<_>, _>>().map_err(|_| AppError::internal("source memory id did not round-trip"))?;
 
     // The LLM call above is too slow to hold a transaction open, so the write
     // is optimistic: it only lands if the observation is still the one we read
@@ -226,7 +231,7 @@ pub async fn consolidate_subject(
             .bind(("source_memories", source_memories.clone()))
             .await?
             .check()?;
-        let rows: Vec<ObservationRow> = res.take(0)?;
+        let rows: Vec<ObservationRow> = res.take(stmt.slot)?;
         Ok(rows.into_iter().next())
     })
     .await?;

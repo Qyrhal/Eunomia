@@ -2,6 +2,7 @@
 //! it (or a Bearer API token, via the `User` extractor). Ported from
 //! `app/routers/auth.py`.
 
+use surrealdb::types::SurrealValue;
 use axum::{
     extract::{Path, State},
     http::{header, HeaderMap, StatusCode},
@@ -11,7 +12,8 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use surrealdb::{Datetime, RecordId};
+use surrealdb::types::{Datetime, RecordId};
+use crate::rid::RecordIdExt;
 
 use crate::auth::{self, SESSION_COOKIE};
 use crate::error::{AppError, AppResult, ErrorCode};
@@ -68,7 +70,7 @@ fn user_agent_from(headers: &HeaderMap) -> Option<String> {
 }
 
 async fn onboarded(state: &AppState, user: &User) -> AppResult<bool> {
-    #[derive(Deserialize)]
+    #[derive(Deserialize, SurrealValue)]
     struct Row {
         onboarded_at: Option<Datetime>,
     }
@@ -248,7 +250,7 @@ async fn delete_token(
     user: User,
     Path(token_id): Path<String>,
 ) -> AppResult<Json<serde_json::Value>> {
-    let rid: RecordId = token_id.parse().map_err(|_| AppError::coded(ErrorCode::AuthNotFound, "Token not found."))?;
+    let rid: RecordId = crate::rid::parse(&token_id).map_err(|_| AppError::coded(ErrorCode::AuthNotFound, "Token not found."))?;
     let ok = models_user::revoke_api_token(&state.db, &user.id, &rid).await?;
     if !ok {
         return Err(AppError::coded(ErrorCode::AuthNotFound, "Token not found."));
@@ -256,10 +258,11 @@ async fn delete_token(
     Ok(Json(json!({ "ok": true })))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, SurrealValue)]
 struct SessionRow {
     id: RecordId,
     #[serde(default)]
+    #[surreal(default)]
     user_agent: String,
     created_at: Datetime,
     last_seen_at: Datetime,
@@ -315,11 +318,11 @@ async fn revoke_session_route(
     user: User,
     Path(session_id): Path<String>,
 ) -> AppResult<Json<serde_json::Value>> {
-    #[derive(Deserialize)]
+    #[derive(Deserialize, SurrealValue)]
     struct Row {
         owner: RecordId,
     }
-    let rid: RecordId = session_id.parse().map_err(|_| AppError::coded(ErrorCode::AuthNotFound, "Session not found."))?;
+    let rid: RecordId = crate::rid::parse(&session_id).map_err(|_| AppError::coded(ErrorCode::AuthNotFound, "Session not found."))?;
     let row: Option<Row> = state.db.select(rid.clone()).await?;
     match row {
         Some(r) if r.owner == user.id => {}
@@ -338,7 +341,7 @@ async fn revoke_session_route(
     security(()),
 )]
 async fn bootstrap(State(state): State<AppState>) -> AppResult<Json<BootstrapOut>> {
-    #[derive(Deserialize)]
+    #[derive(Deserialize, SurrealValue)]
     struct CountRow {
         count: i64,
     }

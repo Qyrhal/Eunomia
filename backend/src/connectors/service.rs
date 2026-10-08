@@ -8,9 +8,10 @@
 //! its SurrealDB query to that owner -- connectors are per-user, not global
 //! singletons.
 
+use surrealdb::types::SurrealValue;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use surrealdb::{Datetime, RecordId};
+use surrealdb::types::{Datetime, RecordId};
 
 use crate::connectors::crypto;
 use crate::db::Db;
@@ -37,16 +38,19 @@ pub const CONNECTOR_KINDS: &[&str] = &[
     "stripe",
 ];
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, SurrealValue, Serialize)]
 pub struct Connector {
     pub id: RecordId,
     pub owner: RecordId,
     pub kind: String,
     #[serde(default)]
+    #[surreal(default)]
     pub enabled: bool,
     #[serde(default)]
+    #[surreal(default)]
     pub config: Value,
     #[serde(default)]
+    #[surreal(default)]
     pub credentials_encrypted: String,
     pub updated_at: Datetime,
 }

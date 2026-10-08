@@ -6,6 +6,7 @@ use std::future::Future;
 use std::time::Duration;
 
 use rand::Rng;
+use surrealdb::types::QueryError;
 use tokio::sync::{Mutex, MutexGuard};
 
 /// Attempts per call. The plan says 3; a commit conflict can repeat when two
@@ -39,11 +40,11 @@ pub async fn lock(key: &str) -> MutexGuard<'static, ()> {
 }
 
 /// The single definition of a commit-time read/write conflict (also used by
-/// `AppError`'s mapping). Over `ws://` the SDK only carries the server's
-/// message text, so we match on that too; it is stable ("...This transaction
-/// can be retried").
+/// `AppError`'s mapping). 3.x reports it as `QueryError::TransactionConflict` over the wire, but
+/// the embedded engine (and 2.x-style servers) only carry the message text ("...This transaction
+/// can be retried"), so match both. `tests/store.rs` provokes a real one.
 pub fn is_conflict(err: &surrealdb::Error) -> bool {
-    matches!(err, surrealdb::Error::Db(surrealdb::error::Db::TxRetryable)) || err.to_string().contains("can be retried")
+    err.query_details() == Some(&QueryError::TransactionConflict) || err.to_string().contains("can be retried")
 }
 
 /// Worth retrying: a conflict, or a unique-index/record-exists violation (a
@@ -54,7 +55,7 @@ pub fn is_retryable(err: &surrealdb::Error) -> bool {
         return true;
     }
     let msg = err.to_string();
-    msg.contains("already contains") || msg.contains("already exists")
+    err.is_already_exists() || msg.contains("already contains") || msg.contains("already exists")
 }
 
 /// Run `f` up to `MAX_ATTEMPTS` times, retrying only when `is_retryable`, with
@@ -83,19 +84,19 @@ mod tests {
     use std::sync::atomic::{AtomicU32, Ordering};
 
     fn conflict() -> surrealdb::Error {
-        surrealdb::Error::Db(surrealdb::error::Db::TxRetryable)
+        surrealdb::Error::query("conflict".into(), QueryError::TransactionConflict)
     }
 
     fn other() -> surrealdb::Error {
-        surrealdb::Error::Api(surrealdb::error::Api::Query("Found NONE for field `x`".into()))
+        surrealdb::Error::query("Found NONE for field `x`".into(), None)
     }
 
     #[test]
     fn detects_variant_and_text() {
         assert!(is_retryable(&conflict()));
-        let remote = surrealdb::Error::Api(surrealdb::error::Api::Query(
+        let remote = surrealdb::Error::internal(
             "Failed to commit transaction due to a read or write conflict. This transaction can be retried".into(),
-        ));
+        );
         assert!(is_retryable(&remote));
         assert!(!is_retryable(&other()));
     }

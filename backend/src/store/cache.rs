@@ -2,7 +2,7 @@
 //!
 //! Not here, built at runtime with `store::dynamic` (the variant count
 //! explodes or the SQL embeds a literal): `cache.search_filtered`,
-//! `cache.semantic_ids` (KNN `<|k|>` needs a literal integer),
+//! `cache.semantic_ids` (KNN `<|k,ef|>` needs literal integers),
 //! `cache.list_records`, `cache.count_records`, `cache.generic_search`,
 //! `cache.generic_list`, `cache.generic_count`.
 
@@ -66,7 +66,14 @@ pub const KEYWORD_IDS: Stmt = Stmt::new(
     "SELECT id, search::score(1) AS score FROM cache_record \
      WHERE owner = $owner AND title @1@ $t AND deleted = false ORDER BY score DESC LIMIT $limit; \
      SELECT id, 0.0 AS score FROM cache_record WHERE owner = $owner AND deleted = false \
-     AND string::contains(string::lowercase(body_text), $t) LIMIT $limit",
+     AND body_text @1@ $t LIMIT $limit",
+);
+
+/// Exact cosine ranking of one owner's embedded records; the fallback when KNN comes up short.
+pub const SEMANTIC_EXACT: Stmt = Stmt::new(
+    "cache.semantic_exact",
+    "SELECT id, vector::similarity::cosine(embedding, $vec) AS sim FROM cache_record \
+     WHERE owner = $owner AND deleted = false AND embedding != NONE ORDER BY sim DESC LIMIT $limit",
 );
 
 pub const LINKS_OUT: Stmt = Stmt::new("cache.links_out", "SELECT rel, out FROM linked_to WHERE in = $id");
@@ -107,6 +114,7 @@ pub const ALL: &[&Stmt] = &[
     &UPSERT_RECORD,
     &SET_EMBEDDING,
     &KEYWORD_IDS,
+    &SEMANTIC_EXACT,
     &LINKS_OUT,
     &LINKS_OUT_REL,
     &LINKS_IN,

@@ -17,7 +17,7 @@ use axum::{
 use futures::Stream;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use surrealdb::RecordId;
+use surrealdb::types::RecordId;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::StreamExt as _;
@@ -53,7 +53,7 @@ struct ThreadCreate {
 /// Path params are plain strings; parse here, same convention as
 /// `routers/vaults.rs`'s `parse_vault_id`.
 fn parse_thread_id(thread_id: &str) -> AppResult<RecordId> {
-    thread_id.parse().map_err(|_| AppError::coded(ErrorCode::ChatThreadNotFound, "not found"))
+    crate::rid::parse(&thread_id).map_err(|_| AppError::coded(ErrorCode::ChatThreadNotFound, "not found"))
 }
 
 #[utoipa::path(

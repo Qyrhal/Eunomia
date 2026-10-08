@@ -415,8 +415,8 @@ mod tests {
     #[test]
     fn connector_out_reports_credentials_set_without_leaking_them() {
         let row = Connector {
-            id: "connector:abc".parse().unwrap(),
-            owner: "user:abc".parse().unwrap(),
+            id: crate::rid::parse("connector:abc").unwrap(),
+            owner: crate::rid::parse("user:abc").unwrap(),
             kind: "up_bank".to_string(),
             enabled: true,
             config: json!({}),

@@ -11,6 +11,7 @@ pub mod error;
 pub mod migrate;
 pub mod models_user;
 pub mod openapi;
+pub mod rid;
 pub mod routers;
 pub mod sources;
 pub mod state;

@@ -203,23 +203,16 @@ impl IntoResponse for AppError {
 
 impl From<surrealdb::Error> for AppError {
     fn from(err: surrealdb::Error) -> Self {
-        use surrealdb::error::Db;
         let raw = err.to_string();
+        if std::env::var("DBG_ERR").is_ok() { eprintln!("DBGERR {raw} :: {err:?}\n{}", std::backtrace::Backtrace::force_capture()); }
         let lower = raw.to_lowercase();
         let (code, message) = match &err {
             _ if crate::tx::is_conflict(&err) => (ErrorCode::DbConflict, "The write conflicted with another; retry it."),
-            surrealdb::Error::Db(
-                Db::IamError(_)
-                | Db::TablePermissions { .. }
-                | Db::ParamPermissions { .. }
-                | Db::FunctionPermissions { .. }
-                | Db::NsNotAllowed { .. }
-                | Db::DbNotAllowed { .. },
-            ) => (ErrorCode::TenantDenied, "Internal server error."),
+            _ if err.is_not_allowed() => (ErrorCode::TenantDenied, "Internal server error."),
             _ if lower.contains("you don't have permission") || lower.contains("not enough permissions") => {
                 (ErrorCode::TenantDenied, "Internal server error.")
             }
-            _ if lower.contains("already contains") => (ErrorCode::DbDuplicate, "That record already exists."),
+            _ if err.is_already_exists() || lower.contains("already contains") => (ErrorCode::DbDuplicate, "That record already exists."),
             _ => (ErrorCode::Internal, "Internal server error."),
         };
         AppError::coded(code, message).with_source(raw)

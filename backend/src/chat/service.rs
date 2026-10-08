@@ -16,12 +16,14 @@
 //!
 //! Ported from `chat/service.py`.
 
+use surrealdb::types::SurrealValue;
 use std::collections::BTreeMap;
 
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use surrealdb::{Datetime, RecordId};
+use surrealdb::types::{Datetime, RecordId};
+use crate::rid::RecordIdExt;
 use tokio::sync::mpsc;
 
 use crate::config::Settings;
@@ -91,11 +93,13 @@ pub enum ChatEvent {
 // that function yet -- same situation `entities::extract` is already in).
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Deserialize, SurrealValue, Default)]
 struct AppSettingsRow {
     #[serde(default)]
+    #[surreal(default)]
     openai_base_url: String,
     #[serde(default)]
+    #[surreal(default)]
     openai_api_key_encrypted: String,
 }
 
@@ -152,11 +156,12 @@ pub async fn ensure_configured(db: &Db, settings: &Settings, owner: &RecordId) -
 // threads
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, SurrealValue)]
 struct ThreadRow {
     id: RecordId,
     owner: RecordId,
     #[serde(default)]
+    #[surreal(default)]
     title: String,
     created_at: Datetime,
     updated_at: Datetime,
@@ -253,14 +258,16 @@ async fn touch_thread(db: &Db, thread_id: &RecordId, title: Option<&str>) -> App
 // messages
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, SurrealValue)]
 struct MessageRow {
     thread_id: RecordId,
     role: String,
     content: String,
     #[serde(default)]
+    #[surreal(default)]
     tool_calls: Option<Vec<Value>>,
     #[serde(default)]
+    #[surreal(default)]
     tool_call_id: Option<String>,
     created_at: Datetime,
 }
@@ -658,7 +665,7 @@ mod tests {
 
     fn row(role: &str, content: &str, tool_calls: Option<Vec<Value>>, tool_call_id: Option<&str>) -> MessageRow {
         MessageRow {
-            thread_id: "chat_thread:abc".parse().unwrap(),
+            thread_id: crate::rid::parse("chat_thread:abc").unwrap(),
             role: role.to_string(),
             content: content.to_string(),
             tool_calls,

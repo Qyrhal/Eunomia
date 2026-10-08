@@ -9,7 +9,7 @@
 
 use serde::Deserialize;
 use serde_json::{json, Value};
-use surrealdb::RecordId;
+use surrealdb::types::RecordId;
 
 use crate::cache::recall::{self, RecallItem};
 use crate::config::Settings;

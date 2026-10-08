@@ -3,9 +3,10 @@
 //! personal API tokens are random strings, only their SHA-256 hash is ever
 //! stored.
 
+use surrealdb::types::SurrealValue;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use surrealdb::RecordId;
+use surrealdb::types::RecordId;
 
 use crate::db::Db;
 use crate::store;
@@ -17,7 +18,7 @@ pub struct User {
     pub email: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, SurrealValue)]
 struct UserRow {
     id: RecordId,
     email: String,
@@ -66,7 +67,7 @@ pub async fn register_user(db: &Db, email: &str, password: &str) -> AppResult<Us
         .on(db)
         .bind(("email", email.to_string()))
         .await?;
-    #[derive(Deserialize)]
+    #[derive(Deserialize, SurrealValue)]
     struct IdRow {
         #[allow(dead_code)]
         id: RecordId,
@@ -124,7 +125,7 @@ pub struct ApiTokenCreated {
     pub token: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, SurrealValue)]
 struct ApiTokenRow {
     id: RecordId,
     name: String,
@@ -146,12 +147,12 @@ pub async fn create_api_token(db: &Db, owner: &RecordId, name: &str) -> AppResul
     Ok(ApiTokenCreated { id: row.id, name: row.name, token })
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, SurrealValue, Serialize)]
 pub struct ApiTokenSummary {
     pub id: RecordId,
     pub name: String,
-    pub created_at: surrealdb::Datetime,
-    pub last_used_at: Option<surrealdb::Datetime>,
+    pub created_at: surrealdb::types::Datetime,
+    pub last_used_at: Option<surrealdb::types::Datetime>,
 }
 
 pub async fn list_api_tokens(db: &Db, owner: &RecordId) -> AppResult<Vec<ApiTokenSummary>> {
@@ -163,7 +164,7 @@ pub async fn list_api_tokens(db: &Db, owner: &RecordId) -> AppResult<Vec<ApiToke
 }
 
 pub async fn revoke_api_token(db: &Db, owner: &RecordId, token_id: &RecordId) -> AppResult<bool> {
-    #[derive(Deserialize)]
+    #[derive(Deserialize, SurrealValue)]
     struct Row {
         owner: RecordId,
     }
@@ -177,7 +178,7 @@ pub async fn revoke_api_token(db: &Db, owner: &RecordId, token_id: &RecordId) ->
 }
 
 pub async fn verify_api_token(db: &Db, token: &str) -> AppResult<Option<User>> {
-    #[derive(Deserialize)]
+    #[derive(Deserialize, SurrealValue)]
     struct TokenRow {
         id: RecordId,
         owner: RecordId,

@@ -6,7 +6,7 @@
 //! into a registry module that doesn't exist on this side yet.
 
 use serde_json::{json, Value};
-use surrealdb::RecordId;
+use surrealdb::types::RecordId;
 
 use crate::db::Db;
 use crate::vaults::service;

@@ -14,7 +14,8 @@
 //!
 //! Ported from `entities/tools.py`.
 
-use surrealdb::RecordId;
+use surrealdb::types::RecordId;
+use crate::rid::RecordIdExt;
 
 use crate::config::Settings;
 use crate::db::Db;
@@ -179,7 +180,7 @@ pub async fn consolidate_observations(
     let mut out = ConsolidateOut::default();
     let all = service::list_entities(db, owner, None, None, None, 0).await?;
     for entity in all.results {
-        let sid: RecordId = match entity.id.parse() {
+        let sid: RecordId = match crate::rid::parse(&entity.id) {
             Ok(id) => id,
             Err(_) => {
                 out.errors.push(format!("{}: invalid entity id", entity.id));

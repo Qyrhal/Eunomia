@@ -9,12 +9,14 @@
 //! `tool_registry()` (the per-source MCP tool surface) is not ported: see
 //! `sources::base`'s module doc.
 
+use surrealdb::types::SurrealValue;
 use std::collections::HashSet;
 use std::sync::Arc;
 
 use serde::Deserialize;
 use serde_json::Value;
-use surrealdb::RecordId;
+use surrealdb::types::RecordId;
+use crate::rid::RecordIdExt;
 
 use crate::connectors::service;
 use crate::db::Db;
@@ -72,10 +74,11 @@ pub async fn credentials_for(db: &Db, encryption_key: &str, owner: &RecordId, sr
     service::credentials_for(db, encryption_key, owner, src.provider_key()).await
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, SurrealValue)]
 struct ConnectorKindRow {
     kind: String,
     #[serde(default)]
+    #[surreal(default)]
     config: Value,
 }
 
@@ -172,11 +175,13 @@ fn hash_envelope(env: &Value) -> String {
     format!("{:x}", hasher.finalize())
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, SurrealValue)]
 struct ExistingRecord {
     #[serde(default)]
+    #[surreal(default)]
     content_hash: String,
     #[serde(default)]
+    #[surreal(default)]
     deleted: bool,
 }
 
@@ -196,16 +201,16 @@ async fn upsert_one(db: &Db, owner: &RecordId, env: &Value) -> AppResult<bool> {
             store::app::SOURCES_RECORD_TOUCH
                 .on(db)
                 .bind(("id", rid))
-                .bind(("now", surrealdb::Datetime::from(now)))
+                .bind(("now", surrealdb::types::Datetime::from(now)))
                 .await?;
             return Ok(false);
         }
 
-    let occurred_at: Option<surrealdb::Datetime> = env
+    let occurred_at: Option<surrealdb::types::Datetime> = env
         .get("occurred_at")
         .and_then(|v| v.as_str())
         .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-        .map(|dt| surrealdb::Datetime::from(dt.with_timezone(&chrono::Utc)));
+        .map(|dt| surrealdb::types::Datetime::from(dt.with_timezone(&chrono::Utc)));
 
     store::app::SOURCES_RECORD_UPSERT
     .on(db)
@@ -220,7 +225,7 @@ async fn upsert_one(db: &Db, owner: &RecordId, env: &Value) -> AppResult<bool> {
     .bind(("url", str_field(env, "url")))
     .bind(("payload", env.get("payload").cloned().unwrap_or(Value::Object(Default::default()))))
     .bind(("content_hash", h))
-    .bind(("now", surrealdb::Datetime::from(now)))
+    .bind(("now", surrealdb::types::Datetime::from(now)))
     .bind(("deleted", env.get("deleted").and_then(|v| v.as_bool()).unwrap_or(false)))
     .await?;
 

@@ -15,10 +15,12 @@
 //! keyword search still works standalone and hybrid degrades to keyword-only
 //! until embeddings exist.
 
+use surrealdb::types::SurrealValue;
 use std::collections::HashMap;
 
 use serde_json::{json, Value};
-use surrealdb::{Datetime, RecordId, RecordIdKey};
+use surrealdb::types::{Datetime, RecordId, RecordIdKey};
+use crate::rid::RecordIdExt;
 
 use crate::db::Db;
 use crate::store;
@@ -32,24 +34,32 @@ const RRF_K: f64 = 60.0;
 const FIELDS: &[&str] =
     &["occurred_at", "ingested_at", "updated_at", "title", "type", "source", "id", "external_id"];
 
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, serde::Deserialize, SurrealValue)]
 struct Row {
     id: RecordId,
     #[serde(default)]
+    #[surreal(default)]
     source: String,
     #[serde(rename = "type", default)]
+    #[surreal(rename = "type", default)]
     type_: String,
     #[serde(default)]
+    #[surreal(default)]
     external_id: String,
     #[serde(default)]
+    #[surreal(default)]
     title: String,
     #[serde(default)]
+    #[surreal(default)]
     body_text: String,
     #[serde(default)]
+    #[surreal(default)]
     occurred_at: Option<Datetime>,
     #[serde(default)]
+    #[surreal(default)]
     url: String,
     #[serde(default)]
+    #[surreal(default)]
     payload: Value,
 }
 
@@ -68,7 +78,7 @@ struct CacheRecord {
 /// The owner-id prefix baked into the scoped `cache_record` key is internal
 /// plumbing; callers never see or pass it.
 fn owner_key(owner: &RecordId) -> String {
-    String::try_from(owner.key().clone()).unwrap_or_else(|_| owner.to_string())
+    crate::rid::key_string(owner.key()).unwrap_or_else(|| owner.to_string())
 }
 
 fn scoped_rid(owner: &RecordId, record_id: &str) -> RecordId {
@@ -77,7 +87,7 @@ fn scoped_rid(owner: &RecordId, record_id: &str) -> RecordId {
 
 /// The caller-facing record id -- strips the owner-key prefix back off.
 fn literal(key: &RecordIdKey) -> String {
-    let raw = String::try_from(key.clone()).unwrap_or_default();
+    let raw = crate::rid::key_string(key).unwrap_or_default();
     raw.split_once(':').map(|(_, rest)| rest.to_string()).unwrap_or(raw)
 }
 
@@ -330,7 +340,7 @@ pub async fn list(
     for (name, val) in filter_binds {
         cq = cq.bind((name, val));
     }
-    #[derive(serde::Deserialize)]
+    #[derive(serde::Deserialize, SurrealValue)]
     struct CountRow {
         count: i64,
     }
@@ -344,15 +354,16 @@ pub async fn list(
 }
 
 pub async fn links(db: &Db, owner: &RecordId, id: &str, rel: Option<&str>) -> AppResult<Value> {
-    #[derive(serde::Deserialize)]
+    #[derive(serde::Deserialize, SurrealValue)]
     struct FwdRow {
         rel: String,
         out: RecordId,
     }
-    #[derive(serde::Deserialize)]
+    #[derive(serde::Deserialize, SurrealValue)]
     struct BackRow {
         rel: String,
         #[serde(rename = "in")]
+        #[surreal(rename = "in")]
         in_: RecordId,
     }
 

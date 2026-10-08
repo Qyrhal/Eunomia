@@ -11,10 +11,12 @@
 //! otherwise a local hashed bag-of-words vector -- no key, no network, still
 //! puts texts that share words near each other.
 
+use surrealdb::types::SurrealValue;
 use std::collections::HashSet;
 
 use serde::{Deserialize, Serialize};
-use surrealdb::RecordId;
+use surrealdb::types::RecordId;
+use crate::rid::RecordIdExt;
 
 use crate::cache::search as cs;
 use crate::config::Settings;
@@ -143,12 +145,14 @@ fn label(text: &str) -> String {
 }
 
 async fn layer_items(db: &Db, owner: &RecordId, vault: &RecordId, personal: bool) -> AppResult<Vec<Item>> {
-    #[derive(Deserialize)]
+    #[derive(Deserialize, SurrealValue)]
     struct Mem {
         id: RecordId,
         #[serde(default)]
+        #[surreal(default)]
         text: String,
         #[serde(rename = "type", default)]
+        #[surreal(rename = "type", default)]
         mem_type: String,
     }
     let mut res = store::cache::MEMORY_FOR_EMBED
@@ -164,14 +168,17 @@ async fn layer_items(db: &Db, owner: &RecordId, vault: &RecordId, personal: bool
         .collect();
 
     if personal && items.len() < MAX_PER_LAYER {
-        #[derive(Deserialize)]
+        #[derive(Deserialize, SurrealValue)]
         struct Rec {
             id: RecordId,
             #[serde(default)]
+            #[surreal(default)]
             title: String,
             #[serde(default)]
+            #[surreal(default)]
             body_text: String,
             #[serde(default)]
+            #[surreal(default)]
             embedding: Option<Vec<f32>>,
         }
         let mut res = store::cache::RECORDS_FOR_EMBED

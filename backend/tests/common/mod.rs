@@ -25,14 +25,19 @@ pub struct TestApp {
     pub router: Router,
 }
 
+/// In-memory SurrealDB by default. `TEST_SURREAL_URL=ws://127.0.0.1:8231/rpc` (with
+/// `TEST_SURREAL_USER` / `TEST_SURREAL_PASS`) runs the same suite against a real server, e.g. one
+/// started with the hardened flags from docker-compose.yml; each call then gets a fresh database.
 pub fn test_settings() -> Settings {
+    let url = std::env::var("TEST_SURREAL_URL").unwrap_or_else(|_| "mem://".into());
+    let db = if url == "mem://" { "test".to_string() } else { format!("t{}", uuid::Uuid::new_v4().simple()) };
     Settings {
         jwt_secret: "test-jwt-secret".into(),
-        surreal_url: "mem://".into(),
-        surreal_user: "root".into(),
-        surreal_pass: "root".into(),
+        surreal_url: url,
+        surreal_user: std::env::var("TEST_SURREAL_USER").unwrap_or_else(|_| "root".into()),
+        surreal_pass: std::env::var("TEST_SURREAL_PASS").unwrap_or_else(|_| "root".into()),
         surreal_ns: "test".into(),
-        surreal_db: "test".into(),
+        surreal_db: db,
         openai_api_key: None,
         openai_base_url: "http://127.0.0.1:9/v1".into(), // unroutable: never reached without a key
         encryption_key: "test-encryption-key".into(),
@@ -40,6 +45,7 @@ pub fn test_settings() -> Settings {
         cors_allowed_origins: "http://localhost:3000".into(),
         log_level: "WARN".into(),
         update_status_dir: "/nonexistent".into(),
+        bind_addr: "127.0.0.1:0".into(),
     }
 }
 

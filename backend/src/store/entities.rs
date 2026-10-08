@@ -11,7 +11,7 @@ pub const MERGE_ALIASES: Stmt = Stmt::new(
 );
 
 // One round trip, all-or-nothing; see add_memory in entities/service.rs.
-pub const WRITE_OBSERVATION: Stmt = Stmt::new(
+pub const WRITE_OBSERVATION: Stmt = Stmt::at(
     "entities.write_observation",
     r#"BEGIN TRANSACTION;
         LET $cur = (SELECT VALUE id FROM $obs_id);
@@ -26,9 +26,10 @@ pub const WRITE_OBSERVATION: Stmt = Stmt::new(
         };
         RETURN $row;
         COMMIT TRANSACTION;"#,
+    5, // BEGIN 0, four LETs 1 to 4, RETURN 5
 );
 
-pub const WRITE_FACT: Stmt = Stmt::new(
+pub const WRITE_FACT: Stmt = Stmt::at(
     "entities.write_fact",
     r#"BEGIN TRANSACTION;
         CREATE memory SET owner = $owner, vault = $vault, subject = $subject, text = $text, type = $type, source = $source RETURN AFTER;
@@ -39,6 +40,7 @@ pub const WRITE_FACT: Stmt = Stmt::new(
             UPDATE memory SET status = "stale" WHERE subject = $subject AND type = "observation" AND status != "stale"
         };
         COMMIT TRANSACTION;"#,
+    1, // BEGIN 0, CREATE 1
 );
 
 pub const RELATE_RETURNING: Stmt = Stmt::new(
@@ -114,7 +116,7 @@ pub const OBSERVATION_OF: Stmt = Stmt::new(
     "entities.observation_of",
     r#"SELECT * FROM memory WHERE subject = $id AND type = "observation" LIMIT 1"#,
 );
-pub const CONSOLIDATE_CREATE: Stmt = Stmt::new(
+pub const CONSOLIDATE_CREATE: Stmt = Stmt::at(
     "entities.consolidate_create",
     r#"BEGIN TRANSACTION;
             LET $cur = (SELECT VALUE id FROM memory WHERE subject = $subject AND type = "observation" LIMIT 1);
@@ -125,6 +127,7 @@ pub const CONSOLIDATE_CREATE: Stmt = Stmt::new(
             };
             RETURN $row;
             COMMIT TRANSACTION;"#,
+    3, // BEGIN 0, two LETs 1 and 2, RETURN 3
 );
 pub const CONSOLIDATE_UPDATE: Stmt = Stmt::new(
     "entities.consolidate_update",

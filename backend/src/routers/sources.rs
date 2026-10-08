@@ -12,6 +12,7 @@
 //! `routers::connectors`'s dual-router pattern (`router()` + a second
 //! function the caller mounts separately).
 
+use surrealdb::types::SurrealValue;
 use axum::{
     extract::{Path, State},
     routing::{get, post},
@@ -19,7 +20,8 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
-use surrealdb::RecordId;
+use surrealdb::types::RecordId;
+use crate::rid::RecordIdExt;
 
 use crate::error::{AppError, AppResult, ErrorCode};
 use crate::models_user::User;
@@ -40,18 +42,23 @@ pub fn webhook_router() -> Router<AppState> {
     Router::new().route("/sources/{key}/webhook/{owner_id}", post(source_webhook))
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, SurrealValue)]
 struct SyncStatusRow {
     id: RecordId,
     #[serde(default)]
+    #[surreal(default)]
     cursor: String,
     #[serde(default)]
-    last_run: Option<surrealdb::Datetime>,
+    #[surreal(default)]
+    last_run: Option<surrealdb::types::Datetime>,
     #[serde(default)]
-    last_ok: Option<surrealdb::Datetime>,
+    #[surreal(default)]
+    last_ok: Option<surrealdb::types::Datetime>,
     #[serde(default)]
+    #[surreal(default)]
     last_error: String,
     #[serde(default)]
+    #[surreal(default)]
     consecutive_failures: i64,
 }
 
@@ -67,7 +74,7 @@ async fn sync_status_rows(state: &AppState, owner: &RecordId) -> AppResult<std::
             // The record key is `{owner_key}:{source_key}`; partition off the
             // owner-key prefix to recover the source key, same as the Python
             // router's `row["id"].id.partition(":")`.
-            let raw_key: String = r.id.key().clone().try_into().unwrap_or_default();
+            let raw_key = crate::rid::key_string(r.id.key()).unwrap_or_default();
             let source_key = raw_key.split_once(':').map(|(_, k)| k.to_string()).unwrap_or(raw_key);
             (source_key, r)
         })
@@ -77,7 +84,7 @@ async fn sync_status_rows(state: &AppState, owner: &RecordId) -> AppResult<std::
 /// Cached-record count per source key, for the dashboard's totals -- a single
 /// grouped count, not a per-source query.
 async fn record_counts(state: &AppState, owner: &RecordId) -> AppResult<std::collections::HashMap<String, i64>> {
-    #[derive(Deserialize)]
+    #[derive(Deserialize, SurrealValue)]
     struct Row {
         source: String,
         count: i64,
@@ -188,7 +195,7 @@ async fn source_webhook(
         return Err(AppError::coded(ErrorCode::SourceNotFound, format!("no source {key:?}")));
     };
 
-    let owner: RecordId = owner_id.parse().map_err(|_| AppError::not_found("unknown owner"))?;
+    let owner: RecordId = crate::rid::parse(&owner_id).map_err(|_| AppError::not_found("unknown owner"))?;
 
     let (parts, body) = request.into_parts();
     let body_bytes = axum::body::to_bytes(body, usize::MAX)
@@ -203,12 +210,12 @@ async fn source_webhook(
         // ingesting" -- `Source::webhook` doesn't distinguish the two (see
         // its doc comment), and responding 200 either way avoids the
         // provider retrying a delivery it has no reason to believe failed.
-        tracing::info!(source = %key, owner = %owner, "webhook: ignored");
+        tracing::info!(source = %key, owner = %owner.to_string(), "webhook: ignored");
         return Ok(Json(json!({"status": "ignored"})));
     };
 
     let report = registry::ingest(&state.db, &owner, &key, &raw_records, src.as_ref()).await;
-    tracing::info!(source = %key, owner = %owner, report = ?report.as_value(), "webhook: processed");
+    tracing::info!(source = %key, owner = %owner.to_string(), report = ?report.as_value(), "webhook: processed");
 
     let mut out = report.as_value();
     out.as_object_mut().unwrap().insert("status".to_string(), json!("ok"));

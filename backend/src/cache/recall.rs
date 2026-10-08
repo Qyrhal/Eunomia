@@ -38,9 +38,11 @@
 //!
 //! Ported from `cache/recall.py`.
 
+use surrealdb::types::SurrealValue;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use surrealdb::RecordId;
+use surrealdb::types::RecordId;
+use crate::rid::RecordIdExt;
 
 use crate::cache::search as cs;
 use crate::config::Settings;
@@ -59,11 +61,11 @@ const RECENCY_SPAN: f64 = 0.3;
 // proof boost: +5% per extra arm that surfaced the same item.
 const PROOF_STEP: f64 = 0.05;
 
-/// `surrealdb::Datetime` only converts *from* `chrono::DateTime<Utc>`
+/// `surrealdb::types::Datetime` only converts *from* `chrono::DateTime<Utc>`
 /// (`Datetime::from`); the reverse direction isn't exposed on the wrapper
 /// type directly, only on the inner core type it wraps, so go through
 /// `into_inner()`.
-fn to_chrono(dt: surrealdb::Datetime) -> DateTime<Utc> {
+fn to_chrono(dt: surrealdb::types::Datetime) -> DateTime<Utc> {
     dt.into_inner().into()
 }
 
@@ -96,12 +98,14 @@ impl MemoryType {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, SurrealValue)]
 struct EntityRow {
     id: RecordId,
     #[serde(default)]
+    #[surreal(default)]
     name: String,
     #[serde(default)]
+    #[surreal(default)]
     aliases: Vec<String>,
 }
 
@@ -132,10 +136,11 @@ async fn graph_arm(db: &Db, owner: &RecordId, vault: &RecordId, query: &str, lim
     }
     matches.sort_by_key(|m| std::cmp::Reverse(m.0));
 
-    #[derive(Deserialize)]
+    #[derive(Deserialize, SurrealValue)]
     struct MemRow {
         id: RecordId,
         #[serde(default)]
+        #[surreal(default)]
         source: Option<RecordId>,
     }
 
@@ -147,7 +152,7 @@ async fn graph_arm(db: &Db, owner: &RecordId, vault: &RecordId, query: &str, lim
             .await?;
         let mem_rows: Vec<MemRow> = res.take(0)?;
         for mem in mem_rows {
-            keys.push(format!("memory:{}", mem.id));
+            keys.push(format!("memory:{}", mem.id.to_string()));
             if let Some(source) = mem.source {
                 let src_literal = cs::literal(&source);
                 keys.push(format!("cache_record:{src_literal}"));
@@ -177,10 +182,11 @@ async fn graph_arm(db: &Db, owner: &RecordId, vault: &RecordId, query: &str, lim
 /// says, not just by its subject's name -- no embeddings required. Works for
 /// any vault the caller can read.
 async fn memory_text_arm(db: &Db, vault: &RecordId, query: &str, limit: usize) -> AppResult<Vec<String>> {
-    #[derive(Deserialize)]
+    #[derive(Deserialize, SurrealValue)]
     struct ScoredRow {
         id: RecordId,
         #[serde(default)]
+        #[surreal(default)]
         score: f64,
     }
     // one BM25 match per term: `@@` with a whole question needs every word to match
@@ -193,7 +199,7 @@ async fn memory_text_arm(db: &Db, vault: &RecordId, query: &str, limit: usize) -
             .bind(("limit", limit as i64))
             .await?;
         let rows: Vec<ScoredRow> = res.take(0)?;
-        per_term.push(rows.into_iter().map(|r| (format!("memory:{}", r.id), r.score)).collect());
+        per_term.push(rows.into_iter().map(|r| (format!("memory:{}", r.id.to_string()), r.score)).collect());
     }
     Ok(cs::rank_term_hits(per_term, limit))
 }
@@ -215,18 +221,18 @@ async fn temporal_ids(
         return Ok(Vec::new());
     };
 
-    #[derive(Deserialize)]
+    #[derive(Deserialize, SurrealValue)]
     struct CacheRow {
         id: RecordId,
-        occurred_at: surrealdb::Datetime,
+        occurred_at: surrealdb::types::Datetime,
     }
-    #[derive(Deserialize)]
+    #[derive(Deserialize, SurrealValue)]
     struct MemRow {
         id: RecordId,
-        created_at: surrealdb::Datetime,
+        created_at: surrealdb::types::Datetime,
     }
 
-    let mut dated: Vec<(surrealdb::Datetime, String)> = Vec::new();
+    let mut dated: Vec<(surrealdb::types::Datetime, String)> = Vec::new();
 
     if include_cache_record {
         let mut res = store::cache::CACHE_RECORDS_IN_RANGE
@@ -246,7 +252,7 @@ async fn temporal_ids(
         .bind(("until", until.to_string()))
         .await?;
     let rows: Vec<MemRow> = res.take(0)?;
-    dated.extend(rows.into_iter().map(|r| (r.created_at, format!("memory:{}", r.id))));
+    dated.extend(rows.into_iter().map(|r| (r.created_at, format!("memory:{}", r.id.to_string()))));
 
     dated.sort_by(|a, b| b.0.cmp(&a.0));
     Ok(dated.into_iter().take(limit).map(|(_, k)| k).collect())
@@ -282,19 +288,22 @@ async fn hydrate(db: &Db, owner: &RecordId, vault: &RecordId, key: &str) -> AppR
     }
 
     if kind == "memory" {
-        let Ok(rid) = rest.parse::<RecordId>() else {
+        let Ok(rid) = crate::rid::parse(&rest) else {
             return Ok(None);
         };
 
-        #[derive(Deserialize)]
+        #[derive(Deserialize, SurrealValue)]
         struct MemRow {
             vault: RecordId,
             #[serde(default)]
+            #[surreal(default)]
             text: String,
             #[serde(default)]
+            #[surreal(default)]
             source: Option<RecordId>,
-            created_at: surrealdb::Datetime,
+            created_at: surrealdb::types::Datetime,
             #[serde(rename = "type", default = "default_memory_type")]
+            #[surreal(rename = "type", default = "default_memory_type")]
             mem_type: String,
         }
         fn default_memory_type() -> String {

@@ -13,6 +13,7 @@
 //! `cache.search`, which isn't ported yet -- these query `cache_record`
 //! directly instead. Behavior and output shape match the Python version.
 
+use surrealdb::types::SurrealValue;
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
 use hmac::{Hmac, Mac};
@@ -227,19 +228,23 @@ fn map_category(raw: &Value) -> Value {
 // Tool helpers (read from the cache, not the live API)
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, SurrealValue, Clone)]
 pub(crate) struct CachedRecord {
     #[serde(default)]
+    #[surreal(default)]
     title: String,
     #[serde(default)]
+    #[surreal(default)]
     external_id: String,
     #[serde(default)]
-    occurred_at: Option<surrealdb::Datetime>,
+    #[surreal(default)]
+    occurred_at: Option<surrealdb::types::Datetime>,
     #[serde(default)]
+    #[surreal(default)]
     payload: Value,
 }
 
-fn iso(dt: &Option<surrealdb::Datetime>) -> Option<String> {
+fn iso(dt: &Option<surrealdb::types::Datetime>) -> Option<String> {
     dt.as_ref().and_then(datetime_to_chrono).map(|d| d.to_rfc3339())
 }
 

@@ -8,6 +8,7 @@
 //! Scope cut carried over from the Python version: cache records (raw
 //! synced data) are left out -- re-derivable via a source re-sync.
 
+use surrealdb::types::SurrealValue;
 use std::collections::HashMap;
 
 use axum::{
@@ -20,7 +21,8 @@ use axum::{
 use chrono::Utc;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use surrealdb::{Datetime, RecordId};
+use surrealdb::types::{Datetime, RecordId};
+use crate::rid::RecordIdExt;
 
 use crate::db::Db;
 use crate::store;
@@ -34,64 +36,74 @@ pub fn router() -> Router<AppState> {
     Router::new().route("/export", get(export_data))
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, SurrealValue)]
 struct EntityRow {
     id: RecordId,
     #[serde(default)]
+    #[surreal(default)]
     name: String,
     #[serde(default)]
+    #[surreal(default)]
     aliases: Vec<String>,
     #[serde(default)]
+    #[surreal(default)]
     summary: String,
     owner: Option<RecordId>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, SurrealValue)]
 struct MemoryRow {
     id: RecordId,
     #[serde(default)]
+    #[surreal(default)]
     text: String,
     owner: Option<RecordId>,
     #[serde(default, rename = "type")]
+    #[surreal(default, rename = "type")]
     kind: String,
     #[serde(default)]
+    #[surreal(default)]
     proof_count: i64,
     status: Option<String>,
     created_at: Option<Datetime>,
     updated_at: Option<Datetime>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, SurrealValue)]
 struct RelationRow {
     id: RecordId,
     #[serde(rename = "in")]
+    #[surreal(rename = "in")]
     in_: RecordId,
     out: RecordId,
     #[serde(default)]
+    #[surreal(default)]
     label: String,
     owner: Option<RecordId>,
     created_at: Option<Datetime>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, SurrealValue)]
 struct ChatMessageRow {
     id: RecordId,
     thread_id: RecordId,
     role: String,
     content: String,
     #[serde(default)]
+    #[surreal(default)]
     tool_calls: Option<Vec<Value>>,
     #[serde(default)]
+    #[surreal(default)]
     tool_call_id: Option<String>,
     created_at: Option<Datetime>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, SurrealValue)]
 struct VaultRow {
     vault: RecordId,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, SurrealValue)]
 struct UserEmailRow {
     id: RecordId,
     email: String,

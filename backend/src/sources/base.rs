@@ -16,7 +16,8 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use reqwest::header::HeaderMap;
 use serde_json::Value;
-use surrealdb::RecordId;
+use surrealdb::types::RecordId;
+use crate::rid::RecordIdExt;
 
 use crate::db::Db;
 use crate::error::AppResult;
@@ -97,12 +98,12 @@ pub fn owner_key_str(owner: &RecordId) -> String {
     }
 }
 
-/// Converts a `surrealdb::Datetime` to a `chrono::DateTime<Utc>`. The public
+/// Converts a `surrealdb::types::Datetime` to a `chrono::DateTime<Utc>`. The public
 /// `surrealdb` crate's `Datetime` wrapper only offers `From<DateTime<Utc>>`
 /// (writing), not the reverse (reading) -- so this round-trips through its
 /// `Serialize` impl (a newtype-struct around `chrono::DateTime<Utc>`, which
 /// `serde_json` serializes as a plain RFC3339 string) instead.
-pub fn datetime_to_chrono(d: &surrealdb::Datetime) -> Option<DateTime<Utc>> {
+pub fn datetime_to_chrono(d: &surrealdb::types::Datetime) -> Option<DateTime<Utc>> {
     let value = serde_json::to_value(d).ok()?;
     let s = value.as_str()?;
     DateTime::parse_from_rfc3339(s).ok().map(|dt| dt.with_timezone(&Utc))
@@ -114,7 +115,7 @@ mod tests {
 
     #[test]
     fn owner_key_str_strips_table_prefix() {
-        let owner: RecordId = "user:abc123".parse().unwrap();
+        let owner: RecordId = crate::rid::parse("user:abc123").unwrap();
         assert_eq!(owner_key_str(&owner), "abc123");
     }
 
@@ -123,7 +124,7 @@ mod tests {
         let now = Utc::now();
         // Truncate to milliseconds like a real RFC3339 round-trip would.
         let now = DateTime::parse_from_rfc3339(&now.to_rfc3339()).unwrap().with_timezone(&Utc);
-        let sd: surrealdb::Datetime = now.into();
+        let sd: surrealdb::types::Datetime = now.into();
         assert_eq!(datetime_to_chrono(&sd), Some(now));
     }
 }

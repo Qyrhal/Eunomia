@@ -4,10 +4,12 @@
 //! ported to Rust, the query is written directly here against the
 //! `audit_log` table.
 
+use surrealdb::types::SurrealValue;
 use axum::{extract::{Query, State}, routing::get, Json, Router};
 use serde::Deserialize;
 use serde_json::{json, Value};
-use surrealdb::{Datetime, RecordId};
+use surrealdb::types::{Datetime, RecordId};
+use crate::rid::RecordIdExt;
 
 use crate::error::AppResult;
 use crate::store;
@@ -31,17 +33,18 @@ struct AuditQuery {
     offset: i64,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, SurrealValue)]
 struct AuditRow {
     id: RecordId,
     tool_name: String,
     #[serde(default)]
+    #[surreal(default)]
     args_summary: String,
     outcome: String,
     created_at: Option<Datetime>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, SurrealValue)]
 struct CountRow {
     count: i64,
 }

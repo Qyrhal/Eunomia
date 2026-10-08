@@ -22,7 +22,7 @@
 
 use serde::Serialize;
 use serde_json::Value;
-use surrealdb::RecordId;
+use surrealdb::types::RecordId;
 
 use crate::cache::search::{self, Envelope};
 use crate::config::Settings;

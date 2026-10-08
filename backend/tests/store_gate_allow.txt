@@ -1,2 +1,3 @@
 src/connectors/clients.rs
+src/db.rs
 src/migrate.rs

@@ -13,12 +13,14 @@
 //! and `embeddings.service.embed`, neither of which is ported to Rust yet
 //! (see `sources::registry::ingest`'s doc comment for the same gap).
 
+use surrealdb::types::SurrealValue;
 use std::time::Duration as StdDuration;
 
 use chrono::Utc;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use surrealdb::RecordId;
+use surrealdb::types::RecordId;
+use crate::rid::RecordIdExt;
 
 use crate::db::Db;
 use crate::store;
@@ -40,7 +42,7 @@ fn sync_status_id(owner: &RecordId, key: &str) -> RecordId {
 }
 
 async fn all_user_ids(db: &Db) -> AppResult<Vec<RecordId>> {
-    #[derive(Deserialize)]
+    #[derive(Deserialize, SurrealValue)]
     struct Row {
         id: RecordId,
     }
@@ -49,13 +51,16 @@ async fn all_user_ids(db: &Db) -> AppResult<Vec<RecordId>> {
     Ok(rows.into_iter().map(|r| r.id).collect())
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, SurrealValue)]
 struct SyncStatusRow {
     #[serde(default)]
+    #[surreal(default)]
     cursor: String,
     #[serde(default)]
-    last_run: Option<surrealdb::Datetime>,
+    #[surreal(default)]
+    last_run: Option<surrealdb::types::Datetime>,
     #[serde(default)]
+    #[surreal(default)]
     consecutive_failures: i64,
 }
 
@@ -92,7 +97,7 @@ pub async fn sync_source(db: &Db, encryption_key: &str, owner: &RecordId, key: &
             let _ = store::app::SOURCES_SYNC_OK
                 .on(db)
                 .bind(("id", sync_status_id(owner, key)))
-                .bind(("now", surrealdb::Datetime::from(now)))
+                .bind(("now", surrealdb::types::Datetime::from(now)))
                 .bind(("cursor", next_cursor.unwrap_or_default()))
                 .bind(("report", report_value.clone()))
                 .await;
@@ -104,7 +109,7 @@ pub async fn sync_source(db: &Db, encryption_key: &str, owner: &RecordId, key: &
             let _ = store::app::SOURCES_SYNC_FAILED
                 .on(db)
                 .bind(("id", sync_status_id(owner, key)))
-                .bind(("now", surrealdb::Datetime::from(now)))
+                .bind(("now", surrealdb::types::Datetime::from(now)))
                 .bind(("failures", failures))
                 .bind(("error", error.clone()))
                 .await;
@@ -191,9 +196,10 @@ pub async fn spawn(state: AppState) -> Vec<tokio::task::JoinHandle<()>> {
 }
 
 async fn sync_intervals_for(db: &Db, owner: &RecordId) -> AppResult<Value> {
-    #[derive(Deserialize)]
+    #[derive(Deserialize, SurrealValue)]
     struct Row {
         #[serde(default)]
+        #[surreal(default)]
         sync_intervals: Value,
     }
     let mut res = store::app::SOURCES_SYNC_INTERVALS.on(db).bind(("owner", owner.clone())).await?;
@@ -229,10 +235,10 @@ mod tests {
 
     #[test]
     fn sync_status_id_embeds_owner_key_and_source() {
-        let owner: RecordId = "user:abc123".parse().unwrap();
+        let owner: RecordId = crate::rid::parse("user:abc123").unwrap();
         let id = sync_status_id(&owner, "up_bank");
         assert_eq!(id.table(), "sync_status");
-        let key_str: String = id.key().clone().try_into().expect("string key");
+        let key_str = crate::rid::key_string(id.key()).expect("string key");
         assert_eq!(key_str, "abc123:up_bank");
     }
 

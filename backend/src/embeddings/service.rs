@@ -16,13 +16,15 @@
 //!
 //! Ported from `embeddings/service.py`.
 
+use surrealdb::types::SurrealValue;
 use std::collections::HashMap;
 
 use hmac::{Hmac, Mac};
 use serde::Deserialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
-use surrealdb::RecordId;
+use surrealdb::types::RecordId;
+use crate::rid::RecordIdExt;
 
 use crate::config::Settings;
 use crate::db::Db;
@@ -116,11 +118,13 @@ pub fn dim() -> usize {
     DIM
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, SurrealValue)]
 struct AppSettingsOpenaiRow {
     #[serde(default)]
+    #[surreal(default)]
     openai_api_key_encrypted: String,
     #[serde(default)]
+    #[surreal(default)]
     openai_base_url: String,
 }
 
@@ -171,7 +175,7 @@ pub async fn chat_available(db: &Db, settings: &Settings, owner: &RecordId) -> b
     settings.embeddings_backend == "openai" && available(db, settings, owner).await
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, SurrealValue)]
 struct EmbedCacheRow {
     text_hmac: String,
     vector: Vec<f32>,

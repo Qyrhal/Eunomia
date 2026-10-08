@@ -17,9 +17,16 @@ async fn info(db: &Db) -> Value {
     let mut r = db.query("INFO FOR DB STRUCTURE").await.expect("info");
     let mut v: Value = r.take::<Option<Value>>(0).expect("take").expect("row");
     // The ledger is bookkeeping, not schema: legacy-then-migrate has it, a raw legacy DB does not.
-    for k in ["tables"] {
-        if let Some(a) = v.get_mut(k).and_then(Value::as_array_mut) {
-            a.retain(|t| t["name"] != "_migration");
+    if let Some(a) = v.get_mut("tables").and_then(Value::as_array_mut) {
+        a.retain(|t| t["name"] != "_migration");
+        for t in a.iter_mut() {
+            // Table ids follow creation order, which differs between a fresh and an imported database.
+            t.as_object_mut().unwrap().remove("id");
+            // Indexes live on the table, not in the database overview.
+            let name = t["name"].as_str().unwrap().to_string();
+            let mut r = db.query(format!("INFO FOR TABLE `{name}` STRUCTURE")).await.expect("table info");
+            let info: Value = r.take::<Option<Value>>(0).expect("take").expect("row");
+            t["indexes"] = info["indexes"].clone();
         }
     }
     v
@@ -114,7 +121,7 @@ async fn rerun_is_noop() {
     let before = info(&db).await;
     migrate::migrate(&db, &s).await.unwrap();
     assert_eq!(before, info(&db).await);
-    assert_eq!(count(&db, "_migration").await, 2);
+    assert_eq!(count(&db, "_migration").await, migrate::MIGRATIONS.len());
 }
 
 #[tokio::test]

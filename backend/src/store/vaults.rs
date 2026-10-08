@@ -10,13 +10,14 @@ pub const CREATE_PERSONAL: Stmt = Stmt::new(
             COMMIT TRANSACTION;"#,
 );
 
-pub const CREATE_VAULT: Stmt = Stmt::new(
+pub const CREATE_VAULT: Stmt = Stmt::at(
     "vaults.create_vault",
     r#"BEGIN TRANSACTION;
                 LET $v = (CREATE vault SET name = $name, kind = $kind RETURN AFTER);
                 CREATE vault_member SET vault = $v[0].id, user = $user, role = "owner";
                 RETURN $v;
                 COMMIT TRANSACTION;"#,
+    3, // BEGIN 0, LET 1, CREATE 2, RETURN 3
 );
 
 pub const MEMBERSHIP_ACTIVE: Stmt = Stmt::new(
@@ -65,12 +66,13 @@ pub const LIST_INVITATIONS: Stmt = Stmt::new(
     r#"SELECT vault.* AS vault, role, created_at FROM vault_member WHERE user = $user AND status = "pending""#,
 );
 
-pub const ACCEPT_INVITATION: Stmt = Stmt::new(
+pub const ACCEPT_INVITATION: Stmt = Stmt::at(
     "vaults.accept_invitation",
     r#"BEGIN TRANSACTION;
             LET $flipped = (UPDATE $id SET status = "active" WHERE status = "pending" RETURN AFTER);
             RETURN IF array::len($flipped) > 0 { (SELECT * FROM $vault) } ELSE { [] };
             COMMIT TRANSACTION;"#,
+    2, // BEGIN 0, LET 1, RETURN 2
 );
 
 pub const DELETE_RECORD: Stmt = Stmt::new("vaults.delete_record", "DELETE $id");

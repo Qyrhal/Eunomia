@@ -23,12 +23,14 @@
 //! into a sibling module that doesn't have it -- refactor to call the real
 //! thing once it exists.
 
+use surrealdb::types::SurrealValue;
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use serde::Deserialize;
 use serde_json::{json, Value};
-use surrealdb::RecordId;
+use surrealdb::types::RecordId;
+use crate::rid::RecordIdExt;
 
 use crate::config::Settings;
 use crate::db::Db;
@@ -104,13 +106,16 @@ fn should_extract(body: &str, embeddings_backend: &str) -> bool {
     body.trim().len() >= MIN_BODY_LEN && embeddings_backend != "stub"
 }
 
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Deserialize, SurrealValue, Default)]
 pub(super) struct AppSettingsRow {
     #[serde(default)]
+    #[surreal(default)]
     pub openai_base_url: String,
     #[serde(default)]
+    #[surreal(default)]
     pub openai_api_key_encrypted: String,
     #[serde(default)]
+    #[surreal(default)]
     pub observations_mission: String,
 }
 
@@ -199,7 +204,7 @@ async fn apply_extraction(
             return Ok(entry.clone());
         }
         let entity = service::upsert_entity(db, owner, kind, name, aliases, None).await?;
-        let rid: RecordId = entity.id.parse().map_err(|_| AppError::internal("entity id did not round-trip"))?;
+        let rid: RecordId = crate::rid::parse(&entity.id).map_err(|_| AppError::internal("entity id did not round-trip"))?;
         let entry = (rid, kind.to_string());
         entity_ids.insert(key, entry.clone());
         Ok(entry)

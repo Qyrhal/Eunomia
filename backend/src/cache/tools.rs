@@ -15,7 +15,7 @@
 //! Ported from `cache/tools.py`.
 
 use serde_json::{json, Value};
-use surrealdb::RecordId;
+use surrealdb::types::RecordId;
 
 use crate::cache::recall::{self, MemoryType};
 use crate::cache::reflect;

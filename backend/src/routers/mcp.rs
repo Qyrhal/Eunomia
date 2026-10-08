@@ -9,6 +9,7 @@
 //! Auth is a personal API token (`Authorization: Bearer ...`), never the
 //! browser session cookie -- a page the user visits can't drive tools.
 
+use crate::rid::RecordIdExt;
 use axum::{
     extract::State,
     http::{header, HeaderMap, StatusCode},
@@ -281,12 +282,13 @@ mod tests {
             cors_allowed_origins: "http://localhost:3000".into(),
             log_level: "INFO".into(),
             update_status_dir: String::new(),
+            bind_addr: String::new(),
         };
         AppState(std::sync::Arc::new(AppStateInner { db: crate::db::Db::init(), settings }))
     }
 
     fn user() -> User {
-        User { id: "user:abc".parse().unwrap(), email: "a@example.com".into() }
+        User { id: crate::rid::parse("user:abc").unwrap(), email: "a@example.com".into() }
     }
 
     async fn rpc(message: Value) -> Option<Value> {

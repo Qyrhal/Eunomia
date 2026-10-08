@@ -6,12 +6,14 @@
 //!
 //! Ported from `cache/search.py`.
 
+use surrealdb::types::SurrealValue;
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use surrealdb::{Datetime, RecordId};
+use surrealdb::types::{Datetime, RecordId};
+use crate::rid::RecordIdExt;
 
 use crate::db::Db;
 use crate::store;
@@ -77,41 +79,54 @@ pub struct CacheRecord {
     pub embedding: Option<Vec<f32>>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, SurrealValue)]
 struct Row {
     id: RecordId,
     #[serde(default)]
+    #[surreal(default)]
     source: String,
     #[serde(rename = "type", default)]
+    #[surreal(rename = "type", default)]
     type_: String,
     #[serde(default)]
+    #[surreal(default)]
     external_id: String,
     #[serde(default)]
+    #[surreal(default)]
     title: String,
     #[serde(default)]
+    #[surreal(default)]
     body_text: String,
     #[serde(default)]
+    #[surreal(default)]
     occurred_at: Option<Datetime>,
     #[serde(default)]
+    #[surreal(default)]
     url: String,
     #[serde(default)]
+    #[surreal(default)]
     payload: Value,
     #[serde(default)]
+    #[surreal(default)]
     content_hash: String,
     #[serde(default)]
+    #[surreal(default)]
     ingested_at: Option<Datetime>,
     #[serde(default)]
+    #[surreal(default)]
     updated_at: Option<Datetime>,
     #[serde(default)]
+    #[surreal(default)]
     deleted: bool,
     #[serde(default)]
+    #[surreal(default)]
     embedding: Option<Vec<f32>>,
 }
 
 /// The owner-id prefix baked into the internal `cache_record` key -- callers
 /// never see or pass it. Mirrors `cache/search.py`'s `_rid`.
 pub(crate) fn owner_key(owner: &RecordId) -> String {
-    String::try_from(owner.key().clone()).unwrap_or_else(|_| owner.to_string())
+    crate::rid::key_string(owner.key()).unwrap_or_else(|| owner.to_string())
 }
 
 pub(crate) fn rid(owner: &RecordId, record_id: &str) -> RecordId {
@@ -120,7 +135,7 @@ pub(crate) fn rid(owner: &RecordId, record_id: &str) -> RecordId {
 
 /// The caller-facing record id -- mirrors `cache/search.py`'s `_literal`.
 pub(crate) fn literal(key: &RecordId) -> String {
-    let raw = String::try_from(key.key().clone()).unwrap_or_default();
+    let raw = crate::rid::key_string(key.key()).unwrap_or_default();
     raw.split_once(':').map(|(_, rest)| rest.to_string()).unwrap_or(raw)
 }
 
@@ -150,7 +165,9 @@ fn row_to_record(row: Row) -> CacheRecord {
 /// Python backend's hash (this is a from-scratch SurrealDB-backed cache, not
 /// a shared store), only be stable within this implementation for dedup.
 fn hash_envelope(env: &Envelope) -> String {
-    let occurred_at_str = env.occurred_at.as_ref().map(|d| d.to_string());
+    // Stored hashes come from SurrealDB 2.x, whose `Datetime` displayed as `d'...'`; keep that
+    // text so an upgraded install does not see every record as changed (and re-embed it).
+    let occurred_at_str = env.occurred_at.as_ref().map(|d| format!("d'{d}'"));
     let blob = json!({
         "title": env.title,
         "body_text": env.body_text,
@@ -277,17 +294,15 @@ pub(crate) fn rank_term_hits(per_term: Vec<Vec<(String, f64)>>, limit: usize) ->
     ranked.into_iter().take(limit).map(|(id, _)| id).collect()
 }
 
-/// `cache_record_fts_idx` is a composite BM25 index over `(title,
-/// body_text)`, but this SurrealDB version only resolves the `@N@` match
-/// operator against the FIRST field of a composite search index (title) --
-/// body_text-only matches raise "no suitable index". So per search term: the
-/// index for title (BM25-scored, +1 so a title hit beats a body-only one),
-/// plus a substring scan of body_text; fused by [`rank_term_hits`].
+/// `title` and `body_text` each have their own FULLTEXT index (a two-field index only resolves
+/// the first field). Per search term: the title index (BM25-scored, +1 so a title hit beats a
+/// body-only one) plus the body index (flat score); fused by [`rank_term_hits`].
 pub(crate) async fn keyword_ids(db: &Db, owner: &RecordId, q: &str, limit: usize) -> AppResult<Vec<String>> {
-    #[derive(Deserialize)]
+    #[derive(Deserialize, SurrealValue)]
     struct ScoredRow {
         id: RecordId,
         #[serde(default)]
+        #[surreal(default)]
         score: f64,
     }
 
@@ -312,9 +327,7 @@ pub(crate) async fn keyword_ids(db: &Db, owner: &RecordId, q: &str, limit: usize
     Ok(rank_term_hits(per_term, limit))
 }
 
-/// Mirrors `cache/search.py`'s `_semantic_ids`. The KNN `<|K|>` operator
-/// requires a literal integer -- it cannot be a bound parameter -- so
-/// `limit` is interpolated directly rather than passed as a bind.
+/// Mirrors `cache/search.py`'s `_semantic_ids`: embed the query, then [`nearest_ids`].
 pub(crate) async fn semantic_ids(
     db: &Db,
     settings: &crate::config::Settings,
@@ -327,17 +340,38 @@ pub(crate) async fn semantic_ids(
         .into_iter()
         .next()
         .unwrap_or_default();
+    nearest_ids(db, owner, vec, limit).await
+}
 
-    #[derive(Deserialize)]
+/// The `limit` live records of `owner` closest to `vec`, best first. HNSW KNN (`<|K,EF|>`, both
+/// literal integers: they cannot be bound parameters) answers first. The index is shared by every
+/// owner and the owner filter is not part of the ANN walk, so a small owner among big ones can get
+/// fewer than `limit` rows back; then an exact cosine scan over just this owner's records is the
+/// answer (it is ground truth, and cheap exactly when the owner is small).
+pub(crate) async fn nearest_ids(db: &Db, owner: &RecordId, vec: Vec<f32>, limit: usize) -> AppResult<Vec<String>> {
+    #[derive(Deserialize, SurrealValue)]
     struct IdRow {
         id: RecordId,
     }
+    let ef = (limit * 2).max(64);
     let query = format!(
-        "SELECT id FROM cache_record WHERE owner = $owner AND embedding <|{}|> $vec AND deleted = false",
-        limit as i64
+        "SELECT id FROM cache_record WHERE owner = $owner AND embedding <|{limit},{ef}|> $vec AND deleted = false"
     );
-    // dynamic: the KNN `<|k|>` operator needs a literal integer, one SQL text per k.
-    let mut res = store::dynamic(db, "cache.semantic_ids", query).bind(("owner", owner.clone())).bind(("vec", vec)).await?;
+    // dynamic: the KNN `<|K,EF|>` operator needs literal integers, one SQL text per (K, EF).
+    let mut res = store::dynamic(db, "cache.semantic_ids", query)
+        .bind(("owner", owner.clone()))
+        .bind(("vec", vec.clone()))
+        .await?;
+    let rows: Vec<IdRow> = res.take(0)?;
+    if rows.len() >= limit {
+        return Ok(rows.into_iter().map(|r| literal(&r.id)).collect());
+    }
+    let mut res = store::cache::SEMANTIC_EXACT
+        .on(db)
+        .bind(("owner", owner.clone()))
+        .bind(("vec", vec))
+        .bind(("limit", limit as i64))
+        .await?;
     let rows: Vec<IdRow> = res.take(0)?;
     Ok(rows.into_iter().map(|r| literal(&r.id)).collect())
 }
@@ -536,7 +570,7 @@ pub async fn count_records(db: &Db, owner: &RecordId, type_: Option<&str>, filte
         query = query.bind((k, v));
     }
 
-    #[derive(Deserialize)]
+    #[derive(Deserialize, SurrealValue)]
     struct CountRow {
         count: i64,
     }
@@ -555,15 +589,16 @@ pub async fn links(db: &Db, owner: &RecordId, record_id: &str, rel: Option<&str>
     let record_rid = rid(owner, record_id);
     let mut out = Vec::new();
 
-    #[derive(Deserialize)]
+    #[derive(Deserialize, SurrealValue)]
     struct FwdRow {
         rel: String,
         out: RecordId,
     }
-    #[derive(Deserialize)]
+    #[derive(Deserialize, SurrealValue)]
     struct BackRow {
         rel: String,
         #[serde(rename = "in")]
+        #[surreal(rename = "in")]
         in_: RecordId,
     }
 
@@ -631,6 +666,21 @@ mod tests {
             body_text: body.to_string(),
             ..Default::default()
         }
+    }
+
+    /// The expected value was computed from the 2.x text form, so this fails if the hash input
+    /// drifts (datetime format, field order, `serde_json` key order) and would orphan stored hashes.
+    #[test]
+    fn hash_envelope_matches_the_value_stored_by_2x() {
+        let e = Envelope {
+            title: "Woolworths".into(),
+            body_text: "Groceries $42.50".into(),
+            url: "https://x/y".into(),
+            occurred_at: Some("2026-01-05T09:00:00Z".parse().unwrap()),
+            payload: serde_json::from_str(r#"{"zeta":1,"alpha":{"b":2,"a":1}}"#).unwrap(),
+            ..Default::default()
+        };
+        assert_eq!(hash_envelope(&e), "86d1d37b57ed8b728294c14bb1fad628e4c94df7acac2e2836a152f6bf18ac41");
     }
 
     #[test]

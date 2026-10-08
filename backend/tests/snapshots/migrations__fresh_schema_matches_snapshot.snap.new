@@ -1,0 +1,386 @@
+---
+source: tests/migrations.rs
+assertion_line: 39
+expression: info(&db).await
+---
+{
+  "accesses": [],
+  "analyzers": [
+    {
+      "filters": [
+        "LOWERCASE",
+        "SNOWBALL(ENGLISH)"
+      ],
+      "name": "cache_text_analyzer",
+      "tokenizers": [
+        "BLANK",
+        "CLASS"
+      ]
+    }
+  ],
+  "apis": [],
+  "buckets": [],
+  "configs": [],
+  "functions": [],
+  "models": [],
+  "modules": [],
+  "params": [],
+  "sequences": [],
+  "tables": [
+    {
+      "drop": false,
+      "id": 2,
+      "kind": {
+        "kind": "NORMAL"
+      },
+      "name": "api_token",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      },
+      "schemafull": true
+    },
+    {
+      "drop": false,
+      "id": 4,
+      "kind": {
+        "kind": "NORMAL"
+      },
+      "name": "app_settings",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      },
+      "schemafull": true
+    },
+    {
+      "drop": false,
+      "id": 21,
+      "kind": {
+        "kind": "NORMAL"
+      },
+      "name": "audit_log",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      },
+      "schemafull": true
+    },
+    {
+      "drop": false,
+      "id": 9,
+      "kind": {
+        "kind": "NORMAL"
+      },
+      "name": "cache_record",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      },
+      "schemafull": true
+    },
+    {
+      "drop": false,
+      "id": 20,
+      "kind": {
+        "kind": "NORMAL"
+      },
+      "name": "chat_message",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      },
+      "schemafull": true
+    },
+    {
+      "drop": false,
+      "id": 19,
+      "kind": {
+        "kind": "NORMAL"
+      },
+      "name": "chat_thread",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      },
+      "schemafull": true
+    },
+    {
+      "drop": false,
+      "id": 7,
+      "kind": {
+        "kind": "NORMAL"
+      },
+      "name": "connector",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      },
+      "schemafull": true
+    },
+    {
+      "drop": false,
+      "id": 22,
+      "kind": {
+        "kind": "NORMAL"
+      },
+      "name": "embed_cache",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      },
+      "schemafull": true
+    },
+    {
+      "drop": false,
+      "id": 15,
+      "kind": {
+        "kind": "NORMAL"
+      },
+      "name": "file",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      },
+      "schemafull": true
+    },
+    {
+      "drop": false,
+      "id": 10,
+      "kind": {
+        "enforced": false,
+        "in": [
+          "cache_record"
+        ],
+        "kind": "RELATION",
+        "out": [
+          "cache_record"
+        ]
+      },
+      "name": "linked_to",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      },
+      "schemafull": true
+    },
+    {
+      "drop": false,
+      "id": 13,
+      "kind": {
+        "kind": "NORMAL"
+      },
+      "name": "location",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      },
+      "schemafull": true
+    },
+    {
+      "drop": false,
+      "id": 17,
+      "kind": {
+        "kind": "NORMAL"
+      },
+      "name": "memory",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      },
+      "schemafull": true
+    },
+    {
+      "drop": false,
+      "id": 12,
+      "kind": {
+        "kind": "NORMAL"
+      },
+      "name": "organisation",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      },
+      "schemafull": true
+    },
+    {
+      "drop": false,
+      "id": 11,
+      "kind": {
+        "kind": "NORMAL"
+      },
+      "name": "person",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      },
+      "schemafull": true
+    },
+    {
+      "drop": false,
+      "id": 18,
+      "kind": {
+        "enforced": false,
+        "in": [
+          "person",
+          "organisation",
+          "location",
+          "repository",
+          "file",
+          "symbol"
+        ],
+        "kind": "RELATION",
+        "out": [
+          "person",
+          "organisation",
+          "location",
+          "repository",
+          "file",
+          "symbol"
+        ]
+      },
+      "name": "relates_to",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      },
+      "schemafull": true
+    },
+    {
+      "drop": false,
+      "id": 14,
+      "kind": {
+        "kind": "NORMAL"
+      },
+      "name": "repository",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      },
+      "schemafull": true
+    },
+    {
+      "drop": false,
+      "id": 3,
+      "kind": {
+        "kind": "NORMAL"
+      },
+      "name": "session",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      },
+      "schemafull": true
+    },
+    {
+      "drop": false,
+      "id": 16,
+      "kind": {
+        "kind": "NORMAL"
+      },
+      "name": "symbol",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      },
+      "schemafull": true
+    },
+    {
+      "drop": false,
+      "id": 8,
+      "kind": {
+        "kind": "NORMAL"
+      },
+      "name": "sync_status",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      },
+      "schemafull": true
+    },
+    {
+      "drop": false,
+      "id": 1,
+      "kind": {
+        "kind": "NORMAL"
+      },
+      "name": "user",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      },
+      "schemafull": true
+    },
+    {
+      "drop": false,
+      "id": 5,
+      "kind": {
+        "kind": "NORMAL"
+      },
+      "name": "vault",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      },
+      "schemafull": true
+    },
+    {
+      "drop": false,
+      "id": 6,
+      "kind": {
+        "kind": "NORMAL"
+      },
+      "name": "vault_member",
+      "permissions": {
+        "create": false,
+        "delete": false,
+        "select": false,
+        "update": false
+      },
+      "schemafull": true
+    }
+  ],
+  "users": []
+}
