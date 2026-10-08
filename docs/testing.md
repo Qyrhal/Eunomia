@@ -9,18 +9,19 @@ Every test layer, from cheapest to most destructive. Run the first six on every 
 | Isolation proof | Two orgs, canaries in every table, every tool and route called as one org with the other's ids: no leak with both layers, with the app filters off, or with a shared database; the harness fails when a filter is removed; credential wall; static gates | `backend/tests/isolation.rs`, `backend/tests/store.rs`, `docs/architecture/tenancy.md` | `cd backend && cargo test --test isolation` |
 | Concurrency without the in-process lock | Writers meet at the transaction and retry path: the striped `tx::lock` is switched off (`tx::LOCKS_OFF`, `test-support` builds only) and two memory writers and four job claimers run against the in-memory engine; asserts what the engine guarantees, prints what it does not | `backend/tests/no_lock.rs` | `cd backend && cargo test --test no_lock -- --nocapture` |
 | Tenancy and the self-host move | Provisioning, the pool, schema N-1 gating, the verified resumable move of a single-database install (the 2.x export fixture) | `backend/tests/tenancy.rs` | `cd backend && cargo test --test tenancy` |
-| Script tests | Shell scripts (auto-update, agent connect, backup and restore of every database) against a mock server | `scripts/tests/` | `bash scripts/tests/auto-update.test.sh`, `bash scripts/tests/backup.test.sh` and `bash scripts/tests/connect-agents.test.sh` |
+| Script tests | Shell scripts (auto-update, agent connect, backup and restore of every database) against a mock server | `scripts/tests/` | every `scripts/tests/*.test.sh` except `upgrade-surreal-v3.test.sh` (needs Docker, own CI job) runs in the CI `scripts` job by glob; locally `for t in scripts/tests/*.test.sh; do bash $t; done` |
 | Playwright e2e | The real UI and `/mcp` through the frontend proxy | `frontend/tests/` | Start backend and SurrealDB (`docker compose up -d surrealdb backend`), then `cd frontend && bun run test` (`E2E_BASE_URL=...` to target a running stack) |
 | k6 load | Latency, error rate and noisy-neighbour fairness over MCP | `loadtest/k6/` | `k6 run loadtest/k6/noisy.js`, see `loadtest/k6/README.md` |
 | Fuzz | Parsers never panic on hostile input (MCP request parsing, every connector `map`, summary functions) | `backend/fuzz/` | `cd backend && cargo +nightly fuzz run source_map` (also `jsonrpc_parse`, `summaries`). Needs `cargo install cargo-fuzz` and a nightly toolchain. Without them, `cd backend/fuzz && cargo check --bins` still type-checks the targets |
 | Chaos | Killing the backend and DB mid-load loses no acknowledged records and `/healthz` recovers | `scripts/chaos.sh` | `CHAOS_CONFIRM=yes scripts/chaos.sh` |
 | Restore drill | Backups actually restore (seed, back up, wipe, restore, compare counts) | `scripts/restore-drill.sh` | `scripts/restore-drill.sh` |
+| Restore drill, tenancy layout | A backup directory with `control` and one `org_<32 hex>` database restores: per-database per-table counts match. Needs Docker. **Not yet run** (written while Docker was unavailable, only `bash -n` checked) | `scripts/restore-drill-tenancy.sh` | `scripts/restore-drill-tenancy.sh` |
 
 ## Safety
 
 - k6 registers users and writes memories. Point it at a test stack only.
 - Chaos kills containers. It only touches compose project `fw-chaos` (own volumes, port `18101`), refuses ports used by a normal install, and needs `CHAOS_CONFIRM=yes`. Never run it against a real install.
-- The restore drill uses its own throwaway database container `fw-backup-db`, never the live stack.
+- Both restore drills use the throwaway database container `fw-backup-db`, never the live stack.
 - Do not run any of these against the containers or volumes of a real `eunomia` compose project.
 
 ## Concurrency ceiling

@@ -13,4 +13,15 @@ echo '    image: surrealdb/surrealdb:v2.3' > docker-compose.yml; echo 'bash scri
 g add -A; g commit -qm c; g tag v1.2.0
 echo '    image: surrealdb/surrealdb:v3.3.1' > docker-compose.yml; g commit -qam d; g tag v1.3.0
 check "3.x pin after a bridge release passes" bash "$S" v1.3.0
+# compose pin and backend SDK must agree
+mkdir backend
+cdep() { echo "surrealdb = { version = \"$1\", features = [\"kv-mem\"] }" > backend/Cargo.toml; }
+echo '    image: surrealdb/surrealdb:v2.3' > docker-compose.yml; cdep '=3.3.1'; g add -A; g commit -qm e; g tag v1.4.0
+check "2.x pin with a 3.x SDK backend is refused" bash -c "! bash '$S' v1.4.0"
+echo '    image: surrealdb/surrealdb:v3.3.1' > docker-compose.yml; cdep '2.3'; g commit -qam f; g tag v1.5.0
+check "3.x pin with a 2.x SDK backend is refused" bash -c "! bash '$S' v1.5.0"
+cdep '=3.3.1'; g commit -qam h; g tag v1.6.0
+check "3.x pin with a 3.x SDK backend passes (hook already in v1.2.0)" bash "$S" v1.6.0
+echo '    image: surrealdb/surrealdb:v2.3' > docker-compose.yml; cdep '2.3'; g commit -qam i; g tag v1.7.0
+check "2.x pin with a 2.x SDK backend passes" bash "$S" v1.7.0
 echo "release-order: $PASS passed, $FAIL failed"; [ "$FAIL" -eq 0 ]

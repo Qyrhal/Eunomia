@@ -25,11 +25,26 @@ eunomia.example.com {
 }
 ```
 
-Caddy sets `X-Forwarded-For` and `X-Forwarded-Proto` itself. Next.js forwards
-whatever the client sent unchanged, and only adds `X-Forwarded-For` when it is
-missing, using the peer it sees. It cannot tell a trusted proxy from a client, so
-`frontend/src/proxy.ts` drops client-supplied `X-Forwarded-For`, `X-Forwarded-Proto`
-and `X-Real-IP` unless `FRONTEND_TRUST_FORWARDED=1`. Behind Caddy, set in `.env`:
+What reaches the backend (read from the Next 16.3 source: the rewrite to the backend is
+proxied by Next's router before any page code runs, its proxy library has `xfwd` off, and
+Next never adds `X-Forwarded-For` from the TCP peer on that path; `frontend/src/proxy.ts`
+runs first and can only drop or keep what the client sent):
+
+- A direct LAN client (the defaults, `FRONTEND_BIND=0.0.0.0`): `proxy.ts` drops any
+  client-supplied `X-Forwarded-For`, `X-Forwarded-Proto` and `X-Real-IP`, so none reach the
+  backend. The backend peer is the frontend container, which is trusted but sent no header,
+  so every direct client shares one rate-limit bucket (the frontend's address) and
+  `COOKIE_SECURE=auto` sees http. Put a reverse proxy in front if you need per-client limits.
+- Caddy on the host in front of the frontend, with `FRONTEND_TRUST_FORWARDED=1`: `proxy.ts`
+  keeps the headers. Caddy sets `X-Forwarded-For` to the connecting client and
+  `X-Forwarded-Proto` itself (it replaces client-supplied values unless you configured
+  Caddy's own `trusted_proxies`). Next passes them through unchanged, so the backend sees
+  peer = frontend container, `X-Forwarded-For` = the real client, and uses the client.
+
+For the Caddy-on-host case set in `.env`, and leave `TRUSTED_PROXIES` at its default
+(`frontend`, already set by `docker-compose.yml`). Caddy is not the backend's peer, so it
+does not go in `TRUSTED_PROXIES`. Add it only if its address ever shows up inside
+`X-Forwarded-For` (the backend then takes that address for the client).
 
 ```
 FRONTEND_BIND=127.0.0.1
@@ -38,12 +53,8 @@ PUBLIC_URL=https://eunomia.example.com
 ```
 
 `FRONTEND_BIND=127.0.0.1` stops anyone reaching `:3000` around the proxy, which is
-what makes trusting the header safe. Without a proxy (a plain LAN install: the
-defaults, `FRONTEND_BIND=0.0.0.0`), client forwarding headers are dropped so they
-cannot be spoofed, and the backend sees the frontend container as the peer: all
-direct clients then share one rate-limit bucket and `COOKIE_SECURE=auto` sees http.
-Next does not expose the TCP peer to its proxy hook, so it cannot be filled in
-there; put a reverse proxy in front if you need per-client limits.
+what makes trusting the header safe. This behaviour is read from source, not yet checked
+on a running stack (see the "Still to verify" list in `docs/architecture/foundation-plan.md`).
 
 The compose file publishes the backend only on `127.0.0.1:8001`, so it is not
 reachable from the LAN. Agents on the same machine keep using
