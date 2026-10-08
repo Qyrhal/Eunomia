@@ -71,7 +71,7 @@ jobs:
         run: |
           export JWT_SECRET="$(openssl rand -hex 32)"
           export ENCRYPTION_KEY="$(openssl rand -hex 32)"
-          docker compose -p eunomia-ci up -d
+          docker compose -p eunomia-ci up -d backend frontend
 
       - name: Wait for backend and frontend
         run: |
