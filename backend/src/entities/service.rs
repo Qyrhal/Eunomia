@@ -358,19 +358,20 @@ fn is_write_conflict(e: &surrealdb::Error) -> bool {
 }
 
 /// The `table` entity in `vault` whose name or an alias is `needle`
-/// (lowercased), a name match first.
+/// (lowercased), a name match first -- both lookups index-backed.
 async fn find_entity(db: &Db, table: &str, vault: &RecordId, needle: &str) -> AppResult<Option<EntityRow>> {
     let mut res = db
         .query(format!(
-            "SELECT *, name_key = $needle AS by_name FROM {table} WHERE vault = $vault \
-             AND (name_key = $needle OR $needle IN aliases.map(|$a| string::lowercase($a))) \
-             ORDER BY by_name DESC, created_at LIMIT 1"
+            "SELECT * FROM {table} WHERE vault = $vault AND name_key = $needle LIMIT 1; \
+             SELECT * FROM {table} WITH INDEX {table}_alias_keys_idx WHERE alias_keys CONTAINS $needle AND vault = $vault \
+             ORDER BY created_at LIMIT 1;"
         ))
         .bind(("vault", vault.clone()))
         .bind(("needle", needle.to_string()))
         .await?;
-    let rows: Vec<EntityRow> = res.take(0)?;
-    Ok(rows.into_iter().next())
+    let by_name: Vec<EntityRow> = res.take(0)?;
+    let by_alias: Vec<EntityRow> = res.take(1)?;
+    Ok(by_name.into_iter().chain(by_alias).next())
 }
 
 /// Find-or-create a `kind` entity in the resolved vault, matched
@@ -857,8 +858,9 @@ fn loser_names(loser: &EntityRow) -> Vec<String> {
 /// next consolidation rebuilds it from the merged raw facts. Runs inside a
 /// caller's transaction (it frees the unique observation slot first).
 const FOLD_OBSERVATIONS: &str = "\
-    LET $obs = (SELECT id, text, source_memories, created_at FROM memory \
-        WHERE (subject = $winner OR subject = $loser) AND type = \"observation\" ORDER BY created_at, id); \
+    LET $obs = (SELECT id, text, source_memories, created_at FROM array::union( \
+        (SELECT VALUE id FROM memory WHERE subject = $winner AND type = \"observation\"), \
+        (SELECT VALUE id FROM memory WHERE subject = $loser AND type = \"observation\")) ORDER BY created_at, id); \
     IF array::len($obs) > 1 { \
         DELETE array::slice($obs.id, 1); \
         UPDATE $obs[0].id SET subject = $winner, text = array::join($obs.text, \"\\n\\n\"), version += 1, \
@@ -872,25 +874,27 @@ const FOLD_OBSERVATIONS: &str = "\
 /// (re-created on the winner unless it already has that exact edge -- the
 /// only conflict that is skipped; edges between the two are dropped), and
 /// `add_aliases` onto the winner. Any failing statement rolls all of it
-/// back, so a merge never half-happens.
+/// back, so a merge never half-happens. Every read is an index or graph
+/// lookup, keeping the transaction's read set (and so its chance of
+/// clashing with concurrent writes) small.
 async fn merge_rows(db: &Db, winner: &RecordId, loser: &RecordId, add_aliases: Vec<String>) -> AppResult<()> {
     db.query(format!(
         "BEGIN TRANSACTION; {FOLD_OBSERVATIONS} \
          UPDATE memory SET subject = $winner WHERE subject = $loser; \
          UPDATE memory SET status = \"stale\", updated_at = time::now() WHERE subject = $winner AND type = \"observation\"; \
-         FOR $e IN (SELECT * FROM relates_to WHERE in = $loser AND out NOT IN [$winner, $loser]) {{ \
+         FOR $e IN (SELECT * FROM $loser->relates_to WHERE out NOT IN [$winner, $loser]) {{ \
              IF array::len(SELECT id FROM relates_to WHERE in = $winner AND out = $e.out AND label = $e.label) = 0 {{ \
                  LET $o = $e.out; \
                  RELATE $winner->relates_to->$o SET label = $e.label, owner = $e.owner, source = $e.source, created_at = $e.created_at; \
              }}; \
          }}; \
-         FOR $e IN (SELECT * FROM relates_to WHERE out = $loser AND in NOT IN [$winner, $loser]) {{ \
+         FOR $e IN (SELECT * FROM $loser<-relates_to WHERE in NOT IN [$winner, $loser]) {{ \
              IF array::len(SELECT id FROM relates_to WHERE in = $e.in AND out = $winner AND label = $e.label) = 0 {{ \
                  LET $i = $e.in; \
                  RELATE $i->relates_to->$winner SET label = $e.label, owner = $e.owner, source = $e.source, created_at = $e.created_at; \
              }}; \
          }}; \
-         DELETE relates_to WHERE in = $loser OR out = $loser; \
+         DELETE array::union((SELECT VALUE id FROM $loser->relates_to), (SELECT VALUE id FROM $loser<-relates_to)); \
          UPDATE $winner SET aliases = array::sort(array::union(aliases, $aliases)), updated_at = time::now(); \
          DELETE $loser; \
          COMMIT TRANSACTION;"
@@ -953,7 +957,7 @@ pub async fn dedupe(db: &Db, table: &str) -> AppResult<()> {
     }
 
     let table = kind_table(table)?;
-    db.query(format!("UPDATE {table} SET name = name WHERE name_key = NONE")).await?.check()?;
+    db.query(format!("UPDATE {table} SET name = name WHERE name_key = NONE OR alias_keys = NONE")).await?.check()?;
     let mut res = db
         .query(format!(
             "SELECT vault, name_key, array::group(id) AS ids FROM {table} GROUP BY vault, name_key"

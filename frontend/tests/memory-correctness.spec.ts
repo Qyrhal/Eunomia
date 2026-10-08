@@ -20,7 +20,7 @@ const DB_URL = process.env.E2E_SURREAL_HTTP ?? "http://127.0.0.1:8000";
 const DB_NS = process.env.E2E_SURREAL_NS ?? "eunomia";
 const DB_DB = process.env.E2E_SURREAL_DB ?? "eunomia";
 
-async function sql(query: string): Promise<Json[]> {
+async function sql(query: string, attempt = 0): Promise<Json[]> {
   const res = await fetch(`${DB_URL}/sql`, {
     method: "POST",
     headers: {
@@ -31,8 +31,10 @@ async function sql(query: string): Promise<Json[]> {
     },
     body: query,
   });
-  const out = await res.json();
+  const out: Json = await res.json();
   if (!Array.isArray(out)) throw new Error(`${query}\n-> ${JSON.stringify(out)}`);
+  // optimistic transactions can clash with other tests' writes
+  if (attempt < 5 && out.some((r: Json) => String(r.result).includes("can be retried"))) return sql(query, attempt + 1);
   for (const r of out) if (r.status !== "OK") throw new Error(`${query}\n-> ${JSON.stringify(r.result)}`);
   return out.map((r) => r.result);
 }
@@ -78,6 +80,9 @@ external_id = ${JSON.stringify(id)}, title = ${JSON.stringify(f.title)}, body_te
 occurred_at = ${occurred}, payload = ${JSON.stringify(f.payload ?? {})}, content_hash = "fx", ingested_at = time::now(), \
 updated_at = time::now(), deleted = false;`;
 }
+
+/** Statements as one transaction, so a retried conflict re-runs all or nothing. */
+const tx = (statements: string[]) => `BEGIN TRANSACTION;\n${statements.join("\n")}\nCOMMIT TRANSACTION;`;
 
 // A stand-in OpenAI-compatible endpoint: consolidation returns the current
 // belief plus the new facts verbatim, so tests can see exactly what a rebuild
@@ -289,7 +294,7 @@ test.describe.serial("memory correctness", () => {
       ),
       recordSql("fx:rare:1", { source: "rare", type: "fx.note", title: "an unrelated title", body: "a lone zebrafjord mention" }),
     ];
-    await sql(statements.join("\n"));
+    await sql(tx(statements));
 
     // the rare source's single, body-only match beats 60 better-ranked crowd hits
     const rare = await ok("search", { query: "zebrafjord", sources: ["rare"], mode: "keyword", limit: 1 });
@@ -316,11 +321,11 @@ test.describe.serial("memory correctness", () => {
 
   test("dates compare as datetimes and payload filters target the named field", async () => {
     await sql(
-      [
+      tx([
         recordSql("fx:d:1", { source: "dated", type: "fx.dated", title: "d1", body: "", occurred_at: "2020-01-01T00:00:00Z", payload: { category: "Groceries", amount: { cents: 500 } } }),
         recordSql("fx:d:2", { source: "dated", type: "fx.dated", title: "d2", body: "", occurred_at: "2020-01-05T12:00:00Z", payload: { category: "Travel", amount: { cents: 9000 } } }),
         recordSql("fx:d:3", { source: "dated", type: "fx.dated", title: "d3", body: "", occurred_at: "2020-01-10T00:00:00Z", payload: { category: "Groceries", amount: { cents: 2500 } } }),
-      ].join("\n"),
+      ]),
     );
     const titles = async (filters: object) =>
       (await ok("list", { type: "fx.dated", filters, sort: "occurred_at" })).results.map((r: Json) => r.title);

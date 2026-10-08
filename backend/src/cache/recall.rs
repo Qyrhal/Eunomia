@@ -63,10 +63,13 @@ const MAX_QUERY_CHARS: usize = 2_000;
 /// Each arm's deadline: past it the arm contributes nothing and the others'
 /// results are returned (see `arm`).
 const ARM_DEADLINE: Duration = Duration::from_secs(4);
-/// Graph arm bounds: index hits kept per (kind, field, term), and how many
-/// matched entities it follows.
+/// Graph arm bounds: index hits kept per (kind, name/alias), how many
+/// matched entities it follows, and the query phrases it looks names up by
+/// (runs of up to `NAME_WORDS` of the first `MAX_NAME_WORDS` words).
 const GRAPH_CANDIDATES: usize = 20;
 const GRAPH_ENTITIES: usize = 10;
+const NAME_WORDS: usize = 6;
+const MAX_NAME_WORDS: usize = 64;
 
 // recency boost floor/ceiling; see `boost` below.
 const RECENCY_FLOOR: f64 = 0.7;
@@ -121,12 +124,39 @@ struct EntityRow {
     aliases: Vec<String>,
 }
 
+/// Phrases of `query` that an entity name or alias could be: every run of up
+/// to [`NAME_WORDS`] consecutive words, lowercased, each word with its
+/// surrounding punctuation and a possessive "'s" trimmed ("Ada's" -> "ada",
+/// "main.rs?" -> "main.rs"). Looked up exactly, these replace a scan of every
+/// entity for names that occur in the question.
+fn name_phrases(query: &str) -> Vec<String> {
+    let words: Vec<String> = query
+        .to_lowercase()
+        .split_whitespace()
+        .map(|w| {
+            let w = w.trim_matches(|c: char| !c.is_alphanumeric());
+            w.strip_suffix("'s").or_else(|| w.strip_suffix("\u{2019}s")).unwrap_or(w).to_string()
+        })
+        .filter(|w| !w.is_empty())
+        .take(MAX_NAME_WORDS)
+        .collect();
+    let mut out: Vec<String> = Vec::new();
+    for start in 0..words.len() {
+        for end in start + 1..=(start + NAME_WORDS).min(words.len()) {
+            let phrase = words[start..end].join(" ");
+            if !out.contains(&phrase) {
+                out.push(phrase);
+            }
+        }
+    }
+    out
+}
+
 /// Candidate entities: the vault's person/organisation/location/.../symbol
-/// whose name or an alias appears as a case-insensitive substring of
-/// `query` (no NER/LLM for v1), ranked by match specificity (longer matched
-/// name first). Candidates come from the per-kind name/alias BM25 indexes
-/// (one hit per query term, bounded), so a large vault is never scanned row
-/// by row; the substring rule is then checked on that bounded set.
+/// whose name or an alias appears in `query` (no NER/LLM for v1), ranked by
+/// match specificity (longer matched name first). Found by exact lookup of
+/// the query's [`name_phrases`] on the `(vault, name_key)` and `alias_keys`
+/// indexes -- one query, a bounded number of rows, however large the vault.
 ///
 /// For each matched entity, pulls its newest memories, each memory's source
 /// `cache_record`, and the records linked to that source -- the "follow the
@@ -146,43 +176,41 @@ async fn graph_arm(
     limit: usize,
     include_cache_record: bool,
 ) -> AppResult<Vec<String>> {
-    let terms = cs::search_terms(query);
-    if terms.is_empty() {
+    let phrases = name_phrases(query);
+    if phrases.is_empty() {
         return Ok(Vec::new());
     }
-    // one statement: per-statement overhead, not the index lookups, dominates
-    let mut lookups = Vec::new();
-    for kind in ENTITY_KINDS {
-        for i in 0..terms.len() {
-            for field in ["name", "aliases"] {
-                lookups.push(format!(
-                    "(SELECT id, name, aliases FROM {kind} WHERE vault = $vault AND {field} @@ $t{i} LIMIT {GRAPH_CANDIDATES})"
-                ));
-            }
-        }
-    }
-    let sql = format!("RETURN array::flatten([{}]);", lookups.join(", "));
-    let mut q = db.query(sql).bind(("vault", vault.clone()));
-    for (i, t) in terms.iter().enumerate() {
-        q = q.bind((format!("t{i}"), t.clone()));
-    }
-    let mut res = q.await?;
+    let lookups: Vec<String> = ENTITY_KINDS
+        .iter()
+        .flat_map(|kind| {
+            [
+                format!("(SELECT id, name, aliases FROM {kind} WHERE vault = $vault AND name_key IN $phrases LIMIT {GRAPH_CANDIDATES})"),
+                format!(
+                    "(SELECT id, name, aliases FROM {kind} WITH INDEX {kind}_alias_keys_idx \
+                     WHERE alias_keys CONTAINSANY $phrases AND vault = $vault LIMIT {GRAPH_CANDIDATES})"
+                ),
+            ]
+        })
+        .collect();
+    let mut res = db
+        .query(format!("RETURN array::flatten([{}]);", lookups.join(", ")))
+        .bind(("vault", vault.clone()))
+        .bind(("phrases", phrases))
+        .await?;
+    let rows: Vec<EntityRow> = res.take(0)?;
 
     let q_lower = query.to_lowercase();
     let mut seen = HashSet::new();
     let mut matches: Vec<(usize, RecordId)> = Vec::new();
-    let rows: Vec<EntityRow> = res.take(0)?;
-    {
-        for row in rows {
-            let best = std::iter::once(row.name.as_str())
-                .chain(row.aliases.iter().map(String::as_str))
-                .filter(|n| !n.is_empty() && q_lower.contains(&n.to_lowercase()))
-                .map(str::len)
-                .max();
-            if let Some(best) = best {
-                if seen.insert(row.id.clone()) {
-                    matches.push((best, row.id));
-                }
+    for row in rows {
+        let best = std::iter::once(row.name.as_str())
+            .chain(row.aliases.iter().map(String::as_str))
+            .filter(|n| !n.is_empty() && q_lower.contains(&n.to_lowercase()))
+            .map(str::len)
+            .max();
+        if let Some(best) = best {
+            if seen.insert(row.id.clone()) {
+                matches.push((best, row.id));
             }
         }
     }
@@ -685,6 +713,21 @@ mod tests {
         assert_eq!(out.len(), 4);
         assert_eq!(out.last().unwrap().text, "tiny");
         assert!(fit_budget(vec![], 100).is_empty());
+    }
+
+    #[test]
+    fn name_phrases_are_trimmed_word_runs() {
+        let p = name_phrases("What does Ada Lovelace's team think of main.rs?");
+        for want in ["ada lovelace", "ada", "lovelace", "main.rs", "team think of main.rs"] {
+            assert!(p.contains(&want.to_string()), "{want} in {p:?}");
+        }
+        assert!(!p.iter().any(|x| x.contains('?') || x.contains("'s")));
+        assert!(name_phrases("  ?! ").is_empty());
+        // bounded: at most NAME_WORDS words per phrase, MAX_NAME_WORDS words read
+        let long = name_phrases(&"w ".repeat(1000));
+        assert_eq!(long, (1..=NAME_WORDS).map(|n| vec!["w"; n].join(" ")).collect::<Vec<_>>());
+        let distinct: String = (0..1000).map(|i| format!("w{i} ")).collect();
+        assert!(name_phrases(&distinct).len() <= MAX_NAME_WORDS * NAME_WORDS);
     }
 
     #[test]
