@@ -19,6 +19,8 @@ export default defineConfig({
   use: {
     baseURL,
     channel: "chrome",
+    // CI uploads test-results/ on failure; a trace makes a failure debuggable
+    trace: process.env.CI ? "retain-on-failure" : "off",
   },
   webServer: process.env.E2E_BASE_URL
     ? undefined

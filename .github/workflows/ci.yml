@@ -47,6 +47,73 @@ jobs:
       - run: bun run build
       - run: bunx tsc --noEmit
 
+  # The Playwright suite (vault isolation, every tool, MCP, recall eval, UI)
+  # against a real backend + the SurrealDB version deployments pin. No OpenAI
+  # key: specs that need a model bring their own fake endpoint.
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      E2E_BASE_URL: http://localhost:3000
+    steps:
+      - uses: actions/checkout@v4
+      # in-memory, pinned to the version deployments run (a service container
+      # can't be given the `start` command)
+      - run: docker run -d --name surrealdb --user root -p 8000:8000 surrealdb/surrealdb:v2.3 start --user root --pass root memory
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend
+      - run: cargo build --release
+        working-directory: backend
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.14"
+      - run: bun install --frozen-lockfile
+        working-directory: frontend
+      # the /api and /mcp rewrites are resolved at build time
+      - run: bun run build
+        working-directory: frontend
+        env:
+          BACKEND_INTERNAL_URL: http://localhost:8001
+      # playwright.config.ts uses channel "chrome": Google Chrome ships with
+      # the ubuntu runner image, so no browser download is needed.
+
+      - name: Start backend and frontend
+        run: |
+          export UPDATE_STATUS_DIR="$RUNNER_TEMP/update-status"
+          mkdir -p "$UPDATE_STATUS_DIR"
+          echo "E2E_UPDATE_STATUS_DIR=$UPDATE_STATUS_DIR" >> "$GITHUB_ENV"
+          PORT=8001 SURREAL_URL=ws://localhost:8000/rpc EMBEDDINGS_BACKEND=openai \
+            ENCRYPTION_KEY="$(openssl rand -base64 32)" JWT_SECRET="$(openssl rand -hex 32)" \
+            nohup backend/target/release/eunomia-backend > "$RUNNER_TEMP/backend.log" 2>&1 &
+          (cd frontend && PORT=3000 nohup bun run start > "$RUNNER_TEMP/frontend.log" 2>&1 &)
+          for url in http://localhost:8001/healthz http://localhost:3000/login; do
+            timeout 60 bash -c "until curl -sf $url >/dev/null; do sleep 1; done" \
+              || { cat "$RUNNER_TEMP"/backend.log "$RUNNER_TEMP"/frontend.log; exit 1; }
+          done
+
+      - run: bunx playwright test
+        working-directory: frontend
+
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: recall-eval
+          path: frontend/test-results/**/recall-eval.json
+          if-no-files-found: ignore
+      - if: failure()
+        run: cat "$RUNNER_TEMP"/backend.log "$RUNNER_TEMP"/frontend.log
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-results
+          path: |
+            frontend/test-results/
+            ${{ runner.temp }}/*.log
+
   scripts:
     runs-on: ubuntu-latest
     steps:
