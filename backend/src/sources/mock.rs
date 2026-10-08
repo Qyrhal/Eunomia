@@ -26,13 +26,14 @@ pub struct Route {
     path: String,
     query: Vec<&'static str>,
     body_has: Vec<&'static str>,
+    delay_ms: u64,
     status: u16,
     body: Value,
     headers: Vec<(&'static str, String)>,
 }
 
 pub fn route(method: &str, path: &str, body: Value) -> Route {
-    Route { method: method.parse().unwrap(), path: path.to_string(), query: vec![], body_has: vec![], status: 200, body, headers: vec![] }
+    Route { method: method.parse().unwrap(), path: path.to_string(), query: vec![], body_has: vec![], delay_ms: 0, status: 200, body, headers: vec![] }
 }
 
 impl Route {
@@ -45,6 +46,12 @@ impl Route {
     /// Only match requests whose body contains `fragment`.
     pub fn body(mut self, fragment: &'static str) -> Self {
         self.body_has.push(fragment);
+        self
+    }
+
+    /// Answer after `ms` milliseconds (a slow provider).
+    pub fn delay(mut self, ms: u64) -> Self {
+        self.delay_ms = ms;
         self
     }
 
@@ -120,6 +127,7 @@ async fn handle(State(st): State<MockState>, method: Method, uri: Uri, headers: 
     else {
         return (StatusCode::NOT_FOUND, format!("mock: no route for {method} {uri}")).into_response();
     };
+    tokio::time::sleep(std::time::Duration::from_millis(r.delay_ms)).await;
     let out = r.body.to_string().replace("{base}", &st.base);
     let mut resp = (StatusCode::from_u16(r.status).unwrap(), [("content-type", "application/json")], out).into_response();
     for (k, v) in &r.headers {

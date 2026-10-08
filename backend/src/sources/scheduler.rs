@@ -5,6 +5,8 @@
 //! on the next tick, and its first sync runs right away. [`sync_source`] is
 //! also what the on-demand `POST /sources/{key}/sync` endpoint calls.
 
+use std::collections::HashSet;
+use std::sync::{LazyLock, Mutex};
 use std::time::Duration as StdDuration;
 
 use chrono::Utc;
@@ -21,6 +23,8 @@ use crate::state::AppState;
 
 const BACKOFF: [u64; 5] = [900, 1800, 3600, 7200, 21600];
 const TICK_SECS: u64 = 60;
+/// How long a sync lease outlives a crashed run (SurrealQL duration).
+const LEASE: &str = "30m";
 
 /// Seconds to wait before retrying after `failures` consecutive failures.
 pub fn backoff_seconds(failures: i64) -> u64 {
@@ -69,12 +73,74 @@ async fn get_sync_status(db: &Db, owner: &RecordId, key: &str) -> AppResult<Sync
     Ok(rows.into_iter().next().unwrap_or_default())
 }
 
+/// `(owner, source)` syncs running in this process. Checked before the
+/// database lease: it is exact within one process (manual + scheduled runs),
+/// while the lease covers other replicas.
+static RUNNING: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(Default::default);
+
+struct RunningGuard(String);
+
+impl RunningGuard {
+    fn claim(owner: &RecordId, key: &str) -> Option<Self> {
+        let id = format!("{}:{key}", owner_key_str(owner));
+        RUNNING.lock().unwrap_or_else(|e| e.into_inner()).insert(id.clone()).then(|| RunningGuard(id))
+    }
+}
+
+impl Drop for RunningGuard {
+    fn drop(&mut self) {
+        RUNNING.lock().unwrap_or_else(|e| e.into_inner()).remove(&self.0);
+    }
+}
+
+fn lease_id(owner: &RecordId, key: &str) -> RecordId {
+    RecordId::from_table_key("sync_lease", format!("{}:{}", owner_key_str(owner), key))
+}
+
+/// Atomically claims the `(owner, source)` sync lease: `CREATE` fails when
+/// the record already exists, so of two concurrent runs -- scheduled and
+/// manual, or two backend replicas -- exactly one gets it. A lease left by a
+/// crashed run expires after `LEASE`.
+async fn claim_lease(db: &Db, owner: &RecordId, key: &str) -> AppResult<bool> {
+    let id = lease_id(owner, key);
+    db.query("DELETE $id WHERE until < time::now()").bind(("id", id.clone())).await?.check()?;
+    match db.query(format!("CREATE $id SET until = time::now() + {LEASE}")).bind(("id", id)).await?.check() {
+        Ok(_) => Ok(true),
+        Err(e) if e.to_string().contains("already exists") => Ok(false),
+        Err(e) => Err(e.into()),
+    }
+}
+
+async fn release_lease(db: &Db, owner: &RecordId, key: &str) {
+    if let Err(e) = db.query("DELETE $id").bind(("id", lease_id(owner, key))).await {
+        tracing::warn!(source = %key, error = %e, "could not release sync lease (it expires on its own)");
+    }
+}
+
 /// Runs one source sync for `owner` and records its health on the
 /// `sync_status` row. Never returns an `Err`: any failure (missing or bad
-/// credentials, a provider error, an unknown source key) is stored as
-/// `last_error` -- shown on the Connectors and dashboard pages -- and
-/// returned as `{"source": key, "error": ...}`.
+/// credentials, a provider error, records that failed to save, the
+/// checkpoint write itself) is stored as `last_error` -- shown on the
+/// Connectors and dashboard pages -- and returned as `{"source", "error"}`.
+/// The cursor only advances when every record was stored, so a failed
+/// record is fetched again next time (the replay is idempotent). If another
+/// run for the same source holds the lease, returns
+/// `{"status": "already_running"}` without calling the provider.
 pub async fn sync_source(db: &Db, settings: &Settings, owner: &RecordId, key: &str) -> Value {
+    let Some(_running) = RunningGuard::claim(owner, key) else {
+        return json!({"source": key, "status": "already_running"});
+    };
+    match claim_lease(db, owner, key).await {
+        Ok(true) => {}
+        Ok(false) => return json!({"source": key, "status": "already_running"}),
+        Err(e) => return json!({"source": key, "error": e.message}),
+    }
+    let out = sync_locked(db, settings, owner, key).await;
+    release_lease(db, owner, key).await;
+    out
+}
+
+async fn sync_locked(db: &Db, settings: &Settings, owner: &RecordId, key: &str) -> Value {
     let st = match get_sync_status(db, owner, key).await {
         Ok(st) => st,
         Err(e) => return json!({"source": key, "error": e.message}),
@@ -82,33 +148,49 @@ pub async fn sync_source(db: &Db, settings: &Settings, owner: &RecordId, key: &s
     let now = surrealdb::Datetime::from(Utc::now());
     let cursor = if st.cursor.is_empty() { None } else { Some(st.cursor.clone()) };
 
-    match registry::run_sync(db, settings, owner, key, cursor).await {
+    let error = match registry::run_sync(db, settings, owner, key, cursor).await {
+        Ok((report, _)) if report.failed > 0 => format!(
+            "{} of {} records failed to save; will retry: {}",
+            report.failed,
+            report.failed + report.written + report.skipped,
+            report.errors.first().map(String::as_str).unwrap_or("")
+        ),
         Ok((report, next_cursor)) => {
             let report_value = report.as_dict();
-            let _ = db
-                .query(
+            let saved = async {
+                db.query(
                     "UPDATE $id SET last_run = $now, cursor = $cursor, last_ok = $now, \
                      last_error = '', consecutive_failures = 0, last_report = $report",
                 )
                 .bind(("id", sync_status_id(owner, key)))
-                .bind(("now", now))
-                .bind(("cursor", next_cursor.unwrap_or(st.cursor)))
+                .bind(("now", now.clone()))
+                .bind(("cursor", next_cursor.unwrap_or(st.cursor.clone())))
                 .bind(("report", report_value.clone()))
-                .await;
-            report_value
+                .await?
+                .check()
+            }
+            .await;
+            match saved {
+                Ok(_) => return report_value,
+                Err(e) => format!("records saved, but the sync checkpoint could not be: {e}"),
+            }
         }
-        Err(e) => {
-            tracing::warn!(source = %key, owner = %owner, error = %e.message, "sync failed");
-            let _ = db
-                .query("UPDATE $id SET last_run = $now, consecutive_failures = $failures, last_error = $error")
-                .bind(("id", sync_status_id(owner, key)))
-                .bind(("now", now))
-                .bind(("failures", st.consecutive_failures + 1))
-                .bind(("error", e.message.clone()))
-                .await;
-            json!({"source": key, "error": e.message})
-        }
+        Err(e) => e.message,
+    };
+
+    tracing::warn!(source = %key, owner = %owner, error = %error, "sync failed");
+    if let Err(e) = db
+        .query("UPDATE $id SET last_run = $now, consecutive_failures = $failures, last_error = $error")
+        .bind(("id", sync_status_id(owner, key)))
+        .bind(("now", now))
+        .bind(("failures", st.consecutive_failures + 1))
+        .bind(("error", error.clone()))
+        .await
+        .and_then(|r| r.check())
+    {
+        tracing::warn!(source = %key, error = %e, "could not record sync failure");
     }
+    json!({"source": key, "error": error})
 }
 
 /// Whether a source last run `since_last` seconds ago (None = never) is due.
@@ -211,78 +293,5 @@ mod tests {
         // after 2 failures wait at least 30 minutes, even with a short interval
         assert!(!is_due(Some(1000), 300, 2));
         assert!(is_due(Some(1800), 300, 2));
-    }
-
-    /// End to end against a real SurrealDB (skipped unless
-    /// `EUNOMIA_TEST_SURREAL_URL`, e.g. `ws://127.0.0.1:8000/rpc`, is set):
-    /// connector saved with encrypted credentials -> scheduler sync -> mock
-    /// GitHub API -> ingest -> records findable by `search`; then a 401 lands
-    /// in `sync_status.last_error` instead of vanishing.
-    #[tokio::test]
-    async fn sync_source_end_to_end_against_surrealdb() {
-        use crate::cache::search;
-        use crate::connectors::service;
-        use crate::sources::mock::{route, serve};
-
-        let Ok(url) = std::env::var("EUNOMIA_TEST_SURREAL_URL") else {
-            eprintln!("skipped: set EUNOMIA_TEST_SURREAL_URL to run");
-            return;
-        };
-        let mut settings = Settings::load();
-        settings.surreal_url = url;
-        settings.surreal_ns = "connectors_test".into();
-        settings.surreal_db = format!("t{}", uuid::Uuid::new_v4().simple());
-        settings.encryption_key = "test-key".into();
-        settings.embeddings_backend = "stub".into();
-        let db = crate::db::connect(&settings).await.unwrap();
-        crate::db::ensure_schema(&db, &settings).await.unwrap();
-        let mut res = db.query("CREATE user SET email = 'e2e@example.com', password_hash = 'x' RETURN id").await.unwrap();
-        #[derive(Deserialize)]
-        struct Id {
-            id: RecordId,
-        }
-        let owner = res.take::<Vec<Id>>(0).unwrap().remove(0).id;
-
-        let mock = serve(vec![route("GET", "/issues", json!([{
-            "number": 7, "title": "Importer drops the last row", "state": "open", "body": "Seen with the quarterly CSV export.",
-            "user": {"login": "octocat"}, "labels": [], "assignees": [], "comments": 0, "repository": {"full_name": "acme/widget"},
-            "html_url": "https://github.com/acme/widget/issues/7", "created_at": "2024-01-01T00:00:00Z", "updated_at": "2024-02-01T00:00:00Z",
-        }]))])
-        .await;
-        service::upsert_connector(
-            &db,
-            &settings.encryption_key,
-            &owner,
-            "github",
-            Some(true),
-            Some(json!({"base_url": mock.base})),
-            Some(json!({"personal_access_token": "ghp_e2e"})),
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(poll_all(&db, &settings).await.unwrap().len(), 1, "a never-synced connector is due at once");
-        let row: Value = db.query("SELECT last_error, cursor, consecutive_failures FROM ONLY $id").bind(("id", sync_status_id(&owner, "github"))).await.unwrap().take::<Option<Value>>(0).unwrap().unwrap();
-        assert_eq!(row["last_error"], "");
-        assert_eq!(row["cursor"], "2024-02-01T00:00:00Z");
-        assert_eq!(mock.requests()[0].header("authorization"), "Bearer ghp_e2e");
-
-        let mut params = search::SearchParams::new();
-        params.mode = "keyword".into();
-        let hits = search::search(&db, &settings, &owner, "importer quarterly", &params).await.unwrap();
-        assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].id, "github:github.issue:acme/widget#7");
-        assert!(poll_all(&db, &settings).await.unwrap().is_empty(), "not due again within the interval");
-
-        // Revoked token: the error is recorded, not swallowed.
-        let bad = serve(vec![route("GET", "/issues", json!({"message": "Bad credentials"})).status(401)]).await;
-        service::upsert_connector(&db, &settings.encryption_key, &owner, "github", None, Some(json!({"base_url": bad.base})), None)
-            .await
-            .unwrap();
-        let out = sync_source(&db, &settings, &owner, "github").await;
-        assert!(out["error"].as_str().unwrap().contains("HTTP 401"));
-        let row: Value = db.query("SELECT last_error, cursor, consecutive_failures FROM ONLY $id").bind(("id", sync_status_id(&owner, "github"))).await.unwrap().take::<Option<Value>>(0).unwrap().unwrap();
-        assert!(row["last_error"].as_str().unwrap().contains("Bad credentials"));
-        assert_eq!(row["consecutive_failures"], 1);
     }
 }

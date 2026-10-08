@@ -3,6 +3,8 @@
 //! that keeps them syncing. See `docs/connectors.md` for the user-facing list.
 
 pub mod base;
+#[cfg(test)]
+mod db_tests;
 pub mod demo;
 pub mod discord;
 pub mod github;

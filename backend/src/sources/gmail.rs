@@ -19,8 +19,10 @@ use crate::sources::base::{envelope, from_unix, items, s, Conn, Source, SyncResu
 
 const BASE_URL: &str = "https://gmail.googleapis.com/gmail/v1";
 const GOOGLE_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
-/// Each message costs one extra request; bound one sync.
-const MAX_MESSAGES_PER_SYNC: usize = 500;
+/// Each message costs one extra request; bound one sync. When more are
+/// waiting, the oldest are read first and the cursor resumes after them, so
+/// a backlog drains over several syncs instead of starving.
+const MAX_MESSAGES_PER_SYNC: usize = 200;
 const MAX_BODY_CHARS: usize = 20_000;
 
 /// A Google API authenticated with a freshly refreshed access token.
@@ -45,6 +47,18 @@ fn plain_text(part: &Value) -> Option<String> {
         return Some(String::from_utf8_lossy(&bytes).to_string());
     }
     items(part, "/parts").iter().find_map(plain_text)
+}
+
+/// `occurred_at` from the RFC 2822 `Date` header (normalized to UTC), else
+/// Gmail's `internalDate` (epoch milliseconds).
+fn sent_at(raw: &Value) -> Option<String> {
+    let date = header(raw, "Date");
+    // Drop a trailing comment like "(UTC)" or "(PDT)", which chrono rejects.
+    let date = date.split(" (").next().unwrap_or("").trim();
+    chrono::DateTime::parse_from_rfc2822(date)
+        .ok()
+        .map(|d| d.with_timezone(&chrono::Utc).to_rfc3339())
+        .or_else(|| s(raw, "/internalDate").parse::<i64>().ok().and_then(|ms| from_unix(ms / 1000)))
 }
 
 pub struct GmailSource;
@@ -81,16 +95,26 @@ impl Source for GmailSource {
             let page = api.get("/users/me/messages", &query).await?;
             ids.extend(items(&page, "/messages").iter().map(|m| s(m, "/id").to_string()));
             page_token = s(&page, "/nextPageToken").to_string();
-            if page_token.is_empty() || ids.len() >= MAX_MESSAGES_PER_SYNC {
+            if page_token.is_empty() {
                 break;
             }
         }
 
+        // The list is newest first: read the oldest batch, so the cursor
+        // never skips past unread messages. A failed read fails the sync
+        // and keeps the cursor, so it is retried.
+        let batch = &ids[ids.len().saturating_sub(MAX_MESSAGES_PER_SYNC)..];
         let mut records = Vec::new();
-        for id in ids.iter().take(MAX_MESSAGES_PER_SYNC) {
+        for id in batch {
             records.push(api.get(&format!("/users/me/messages/{id}"), &[("format", "full".to_string())]).await?);
         }
-        let newest = records.iter().filter_map(|r| s(r, "/internalDate").parse::<i64>().ok()).max().map(|ms| (ms / 1000).to_string());
+        // `after:` has one-second granularity: resume a second early (the
+        // overlap is deduplicated) so a message sharing that second isn't lost.
+        let newest = records
+            .iter()
+            .filter_map(|r| s(r, "/internalDate").parse::<i64>().ok())
+            .max()
+            .map(|ms| (ms / 1000 - 1).to_string());
         Ok(SyncResult { records, cursor: newest.or(cursor) })
     }
 
@@ -99,14 +123,13 @@ impl Source for GmailSource {
         let subject = header(raw, "Subject");
         let from = header(raw, "From");
         let body: String = plain_text(&raw["payload"]).unwrap_or_else(|| s(raw, "/snippet").to_string()).chars().take(MAX_BODY_CHARS).collect();
-        let millis = s(raw, "/internalDate").parse::<i64>().unwrap_or(0);
         Some(envelope(
             "gmail",
             "gmail.message",
             id,
             if subject.is_empty() { "(no subject)" } else { &subject },
             &format!("From: {from}\n{}", body.trim()),
-            from_unix(millis / 1000),
+            sent_at(raw),
             &format!("https://mail.google.com/mail/u/0/#all/{}", s(raw, "/threadId")),
             json!({
                 "from": from,
@@ -122,6 +145,7 @@ impl Source for GmailSource {
 mod tests {
     use super::*;
     use crate::sources::mock::{assert_fetch_fails, envelopes, route, serve};
+    use std::collections::HashSet;
 
     fn b64(s: &str) -> String {
         base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(s)
@@ -159,7 +183,7 @@ mod tests {
         let creds = json!({"client_id": "cid", "client_secret": "csecret", "refresh_token": "1//rt"});
         let res = GmailSource.fetch(&mock.conn(creds), Some("1700000000".into())).await.unwrap();
         assert_eq!(res.records.len(), 2);
-        assert_eq!(res.cursor.as_deref(), Some("1700000200"));
+        assert_eq!(res.cursor.as_deref(), Some("1700000199"));
 
         let reqs = mock.requests();
         let token = &reqs[0];
@@ -172,6 +196,57 @@ mod tests {
         assert_eq!(envs[0].title, "Lunch?");
         assert_eq!(envs[0].body_text, "From: Ada <ada@example.com>\nLunch on Thursday works for me.");
         assert!(envs[0].occurred_at.is_some());
+    }
+
+    #[test]
+    fn rfc2822_date_header_becomes_utc_occurred_at() {
+        let mut m = message("m", "1700000000000", "s");
+        m["payload"]["headers"] = json!([{"name": "Date", "value": "Tue, 5 Mar 2024 09:30:00 +1100 (AEDT)"}]);
+        assert_eq!(sent_at(&m).unwrap(), "2024-03-04T22:30:00+00:00");
+        m["payload"]["headers"] = json!([{"name": "Date", "value": "garbage"}]);
+        assert_eq!(sent_at(&m).unwrap(), "2023-11-14T22:13:20+00:00", "falls back to internalDate");
+    }
+
+    /// 250 waiting messages, 200 per sync: the first run reads the oldest
+    /// 200, the second resumes after them and reads the rest.
+    #[tokio::test]
+    async fn a_backlog_beyond_one_sync_drains_oldest_first_without_starvation() {
+        let at = |i: usize| (1_700_000_000 + (250 - i) as i64 * 10) * 1000; // m0 newest
+        let refs = |r: std::ops::Range<usize>| json!(r.map(|i| json!({"id": format!("m{i}")})).collect::<Vec<_>>());
+        let mut routes = vec![
+            route("POST", "/oauth/token", json!({"access_token": "t"})),
+            // second run: after the newest message read by the first (m50, minus a second)
+            route("GET", "/users/me/messages", json!({"messages": refs(0..51)})).query("q=after:1700001999"),
+            route("GET", "/users/me/messages", json!({"messages": refs(200..250)})).query("pageToken=p3"),
+            route("GET", "/users/me/messages", json!({"messages": refs(100..200), "nextPageToken": "p3"})).query("pageToken=p2"),
+            route("GET", "/users/me/messages", json!({"messages": refs(0..100), "nextPageToken": "p2"})),
+        ];
+        for i in 0..250 {
+            routes.push(route("GET", &format!("/users/me/messages/m{i}"), message(&format!("m{i}"), &at(i).to_string(), &format!("Message {i}"))));
+        }
+        let mock = serve(routes).await;
+        let conn = mock.conn(json!({"client_id": "c", "client_secret": "s", "refresh_token": "r"}));
+
+        let first = GmailSource.fetch(&conn, None).await.unwrap();
+        assert_eq!(first.records.len(), 200);
+        assert!(first.records.iter().all(|r| s(r, "/id")[1..].parse::<usize>().unwrap() >= 50), "oldest 200 first");
+        assert_eq!(first.cursor.as_deref(), Some("1700001999"));
+
+        let second = GmailSource.fetch(&conn, first.cursor).await.unwrap();
+        let seen: HashSet<String> = first.records.iter().chain(&second.records).map(|r| s(r, "/id").to_string()).collect();
+        assert_eq!(seen.len(), 250, "every message imported");
+    }
+
+    #[tokio::test]
+    async fn a_failed_message_read_fails_the_sync_for_retry() {
+        let mock = serve(vec![
+            route("POST", "/oauth/token", json!({"access_token": "t"})),
+            route("GET", "/users/me/messages", json!({"messages": [{"id": "m1"}]})),
+            route("GET", "/users/me/messages/m1", json!({"error": {"code": 500}})).status(500),
+        ])
+        .await;
+        let err = GmailSource.fetch(&mock.conn(json!({"client_id": "c", "client_secret": "s", "refresh_token": "r"})), Some("1".into())).await.unwrap_err();
+        assert!(err.message.contains("HTTP 500"), "{}", err.message);
     }
 
     #[tokio::test]

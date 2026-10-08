@@ -158,6 +158,31 @@ mod tests {
         assert_eq!(envs[1].payload["is_pull_request"], true);
     }
 
+    /// 120 changed items over three Link-paginated pages all land in one
+    /// sync, and the next sync resumes from the newest one seen.
+    #[tokio::test]
+    async fn fetch_imports_every_page_of_a_120_item_feed_and_resumes() {
+        let page = |r: std::ops::Range<i64>| {
+            json!(r.map(|n| issue(n, &format!("2024-03-01T00:{:02}:{:02}Z", n / 60, n % 60), false)).collect::<Vec<_>>())
+        };
+        let mock = serve(vec![
+            route("GET", "/issues", json!([])).query("since=2024-03-01T00:01:59Z"),
+            route("GET", "/issues", page(80..120)).query("page=3"),
+            route("GET", "/issues", page(40..80)).query("page=2").header("link", "<{base}/issues?page=3>; rel=\"next\""),
+            route("GET", "/issues", page(0..40)).header("link", "<{base}/issues?page=2>; rel=\"next\""),
+        ])
+        .await;
+        let conn = mock.conn(json!({"personal_access_token": "t"}));
+        let res = GitHubSource.fetch(&conn, None).await.unwrap();
+        let numbers: std::collections::HashSet<i64> = res.records.iter().map(|r| r["number"].as_i64().unwrap()).collect();
+        assert_eq!(numbers.len(), 120);
+        assert_eq!(res.cursor.as_deref(), Some("2024-03-01T00:01:59Z"));
+
+        let next = GitHubSource.fetch(&conn, res.cursor).await.unwrap();
+        assert!(next.records.is_empty());
+        assert_eq!(next.cursor.as_deref(), Some("2024-03-01T00:01:59Z"), "no change keeps the watermark");
+    }
+
     #[tokio::test]
     async fn fetch_errors_are_visible() {
         let creds = json!({"personal_access_token": "bad"});

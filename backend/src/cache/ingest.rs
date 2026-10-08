@@ -1,24 +1,24 @@
-//! The ingest pipeline: raw source record -> cache row.
+//! The ingest pipeline: raw source record -> cache row -> enrichment.
 //!
-//! One entrypoint, [`ingest`], called by the scheduler, webhook endpoints, and
-//! on-demand refresh. Stages, per record: map -> upsert (idempotent) ->
-//! embed -> extract entities. Then, once per batch: consolidate observations
-//! for every subject that got a new raw memory during the batch.
+//! One entrypoint, [`ingest`], shared by scheduled syncs, manual syncs and
+//! webhooks (via `sources::registry::ingest`). Stages, per record: map ->
+//! upsert (idempotent; reconciles `links`) -> embed -> extract entities.
+//! Then, once per batch: consolidate observations for every subject that got
+//! a new raw memory.
 //!
-//! Partial failure is isolated: a bad record is recorded and skipped, the
-//! batch continues. Embedding failure is non-fatal (backfill retries).
-//! Entity extraction and observation consolidation failures are likewise
-//! non-fatal -- they're enrichment steps, not core pipeline.
-//!
-//! Deferred: entity extraction (`entities/extract.py::extract_entities`) and
-//! observation consolidation (`entities/consolidate.py::consolidate_subject`)
-//! aren't ported to Rust in this pass -- there's no `entities::extract` /
-//! `entities::consolidate` module to call into yet. Both stages are wired up
-//! as no-ops below (clearly marked) rather than blocked on; the write/embed
-//! core of the pipeline is fully functional without them, same as the Python
-//! version when those stages raise (non-fatal by design either way).
-//!
-//! Ported from `cache/ingest.py`.
+//! Partial failure is isolated: a record that can't be mapped or stored is
+//! counted in `failed` (the caller then keeps its sync cursor so the record
+//! is retried), the batch continues. Enrichment is best-effort and never
+//! counts as a failed record:
+//! - Embedding runs when an embedding backend is available. A record left
+//!   without an embedding (provider outage) is re-embedded the next time the
+//!   same unchanged record is replayed.
+//! - Entity extraction + consolidation run only when the server can make
+//!   chat completions for the owner (`chat_available`), on new or changed
+//!   records. With no model configured, raw records are stored and nothing
+//!   calls out.
+
+use std::collections::HashSet;
 
 use serde::Serialize;
 use serde_json::Value;
@@ -27,6 +27,7 @@ use surrealdb::RecordId;
 use crate::cache::search::{self, Envelope};
 use crate::config::Settings;
 use crate::db::Db;
+use crate::entities::{consolidate, extract};
 use crate::error::AppResult;
 
 #[derive(Debug, Clone, Serialize)]
@@ -43,8 +44,7 @@ impl IngestReport {
         IngestReport { source: source.to_string(), written: 0, skipped: 0, failed: 0, errors: Vec::new() }
     }
 
-    /// Mirrors `cache/ingest.py::IngestReport.as_dict` -- truncates `errors`
-    /// to the first 20 for the response payload.
+    /// Truncates `errors` to the first 20 for the response payload.
     pub fn as_dict(&self) -> Value {
         serde_json::json!({
             "source": self.source,
@@ -69,23 +69,27 @@ async fn embed_record(db: &Db, settings: &Settings, owner: &RecordId, rec: &sear
     search::set_embedding(db, owner, &rec.id, vec).await
 }
 
-/// Deferred -- see module docstring. `entities::extract::extract_entities`
-/// hasn't been ported, so this always reports no touched subjects.
-fn extract_record_entities(_owner: &RecordId, _rec: &search::CacheRecord) -> Vec<String> {
-    Vec::new()
+async fn has_embedding(db: &Db, owner: &RecordId, record_id: &str) -> AppResult<bool> {
+    let mut res = db.query("SELECT VALUE embedding != NONE FROM ONLY $id").bind(("id", search::rid(owner, record_id))).await?;
+    Ok(res.take::<Option<bool>>(0)?.unwrap_or(false))
 }
 
-/// Deferred -- see module docstring. `entities::consolidate::consolidate_subject`
-/// hasn't been ported; `extract_record_entities` never returns any touched
-/// subjects yet, so this is currently always a no-op, but kept as the
-/// pipeline's named stage so wiring the real consolidation in later is a
-/// one-function change.
-async fn consolidate_touched_subjects(_owner: &RecordId, _subject_ids: &[String]) {}
+async fn consolidate_touched_subjects(db: &Db, settings: &Settings, owner: &RecordId, subject_ids: &HashSet<String>) {
+    if subject_ids.is_empty() {
+        return;
+    }
+    let mission = consolidate::observations_mission(db, owner).await.ok();
+    for id in subject_ids {
+        let Ok(subject) = id.parse::<RecordId>() else { continue };
+        if let Err(e) = consolidate::consolidate_subject(db, settings, owner, &subject, mission.as_deref()).await {
+            tracing::warn!("consolidation failed for {id}: {}", e.message);
+        }
+    }
+}
 
-/// `raw_records` are JSON values (mirrors Python's untyped `dict` raw
-/// records); `map_fn` maps one raw record to `Some(Envelope)`, `None` to
-/// skip it, or `Err(message)` on a mapping failure (mirrors a raised
-/// exception from the Python mapper).
+/// `raw_records` are JSON values; `map_fn` maps one raw record to
+/// `Some(Envelope)`, `None` to skip it, or `Err(message)` on a mapping
+/// failure.
 pub async fn ingest(
     db: &Db,
     settings: &Settings,
@@ -95,7 +99,9 @@ pub async fn ingest(
     map_fn: impl Fn(&Value) -> Result<Option<Envelope>, String>,
 ) -> AppResult<IngestReport> {
     let mut report = IngestReport::new(source_key);
-    let mut touched_subjects: Vec<String> = Vec::new();
+    let mut touched_subjects: HashSet<String> = HashSet::new();
+    let can_embed = crate::embeddings::service::available(db, settings, owner).await;
+    let can_extract = crate::embeddings::service::chat_available(db, settings, owner).await;
 
     for raw in raw_records {
         let env = match map_fn(raw) {
@@ -116,32 +122,36 @@ pub async fn ingest(
             }
         };
 
-        match search::upsert(db, owner, &env).await {
-            Ok((rec, changed)) => {
-                if !changed {
-                    report.skipped += 1;
-                    continue;
-                }
-                report.written += 1;
-
-                if !rec.deleted {
-                    // No OpenAI key: skip embedding, keyword/graph retrieval still work.
-                    if crate::embeddings::service::available(db, settings, owner).await {
-                        if let Err(e) = embed_record(db, settings, owner, &rec).await {
-                            report.errors.push(format!("embed {}: {}", rec.id, e.message));
-                        }
-                    }
-                    touched_subjects.extend(extract_record_entities(owner, &rec));
-                }
-            }
+        let (rec, changed) = match search::upsert(db, owner, &env).await {
+            Ok(r) => r,
             Err(e) => {
                 report.failed += 1;
                 report.errors.push(format!("{}: {}", env.id, e.message));
+                continue;
             }
+        };
+        if changed {
+            report.written += 1;
+        } else {
+            report.skipped += 1;
+        }
+        if rec.deleted {
+            continue;
+        }
+
+        // An unchanged record is re-embedded only if a previous attempt failed.
+        if can_embed && (changed || !has_embedding(db, owner, &rec.id).await.unwrap_or(true)) {
+            if let Err(e) = embed_record(db, settings, owner, &rec).await {
+                report.errors.push(format!("embed {}: {}", rec.id, e.message));
+            }
+        }
+        if changed && can_extract {
+            let record = extract::ExtractRecord { id: rec.id.clone(), title: rec.title.clone(), body_text: rec.body_text.clone() };
+            touched_subjects.extend(extract::extract_entities(db, settings, owner, &record).await);
         }
     }
 
-    consolidate_touched_subjects(owner, &touched_subjects).await;
+    consolidate_touched_subjects(db, settings, owner, &touched_subjects).await;
     Ok(report)
 }
 
