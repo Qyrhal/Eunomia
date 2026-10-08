@@ -107,20 +107,19 @@ pub async fn resolve_hosts(hosts: &[String]) -> Option<Vec<IpAddr>> {
 
 /// The client behind `peer`: with an untrusted (or unknown) peer, the peer
 /// itself and `X-Forwarded-For` is ignored; with a trusted one, the right-most
-/// `X-Forwarded-For` entry that is not itself a trusted proxy.
+/// `X-Forwarded-For` entry that is not itself a trusted proxy (a header that is not a list of
+/// addresses is ignored whole).
 pub fn client_addr(peer: Option<IpAddr>, forwarded_for: Option<&str>, trusted: &[Cidr]) -> String {
     let is_trusted = |ip: IpAddr| trusted.iter().any(|c| c.contains(ip));
     let Some(peer) = peer else { return "unknown".into() };
     if !is_trusted(peer) {
         return peer.to_string();
     }
-    forwarded_for
-        .into_iter()
-        .flat_map(|v| v.rsplit(','))
-        .filter_map(|s| s.trim().parse::<IpAddr>().ok())
-        .find(|ip| !is_trusted(*ip))
-        .unwrap_or(peer)
-        .to_string()
+    // a header that is not a clean list of addresses is not from a well-behaved proxy: ignore all of it
+    let Some(chain) = forwarded_for.map(|v| v.split(',').map(|s| s.trim().parse::<IpAddr>().ok()).collect::<Option<Vec<_>>>()) else {
+        return peer.to_string();
+    };
+    chain.unwrap_or_default().into_iter().rev().find(|ip| !is_trusted(*ip)).unwrap_or(peer).to_string()
 }
 
 fn is_private(ip: IpAddr) -> bool {
@@ -229,9 +228,79 @@ impl RateLimiter {
     }
 }
 
+/// Failed sign-in attempts per account (or per OAuth client), counted in a fixed window and independent
+/// of the client address: a client that reaches the backend with its own `X-Forwarded-For`, or one
+/// address shared by everyone behind the frontend, cannot dodge it. Per process, like [`RateLimiter`].
+// ponytail: a locked account stays locked for the window even for the owner; per-process, so N replicas allow N times the budget.
+#[derive(Default)]
+pub struct FailThrottle {
+    map: Mutex<HashMap<String, (u32, Instant)>>,
+}
+
+/// Failures allowed per key before attempts are refused.
+pub const LOGIN_FAILS: u32 = 10;
+pub const OAUTH_CLIENT_FAILS: u32 = 30;
+const FAIL_WINDOW: Duration = Duration::from_secs(15 * 60);
+
+impl FailThrottle {
+    fn key(key: &str) -> String {
+        key.chars().take(320).collect()
+    }
+
+    /// `Err(seconds)` once `key` has used up `max` failures in the current window. Does not count.
+    pub fn check(&self, key: &str, max: u32) -> Result<(), u64> {
+        let now = Instant::now();
+        let map = self.map.lock().unwrap_or_else(|e| e.into_inner());
+        match map.get(&Self::key(key)) {
+            Some((n, start)) if *n >= max && now.duration_since(*start) < FAIL_WINDOW => Err((FAIL_WINDOW - now.duration_since(*start)).as_secs().max(1)),
+            _ => Ok(()),
+        }
+    }
+
+    pub fn fail(&self, key: &str) {
+        let now = Instant::now();
+        let mut map = self.map.lock().unwrap_or_else(|e| e.into_inner());
+        if map.len() > PRUNE_AT {
+            map.retain(|_, (_, start)| now.duration_since(*start) < FAIL_WINDOW);
+        }
+        let e = map.entry(Self::key(key)).or_insert((0, now));
+        if now.duration_since(e.1) >= FAIL_WINDOW {
+            *e = (0, now);
+        }
+        e.0 += 1;
+    }
+
+    pub fn clear(&self, key: &str) {
+        self.map.lock().unwrap_or_else(|e| e.into_inner()).remove(&Self::key(key));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fail_throttle_blocks_after_max_and_clears() {
+        let t = FailThrottle::default();
+        for _ in 0..3 {
+            assert!(t.check("a", 3).is_ok());
+            t.fail("a");
+        }
+        assert!((1..=900).contains(&t.check("a", 3).unwrap_err()));
+        assert!(t.check("b", 3).is_ok());
+        t.clear("a");
+        assert!(t.check("a", 3).is_ok());
+    }
+
+    #[test]
+    fn a_forwarded_for_that_is_not_an_address_list_is_ignored() {
+        let trusted = parse_cidrs("172.19.0.4");
+        let peer = Some("172.19.0.4".parse::<IpAddr>().unwrap());
+        assert_eq!(client_addr(peer, Some("203.0.113.9"), &trusted), "203.0.113.9");
+        for bad in ["not-an-ip", "6.6.6.6, junk", "", "203.0.113.9,"] {
+            assert_eq!(client_addr(peer, Some(bad), &trusted), "172.19.0.4", "{bad:?}");
+        }
+    }
 
     #[test]
     fn allows_the_burst_then_limits_with_a_retry_hint() {
