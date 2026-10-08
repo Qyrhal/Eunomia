@@ -39,12 +39,12 @@ pub fn router() -> Router<AppState> {
         .route("/chat/threads/{thread_id}/history", get(thread_history))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 struct ChatRequest {
     message: String,
 }
 
-#[derive(Deserialize, Default)]
+#[derive(Deserialize, Default, utoipa::ToSchema)]
 struct ThreadCreate {
     #[serde(default)]
     title: Option<String>,
@@ -56,10 +56,27 @@ fn parse_thread_id(thread_id: &str) -> AppResult<RecordId> {
     thread_id.parse().map_err(|_| AppError::coded(ErrorCode::ChatThreadNotFound, "not found"))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/chat/threads",
+    tag = "chat",
+    summary = "List chat threads",
+    responses((status = 200, body = Vec<crate::chat::service::ThreadOut>), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    security(("cookie" = []), ("bearer" = [])),
+)]
 async fn list_threads(State(state): State<AppState>, user: User) -> AppResult<Json<Vec<service::ThreadOut>>> {
     Ok(Json(service::list_threads(&state.db, &user.id).await?))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/chat/threads",
+    tag = "chat",
+    summary = "Create a chat thread",
+    request_body = ThreadCreate,
+    responses((status = 200, body = crate::chat::service::ThreadOut), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    security(("cookie" = []), ("bearer" = [])),
+)]
 async fn create_thread(
     State(state): State<AppState>,
     user: User,
@@ -68,6 +85,15 @@ async fn create_thread(
     Ok(Json(service::create_thread(&state.db, &user.id, body.title.as_deref()).await?))
 }
 
+#[utoipa::path(
+    delete,
+    path = "/api/chat/threads/{thread_id}",
+    tag = "chat",
+    summary = "Delete a chat thread",
+    params(("thread_id" = String, Path)),
+    responses((status = 200, body = crate::openapi::OkBody), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    security(("cookie" = []), ("bearer" = [])),
+)]
 async fn delete_thread_route(
     State(state): State<AppState>,
     user: User,
@@ -81,6 +107,15 @@ async fn delete_thread_route(
     Ok(Json(json!({ "ok": true })))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/chat/threads/{thread_id}/history",
+    tag = "chat",
+    summary = "Messages in a thread",
+    params(("thread_id" = String, Path)),
+    responses((status = 200, body = Vec<crate::chat::service::MessageOut>), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    security(("cookie" = []), ("bearer" = [])),
+)]
 async fn thread_history(
     State(state): State<AppState>,
     user: User,
@@ -91,6 +126,16 @@ async fn thread_history(
     hist.map(Json).ok_or_else(|| AppError::coded(ErrorCode::ChatThreadNotFound, "not found"))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/chat/threads/{thread_id}",
+    tag = "chat",
+    summary = "Send a message, streamed back as server-sent events",
+    params(("thread_id" = String, Path)),
+    request_body = ChatRequest,
+    responses((status = 200, description = "Server-sent events", content_type = "text/event-stream", body = String), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    security(("cookie" = []), ("bearer" = [])),
+)]
 async fn send_message(
     State(state): State<AppState>,
     user: User,
@@ -119,3 +164,13 @@ async fn send_message(
 
     Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
 }
+
+#[derive(utoipa::OpenApi)]
+#[openapi(paths(
+    list_threads,
+    create_thread,
+    delete_thread_route,
+    send_message,
+    thread_history,
+))]
+pub struct Doc;

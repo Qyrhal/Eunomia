@@ -32,6 +32,7 @@ opentelemetry-otlp = { version = "0.33", default-features = false, features = ["
 tracing-opentelemetry = { version = "0.34", default-features = false }
 opentelemetry = "0.33"
 opentelemetry_sdk = { version = "0.33", default-features = false, features = ["trace"] }
+utoipa = "5"
 
 [dev-dependencies]
 tokio-test = "0.4"

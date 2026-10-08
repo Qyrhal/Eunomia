@@ -31,13 +31,33 @@ pub fn router() -> Router<AppState> {
         .route("/auth/bootstrap", get(bootstrap))
 }
 
-#[derive(Deserialize)]
+#[derive(Serialize, utoipa::ToSchema)]
+struct AuthOut {
+    id: String,
+    email: String,
+    onboarded: bool,
+}
+
+#[derive(Serialize, utoipa::ToSchema)]
+struct TokenCreated {
+    id: String,
+    name: String,
+    /// Shown once, never retrievable again.
+    token: String,
+}
+
+#[derive(Serialize, utoipa::ToSchema)]
+struct BootstrapOut {
+    has_users: bool,
+}
+
+#[derive(Deserialize, utoipa::ToSchema)]
 struct Credentials {
     email: String,
     password: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 struct TokenCreate {
     name: String,
 }
@@ -59,6 +79,15 @@ fn session_cookie_header(token: &str) -> String {
     format!("{SESSION_COOKIE}={token}; HttpOnly; SameSite=Lax; Path=/")
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/auth/register",
+    tag = "auth",
+    summary = "Create an account and start a session",
+    request_body = Credentials,
+    responses((status = 200, body = AuthOut), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    security(()),
+)]
 async fn register(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -77,7 +106,7 @@ async fn register(
     let token = auth::start_session(&state.db, &state.settings.jwt_secret, &user, user_agent_from(&headers).as_deref())
         .await?;
 
-    let body = json!({ "id": user.id.to_string(), "email": user.email, "onboarded": false });
+    let body = AuthOut { id: user.id.to_string(), email: user.email, onboarded: false };
     Ok((
         StatusCode::OK,
         [(header::SET_COOKIE, session_cookie_header(&token))],
@@ -86,6 +115,15 @@ async fn register(
         .into_response())
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/auth/login",
+    tag = "auth",
+    summary = "Log in and start a session",
+    request_body = Credentials,
+    responses((status = 200, body = AuthOut), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    security(()),
+)]
 async fn login(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -99,7 +137,7 @@ async fn login(
         .await?;
     let onboarded = onboarded(&state, &user).await?;
 
-    let body = json!({ "id": user.id.to_string(), "email": user.email, "onboarded": onboarded });
+    let body = AuthOut { id: user.id.to_string(), email: user.email, onboarded };
     Ok((
         StatusCode::OK,
         [(header::SET_COOKIE, session_cookie_header(&token))],
@@ -108,6 +146,14 @@ async fn login(
         .into_response())
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/auth/logout",
+    tag = "auth",
+    summary = "End the current session",
+    responses((status = 200, body = crate::openapi::OkBody), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    security(()),
+)]
 async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Response {
     if let Some(cookie_header) = headers.get(header::COOKIE).and_then(|v| v.to_str().ok())
         && let Some(token) = cookie_header.split(';').find_map(|p| {
@@ -120,32 +166,59 @@ async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Response {
     (StatusCode::OK, [(header::SET_COOKIE, expired)], Json(json!({ "ok": true }))).into_response()
 }
 
-async fn me(State(state): State<AppState>, user: User) -> AppResult<Json<serde_json::Value>> {
+#[utoipa::path(
+    get,
+    path = "/api/auth/me",
+    tag = "auth",
+    summary = "The signed in user",
+    responses((status = 200, body = AuthOut), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    security(("cookie" = []), ("bearer" = [])),
+)]
+async fn me(State(state): State<AppState>, user: User) -> AppResult<Json<AuthOut>> {
     let onboarded = onboarded(&state, &user).await?;
-    Ok(Json(json!({ "id": user.id.to_string(), "email": user.email, "onboarded": onboarded })))
+    Ok(Json(AuthOut { id: user.id.to_string(), email: user.email, onboarded }))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/auth/tokens",
+    tag = "auth",
+    summary = "Create an API token",
+    request_body = TokenCreate,
+    responses((status = 200, body = TokenCreated), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    security(("cookie" = []), ("bearer" = [])),
+)]
 async fn create_token(
     State(state): State<AppState>,
     user: User,
     Json(body): Json<TokenCreate>,
-) -> AppResult<Json<serde_json::Value>> {
+) -> AppResult<Json<TokenCreated>> {
     let name = {
         let trimmed = body.name.trim();
         if trimmed.is_empty() { "API token".to_string() } else { trimmed.to_string() }
     };
     let result = models_user::create_api_token(&state.db, &user.id, &name).await?;
-    Ok(Json(json!({ "id": result.id.to_string(), "name": result.name, "token": result.token })))
+    Ok(Json(TokenCreated { id: result.id.to_string(), name: result.name, token: result.token }))
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 struct TokenOut {
     id: String,
     name: String,
+    #[schema(value_type = Option<String>)]
     created_at: Option<Datetime>,
+    #[schema(value_type = Option<String>)]
     last_used_at: Option<Datetime>,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/auth/tokens",
+    tag = "auth",
+    summary = "List API tokens",
+    responses((status = 200, body = Vec<TokenOut>), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    security(("cookie" = []), ("bearer" = [])),
+)]
 async fn get_tokens(State(state): State<AppState>, user: User) -> AppResult<Json<Vec<TokenOut>>> {
     let rows = models_user::list_api_tokens(&state.db, &user.id).await?;
     Ok(Json(
@@ -160,6 +233,15 @@ async fn get_tokens(State(state): State<AppState>, user: User) -> AppResult<Json
     ))
 }
 
+#[utoipa::path(
+    delete,
+    path = "/api/auth/tokens/{token_id}",
+    tag = "auth",
+    summary = "Revoke an API token",
+    params(("token_id" = String, Path)),
+    responses((status = 200, body = crate::openapi::OkBody), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    security(("cookie" = []), ("bearer" = [])),
+)]
 async fn delete_token(
     State(state): State<AppState>,
     user: User,
@@ -182,14 +264,24 @@ struct SessionRow {
     last_seen_at: Datetime,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 struct SessionOut {
     id: String,
     user_agent: String,
+    #[schema(value_type = String)]
     created_at: Datetime,
+    #[schema(value_type = String)]
     last_seen_at: Datetime,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/auth/sessions",
+    tag = "auth",
+    summary = "List active sessions",
+    responses((status = 200, body = Vec<SessionOut>), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    security(("cookie" = []), ("bearer" = [])),
+)]
 async fn get_sessions(State(state): State<AppState>, user: User) -> AppResult<Json<Vec<SessionOut>>> {
     let mut res = state
         .db
@@ -212,6 +304,15 @@ async fn get_sessions(State(state): State<AppState>, user: User) -> AppResult<Js
     ))
 }
 
+#[utoipa::path(
+    delete,
+    path = "/api/auth/sessions/{session_id}",
+    tag = "auth",
+    summary = "Revoke a session",
+    params(("session_id" = String, Path)),
+    responses((status = 200, body = crate::openapi::OkBody), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    security(("cookie" = []), ("bearer" = [])),
+)]
 async fn revoke_session_route(
     State(state): State<AppState>,
     user: User,
@@ -231,7 +332,15 @@ async fn revoke_session_route(
     Ok(Json(json!({ "ok": true })))
 }
 
-async fn bootstrap(State(state): State<AppState>) -> AppResult<Json<serde_json::Value>> {
+#[utoipa::path(
+    get,
+    path = "/api/auth/bootstrap",
+    tag = "auth",
+    summary = "Whether any user exists yet",
+    responses((status = 200, body = BootstrapOut), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    security(()),
+)]
+async fn bootstrap(State(state): State<AppState>) -> AppResult<Json<BootstrapOut>> {
     #[derive(Deserialize)]
     struct CountRow {
         count: i64,
@@ -239,8 +348,23 @@ async fn bootstrap(State(state): State<AppState>) -> AppResult<Json<serde_json::
     let mut res = state.db.query("SELECT count() FROM user GROUP ALL").await?;
     let rows: Vec<CountRow> = res.take(0)?;
     let has_users = rows.first().map(|r| r.count > 0).unwrap_or(false);
-    Ok(Json(json!({ "has_users": has_users })))
+    Ok(Json(BootstrapOut { has_users }))
 }
+
+#[derive(utoipa::OpenApi)]
+#[openapi(paths(
+    register,
+    login,
+    logout,
+    me,
+    create_token,
+    get_tokens,
+    delete_token,
+    get_sessions,
+    revoke_session_route,
+    bootstrap,
+))]
+pub struct Doc;
 
 #[cfg(test)]
 mod tests {

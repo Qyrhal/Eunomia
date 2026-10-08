@@ -161,11 +161,13 @@ struct ThreadRow {
     updated_at: Datetime,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct ThreadOut {
     pub id: String,
     pub title: String,
+    #[schema(value_type = String)]
     pub created_at: Datetime,
+    #[schema(value_type = String)]
     pub updated_at: Datetime,
 }
 
@@ -261,12 +263,14 @@ struct MessageRow {
     created_at: Datetime,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct MessageOut {
     pub role: String,
     pub content: String,
+    #[schema(value_type = Option<Vec<Object>>)]
     pub tool_calls: Option<Vec<Value>>,
     pub thread_id: String,
+    #[schema(value_type = String)]
     pub created_at: Datetime,
 }
 

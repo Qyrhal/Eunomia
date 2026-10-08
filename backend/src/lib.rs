@@ -9,6 +9,7 @@ pub mod embeddings;
 pub mod entities;
 pub mod error;
 pub mod models_user;
+pub mod openapi;
 pub mod routers;
 pub mod sources;
 pub mod state;
@@ -40,6 +41,7 @@ pub fn app(state: AppState) -> axum::Router {
         .expose_headers([HeaderName::from_static("x-trace-id")]);
 
     let api = axum::Router::new()
+        .route("/openapi.json", axum::routing::get(openapi::openapi_json))
         .merge(routers::auth::router())
         .merge(routers::chat::router())
         .merge(routers::settings::router())

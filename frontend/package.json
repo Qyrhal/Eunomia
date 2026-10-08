@@ -7,6 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "gen:api": "openapi-ts",
     "test": "playwright test"
   },
   "dependencies": {
@@ -24,6 +25,7 @@
     "three": "^0.186.1"
   },
   "devDependencies": {
+    "@hey-api/openapi-ts": "0.99.0",
     "@playwright/test": "^1.62.1",
     "@tailwindcss/postcss": "^4",
     "@types/d3-force": "^3.0.10",

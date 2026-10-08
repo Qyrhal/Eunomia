@@ -1,7 +1,7 @@
 // Same-origin by default: next.config.ts proxies /api/* to the backend, so
 // the browser never needs to know the backend's host (works from any device
 // or hostname, no CORS). NEXT_PUBLIC_API_URL only overrides that.
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "";
+export const API_URL = process.env.NEXT_PUBLIC_API_URL || "";
 export const apiOrigin = () => API_URL || window.location.origin;
 
 // Session is an httpOnly JWT cookie set by /api/auth/{register,login} --
@@ -47,7 +47,7 @@ const hex = (n: number) =>
   Array.from(crypto.getRandomValues(new Uint8Array(n)), (b) => b.toString(16).padStart(2, "0")).join("");
 
 // W3C traceparent (version 00, sampled) so the backend joins the browser's trace.
-const traceparent = () => `00-${hex(16)}-${hex(8)}-01`;
+export const traceparent = () => `00-${hex(16)}-${hex(8)}-01`;
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API_URL}${path}`, {

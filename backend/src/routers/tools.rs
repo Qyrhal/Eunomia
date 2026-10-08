@@ -24,6 +24,14 @@ pub fn router() -> Router<AppState> {
     Router::new().route("/tools", get(catalogue)).route("/tools/{name}", post(invoke))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/tools",
+    tag = "tools",
+    summary = "Names of the available tools",
+    responses((status = 200, body = Vec<String>), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    security(()),
+)]
 async fn catalogue() -> Json<Value> {
     // The Python version returns each tool's JSON schema alongside its name;
     // there's no Rust equivalent of that schema literal yet (see
@@ -33,6 +41,17 @@ async fn catalogue() -> Json<Value> {
     Json(serde_json::json!(names))
 }
 
+// ponytail: untyped response, give it a struct (see docs/architecture/foundation-plan.md 3.9)
+#[utoipa::path(
+    post,
+    path = "/api/tools/{name}",
+    tag = "tools",
+    summary = "Invoke a tool",
+    params(("name" = String, Path)),
+    request_body(content = Object, description = "Tool arguments"),
+    responses((status = 200, body = Object), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    security(("cookie" = []), ("bearer" = [])),
+)]
 async fn invoke(
     State(state): State<AppState>,
     user: User,
@@ -46,3 +65,10 @@ async fn invoke(
     let result = registry::call(&state, &user.id, &name, args).await?;
     Ok(Json(result))
 }
+
+#[derive(utoipa::OpenApi)]
+#[openapi(paths(
+    catalogue,
+    invoke,
+))]
+pub struct Doc;

@@ -132,6 +132,15 @@ fn datetime_str(d: &Option<Datetime>) -> Value {
     json!(d)
 }
 
+// ponytail: untyped response, give it a struct (see docs/architecture/foundation-plan.md 3.9)
+#[utoipa::path(
+    get,
+    path = "/api/export",
+    tag = "export",
+    summary = "Download the personal vault as JSON",
+    responses((status = 200, body = Object), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    security(("cookie" = []), ("bearer" = [])),
+)]
 async fn export_data(State(state): State<AppState>, user: User) -> AppResult<Response> {
     let db = &state.db;
     let vault = resolve_personal_vault(db, &user.id).await?;
@@ -299,6 +308,12 @@ async fn export_data(State(state): State<AppState>, user: User) -> AppResult<Res
     )
         .into_response())
 }
+
+#[derive(utoipa::OpenApi)]
+#[openapi(paths(
+    export_data,
+))]
+pub struct Doc;
 
 #[cfg(test)]
 mod tests {

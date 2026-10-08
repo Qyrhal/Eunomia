@@ -50,6 +50,12 @@ jobs:
           bun-version: "1.3.14"
 
       - run: bun install --frozen-lockfile
+      # The committed client in src/lib/gen must match backend/openapi.json.
+      - name: API client is up to date
+        run: |
+          bun run gen:api
+          git diff --exit-code -- src/lib/gen
+          test -z "$(git status --porcelain -- src/lib/gen)"
       - run: bun run lint
       # `next build` generates `.next/types/*.d.ts`, which `next-env.d.ts`
       # references and tsconfig.json includes -- both are gitignored

@@ -104,6 +104,15 @@ fn status_out(row: Option<&SyncStatusRow>) -> Value {
     }
 }
 
+// ponytail: untyped response, give it a struct (see docs/architecture/foundation-plan.md 3.9)
+#[utoipa::path(
+    get,
+    path = "/api/sources",
+    tag = "sources",
+    summary = "List sources with sync status",
+    responses((status = 200, body = Vec<Object>), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    security(("cookie" = []), ("bearer" = [])),
+)]
 async fn list_sources(State(state): State<AppState>, user: User) -> AppResult<Json<Vec<Value>>> {
     let statuses = sync_status_rows(&state, &user.id).await?;
     let enabled_keys: std::collections::HashSet<&'static str> =
@@ -128,12 +137,31 @@ async fn list_sources(State(state): State<AppState>, user: User) -> AppResult<Js
     ))
 }
 
+// ponytail: untyped response, give it a struct (see docs/architecture/foundation-plan.md 3.9)
+#[utoipa::path(
+    get,
+    path = "/api/sources/status",
+    tag = "sources",
+    summary = "Overall sync status",
+    responses((status = 200, body = Object), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    security(("cookie" = []), ("bearer" = [])),
+)]
 async fn sources_status(State(state): State<AppState>, user: User) -> AppResult<Json<Value>> {
     let statuses = sync_status_rows(&state, &user.id).await?;
     let out: serde_json::Map<String, Value> = statuses.iter().map(|(k, v)| (k.clone(), status_out(Some(v)))).collect();
     Ok(Json(Value::Object(out)))
 }
 
+// ponytail: untyped response, give it a struct (see docs/architecture/foundation-plan.md 3.9)
+#[utoipa::path(
+    post,
+    path = "/api/sources/{key}/sync",
+    tag = "sources",
+    summary = "Sync a source now",
+    params(("key" = String, Path)),
+    responses((status = 200, body = Object), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    security(("cookie" = []), ("bearer" = [])),
+)]
 async fn sync_now(State(state): State<AppState>, user: User, Path(key): Path<String>) -> AppResult<Json<Value>> {
     if registry::get(&key).is_none() {
         return Err(AppError::coded(ErrorCode::SourceNotFound, format!("no source {key:?}")));
@@ -142,6 +170,16 @@ async fn sync_now(State(state): State<AppState>, user: User, Path(key): Path<Str
     Ok(Json(report))
 }
 
+// ponytail: untyped response, give it a struct (see docs/architecture/foundation-plan.md 3.9)
+#[utoipa::path(
+    post,
+    path = "/api/sources/{key}/webhook/{owner_id}",
+    tag = "sources",
+    summary = "Source webhook (authenticated by the source's own signature)",
+    params(("key" = String, Path), ("owner_id" = String, Path)),
+    responses((status = 200, body = Object), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    security(()),
+)]
 async fn source_webhook(
     State(state): State<AppState>,
     Path((key, owner_id)): Path<(String, String)>,
@@ -177,6 +215,15 @@ async fn source_webhook(
     out.as_object_mut().unwrap().insert("status".to_string(), json!("ok"));
     Ok(Json(out))
 }
+
+#[derive(utoipa::OpenApi)]
+#[openapi(paths(
+    list_sources,
+    sources_status,
+    sync_now,
+    source_webhook,
+))]
+pub struct Doc;
 
 #[cfg(test)]
 mod tests {

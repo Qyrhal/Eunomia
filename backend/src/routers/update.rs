@@ -42,6 +42,15 @@ fn merge_status(data: Value) -> Value {
     merged
 }
 
+// ponytail: untyped response, give it a struct (see docs/architecture/foundation-plan.md 3.9)
+#[utoipa::path(
+    get,
+    path = "/api/update/status",
+    tag = "update",
+    summary = "Updater status",
+    responses((status = 200, body = Object), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    security(("cookie" = []), ("bearer" = [])),
+)]
 async fn get_status(State(state): State<AppState>, _user: User) -> AppResult<Json<Value>> {
     let status_file = status_dir(&state).join("status.json");
     if !status_file.exists() {
@@ -72,15 +81,41 @@ fn drop_marker(state: &AppState, name: &str) -> AppResult<Json<Value>> {
 }
 
 /// "Update now": apply the newest release.
+// ponytail: untyped response, give it a struct (see docs/architecture/foundation-plan.md 3.9)
+#[utoipa::path(
+    post,
+    path = "/api/update/request",
+    tag = "update",
+    summary = "Ask the updater to update",
+    responses((status = 200, body = Object), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    security(("cookie" = []), ("bearer" = [])),
+)]
 async fn request_update(State(state): State<AppState>, _user: User) -> AppResult<Json<Value>> {
     drop_marker(&state, "requested")
 }
 
 /// "Check now": ask GitHub for the newest release without waiting for the
 /// 10-minute throttle.
+// ponytail: untyped response, give it a struct (see docs/architecture/foundation-plan.md 3.9)
+#[utoipa::path(
+    post,
+    path = "/api/update/check",
+    tag = "update",
+    summary = "Ask the updater to check now",
+    responses((status = 200, body = Object), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    security(("cookie" = []), ("bearer" = [])),
+)]
 async fn check_now(State(state): State<AppState>, _user: User) -> AppResult<Json<Value>> {
     drop_marker(&state, "check")
 }
+
+#[derive(utoipa::OpenApi)]
+#[openapi(paths(
+    get_status,
+    request_update,
+    check_now,
+))]
+pub struct Doc;
 
 #[cfg(test)]
 mod tests {

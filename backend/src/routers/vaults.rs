@@ -37,14 +37,14 @@ fn default_role() -> String {
     "member".to_string()
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 struct VaultCreate {
     name: String,
     #[serde(default = "default_kind")]
     kind: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 struct VaultClone {
     #[serde(default)]
     name: Option<String>,
@@ -52,12 +52,12 @@ struct VaultClone {
     kind: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 struct VaultRename {
     name: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 struct InviteRequest {
     email: String,
     #[serde(default = "default_role")]
@@ -76,11 +76,30 @@ fn parse_vault_id(vault_id: &str) -> AppResult<RecordId> {
     vault_id.parse().map_err(|_| AppError::coded(ErrorCode::VaultNotFound, "Vault not found."))
 }
 
+// ponytail: untyped response, give it a struct (see docs/architecture/foundation-plan.md 3.9)
+#[utoipa::path(
+    get,
+    path = "/api/vaults",
+    tag = "vaults",
+    summary = "List vaults the caller belongs to",
+    responses((status = 200, body = Object), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    security(("cookie" = []), ("bearer" = [])),
+)]
 async fn list_vaults(State(state): State<AppState>, user: User) -> AppResult<Json<Value>> {
     let results = service::list_my_vaults(&state.db, &user.id).await?;
     Ok(Json(json!({ "results": results })))
 }
 
+// ponytail: untyped response, give it a struct (see docs/architecture/foundation-plan.md 3.9)
+#[utoipa::path(
+    post,
+    path = "/api/vaults",
+    tag = "vaults",
+    summary = "Create a vault",
+    request_body = VaultCreate,
+    responses((status = 200, body = Object), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    security(("cookie" = []), ("bearer" = [])),
+)]
 async fn create_vault(
     State(state): State<AppState>,
     user: User,
@@ -92,6 +111,17 @@ async fn create_vault(
     Ok(Json(service::create_vault(&state.db, &user.id, &body.name, &body.kind).await?))
 }
 
+// ponytail: untyped response, give it a struct (see docs/architecture/foundation-plan.md 3.9)
+#[utoipa::path(
+    post,
+    path = "/api/vaults/{vault_id}/clone",
+    tag = "vaults",
+    summary = "Clone a vault",
+    params(("vault_id" = String, Path)),
+    request_body = VaultClone,
+    responses((status = 200, body = Object), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    security(("cookie" = []), ("bearer" = [])),
+)]
 async fn clone_vault(
     State(state): State<AppState>,
     user: User,
@@ -105,7 +135,7 @@ async fn clone_vault(
     Ok(Json(service::clone_vault(&state.db, &user.id, &rid, body.name.as_deref(), &body.kind).await?))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 struct VaultMerge {
     vault_ids: [String; 2],
     #[serde(default)]
@@ -114,6 +144,16 @@ struct VaultMerge {
     kind: String,
 }
 
+// ponytail: untyped response, give it a struct (see docs/architecture/foundation-plan.md 3.9)
+#[utoipa::path(
+    post,
+    path = "/api/vaults/merge",
+    tag = "vaults",
+    summary = "Merge two vaults",
+    request_body = VaultMerge,
+    responses((status = 200, body = Object), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    security(("cookie" = []), ("bearer" = [])),
+)]
 async fn merge_vaults(
     State(state): State<AppState>,
     user: User,
@@ -127,6 +167,17 @@ async fn merge_vaults(
     Ok(Json(service::merge_vaults(&state.db, &user.id, &a, &b, body.name.as_deref(), &body.kind).await?))
 }
 
+// ponytail: untyped response, give it a struct (see docs/architecture/foundation-plan.md 3.9)
+#[utoipa::path(
+    patch,
+    path = "/api/vaults/{vault_id}",
+    tag = "vaults",
+    summary = "Rename a vault",
+    params(("vault_id" = String, Path)),
+    request_body = VaultRename,
+    responses((status = 200, body = Object), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    security(("cookie" = []), ("bearer" = [])),
+)]
 async fn rename_vault(
     State(state): State<AppState>,
     user: User,
@@ -137,6 +188,15 @@ async fn rename_vault(
     Ok(Json(service::rename_vault(&state.db, &user.id, &rid, &body.name).await?))
 }
 
+#[utoipa::path(
+    delete,
+    path = "/api/vaults/{vault_id}",
+    tag = "vaults",
+    summary = "Delete a vault",
+    params(("vault_id" = String, Path)),
+    responses((status = 200, body = crate::openapi::DeletedBody), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    security(("cookie" = []), ("bearer" = [])),
+)]
 async fn delete_vault(
     State(state): State<AppState>,
     user: User,
@@ -147,6 +207,16 @@ async fn delete_vault(
     Ok(Json(json!({ "deleted": true })))
 }
 
+// ponytail: untyped response, give it a struct (see docs/architecture/foundation-plan.md 3.9)
+#[utoipa::path(
+    get,
+    path = "/api/vaults/{vault_id}/members",
+    tag = "vaults",
+    summary = "List vault members",
+    params(("vault_id" = String, Path)),
+    responses((status = 200, body = Object), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    security(("cookie" = []), ("bearer" = [])),
+)]
 async fn list_members(
     State(state): State<AppState>,
     user: User,
@@ -157,6 +227,17 @@ async fn list_members(
     Ok(Json(json!({ "results": results })))
 }
 
+// ponytail: untyped response, give it a struct (see docs/architecture/foundation-plan.md 3.9)
+#[utoipa::path(
+    post,
+    path = "/api/vaults/{vault_id}/members",
+    tag = "vaults",
+    summary = "Invite someone to a vault",
+    params(("vault_id" = String, Path)),
+    request_body = InviteRequest,
+    responses((status = 200, body = Object), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    security(("cookie" = []), ("bearer" = [])),
+)]
 async fn invite_member(
     State(state): State<AppState>,
     user: User,
@@ -167,6 +248,15 @@ async fn invite_member(
     Ok(Json(service::invite_member(&state.db, &user.id, &rid, &body.email, &body.role).await?))
 }
 
+#[utoipa::path(
+    delete,
+    path = "/api/vaults/{vault_id}/members/{email}",
+    tag = "vaults",
+    summary = "Remove a vault member",
+    params(("vault_id" = String, Path), ("email" = String, Path)),
+    responses((status = 200, body = crate::openapi::RemovedBody), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    security(("cookie" = []), ("bearer" = [])),
+)]
 async fn remove_member(
     State(state): State<AppState>,
     user: User,
@@ -177,6 +267,15 @@ async fn remove_member(
     Ok(Json(json!({ "removed": true })))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/vaults/{vault_id}/leave",
+    tag = "vaults",
+    summary = "Leave a vault",
+    params(("vault_id" = String, Path)),
+    responses((status = 200, body = crate::openapi::LeftBody), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    security(("cookie" = []), ("bearer" = [])),
+)]
 async fn leave_vault(
     State(state): State<AppState>,
     user: User,
@@ -187,11 +286,30 @@ async fn leave_vault(
     Ok(Json(json!({ "left": true })))
 }
 
+// ponytail: untyped response, give it a struct (see docs/architecture/foundation-plan.md 3.9)
+#[utoipa::path(
+    get,
+    path = "/api/vaults/invitations",
+    tag = "vaults",
+    summary = "Pending vault invitations",
+    responses((status = 200, body = Object), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    security(("cookie" = []), ("bearer" = [])),
+)]
 async fn list_invitations(State(state): State<AppState>, user: User) -> AppResult<Json<Value>> {
     let results = service::list_my_invitations(&state.db, &user.id).await?;
     Ok(Json(json!({ "results": results })))
 }
 
+// ponytail: untyped response, give it a struct (see docs/architecture/foundation-plan.md 3.9)
+#[utoipa::path(
+    post,
+    path = "/api/vaults/{vault_id}/invitations/accept",
+    tag = "vaults",
+    summary = "Accept an invitation",
+    params(("vault_id" = String, Path)),
+    responses((status = 200, body = Object), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    security(("cookie" = []), ("bearer" = [])),
+)]
 async fn accept_invitation(
     State(state): State<AppState>,
     user: User,
@@ -201,6 +319,15 @@ async fn accept_invitation(
     Ok(Json(service::accept_invitation(&state.db, &user.id, &rid).await?))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/vaults/{vault_id}/invitations/decline",
+    tag = "vaults",
+    summary = "Decline an invitation",
+    params(("vault_id" = String, Path)),
+    responses((status = 200, body = crate::openapi::DeclinedBody), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    security(("cookie" = []), ("bearer" = [])),
+)]
 async fn decline_invitation(
     State(state): State<AppState>,
     user: User,
@@ -210,6 +337,24 @@ async fn decline_invitation(
     service::decline_invitation(&state.db, &user.id, &rid).await?;
     Ok(Json(json!({ "declined": true })))
 }
+
+#[derive(utoipa::OpenApi)]
+#[openapi(paths(
+    list_vaults,
+    create_vault,
+    list_invitations,
+    merge_vaults,
+    rename_vault,
+    delete_vault,
+    clone_vault,
+    list_members,
+    invite_member,
+    remove_member,
+    leave_vault,
+    accept_invitation,
+    decline_invitation,
+))]
+pub struct Doc;
 
 #[cfg(test)]
 mod tests {

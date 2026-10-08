@@ -117,14 +117,15 @@ fn require_known_kind(kind: &str) -> AppResult<()> {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 struct ConnectorUpdateBody {
     enabled: Option<bool>,
     config: Option<Value>,
     credentials: Option<Value>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 struct DaysQuery {
     #[serde(default = "default_days")]
     days: i64,
@@ -134,7 +135,8 @@ fn default_days() -> i64 {
     30
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 struct LimitQuery {
     #[serde(default = "default_limit")]
     limit: i64,
@@ -144,16 +146,36 @@ fn default_limit() -> i64 {
     50
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 struct SearchQuery {
     query: String,
 }
 
+// ponytail: untyped response, give it a struct (see docs/architecture/foundation-plan.md 3.9)
+#[utoipa::path(
+    get,
+    path = "/api/connectors",
+    tag = "connectors",
+    summary = "List connectors with their status",
+    responses((status = 200, body = Vec<Object>), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    security(("cookie" = []), ("bearer" = [])),
+)]
 async fn list_all(State(state): State<AppState>, user: User) -> AppResult<Json<Vec<Value>>> {
     let rows = service::list_connectors(&state.db, &user.id).await?;
     Ok(Json(rows.iter().map(connector_out).collect()))
 }
 
+// ponytail: untyped response, give it a struct (see docs/architecture/foundation-plan.md 3.9)
+#[utoipa::path(
+    get,
+    path = "/api/connectors/up_bank/finance-summary",
+    tag = "connectors",
+    summary = "Up Bank finance summary",
+    params(DaysQuery),
+    responses((status = 200, body = Object), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    security(("cookie" = []), ("bearer" = [])),
+)]
 async fn up_bank_finance_summary(
     State(state): State<AppState>,
     user: User,
@@ -181,6 +203,16 @@ async fn pocketai_client_or_400(state: &AppState, user: &User) -> AppResult<Pock
     Ok(PocketAIClient::new(&creds, base_url))
 }
 
+// ponytail: untyped response, give it a struct (see docs/architecture/foundation-plan.md 3.9)
+#[utoipa::path(
+    get,
+    path = "/api/connectors/pocketai/summary",
+    tag = "connectors",
+    summary = "PocketAI summary",
+    params(DaysQuery),
+    responses((status = 200, body = Object), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    security(("cookie" = []), ("bearer" = [])),
+)]
 async fn pocketai_summary(
     State(state): State<AppState>,
     user: User,
@@ -191,6 +223,16 @@ async fn pocketai_summary(
     Ok(Json(client.summary(&since).await?))
 }
 
+// ponytail: untyped response, give it a struct (see docs/architecture/foundation-plan.md 3.9)
+#[utoipa::path(
+    get,
+    path = "/api/connectors/pocketai/all",
+    tag = "connectors",
+    summary = "All PocketAI recordings",
+    params(LimitQuery),
+    responses((status = 200, body = Object), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    security(("cookie" = []), ("bearer" = [])),
+)]
 async fn pocketai_all(
     State(state): State<AppState>,
     user: User,
@@ -200,6 +242,16 @@ async fn pocketai_all(
     Ok(Json(client.recordings(&[("limit", q.limit.to_string())]).await?))
 }
 
+// ponytail: untyped response, give it a struct (see docs/architecture/foundation-plan.md 3.9)
+#[utoipa::path(
+    get,
+    path = "/api/connectors/pocketai/search",
+    tag = "connectors",
+    summary = "Search PocketAI recordings",
+    params(SearchQuery),
+    responses((status = 200, body = Object), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    security(("cookie" = []), ("bearer" = [])),
+)]
 async fn pocketai_search(
     State(state): State<AppState>,
     user: User,
@@ -209,6 +261,16 @@ async fn pocketai_search(
     Ok(Json(client.search(&q.query).await?))
 }
 
+// ponytail: untyped response, give it a struct (see docs/architecture/foundation-plan.md 3.9)
+#[utoipa::path(
+    get,
+    path = "/api/connectors/pocketai/detail/{recording_id}",
+    tag = "connectors",
+    summary = "One PocketAI recording",
+    params(("recording_id" = String, Path)),
+    responses((status = 200, body = Object), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    security(("cookie" = []), ("bearer" = [])),
+)]
 async fn pocketai_detail(
     State(state): State<AppState>,
     user: User,
@@ -218,12 +280,33 @@ async fn pocketai_detail(
     Ok(Json(client.recording(&recording_id).await?))
 }
 
+// ponytail: untyped response, give it a struct (see docs/architecture/foundation-plan.md 3.9)
+#[utoipa::path(
+    get,
+    path = "/api/connectors/{kind}",
+    tag = "connectors",
+    summary = "One connector",
+    params(("kind" = String, Path)),
+    responses((status = 200, body = Object), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    security(("cookie" = []), ("bearer" = [])),
+)]
 async fn get_one(State(state): State<AppState>, user: User, Path(kind): Path<String>) -> AppResult<Json<Value>> {
     require_known_kind(&kind)?;
     let row = service::get_or_create_connector(&state.db, &user.id, &kind).await?;
     Ok(Json(connector_out(&row)))
 }
 
+// ponytail: untyped response, give it a struct (see docs/architecture/foundation-plan.md 3.9)
+#[utoipa::path(
+    put,
+    path = "/api/connectors/{kind}",
+    tag = "connectors",
+    summary = "Update a connector",
+    params(("kind" = String, Path)),
+    request_body = ConnectorUpdateBody,
+    responses((status = 200, body = Object), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    security(("cookie" = []), ("bearer" = [])),
+)]
 async fn put_one(
     State(state): State<AppState>,
     user: User,
@@ -244,6 +327,16 @@ async fn put_one(
     Ok(Json(connector_out(&row)))
 }
 
+// ponytail: untyped response, give it a struct (see docs/architecture/foundation-plan.md 3.9)
+#[utoipa::path(
+    post,
+    path = "/api/connectors/{kind}/test",
+    tag = "connectors",
+    summary = "Test a connector's credentials",
+    params(("kind" = String, Path)),
+    responses((status = 200, body = Object), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    security(("cookie" = []), ("bearer" = [])),
+)]
 async fn test_one(State(state): State<AppState>, user: User, Path(kind): Path<String>) -> AppResult<Json<Value>> {
     require_known_kind(&kind)?;
     let row = service::get_or_create_connector(&state.db, &user.id, &kind).await?;
@@ -258,6 +351,15 @@ async fn test_one(State(state): State<AppState>, user: User, Path(kind): Path<St
 /// Best-effort figures for each connected account, read live from each
 /// client. A connector that isn't connected, or whose call fails, comes back
 /// as null rather than failing the whole request.
+// ponytail: untyped response, give it a struct (see docs/architecture/foundation-plan.md 3.9)
+#[utoipa::path(
+    get,
+    path = "/api/snapshot",
+    tag = "connectors",
+    summary = "Combined snapshot of connector data",
+    responses((status = 200, body = Object), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    security(("cookie" = []), ("bearer" = [])),
+)]
 async fn snapshot(State(state): State<AppState>, user: User) -> AppResult<Json<Value>> {
     let mut result = json!({ "up_bank": Value::Null, "pocketai": Value::Null });
 
@@ -290,6 +392,21 @@ async fn snapshot(State(state): State<AppState>, user: User) -> AppResult<Json<V
 
     Ok(Json(result))
 }
+
+#[derive(utoipa::OpenApi)]
+#[openapi(paths(
+    list_all,
+    up_bank_finance_summary,
+    pocketai_summary,
+    pocketai_all,
+    pocketai_search,
+    pocketai_detail,
+    get_one,
+    put_one,
+    test_one,
+    snapshot,
+))]
+pub struct Doc;
 
 #[cfg(test)]
 mod tests {

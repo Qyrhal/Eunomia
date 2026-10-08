@@ -47,7 +47,7 @@ struct AppSettingsRow {
     memory_skill: String,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, utoipa::ToSchema)]
 struct SettingsUpdate {
     embedding_model: Option<String>,
     sync_intervals: Option<Value>,
@@ -193,11 +193,30 @@ async fn resolve_openai(db: &Db, owner: &RecordId, env_api_key: &Option<String>,
     Ok((base_url, key))
 }
 
+// ponytail: untyped response, give it a struct (see docs/architecture/foundation-plan.md 3.9)
+#[utoipa::path(
+    get,
+    path = "/api/settings",
+    tag = "settings",
+    summary = "Read app settings",
+    responses((status = 200, body = Object), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    security(("cookie" = []), ("bearer" = [])),
+)]
 async fn read_settings(State(state): State<AppState>, user: User) -> AppResult<Json<Value>> {
     let row = get_app_settings(&state.db, &user.id).await?;
     Ok(Json(out(&row)))
 }
 
+// ponytail: untyped response, give it a struct (see docs/architecture/foundation-plan.md 3.9)
+#[utoipa::path(
+    patch,
+    path = "/api/settings",
+    tag = "settings",
+    summary = "Update app settings",
+    request_body = SettingsUpdate,
+    responses((status = 200, body = Object), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    security(("cookie" = []), ("bearer" = [])),
+)]
 async fn patch_settings(
     State(state): State<AppState>,
     user: User,
@@ -207,6 +226,14 @@ async fn patch_settings(
     Ok(Json(out(&row)))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/settings/complete-onboarding",
+    tag = "settings",
+    summary = "Mark onboarding done",
+    responses((status = 200, body = crate::openapi::OkBody), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    security(("cookie" = []), ("bearer" = [])),
+)]
 async fn complete_onboarding(State(state): State<AppState>, user: User) -> AppResult<Json<Value>> {
     state
         .db
@@ -230,6 +257,15 @@ struct ModelEntry {
 /// Lists models from the caller's configured OpenAI-compatible base URL.
 /// Never errors out to the caller -- an unreachable base URL or auth
 /// failure comes back as `{"models": [], "error": "..."}`.
+// ponytail: untyped response, give it a struct (see docs/architecture/foundation-plan.md 3.9)
+#[utoipa::path(
+    get,
+    path = "/api/settings/openai-models",
+    tag = "settings",
+    summary = "List models the configured OpenAI endpoint offers",
+    responses((status = 200, body = Object), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    security(("cookie" = []), ("bearer" = [])),
+)]
 async fn openai_models(State(state): State<AppState>, user: User) -> AppResult<Json<Value>> {
     let (base_url, api_key) = resolve_openai(&state.db, &user.id, &state.settings.openai_api_key, &state.settings.encryption_key).await?;
     let url = format!("{}/models", base_url.trim_end_matches('/'));
@@ -255,6 +291,15 @@ async fn openai_models(State(state): State<AppState>, user: User) -> AppResult<J
         Err(e) => Ok(Json(json!({ "models": [], "error": e.to_string() }))),
     }
 }
+
+#[derive(utoipa::OpenApi)]
+#[openapi(paths(
+    read_settings,
+    patch_settings,
+    complete_onboarding,
+    openai_models,
+))]
+pub struct Doc;
 
 #[cfg(test)]
 mod tests {

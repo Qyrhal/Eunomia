@@ -21,7 +21,8 @@ fn default_limit() -> i64 {
     50
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 struct AuditQuery {
     #[serde(default = "default_limit")]
     limit: i64,
@@ -50,6 +51,16 @@ fn has_more(offset: i64, returned: usize, total: i64) -> bool {
     offset + (returned as i64) < total
 }
 
+// ponytail: untyped response, give it a struct (see docs/architecture/foundation-plan.md 3.9)
+#[utoipa::path(
+    get,
+    path = "/api/audit",
+    tag = "audit",
+    summary = "Page of the caller's tool-call audit log",
+    params(AuditQuery),
+    responses((status = 200, body = Object), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    security(("cookie" = []), ("bearer" = [])),
+)]
 async fn get_audit(
     State(state): State<AppState>,
     user: User,
@@ -91,6 +102,12 @@ async fn get_audit(
         "has_more": has_more(q.offset, results.len(), total),
     })))
 }
+
+#[derive(utoipa::OpenApi)]
+#[openapi(paths(
+    get_audit,
+))]
+pub struct Doc;
 
 #[cfg(test)]
 mod tests {
