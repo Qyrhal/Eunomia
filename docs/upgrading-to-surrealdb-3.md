@@ -26,7 +26,7 @@ Disk: plan for about 4 times the size of the current `eunomia-surreal-data` volu
 SurrealDB 3.3 refuses downgrades, so rollback means going back to the old volume, which is never modified or deleted:
 
 1. If the script failed, it already did this for you.
-2. After a successful upgrade, to go back anyway: set the compose image back to `surrealdb/surrealdb:v2.7.0` (check out the previous release tag), remove the `SURREAL_DATA_VOLUME=` line from `.env`, and run `docker compose up -d`. You lose anything written after the upgrade. To keep it, restore the post-upgrade state from a backup into 3.x instead.
+2. After a successful upgrade, to go back anyway: set the compose image back to the old one, `surrealdb/surrealdb:v2.3` on released installs (check out the previous release tag), remove the `SURREAL_DATA_VOLUME=` line from `.env`, and run `docker compose up -d`. You lose anything written after the upgrade. To keep it, restore the post-upgrade state from a backup into 3.x instead.
 3. If the old volume is already gone, restore `pre-v3-*.surql.enc` into a 2.x server: `docker compose exec backup eunomia-backup restore pre-v3-<time>.surql.enc`.
 
 ## Deleting the old volume
