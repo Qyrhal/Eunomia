@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@blobatar/react": "^2.7.0",
+    "@tanstack/react-query": "5.104.1",
     "blobatar": "^2.7.0",
     "d3-force": "^3.0.0",
     "d3-force-3d": "^3.0.6",

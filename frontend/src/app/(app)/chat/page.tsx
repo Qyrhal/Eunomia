@@ -8,7 +8,11 @@ import Markdown from "@/components/Markdown";
 import AuthorTag from "@/components/AuthorTag";
 import SyncMark from "@/components/bits/SyncMark";
 import Tooltip, { TooltipGroup } from "@/components/bits/Tooltip";
-import { auth, chat, type ChatMessage, type ChatThread } from "@/lib/api";
+import { useQueryClient } from "@tanstack/react-query";
+import { chat } from "@/lib/api";
+import type { ChatMessage, ChatThread } from "@/lib/types";
+import { useMe } from "@/lib/queries/auth";
+import { chatKeys, historyQuery, threadsQuery, useCreateThread, useDeleteThread, useThreads } from "@/lib/queries/chat";
 
 // The built-in agent, labelled by the name its system prompt gives it.
 const ASSISTANT = "Eunomia";
@@ -317,7 +321,10 @@ function LoadingTurns() {
 }
 
 export default function ChatPage() {
-  const [threads, setThreads] = useState<ChatThread[] | null>(null);
+  const queryClient = useQueryClient();
+  const threads = useThreads().data ?? null;
+  const createThreadMutation = useCreateThread();
+  const deleteThreadMutation = useDeleteThread();
   const [activeId, setActiveId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[] | null>(null);
   const [input, setInput] = useState("");
@@ -326,7 +333,7 @@ export default function ChatPage() {
   const [liveSteps, setLiveSteps] = useState<ToolStep[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [needsKey, setNeedsKey] = useState(false);
-  const [me, setMe] = useState<string | null>(null);
+  const me = useMe().data?.email ?? null;
   const [lastSent, setLastSent] = useState("");
   // When the current reply was asked for, and how long it took to start answering.
   const [startedAt, setStartedAt] = useState<number | null>(null);
@@ -338,26 +345,22 @@ export default function ChatPage() {
   const loadHistory = useCallback((threadId: string) => {
     setMessages(null);
     stickRef.current = true;
-    chat
-      .history(threadId)
+    queryClient
+      .fetchQuery(historyQuery(threadId))
       .then(setMessages)
       .catch(() => setMessages([]));
-  }, []);
+  }, [queryClient]);
 
   useEffect(() => {
-    auth
-      .me()
-      .then((u) => setMe(u.email))
+    queryClient
+      .fetchQuery({ ...threadsQuery(), staleTime: 0 })
+      .then(async (list: ChatThread[]) => {
+        if (list.length === 0) list = [await createThreadMutation.mutateAsync(undefined)];
+        setActiveId(list[0].id);
+        loadHistory(list[0].id);
+      })
       .catch(() => {});
-    chat.threads.list().then(async (list) => {
-      if (list.length === 0) {
-        const created = await chat.threads.create();
-        list = [created];
-      }
-      setThreads(list);
-      setActiveId(list[0].id);
-      loadHistory(list[0].id);
-    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadHistory]);
 
   // Follow new content only while the reader is at the bottom; scrolling up
@@ -378,8 +381,7 @@ export default function ChatPage() {
   }
 
   async function createThread() {
-    const created = await chat.threads.create();
-    setThreads((prev) => [created, ...(prev ?? [])]);
+    const created = await createThreadMutation.mutateAsync(undefined);
     setActiveId(created.id);
     setMessages([]);
     setError(null);
@@ -388,16 +390,14 @@ export default function ChatPage() {
   }
 
   async function deleteThread(id: string) {
-    await chat.threads.delete(id);
+    await deleteThreadMutation.mutateAsync(id);
     const remaining = (threads ?? []).filter((t) => t.id !== id);
-    setThreads(remaining);
     if (id !== activeId) return;
     if (remaining.length > 0) {
       setActiveId(remaining[0].id);
       loadHistory(remaining[0].id);
     } else {
-      const created = await chat.threads.create();
-      setThreads([created]);
+      const created = await createThreadMutation.mutateAsync(undefined);
       setActiveId(created.id);
       setMessages([]);
     }
@@ -449,7 +449,7 @@ export default function ChatPage() {
         const tool_calls = steps.map((s, i) => ({ id: `live_${i}`, type: "function" as const, function: { name: s.name, arguments: "" } }));
         setMessages((prev) => [...(prev ?? []), { role: "assistant", content: reply, tool_calls, created_at: new Date().toISOString() }]);
       }
-      chat.threads.list().then(setThreads);
+      queryClient.invalidateQueries({ queryKey: chatKeys.threads() });
     } catch (e) {
       if (controller.signal.aborted) {
         // stopped by the person: keep whatever streamed so far

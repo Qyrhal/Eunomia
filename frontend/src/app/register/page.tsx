@@ -4,13 +4,14 @@ import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Loader2 } from "lucide-react";
-import { auth } from "@/lib/api";
+import { useRegister } from "@/lib/queries/auth";
 import AuthShell, { FormError, LABEL, RevealToggle } from "../login/AuthShell";
 
 const MISMATCH = "Passwords don't match.";
 
 export default function RegisterPage() {
   const router = useRouter();
+  const register = useRegister();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -27,7 +28,7 @@ export default function RegisterPage() {
     setBusy(true);
     setError(null);
     try {
-      await auth.register(email, password);
+      await register.mutateAsync({ email, password });
       router.replace("/onboarding");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not create the account. Try again.");

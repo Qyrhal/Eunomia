@@ -1,9 +1,11 @@
 "use client";
 
-import { Fragment, use, useCallback, useEffect, useState } from "react";
+import { Fragment, use, useState } from "react";
 import Link from "next/link";
 import { ChevronRight, ExternalLink, Search, Settings2, X } from "lucide-react";
-import { sources, tools, type SourceRow, type ToolHit, type ToolRecord } from "@/lib/api";
+import type { SourceRow, ToolHit } from "@/lib/types";
+import { useSources, useSyncSource } from "@/lib/queries/sources";
+import { useRecord, useSourceRecords, useSourceSearch } from "@/lib/queries/tools";
 import AuthorTag from "@/components/AuthorTag";
 import DigitRoll from "@/components/bits/DigitRoll";
 import SyncMark, { type SyncStatus } from "@/components/bits/SyncMark";
@@ -82,14 +84,10 @@ function PayloadValue({ k, v }: { k: string; v: unknown }) {
 
 function RecordRow({ hit }: { hit: ToolHit }) {
   const [open, setOpen] = useState(false);
-  const [detail, setDetail] = useState<ToolRecord | null | "error">(null);
+  const record = useRecord(hit.id, open);
+  const detail = record.isError ? "error" : (record.data ?? null);
 
-  async function toggle() {
-    if (!open && (detail === null || detail === "error")) {
-      setDetail(null);
-      const res = await tools.get(hit.id).catch(() => null);
-      setDetail(res && !("error" in res) ? res : "error");
-    }
+  function toggle() {
     setOpen((o) => !o);
   }
 
@@ -190,51 +188,37 @@ function health(row: SourceRow): { tone: string; text: string } {
 export default function ConnectorWorkspacePage({ params }: { params: Promise<{ kind: string }> }) {
   const { kind } = use(params);
   const connectorKind = kindForSource(kind);
-  const [row, setRow] = useState<SourceRow | null | undefined>(undefined);
+  const rowsQuery = useSources();
+  const row: SourceRow | null | undefined = rowsQuery.data ? (rowsQuery.data.find((r) => r.key === kind) ?? null) : rowsQuery.isError ? null : undefined;
   const [query, setQuery] = useState("");
+  // The submitted search; "" shows the latest records.
   const [activeQuery, setActiveQuery] = useState("");
-  const [results, setResults] = useState<ToolHit[] | null>(null);
-  const [searching, setSearching] = useState(false);
+  const listQuery = useSourceRecords(kind);
+  const searchQuery = useSourceSearch(kind, activeQuery);
+  const syncSource = useSyncSource();
+  const shown = activeQuery ? (searchQuery.data ?? listQuery.data) : listQuery.data;
+  const results: ToolHit[] | null = activeQuery && searchQuery.isError ? [] : (shown ?? (listQuery.isError ? [] : null));
+  const searching = activeQuery !== "" && searchQuery.isFetching;
   const [syncing, setSyncing] = useState(false);
   // Result mark after a sync: holds 1.2s, then the button goes back to idle.
   const [syncResult, setSyncResult] = useState<"done" | "failed" | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
 
-  const loadRow = useCallback(
-    () =>
-      sources
-        .list()
-        .then((rows) => setRow(rows.find((r) => r.key === kind) ?? null))
-        .catch(() => setRow(null)),
-    [kind]
-  );
+  function loadRecords() {
+    setActiveQuery("");
+    listQuery.refetch();
+  }
 
-  const loadRecords = useCallback(() => {
-    tools
-      .list({ filters: { source: kind }, sort: "-occurred_at", limit: 50 })
-      .then((res) => {
-        setActiveQuery("");
-        setResults("results" in res ? res.results : []);
-      })
-      .catch(() => setResults([]));
-  }, [kind]);
-
-  useEffect(() => {
-    loadRow();
-    loadRecords();
-  }, [loadRow, loadRecords]);
-
-  async function runSearch(e: React.FormEvent) {
+  function runSearch(e: React.FormEvent) {
     e.preventDefault();
-    if (!query.trim()) {
+    const q = query.trim();
+    if (!q) {
       loadRecords();
-      return;
+    } else if (q === activeQuery) {
+      searchQuery.refetch();
+    } else {
+      setActiveQuery(q);
     }
-    setSearching(true);
-    const res = await tools.search({ query, sources: [kind], limit: 50 }).catch(() => null);
-    setSearching(false);
-    setActiveQuery(query.trim());
-    setResults(res && "results" in res ? res.results : []);
   }
 
   function clearSearch() {
@@ -248,9 +232,7 @@ export default function ConnectorWorkspacePage({ params }: { params: Promise<{ k
     setSyncError(null);
     let result: "done" | "failed" = "done";
     try {
-      await sources.sync(kind);
-      await loadRow();
-      if (!activeQuery) loadRecords();
+      await syncSource.mutateAsync(kind);
     } catch (e) {
       result = "failed";
       setSyncError((e as Error).message);

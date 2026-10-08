@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { BookOpen, Brain, FolderGit2, LayoutDashboard, LogOut, Menu, MessageSquare, Plug, Search, Settings, Share2, Vault, X } from "lucide-react";
@@ -9,7 +9,9 @@ import ThemeToggle from "./ThemeToggle";
 import Tooltip, { TooltipGroup } from "./bits/Tooltip";
 import { authorColor } from "./AuthorTag";
 import { openCommandPalette } from "./CommandPalette";
-import { auth, sources, update, type Me, type SourceRow } from "@/lib/api";
+import { useMe, useLogout } from "@/lib/queries/auth";
+import { useSources } from "@/lib/queries/sources";
+import { useUpdateStatus } from "@/lib/queries/settings";
 import { isLiveSource, sourceHealth, sourceLabel } from "@/lib/sourceState";
 
 const STATIC_NAV = [
@@ -44,34 +46,23 @@ function NavLink({ href, active, children }: { href: string; active: boolean; ch
 export default function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
-  const [rows, setRows] = useState<SourceRow[] | null>(null);
-  const [me, setMe] = useState<Me | null>(null);
-  const [newVersion, setNewVersion] = useState<string | null>(null);
+  const sourcesQuery = useSources();
+  // A failed load reads as nothing connected, as before.
+  const rows = sourcesQuery.data ?? (sourcesQuery.isError ? [] : null);
+  const me = useMe().data ?? null;
+  const status = useUpdateStatus().data;
+  const newVersion = status?.configured && status.update_available ? status.latest_version : null;
+  const logoutMutation = useLogout();
   // The drawer is open only for the page it was opened on, so navigating
   // closes it without an effect.
   const [drawerPath, setDrawerPath] = useState<string | null>(null);
   const drawerOpen = drawerPath === pathname;
   const setDrawerOpen = (open: boolean) => setDrawerPath(open ? pathname : null);
 
-  useEffect(() => {
-    sources
-      .list()
-      .then(setRows)
-      .catch(() => setRows([]));
-    auth
-      .me()
-      .then(setMe)
-      .catch(() => {});
-    update
-      .status()
-      .then((s) => setNewVersion(s.configured && s.update_available ? s.latest_version : null))
-      .catch(() => {});
-  }, []);
-
   const connected = rows?.filter(isLiveSource) ?? [];
 
   async function logout() {
-    await auth.logout().catch(() => {});
+    await logoutMutation.mutateAsync().catch(() => {});
     router.replace("/login");
   }
 

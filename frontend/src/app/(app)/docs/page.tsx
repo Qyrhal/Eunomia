@@ -5,7 +5,7 @@ import { isValidElement, useEffect, useRef, useState, type ReactNode } from "rea
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { ArrowLeft, ArrowRight, Link2 } from "lucide-react";
-import { docs } from "@/lib/api";
+import { useDoc, useDocs } from "@/lib/queries/tools";
 import CopyButton from "@/components/bits/CopyButton";
 import Tooltip from "@/components/bits/Tooltip";
 
@@ -63,27 +63,18 @@ function Heading({ level, children }: { level: 2 | 3; children?: ReactNode }) {
 
 // The repo's docs/ folder, served by the same `docs` tool agents call over MCP.
 export default function DocsPage() {
-  const [topics, setTopics] = useState<Topic[]>([]);
+  const topicsQuery = useDocs();
+  const topics: Topic[] = topicsQuery.data?.docs ?? [];
   const [topic, setTopic] = useState("quickstart");
-  const [body, setBody] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const docQuery = useDoc(topic);
+  const body = docQuery.data?.markdown ?? null;
+  const error = docQuery.isError ? "Could not load that doc." : topicsQuery.isError ? "Could not load the docs." : null;
   const [outline, setOutline] = useState<{ id: string; text: string }[]>([]);
   const [active, setActive] = useState<string | null>(null);
   const articleRef = useRef<HTMLElement>(null);
   const first = useRef(true);
 
   useEffect(() => {
-    docs.list().then((r) => setTopics(r.docs)).catch(() => setError("Could not load the docs."));
-  }, []);
-
-  useEffect(() => {
-    docs
-      .get(topic)
-      .then((d) => {
-        setError(null);
-        setBody(d.markdown);
-      })
-      .catch(() => setError("Could not load that doc."));
     if (first.current) first.current = false;
     else window.scrollTo({ top: 0 });
   }, [topic]);

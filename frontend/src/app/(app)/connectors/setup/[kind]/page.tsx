@@ -1,10 +1,14 @@
 "use client";
 
 import Select from "@/components/Select";
-import { use, useEffect, useState } from "react";
+import { use, useState } from "react";
 import Link from "next/link";
 import { ArrowRight, ChevronRight, Eye, EyeOff } from "lucide-react";
-import { apiOrigin, auth as authApi, connectors as connectorsApi, settings as settingsApi, type AppSettings, type Connector, type ConnectorKind } from "@/lib/api";
+import { apiOrigin } from "@/lib/api";
+import type { ConnectorKind, ConnectorUpdate } from "@/lib/types";
+import { useMe } from "@/lib/queries/auth";
+import { useConnectors, useTestConnector, useUpdateConnector } from "@/lib/queries/connectors";
+import { useSettings, useUpdateSettings } from "@/lib/queries/settings";
 import { CONNECTOR_META, CONNECTOR_ORDER, ConnectorTile, connectorStatus, type FieldDef } from "@/lib/connectorMeta";
 import CopyButton from "@/components/bits/CopyButton";
 import SyncMark from "@/components/bits/SyncMark";
@@ -94,8 +98,13 @@ function SecretToggle({ shown, onToggle, label }: { shown: boolean; onToggle: ()
 
 function ConnectorSetup({ kind }: { kind: ConnectorKind }) {
   const meta = CONNECTOR_META[kind];
-  const [connector, setConnector] = useState<Connector | undefined | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
+  const connectorsQuery = useConnectors();
+  // null while loading, undefined when the backend lists no such connector.
+  const connector = connectorsQuery.data ? connectorsQuery.data.find((c) => c.kind === kind) : null;
+  const loadError = connectorsQuery.isError ? connectorsQuery.error.message : null;
+  const updateConnector = useUpdateConnector();
+  const testConnector = useTestConnector();
+  const updateSettings = useUpdateSettings();
   const [values, setValues] = useState<Record<string, string>>({});
   const [shown, setShown] = useState<Record<string, boolean>>({});
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -104,27 +113,14 @@ function ConnectorSetup({ kind }: { kind: ConnectorKind }) {
   const [savedFlash, setSavedFlash] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; error?: string } | null>(null);
-  const [appSettings, setAppSettings] = useState<AppSettings | undefined>(undefined);
+  const appSettings = useSettings(Boolean(meta.sourceKey)).data;
   const [intervalState, setIntervalState] = useState<"idle" | "saved" | "error">("idle");
-  const [webhookUrl, setWebhookUrl] = useState<string | null>(null);
+  const me = useMe(Boolean(meta.webhooks)).data;
+  // The URL is editable (swap in a tunnel host before copying); null until then shows the derived one.
+  const [editedWebhookUrl, setWebhookUrl] = useState<string | null>(null);
+  const webhookUrl = editedWebhookUrl ?? (me ? `${apiOrigin()}/api/sources/${kind}/webhook/${me.id}` : null);
   const [confirmDisconnect, setConfirmDisconnect] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
-
-  const load = () =>
-    connectorsApi
-      .list()
-      .then((list) => setConnector(list.find((c) => c.kind === kind)))
-      .catch((e: Error) => setLoadError(e.message));
-  useEffect(() => {
-    load();
-    if (meta.sourceKey) settingsApi.get().then(setAppSettings).catch(() => undefined);
-    if (meta.webhooks)
-      authApi
-        .me()
-        .then((me) => setWebhookUrl(`${apiOrigin()}/api/sources/${kind}/webhook/${me.id}`))
-        .catch(() => undefined);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [kind]);
 
   const status = connectorStatus(connector ?? undefined);
   const isDemo = status === "demo";
@@ -139,7 +135,8 @@ function ConnectorSetup({ kind }: { kind: ConnectorKind }) {
     setTesting(true);
     setTestResult(null);
     try {
-      setTestResult(await connectorsApi.test(kind));
+      const r = await testConnector.mutateAsync(kind);
+      setTestResult({ ok: r.ok, error: r.error ?? undefined });
     } catch (e) {
       setTestResult({ ok: false, error: (e as Error).message });
     } finally {
@@ -169,14 +166,14 @@ function ConnectorSetup({ kind }: { kind: ConnectorKind }) {
       if (f.secret || f.key === "client_id") credentials[f.key] = v;
       else config[f.key] = v;
     }
-    const body: Record<string, unknown> = { enabled: true };
+    const body: ConnectorUpdate = { enabled: true };
     if (Object.keys(credentials).length) body.credentials = credentials;
     if (Object.keys(config).length) body.config = config;
 
     setSaving(true);
     setSaveError(null);
     try {
-      await connectorsApi.update(kind, body);
+      await updateConnector.mutateAsync({ kind, body });
     } catch (err) {
       setSaveError((err as Error).message);
       return;
@@ -187,7 +184,6 @@ function ConnectorSetup({ kind }: { kind: ConnectorKind }) {
     setShown({});
     setSavedFlash(true);
     setTimeout(() => setSavedFlash(false), 1400);
-    await load();
     // Saving is the moment people want to know it works: check it for them.
     test();
   }
@@ -195,10 +191,9 @@ function ConnectorSetup({ kind }: { kind: ConnectorKind }) {
   async function saveInterval(seconds: number) {
     if (!meta.sourceKey) return;
     try {
-      const updated = await settingsApi.update({
+      await updateSettings.mutateAsync({
         sync_intervals: { ...(appSettings?.sync_intervals ?? {}), [meta.sourceKey]: seconds },
       });
-      setAppSettings(updated);
       setIntervalState("saved");
       setTimeout(() => setIntervalState("idle"), 1400);
     } catch {
@@ -210,10 +205,9 @@ function ConnectorSetup({ kind }: { kind: ConnectorKind }) {
     setDisconnecting(true);
     setSaveError(null);
     try {
-      await connectorsApi.update(kind, { enabled: false });
+      await updateConnector.mutateAsync({ kind, body: { enabled: false } });
       setConfirmDisconnect(false);
       setTestResult(null);
-      await load();
     } catch (err) {
       setSaveError(`Could not disconnect: ${(err as Error).message}. Try again.`);
     } finally {

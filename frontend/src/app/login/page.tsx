@@ -4,7 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Loader2 } from "lucide-react";
-import { auth } from "@/lib/api";
+import { useLogin } from "@/lib/queries/auth";
 import AuthShell, { FormError, LABEL, RevealToggle } from "./AuthShell";
 
 /** Where to go after signing in: `?next=` when it is a same-site path (the OAuth consent page), else the dashboard. */
@@ -15,6 +15,7 @@ function nextPath(): string {
 
 export default function LoginPage() {
   const router = useRouter();
+  const login = useLogin();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [show, setShow] = useState(false);
@@ -26,7 +27,7 @@ export default function LoginPage() {
     setBusy(true);
     setError(null);
     try {
-      await auth.login(email, password);
+      await login.mutateAsync({ email, password });
       router.replace(nextPath());
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not sign in. Check your email and password, then try again.");

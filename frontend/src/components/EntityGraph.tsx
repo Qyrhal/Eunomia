@@ -11,15 +11,20 @@ import SyncMark from "./bits/SyncMark";
 import Tooltip, { TooltipGroup } from "./bits/Tooltip";
 import { cssVar, prefersReducedMotion } from "./bits/motion";
 import { Blobatar } from "@blobatar/react";
+import { useQueryClient } from "@tanstack/react-query";
+import type { EntityDetail, EntityGraph as EntityGraphData, EntityKind } from "@/lib/types";
+import { useMe } from "@/lib/queries/auth";
 import {
-  auth,
-  entities,
-  vaults as vaultsApi,
-  type EntityDetail,
-  type EntityGraph as EntityGraphData,
-  type EntityKind,
-  type Vault,
-} from "@/lib/api";
+  entityDetailQuery,
+  useAddMemory,
+  useAddRelation,
+  useCreateEntity as useCreateEntityMutation,
+  useDeleteEntity,
+  useDeleteMemory,
+  useEntityGraph,
+  useUpdateEntity,
+} from "@/lib/queries/entities";
+import { useVaults } from "@/lib/queries/vaults";
 
 const KIND_COLOR: Record<EntityKind, string> = {
   person: "var(--kind-person)",
@@ -103,11 +108,19 @@ export default function EntityGraph({
   guide?: ReactNode;
 } = {}) {
   const shownKinds = kinds ?? ALL_KINDS;
-  const [graph, setGraph] = useState<EntityGraphData | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [myEmail, setMyEmail] = useState<string | null>(null);
-  const [myVaults, setMyVaults] = useState<Vault[]>([]);
+  const queryClient = useQueryClient();
   const [vaultId, setVaultId] = useState<string | undefined>(undefined);
+  const graphQuery = useEntityGraph({ kinds, vaultId });
+  const graph: EntityGraphData | null = graphQuery.data ?? null;
+  const error = graphQuery.error && !graph ? graphQuery.error.message || "Could not load the entity graph." : null;
+  const myEmail = useMe().data?.email ?? null;
+  const myVaults = useVaults().data ?? [];
+  const createEntityMutation = useCreateEntityMutation();
+  const updateEntityMutation = useUpdateEntity();
+  const deleteEntityMutation = useDeleteEntity();
+  const addMemoryMutation = useAddMemory();
+  const deleteMemoryMutation = useDeleteMemory();
+  const addRelationMutation = useAddRelation();
   const [selected, setSelected] = useState<EntityDetail | null>(null);
   const [visibleKinds, setVisibleKinds] = useState<Set<EntityKind>>(new Set(shownKinds));
   const [showCreate, setShowCreate] = useState(false);
@@ -158,25 +171,6 @@ export default function EntityGraph({
   }
 
   useEffect(() => {
-    auth
-      .me()
-      .then((me) => setMyEmail(me.email))
-      .catch(() => {});
-    vaultsApi
-      .list()
-      .then((r) => setMyVaults(r.results))
-      .catch(() => setMyVaults([]));
-  }, []);
-
-  useEffect(() => {
-    entities
-      .graph(kinds ? { kinds, vaultId } : { vaultId })
-      .then(setGraph)
-      .catch((e) => setError(e instanceof Error ? e.message : "Could not load the entity graph."));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [vaultId]);
-
-  useEffect(() => {
     if (!selected && !showCreate) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
@@ -209,17 +203,12 @@ export default function EntityGraph({
     setRelForm({ to: "", label: "" });
     setActionError(null);
     try {
-      const detail = await entities.get(id);
+      const detail = await queryClient.fetchQuery(entityDetailQuery(id));
       setSelected(detail);
       return detail;
     } catch {
       setSelected(null);
     }
-  }
-
-  async function refreshGraph() {
-    const g = await entities.graph(kinds ? { kinds, vaultId } : { vaultId }).catch(() => null);
-    if (g) setGraph(g);
   }
 
   async function createEntity(e: React.FormEvent) {
@@ -233,7 +222,7 @@ export default function EntityGraph({
         .split(",")
         .map((a) => a.trim())
         .filter(Boolean);
-      const created = await entities.create({
+      const created = await createEntityMutation.mutateAsync({
         kind: createForm.kind,
         name,
         aliases: aliases.length ? aliases : undefined,
@@ -241,7 +230,6 @@ export default function EntityGraph({
       });
       setShowCreate(false);
       setCreateForm({ kind: shownKinds[0], name: "", aliases: "" });
-      await refreshGraph();
       await selectNode(created.id);
     } catch (err) {
       setCreateError(failure(err, "Could not create the entity."));
@@ -267,9 +255,8 @@ export default function EntityGraph({
         .split(",")
         .map((a) => a.trim())
         .filter(Boolean);
-      await entities.update(selected.id, { name: editForm.name.trim(), aliases, summary: editForm.summary.trim() });
+      await updateEntityMutation.mutateAsync({ id: selected.id, name: editForm.name.trim(), aliases, summary: editForm.summary.trim() });
       setEditing(false);
-      await refreshGraph();
       await selectNode(selected.id);
     } catch (err) {
       setActionError(failure(err, "Could not save changes."));
@@ -284,9 +271,8 @@ export default function EntityGraph({
     setBusy(true);
     setActionError(null);
     try {
-      await entities.delete(selected.id);
+      await deleteEntityMutation.mutateAsync(selected.id);
       setSelected(null);
-      await refreshGraph();
     } catch (err) {
       setActionError(failure(err, "Could not delete this entity."));
       setBusy(false);
@@ -302,7 +288,7 @@ export default function EntityGraph({
     setMemoryStatus("running");
     const before = new Set(selected.memory.map((m) => m.id));
     try {
-      await entities.addMemory(selected.id, { text: memoryText.trim() });
+      await addMemoryMutation.mutateAsync({ id: selected.id, text: memoryText.trim() });
       setMemoryText("");
       const detail = await selectNode(selected.id);
       setFreshMemory(detail?.memory.find((m) => !before.has(m.id))?.id ?? null);
@@ -322,7 +308,7 @@ export default function EntityGraph({
     setBusy(true);
     setActionError(null);
     try {
-      await entities.deleteMemory(memoryId);
+      await deleteMemoryMutation.mutateAsync(memoryId);
       await selectNode(selected.id);
     } catch (err) {
       setActionError(failure(err, "Could not delete that memory."));
@@ -337,9 +323,8 @@ export default function EntityGraph({
     setBusy(true);
     setActionError(null);
     try {
-      await entities.addRelation(selected.id, { to_id: relForm.to, label: relForm.label.trim() });
+      await addRelationMutation.mutateAsync({ id: selected.id, to_id: relForm.to, label: relForm.label.trim() });
       setRelForm({ to: "", label: "" });
-      await refreshGraph();
       await selectNode(selected.id);
     } catch (err) {
       setActionError(failure(err, "Could not add that relation."));
