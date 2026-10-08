@@ -56,4 +56,5 @@ jobs:
       - run: bash scripts/tests/connect-agents.test.sh
       - run: CONNECT_JSON=py bash scripts/tests/connect-agents.test.sh
       - run: bash scripts/tests/auto-update.test.sh
+      - run: bash scripts/tests/https.test.sh
       - run: bash -n scripts/auto-update.sh scripts/connect-agents.sh

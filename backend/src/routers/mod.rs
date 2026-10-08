@@ -9,4 +9,5 @@ pub mod export;
 pub mod sources;
 pub mod tools;
 pub mod update;
+pub mod https;
 pub mod mcp;

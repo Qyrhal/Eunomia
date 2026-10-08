@@ -7,10 +7,12 @@ import { Check, Copy, Download, Plug, RefreshCw, Trash2 } from "lucide-react";
 import {
   auth,
   downloadExport,
+  https as httpsApi,
   settings as settingsApi,
   update as updateApi,
   type ApiToken,
   type AppSettings,
+  type HttpsStatus,
   type Session,
   type UpdateStatus,
 } from "@/lib/api";
@@ -346,9 +348,140 @@ function UpdateSection() {
   );
 }
 
+function HttpsSection() {
+  const [status, setStatus] = useState<HttpsStatus | null>(null);
+  const [domain, setDomain] = useState("");
+  const [email, setEmail] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(
+    () =>
+      httpsApi
+        .status()
+        .then((s) => {
+          setStatus(s);
+          if (s.configured && s.domain) setDomain((d) => d || s.domain || "");
+        })
+        .catch(() => {}),
+    []
+  );
+  const pending = status?.configured && status.state === "pending";
+  useEffect(() => {
+    load();
+    const id = setInterval(load, pending ? 3000 : 15000);
+    return () => clearInterval(id);
+  }, [load, pending]);
+
+  async function submit(enable: boolean) {
+    setBusy(true);
+    setError(null);
+    try {
+      await (enable ? httpsApi.enable(domain.trim(), email.trim()) : httpsApi.disable());
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not save.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!status || !status.configured) {
+    return (
+      <section className="ledger p-6 flex flex-col gap-3">
+        <div className="eyebrow">HTTPS</div>
+        <p className="text-[12.5px]" style={{ color: "var(--ink-faint)" }}>
+          HTTPS is set up by the <code className="font-mono">updater</code> service, which hasn&apos;t reported in yet.
+          See Settings → Updates.
+        </p>
+      </section>
+    );
+  }
+
+  const line =
+    status.state === "active"
+      ? "Active"
+      : status.state === "pending"
+        ? `Pending — getting a certificate for ${status.domain}…`
+        : status.state === "error"
+          ? "Error"
+          : "Off";
+
+  return (
+    <section className="ledger p-6 flex flex-col gap-4">
+      <div>
+        <div className="eyebrow">HTTPS</div>
+        <p className="text-[12.5px]" style={{ color: "var(--ink-faint)" }}>
+          Serve Eunomia at your own domain with a free Let&apos;s Encrypt certificate, renewed automatically. Needs a
+          domain whose DNS points at this machine and ports 80 and 443 reachable from the internet. The current
+          address keeps working.
+        </p>
+      </div>
+
+      <div className="field flex items-center justify-between gap-3 px-3 py-2.5">
+        <div className="min-w-0 text-[13px]" role="status">
+          {line}
+          {status.state === "active" && status.domain && (
+            <>
+              {" — "}
+              <a href={`https://${status.domain}`} className="underline font-mono">
+                https://{status.domain}
+              </a>
+            </>
+          )}
+        </div>
+        {status.state !== "off" && (
+          <button onClick={() => submit(false)} disabled={busy} className="pill disabled:opacity-50 shrink-0">
+            Disable
+          </button>
+        )}
+      </div>
+      {status.message && (
+        <p className="text-[12px]" style={{ color: status.state === "error" ? "var(--critical)" : "var(--ink-faint)" }}>
+          {status.message}
+        </p>
+      )}
+
+      <label className="text-[13px] flex flex-col gap-1.5" style={{ color: "var(--ink-dim)" }}>
+        Domain
+        <input
+          className="field px-3 py-2.5 text-[13.5px] font-mono"
+          value={domain}
+          onChange={(e) => setDomain(e.target.value)}
+          placeholder="eunomia.example.com"
+        />
+      </label>
+      <label className="text-[13px] flex flex-col gap-1.5" style={{ color: "var(--ink-dim)" }}>
+        Email for Let&apos;s Encrypt
+        <input
+          type="email"
+          className="field px-3 py-2.5 text-[13.5px] font-mono"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          placeholder="you@example.com"
+        />
+      </label>
+      <button
+        onClick={() => submit(true)}
+        disabled={busy}
+        className="self-start px-5 py-2.5 text-[13px] font-medium rounded-xl disabled:opacity-50"
+        style={{ background: "var(--felt)", color: "var(--canvas)" }}
+      >
+        Enable HTTPS
+      </button>
+      {error && (
+        <p className="text-[12px]" style={{ color: "var(--critical)" }}>
+          {error}
+        </p>
+      )}
+    </section>
+  );
+}
+
 const TABS = [
   { id: "general", label: "General" },
   { id: "updates", label: "Updates" },
+  { id: "https", label: "HTTPS" },
   { id: "tokens", label: "API tokens" },
   { id: "sessions", label: "Sessions" },
   { id: "data", label: "Your data" },
@@ -540,6 +673,7 @@ function Settings() {
       )}
 
       {tab === "updates" && <UpdateSection />}
+      {tab === "https" && <HttpsSection />}
       {tab === "tokens" && <TokensSection />}
       {tab === "sessions" && <SessionsSection />}
 
