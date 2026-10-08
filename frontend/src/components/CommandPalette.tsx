@@ -2,18 +2,27 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { FileText, FolderGit2, LayoutDashboard, MessageSquare, Plug, Settings, Share2, User } from "lucide-react";
+import { BookOpen, CornerDownLeft, FileText, FolderGit2, LayoutDashboard, MessageSquare, Plug, Search, Settings, Share2, User, Vault } from "lucide-react";
 import { sources, tools, type EntityKind, type EntitySummary, type SourceRow, type ToolHit } from "@/lib/api";
 
 type IconType = React.ComponentType<{ size?: number; color?: string; strokeWidth?: number }>;
 type Item = { key: string; label: string; sub?: string; icon: IconType; go: () => void };
+type Group = { title: string; items: Item[] };
+
+const OPEN_EVENT = "eunomia:open-palette";
+/** Opens the palette from anywhere (the sidebar search button, page CTAs). */
+export function openCommandPalette() {
+  window.dispatchEvent(new Event(OPEN_EVENT));
+}
 
 const STATIC_ITEMS: { label: string; href: string; icon: IconType }[] = [
   { label: "Dashboard", href: "/", icon: LayoutDashboard },
   { label: "Chat", href: "/chat", icon: MessageSquare },
   { label: "Entities", href: "/entities", icon: Share2 },
   { label: "Code", href: "/code", icon: FolderGit2 },
+  { label: "Vaults", href: "/vaults", icon: Vault },
   { label: "Connectors", href: "/connectors", icon: Plug },
+  { label: "Docs", href: "/docs", icon: BookOpen },
   { label: "Settings", href: "/settings", icon: Settings },
 ];
 
@@ -34,11 +43,17 @@ export default function CommandPalette() {
         setOpen(false);
       }
     }
+    const onOpen = () => setOpen(true);
     window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+    window.addEventListener(OPEN_EVENT, onOpen);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener(OPEN_EVENT, onOpen);
+    };
   }, []);
 
-  // Mounted only while open, so every open starts from fresh state.
+  // Mounted only while open, so every open starts from fresh state. No
+  // open/close animation: this is opened from the keyboard many times a day.
   return open ? <Palette onClose={() => setOpen(false)} /> : null;
 }
 
@@ -110,76 +125,102 @@ function Palette({ onClose }: { onClose: () => void }) {
     },
   }));
 
-  const items = [...navItems, ...entityItems, ...recordItems];
+  const groups: Group[] = [
+    { title: "Pages", items: navItems },
+    { title: "Entities", items: entityItems },
+    { title: "Records", items: recordItems },
+  ].filter((g) => g.items.length > 0);
+  const items = groups.flatMap((g) => g.items);
 
   function choose(item: Item) {
     item.go();
     onClose();
   }
 
+  let flat = -1;
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-start justify-center pt-[15vh]"
-      style={{ background: "rgba(0,0,0,0.35)" }}
-      onClick={onClose}
-    >
+    <div className="fixed inset-0 z-50 flex items-start justify-center px-4 pt-[14vh]" style={{ background: "var(--scrim)" }} onClick={onClose}>
       <div
-        className="w-full max-w-md ledger overflow-hidden"
-        style={{ boxShadow: "0 24px 60px rgba(0,0,0,0.5)" }}
+        role="dialog"
+        aria-label="Command palette"
+        className="w-full max-w-[560px] panel overflow-hidden"
+        style={{ boxShadow: "var(--shadow-pop)" }}
         onClick={(e) => e.stopPropagation()}
       >
-        <input
-          autoFocus
-          value={query}
-          onChange={(e) => {
-            setQuery(e.target.value);
-            setIndex(0);
-          }}
-          onKeyDown={(e) => {
-            if (e.key === "ArrowDown") {
-              e.preventDefault();
-              setIndex((i) => Math.min(i + 1, items.length - 1));
-            } else if (e.key === "ArrowUp") {
-              e.preventDefault();
-              setIndex((i) => Math.max(i - 1, 0));
-            } else if (e.key === "Enter" && items[index]) {
-              choose(items[index]);
-            }
-          }}
-          placeholder="Jump to a page…"
-          className="w-full px-4 py-3 text-[14px]"
-          style={{ background: "transparent", borderBottom: "1px solid var(--border)" }}
-        />
-        <ul className="max-h-80 overflow-y-auto">
-          {items.map((item, i) => {
-            const Icon = item.icon;
-            return (
-              <li key={item.key}>
-                <button
-                  onClick={() => choose(item)}
-                  className="w-full flex items-center gap-2.5 px-4 py-2.5 text-[13px] text-left"
-                  style={{
-                    background: i === index ? "var(--surface-raised)" : "transparent",
-                    color: "var(--ink)",
-                  }}
-                >
-                  <Icon size={14} color="var(--ink-faint)" />
-                  <span className="flex-1 truncate">{item.label}</span>
-                  {item.sub && (
-                    <span className="text-[11px] shrink-0" style={{ color: "var(--ink-faint)" }}>
-                      {item.sub}
-                    </span>
-                  )}
-                </button>
-              </li>
-            );
-          })}
+        <div className="flex items-center gap-2.5 px-4 h-12" style={{ borderBottom: "var(--hair) solid var(--border)" }}>
+          <Search size={16} color="var(--ink-faint)" />
+          <input
+            autoFocus
+            value={query}
+            onChange={(e) => {
+              setQuery(e.target.value);
+              setIndex(0);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "ArrowDown") {
+                e.preventDefault();
+                setIndex((i) => Math.min(i + 1, items.length - 1));
+              } else if (e.key === "ArrowUp") {
+                e.preventDefault();
+                setIndex((i) => Math.max(i - 1, 0));
+              } else if (e.key === "Enter" && items[index]) {
+                choose(items[index]);
+              }
+            }}
+            placeholder="Jump to a page…"
+            aria-label="Search pages, entities and records"
+            className="flex-1 h-full bg-transparent text-[15px] outline-none"
+            style={{ color: "var(--ink)" }}
+          />
+          <span className="kbd">esc</span>
+        </div>
+        <div className="max-h-[min(420px,60vh)] overflow-y-auto py-1.5">
+          {groups.map((g) => (
+            <div key={g.title} className="py-1">
+              <div className="label px-4 h-7 flex items-center">{g.title}</div>
+              <ul>
+                {g.items.map((item) => {
+                  flat += 1;
+                  const i = flat;
+                  const Icon = item.icon;
+                  const active = i === index;
+                  return (
+                    <li key={item.key} className="px-1.5">
+                      <button
+                        onClick={() => choose(item)}
+                        onMouseMove={() => setIndex(i)}
+                        className="w-full flex items-center gap-2.5 px-2.5 h-9 text-[13.5px] text-left rounded-[7px]"
+                        style={{ background: active ? "var(--surface-raised)" : "transparent", color: "var(--ink)" }}
+                      >
+                        <Icon size={15} color={active ? "var(--accent-text)" : "var(--ink-faint)"} />
+                        <span className="flex-1 truncate">{item.label}</span>
+                        {item.sub && (
+                          <span className="text-[12px] shrink-0" style={{ color: "var(--ink-faint)" }}>
+                            {item.sub}
+                          </span>
+                        )}
+                        {active && <CornerDownLeft size={13} color="var(--ink-faint)" />}
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          ))}
           {items.length === 0 && (
-            <li className="px-4 py-6 text-center text-[12.5px]" style={{ color: "var(--ink-faint)" }}>
-              Nothing matches.
-            </li>
+            <div className="px-4 py-8 text-center text-[13px]" style={{ color: "var(--ink-faint)" }}>
+              Nothing matches &ldquo;{query}&rdquo;.
+            </div>
           )}
-        </ul>
+        </div>
+        <div
+          className="flex items-center gap-4 px-4 h-9 text-[11.5px]"
+          style={{ borderTop: "var(--hair) solid var(--border)", color: "var(--ink-faint)" }}
+        >
+          <span className="flex items-center gap-1.5"><span className="kbd">↑</span><span className="kbd">↓</span> move</span>
+          <span className="flex items-center gap-1.5"><span className="kbd">↵</span> open</span>
+          <span className="ml-auto">Type 2+ letters to search memory</span>
+        </div>
       </div>
     </div>
   );

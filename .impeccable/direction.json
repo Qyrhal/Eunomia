@@ -1,0 +1,187 @@
+{
+  "title": "Choose the look for Eunomia",
+  "question": "Every option is San Francisco startup grade. The roll picked Multiplayer Canvas. Keep it, take Linear-grade Workspace, or re-roll.",
+  "options": [
+    {
+      "id": "assigned",
+      "label": "Multiplayer Canvas",
+      "kicker": "THE ROLL",
+      "lineage": "Figma, tldraw and Excalidraw: the shared canvas SF teams live in",
+      "thesis": "Your agents are teammates in the room: every memory carries a named, coloured cursor tag for the agent that wrote it.",
+      "palette": [
+        "#0c0d0f",
+        "#17181b",
+        "#ededef",
+        "#8a8f98",
+        "#4f7cff",
+        "#ff7a59",
+        "#2fbf8f",
+        "#c08cff"
+      ],
+      "materials": [
+        "dot-grid canvas",
+        "floating 1px panels",
+        "presence chips",
+        "selection handles"
+      ],
+      "viewport": "Dashboard opens on a dot-grid canvas header: live presence row of connected agents (Claude Code, Codex, Cursor) as coloured cursor chips, then a dense memory activity table where every row shows its author chip and age.",
+      "risk": "If the cursor chips get cute it reads as a toy; they must stay small, factual and tied to real provenance.",
+      "raised": [
+        {
+          "from": "Split-flap concourse board",
+          "raise": "Live rows update in place inside fixed tabular columns: values change, layout never moves."
+        },
+        {
+          "from": "Warm consumer app surface",
+          "raise": "The blue accent is reserved for things you can press or have selected; agent colours only mark authorship."
+        },
+        {
+          "from": "Centre-rail reference setting",
+          "raise": "Every hairline and border renders at exactly one device pixel; no soft 2px borders anywhere."
+        },
+        {
+          "from": "Vertical feed surface",
+          "raise": "Entity and connector detail is prefetched on hover so the next view is already loaded one click away."
+        }
+      ],
+      "comp": ".impeccable/mocks/decision/assigned.png"
+    },
+    {
+      "id": "model-pick",
+      "label": "Linear-grade Workspace",
+      "kicker": "IMPECCABLE\u2019S PICK",
+      "lineage": "Linear, Vercel, Raycast: keyboard-first SF dev tools",
+      "thesis": "A fast, keyboard-first workspace: near-monochrome, one violet accent, Cmd-K as the front door.",
+      "palette": [
+        "#08090a",
+        "#141516",
+        "#f7f8f8",
+        "#8a8f98",
+        "#5e6ad2"
+      ],
+      "materials": [
+        "glass-thin borders",
+        "inset panels",
+        "kbd hints",
+        "subtle gradient light"
+      ],
+      "viewport": "Slim sidebar, a big Cmd-K hint, stat strip, then a dense list of sources and recent memories with keyboard shortcuts on every row.",
+      "risk": "This is where most SF dev tools land: it looks right but could be mistaken for any Linear clone.",
+      "comp": ".impeccable/mocks/decision/model-pick.png"
+    },
+    {
+      "id": "challenger-split-flap",
+      "label": "Split-flap concourse board",
+      "verdict": "declined",
+      "lineage": "rail station departure boards",
+      "thesis": "Memory activity as a departure board with flipping characters.",
+      "palette": [
+        "#0d0d0d",
+        "#f2f2f2",
+        "#ffb000",
+        "#b3261e"
+      ],
+      "materials": [
+        "matte flaps",
+        "brushed steel"
+      ],
+      "viewport": "A board of live recalls and writes cascading per character.",
+      "case": "Fuses as a live activity board but reads as a transit gimmick to engineering teams.",
+      "kept": "Fixed columns that never move; only values change.",
+      "risk": "Novelty over trust.",
+      "hero": "https://impeccable.style/worlds/cards/signals-instruments-split-flap-concourse-hero.webp"
+    },
+    {
+      "id": "challenger-warm-consumer",
+      "label": "Warm consumer app surface",
+      "verdict": "declined",
+      "lineage": "friendly consumer apps",
+      "thesis": "Soft cards, warm ground, one action colour.",
+      "palette": [
+        "#f6efe6",
+        "#ffffff",
+        "#ff5a36"
+      ],
+      "materials": [
+        "soft radii",
+        "spring press"
+      ],
+      "viewport": "Single column of big friendly cards with a bottom bar.",
+      "case": "Too soft and sparse for teams scanning dense memory data.",
+      "kept": "One colour reserved strictly for actions.",
+      "risk": "Feels like a consumer app, not team infrastructure.",
+      "hero": "https://impeccable.style/worlds/cards/digital-design-canon-warm-consumer-app-surface-hero.webp"
+    },
+    {
+      "id": "challenger-centre-rail",
+      "label": "Centre-rail reference setting",
+      "verdict": "declined",
+      "lineage": "scholarly editions",
+      "thesis": "Two text columns around a rail of keys.",
+      "palette": [
+        "#16130f",
+        "#efe8da",
+        "#c23b22"
+      ],
+      "materials": [
+        "ruled hairlines",
+        "bone paper"
+      ],
+      "viewport": "Docs as a wide-margin edition.",
+      "case": "Beautiful for docs, wrong world for an operating console.",
+      "kept": "One-device-pixel ruling discipline.",
+      "risk": "Bookish, not SF.",
+      "hero": "https://impeccable.style/worlds/cards/rw-centre-rail-reference-setting-hero.webp"
+    },
+    {
+      "id": "challenger-feed",
+      "label": "Vertical feed surface",
+      "verdict": "declined",
+      "lineage": "full-screen short video feeds",
+      "thesis": "One memory per screen, snap to the next.",
+      "palette": [
+        "#000000",
+        "#ffffff"
+      ],
+      "materials": [
+        "full-bleed media",
+        "glyph rail"
+      ],
+      "viewport": "One entity fills the screen.",
+      "case": "Kills density; teams need to scan many rows.",
+      "kept": "The next item is already loaded one step away.",
+      "risk": "Wrong pace for work.",
+      "hero": "https://impeccable.style/worlds/cards/pop-culture-shelf-vertical-video-feed-surface-hero.webp"
+    }
+  ],
+  "reroll": {
+    "registers": [
+      "safer",
+      "bolder"
+    ]
+  },
+  "buildPath": {
+    "value": "code",
+    "toggle": true
+  },
+  "canon": true,
+  "canonCard": {
+    "label": "The category standard",
+    "thesis": "A clean shadcn-style SaaS dashboard, executed impeccably.",
+    "palette": [
+      "#09090b",
+      "#18181b",
+      "#fafafa",
+      "#a1a1aa",
+      "#ffffff"
+    ],
+    "materials": [
+      "zinc neutrals",
+      "card grid",
+      "shadcn components"
+    ],
+    "viewport": "Sidebar, KPI cards, a chart and a table.",
+    "risk": "Indistinguishable from every other SaaS dashboard by design."
+  },
+  "steer": true
+}

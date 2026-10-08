@@ -3,8 +3,11 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { BookOpen, Brain, FolderGit2, LayoutDashboard, LogOut, Menu, MessageSquare, Plug, Settings, Share2, Vault, X } from "lucide-react";
+import { BookOpen, Brain, FolderGit2, LayoutDashboard, LogOut, Menu, MessageSquare, Plug, Search, Settings, Share2, Vault, X } from "lucide-react";
 import EunomiaMark from "./EunomiaMark";
+import ThemeToggle from "./ThemeToggle";
+import { authorColor } from "./AuthorTag";
+import { openCommandPalette } from "./CommandPalette";
 import { auth, sources, update, type Me, type SourceRow } from "@/lib/api";
 
 const STATIC_NAV = [
@@ -23,6 +26,23 @@ function healthColor(failures: number): string {
   if (failures === 0) return "var(--good)";
   if (failures <= 2) return "var(--warning)";
   return "var(--critical)";
+}
+
+function isActive(pathname: string, href: string) {
+  return href === "/" ? pathname === "/" : pathname === href || pathname.startsWith(`${href}/`);
+}
+
+function NavLink({ href, active, children }: { href: string; active: boolean; children: React.ReactNode }) {
+  return (
+    <Link
+      href={href}
+      aria-current={active ? "page" : undefined}
+      className="nav-link flex items-center gap-2.5 h-8 px-2.5 text-[13px] rounded-[7px]"
+      data-active={active || undefined}
+    >
+      {children}
+    </Link>
+  );
 }
 
 export default function Sidebar() {
@@ -59,100 +79,95 @@ export default function Sidebar() {
     router.replace("/login");
   }
 
-  // Nav links / connected sources / account footer -- shared verbatim
-  // between the desktop sidebar and the mobile drawer, which differ only in
-  // their outer chrome (a plain nav vs. an overlay with its own close button).
+  const brand = (
+    <div className="flex items-center gap-2 min-w-0">
+      <EunomiaMark size={20} />
+      <span className="font-display text-[15px] truncate" style={{ color: "var(--ink)" }}>
+        Eunomia
+      </span>
+      <span className="font-mono text-[10.5px]" style={{ color: "var(--ink-faint)" }}>
+        {process.env.NEXT_PUBLIC_APP_VERSION ?? "dev"}
+      </span>
+    </div>
+  );
+
+  // Search / nav / connected sources / account footer -- shared verbatim
+  // between the desktop sidebar and the mobile drawer.
   const navBody = (
     <>
-      <div className="px-3 flex flex-col gap-0.5">
-        {STATIC_NAV.map(({ href, label, icon: Icon }) => {
-          const active = pathname === href;
-          return (
-            <Link
-              key={href}
-              href={href}
-              className="flex items-center gap-2.5 px-3 py-2 text-[13.5px] rounded-lg relative"
-              style={{
-                color: active ? "var(--ink)" : "var(--ink-dim)",
-                fontWeight: active ? 600 : 400,
-                background: active ? "var(--surface-raised)" : "transparent",
-              }}
-            >
-              <Icon size={15} strokeWidth={active ? 2.25 : 1.75} />
-              <span className="flex-1">{label}</span>
-            </Link>
-          );
-        })}
+      <div className="px-3">
+        <button
+          onClick={openCommandPalette}
+          className="field w-full h-8 px-2.5 flex items-center gap-2 text-[13px] text-left"
+          style={{ color: "var(--ink-faint)" }}
+        >
+          <Search size={14} />
+          <span className="flex-1">Search</span>
+          <span className="kbd">⌘K</span>
+        </button>
+      </div>
+
+      <div className="px-3 flex flex-col gap-px">
+        {STATIC_NAV.map(({ href, label, icon: Icon }) => (
+          <NavLink key={href} href={href} active={isActive(pathname, href)}>
+            <Icon size={15} strokeWidth={1.75} className="nav-icon shrink-0" />
+            <span className="flex-1">{label}</span>
+          </NavLink>
+        ))}
         {newVersion && (
           <Link
             href="/settings?tab=updates"
-            className="mt-1 flex items-center gap-2.5 px-3 py-2 text-[12.5px] rounded-lg"
-            style={{ color: "var(--felt)", border: "1px solid var(--border)" }}
+            className="mt-2 flex items-center gap-2 h-8 px-2.5 text-[12.5px] rounded-[7px]"
+            style={{ color: "var(--accent-text)", background: "var(--accent-soft)" }}
           >
-            <span className="w-1.5 h-1.5 rounded-full" style={{ background: "var(--felt)" }} aria-hidden />
+            <span className="dot" style={{ background: "var(--accent)" }} aria-hidden />
             Update available · {newVersion}
           </Link>
         )}
       </div>
 
-      <div className="flex-1 min-h-0 flex flex-col gap-1.5 px-3">
-        <div className="eyebrow px-3">Connected</div>
-        <div className="flex flex-col gap-0.5 overflow-y-auto">
+      <div className="flex-1 min-h-0 flex flex-col gap-1 px-3">
+        <div className="label px-2.5 pb-1">Connected</div>
+        <div className="flex flex-col gap-px overflow-y-auto">
           {rows === null && (
-            <div className="px-3 py-1.5 text-[12px]" style={{ color: "var(--ink-faint)" }}>
-              Loading…
+            <div className="px-2.5 py-1.5 flex flex-col gap-2" aria-label="Loading sources">
+              <div className="skeleton h-3 w-24" />
+              <div className="skeleton h-3 w-16" />
             </div>
           )}
           {rows !== null && connected.length === 0 && (
-            <div className="px-3 py-1.5 text-[12px]" style={{ color: "var(--ink-faint)" }}>
-              Nothing connected yet.
-            </div>
+            <Link href="/connectors" className="px-2.5 py-1.5 text-[12.5px]" style={{ color: "var(--ink-faint)" }}>
+              Nothing connected yet. <span style={{ color: "var(--accent-text)" }}>Add a source</span>
+            </Link>
           )}
           {connected.map((s) => {
             const href = `/connectors/${s.key}`;
-            const active = pathname === href;
             return (
-              <Link
-                key={s.key}
-                href={href}
-                className="flex items-center gap-2.5 px-3 py-2 text-[13.5px] rounded-lg"
-                style={{
-                  color: active ? "var(--ink)" : "var(--ink-dim)",
-                  fontWeight: active ? 600 : 400,
-                  background: active ? "var(--surface-raised)" : "transparent",
-                }}
-              >
-                <Plug size={13} />
+              <NavLink key={s.key} href={href} active={pathname === href}>
+                <span className="dot" style={{ background: healthColor(s.sync_status.consecutive_failures) }} aria-hidden />
                 <span className="flex-1 truncate">{s.label}</span>
-                <span
-                  className="w-1.5 h-1.5 rounded-full shrink-0"
-                  style={{ background: healthColor(s.sync_status.consecutive_failures) }}
-                  aria-hidden
-                />
-              </Link>
+                <span className="font-mono text-[11px]" style={{ color: "var(--ink-faint)" }}>
+                  {s.record_count.toLocaleString()}
+                </span>
+              </NavLink>
             );
           })}
         </div>
       </div>
 
-      <div className="px-5 pt-4 flex items-center gap-2.5" style={{ borderTop: "1px solid var(--border)" }}>
+      <div className="mx-3 pt-3 flex items-center gap-2" style={{ borderTop: "var(--hair) solid var(--border)" }}>
         <div
-          className="w-7 h-7 rounded-full flex items-center justify-center text-[12px] font-medium shrink-0"
-          style={{ background: "var(--surface-raised)", color: "var(--ink-dim)" }}
+          className="w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-semibold shrink-0"
+          style={{ background: me?.email ? authorColor(me.email) : "var(--surface-raised)", color: "var(--on-author)" }}
           aria-hidden
         >
-          {me?.email ? me.email[0].toUpperCase() : "?"}
+          {me?.email ? me.email[0].toUpperCase() : ""}
         </div>
         <span className="flex-1 min-w-0 text-[12px] truncate" style={{ color: "var(--ink-dim)" }}>
           {me?.email ?? ""}
         </span>
-        <button
-          onClick={logout}
-          aria-label="Log out"
-          title="Log out"
-          className="p-1.5 rounded-lg shrink-0"
-          style={{ color: "var(--ink-faint)" }}
-        >
+        <ThemeToggle />
+        <button onClick={logout} aria-label="Log out" title="Log out" className="btn btn-ghost btn-icon btn-sm" style={{ width: 26 }}>
           <LogOut size={14} />
         </button>
       </div>
@@ -161,68 +176,46 @@ export default function Sidebar() {
 
   return (
     <>
-      {/* Mobile top bar -- replaces the fixed-width nav below `md`, where a
-          permanent 224px sidebar would eat most of the viewport. */}
+      {/* Mobile top bar -- replaces the sidebar below `md`. */}
       <div
-        className="md:hidden flex items-center gap-3 px-4 py-3 shrink-0"
-        style={{ background: "var(--surface)", borderBottom: "1px solid var(--border)" }}
+        className="md:hidden sticky top-0 z-40 flex items-center gap-2 px-3 h-12 shrink-0"
+        style={{ background: "var(--surface)", borderBottom: "var(--hair) solid var(--border)" }}
       >
-        <button
-          onClick={() => setDrawerOpen(true)}
-          aria-label="Open menu"
-          className="p-1.5 -ml-1.5 rounded-lg"
-          style={{ color: "var(--ink)" }}
-        >
-          <Menu size={19} />
+        <button onClick={() => setDrawerOpen(true)} aria-label="Open menu" className="btn btn-ghost btn-icon">
+          <Menu size={18} />
         </button>
-        <EunomiaMark size={18} />
-        <span className="font-display text-[15px]" style={{ color: "var(--ink)" }}>
-          Eunomia
-        </span>
+        {brand}
+        <button onClick={openCommandPalette} aria-label="Search" className="btn btn-ghost btn-icon ml-auto">
+          <Search size={16} />
+        </button>
       </div>
 
-      {/* Desktop sidebar -- unchanged fixed-width nav at `md` and up. */}
+      {/* Desktop sidebar */}
       <nav
-        className="hidden md:flex w-56 shrink-0 flex-col gap-6 py-6"
-        style={{ background: "var(--surface)", borderRight: "1px solid var(--border)" }}
+        aria-label="Main"
+        className="hidden md:flex w-[232px] shrink-0 flex-col gap-5 py-4 sticky top-0 h-screen"
+        style={{ background: "var(--surface)", borderRight: "var(--hair) solid var(--border)" }}
       >
-        <div className="px-5 flex items-center gap-2.5">
-          <EunomiaMark size={20} />
-          <span className="font-display text-[17px]" style={{ color: "var(--ink)" }}>
-            Eunomia
-          </span>
-          <span className="text-[11px]" style={{ color: "var(--ink-faint)" }}>
-            {process.env.NEXT_PUBLIC_APP_VERSION ?? "dev"}
-          </span>
-        </div>
+        <div className="px-5 h-7 flex items-center">{brand}</div>
         {navBody}
       </nav>
 
-      {/* Mobile drawer -- an overlay, not part of the page flow, so it never
-          needs the content below to reserve space for it. */}
+      {/* Mobile drawer -- an overlay, not part of the page flow. */}
       {drawerOpen && (
-        <div
-          className="md:hidden fixed inset-0 z-50 flex"
-          style={{ background: "rgba(0,0,0,0.45)" }}
-          onClick={() => setDrawerOpen(false)}
-        >
+        <div className="md:hidden fixed inset-0 z-50 flex fade-in" style={{ background: "var(--scrim)" }} onClick={() => setDrawerOpen(false)}>
           <nav
-            className="w-64 h-full flex flex-col gap-6 py-6"
-            style={{ background: "var(--surface)", borderRight: "1px solid var(--border)" }}
+            aria-label="Main"
+            className="w-[264px] h-full flex flex-col gap-5 py-4 drawer-in"
+            style={{ background: "var(--surface)", borderRight: "var(--hair) solid var(--border)" }}
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="px-5 flex items-center justify-between">
-              <div className="flex items-center gap-2.5">
-                <EunomiaMark size={20} />
-                <span className="font-display text-[17px]" style={{ color: "var(--ink)" }}>
-                  Eunomia
-                </span>
-              </div>
-              <button onClick={() => setDrawerOpen(false)} aria-label="Close menu" style={{ color: "var(--ink-faint)" }}>
-                <X size={17} />
+            <div className="pl-5 pr-3 flex items-center justify-between">
+              {brand}
+              <button onClick={() => setDrawerOpen(false)} aria-label="Close menu" className="btn btn-ghost btn-icon">
+                <X size={16} />
               </button>
             </div>
-            <div className="flex-1 min-h-0 flex flex-col gap-6">{navBody}</div>
+            <div className="flex-1 min-h-0 flex flex-col gap-5">{navBody}</div>
           </nav>
         </div>
       )}

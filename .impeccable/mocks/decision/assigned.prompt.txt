@@ -1,0 +1,12 @@
+Generate one landscape image (16:10, about 1600x1000) and save it as PNG to .impeccable/mocks/decision/assigned.png (path relative to the current directory). Do not edit any other files.
+
+Image: a high-fidelity desktop web app screenshot, dark mode, for "Eunomia", a shared long-term memory layer for a team's AI agents. San Francisco startup craft level (Figma / Linear quality). Visual world: "Multiplayer Canvas", the language of Figma and tldraw.
+Layout, left to right:
+- Slim left sidebar (#17181b) with a small new logo mark and the word "Eunomia", nav items: Dashboard (selected), Chat, Entities, Code, Vaults, Memory skill, Connectors, Docs, Settings. Small 13px UI type, crisp 1px borders.
+- Main area on a near-black #0c0d0f canvas with a faint dot grid.
+- Top: page title "Dashboard" and a search field showing a "⌘K" keyboard hint.
+- A presence row: "Agents online" with four small coloured cursor-arrow chips labelled "Claude Code" (coral #ff7a59), "Codex" (green #2fbf8f), "Cursor" (violet #c08cff), "Avi" (blue #4f7cff), like Figma multiplayer cursors.
+- A strip of four stat tiles with tabular numbers: "Memories 12,480", "Entities 1,932", "Sources healthy 3/4", "Last sync 4m ago".
+- A dense table titled "Live memory": columns Author, Memory, Entity, Vault, Age. Each row has a small coloured author tag chip (Claude Code, Codex, Cursor), short realistic facts like "Prefers Bun over npm for frontend work", "Payments service owns the Stripe webhook", entity names like "Qyrhal/Eunomia", "Platform team", vault "Team", ages like "2m".
+- Right panel: a small floating 1px-bordered inspector showing a selected entity "Platform team" with blue selection handles at its corners.
+Typography: one sharp neutral grotesk, tight tracking, mono for numbers. Accent blue #4f7cff only on selected/pressable items. Hairline 1px borders, small 8px radii, no glow, no gradients, no neon. Calm, precise, expensive.
