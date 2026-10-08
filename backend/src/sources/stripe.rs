@@ -1,21 +1,20 @@
-//! Stripe source: recent charges, via `GET /v1/charges`. Real API shape;
-//! not exercised against a live account in this environment -- see
-//! `connectors::clients::StripeClient`.
+//! Stripe source: charges, via `GET /v1/charges` (`has_more` +
+//! `starting_after` pagination). A restricted key with Charges: Read is
+//! enough; bearer auth.
+//!
+//! Incremental: `created[gt]=` the newest charge's `created` seen last sync.
 
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
 use serde_json::{json, Value};
 
-use crate::connectors::clients::StripeClient;
+use crate::connectors::clients::{bearer, require, Api};
 use crate::error::AppResult;
-use crate::sources::base::{Source, SourceCtx, SyncResult};
-use crate::sources::registry::credentials_for;
+use crate::sources::base::{envelope, from_unix, items, s, Conn, Source, SyncResult, MAX_PAGES};
 
-/// Stripe timestamps are Unix seconds, not ISO strings like every other
-/// source here -- convert once at the mapping boundary.
-fn unix_to_rfc3339(secs: Option<i64>) -> Option<String> {
-    let secs = secs?;
-    DateTime::from_timestamp(secs, 0).map(|dt| dt.to_rfc3339())
+const BASE_URL: &str = "https://api.stripe.com/v1";
+
+fn api(conn: &Conn) -> AppResult<Api> {
+    Ok(Api::new(&conn.config, BASE_URL, bearer(&require(&conn.credentials, "secret_key")?)))
 }
 
 pub struct StripeSource;
@@ -34,60 +33,99 @@ impl Source for StripeSource {
         &["stripe.charge"]
     }
 
-    fn auth_kind(&self) -> &'static str {
-        "api_key"
+    async fn check(&self, conn: &Conn) -> AppResult<()> {
+        api(conn)?.get("/charges", &[("limit", "1".to_string())]).await.map(|_| ())
     }
 
-    async fn sync(&self, ctx: &SourceCtx<'_>, _mode: &str, _cursor: Option<String>) -> AppResult<SyncResult> {
-        let creds = credentials_for(ctx.db, ctx.encryption_key, ctx.owner, self).await?;
-        let client = StripeClient::new(&creds);
-        let resp = client.charges().await?;
-        let records = resp.get("data").and_then(|v| v.as_array()).cloned().unwrap_or_default();
-        Ok(SyncResult { records, cursor: Some(Utc::now().to_rfc3339()) })
+    async fn fetch(&self, conn: &Conn, cursor: Option<String>) -> AppResult<SyncResult> {
+        let api = api(conn)?;
+        let mut records: Vec<Value> = Vec::new();
+        for _ in 0..MAX_PAGES {
+            let mut query = vec![("limit", "100".to_string())];
+            if let Some(c) = &cursor {
+                query.push(("created[gt]", c.clone()));
+            }
+            if let Some(last) = records.last() {
+                query.push(("starting_after", s(last, "/id").to_string()));
+            }
+            let page = api.get("/charges", &query).await?;
+            records.extend(items(&page, "/data"));
+            if page.get("has_more").and_then(|v| v.as_bool()) != Some(true) {
+                break;
+            }
+        }
+        let newest = records.iter().filter_map(|r| r.get("created").and_then(|v| v.as_i64())).max().map(|c| c.to_string());
+        Ok(SyncResult { records, cursor: newest.or(cursor) })
     }
 
     fn map(&self, raw: &Value) -> Option<Value> {
         let id = raw.get("id").and_then(|v| v.as_str())?;
-        let amount_cents = raw.get("amount").and_then(|v| v.as_i64()).unwrap_or(0);
-        let currency = raw.get("currency").and_then(|v| v.as_str()).unwrap_or("usd");
-        let description = raw.get("description").and_then(|v| v.as_str()).unwrap_or("");
-        Some(json!({
-            "id": format!("stripe:stripe.charge:{id}"),
-            "source": "stripe",
-            "type": "stripe.charge",
-            "external_id": id,
-            "title": if description.is_empty() { format!("Charge {id}") } else { description.to_string() },
-            "body_text": format!("{:.2} {}", amount_cents as f64 / 100.0, currency.to_uppercase()),
-            "occurred_at": unix_to_rfc3339(raw.get("created").and_then(|v| v.as_i64())),
-            "url": raw.get("receipt_url").cloned().unwrap_or(Value::String(String::new())),
-            "payload": {
-                "amount_cents": amount_cents,
+        let amount = raw.get("amount").and_then(|v| v.as_i64()).unwrap_or(0) as f64 / 100.0;
+        let currency = s(raw, "/currency").to_uppercase();
+        let description = s(raw, "/description");
+        let customer = s(raw, "/billing_details/email");
+        let title = format!("{amount:.2} {currency} — {}", if description.is_empty() { s(raw, "/status") } else { description });
+        let body = format!("Charge of {amount:.2} {currency} ({}) {description} {customer}", s(raw, "/status"));
+        let url_id = raw.get("payment_intent").and_then(|v| v.as_str()).unwrap_or(id);
+        Some(envelope(
+            "stripe",
+            "stripe.charge",
+            id,
+            &title,
+            body.trim(),
+            from_unix(raw.get("created").and_then(|v| v.as_i64()).unwrap_or(0)),
+            &format!("https://dashboard.stripe.com/payments/{url_id}"),
+            json!({
+                "amount": amount,
                 "currency": currency,
                 "status": raw.get("status"),
                 "paid": raw.get("paid"),
-            },
-            "links": [],
-            "deleted": false,
-        }))
+                "refunded": raw.get("refunded"),
+                "customer": raw.get("customer"),
+                "customer_email": customer,
+                "livemode": raw.get("livemode"),
+            }),
+        ))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sources::mock::{assert_fetch_fails, envelopes, route, serve};
 
-    #[test]
-    fn unix_to_rfc3339_converts_seconds() {
-        assert_eq!(unix_to_rfc3339(Some(0)).unwrap(), "1970-01-01T00:00:00+00:00");
-        assert!(unix_to_rfc3339(None).is_none());
+    fn charge(id: &str, created: i64) -> Value {
+        json!({"id": id, "object": "charge", "amount": 2500, "currency": "aud", "created": created, "status": "succeeded",
+               "paid": true, "refunded": false, "description": "Pro plan", "customer": "cus_1", "livemode": false,
+               "payment_intent": format!("pi_{id}"), "billing_details": {"email": "buyer@example.com"}})
     }
 
-    #[test]
-    fn map_falls_back_to_charge_id_when_no_description() {
-        let src = StripeSource;
-        let raw = json!({"id": "ch_1", "amount": 2599, "currency": "usd", "created": 1700000000, "status": "succeeded"});
-        let env = src.map(&raw).unwrap();
-        assert_eq!(env["title"], "Charge ch_1");
-        assert_eq!(env["body_text"], "25.99 USD");
+    #[tokio::test]
+    async fn fetch_pages_with_starting_after_since_the_cursor() {
+        let mock = serve(vec![
+            route("GET", "/charges", json!({"object": "list", "data": [charge("ch_2", 1700000200)], "has_more": false, "url": "/v1/charges"}))
+                .query("starting_after=ch_1"),
+            route("GET", "/charges", json!({"object": "list", "data": [charge("ch_1", 1700000100)], "has_more": true, "url": "/v1/charges"}))
+                .query("created[gt]=1700000000"),
+        ])
+        .await;
+
+        let res = StripeSource.fetch(&mock.conn(json!({"secret_key": "rk_test_x"})), Some("1700000000".into())).await.unwrap();
+        assert_eq!(res.records.len(), 2);
+        assert_eq!(res.cursor.as_deref(), Some("1700000200"));
+        assert!(mock.requests().iter().all(|r| r.header("authorization") == "Bearer rk_test_x"));
+
+        let envs = envelopes(&StripeSource, &res.records);
+        assert_eq!(envs[0].title, "25.00 AUD — Pro plan");
+        assert_eq!(envs[0].url, "https://dashboard.stripe.com/payments/pi_ch_1");
+        assert!(envs[0].occurred_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn fetch_errors_are_visible() {
+        let creds = json!({"secret_key": "bad"});
+        assert_fetch_fails(&StripeSource, 401, "/charges", creds.clone(), "HTTP 401").await;
+        assert_fetch_fails(&StripeSource, 429, "/charges", creds.clone(), "HTTP 429").await;
+        assert_fetch_fails(&StripeSource, 500, "/charges", creds, "HTTP 500").await;
     }
 }

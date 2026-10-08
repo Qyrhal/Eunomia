@@ -182,6 +182,7 @@ export default function ConnectorWorkspacePage({ params }: { params: Promise<{ k
     try {
       await sources.sync(kind);
       await loadRow();
+      loadRecords();
     } finally {
       setSyncing(false);
     }

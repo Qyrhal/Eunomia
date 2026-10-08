@@ -1,33 +1,22 @@
-//! heypocket source -- meeting recordings from heypocketai.com. Ported from
-//! `sources/heypocket/source.py`. Wraps
-//! `crate::connectors::clients::PocketAIClient`. Poll + on-demand only (the
-//! public API has no webhooks), so `Source::webhook` keeps the trait default
-//! (`Ok(None)`).
+//! heypocket source -- meeting recordings from heypocketai.com (connector
+//! kind `pocketai`, API key, bearer auth). Poll + on-demand only (the public
+//! API has no webhooks).
+//!
+//! Sync: `GET /public/recordings?start_date=` for recordings since the last
+//! one seen, then `GET /public/recordings/{id}` for each one's transcript,
+//! summary and notes -- the list endpoint carries only metadata.
 //!
 //! The tool helpers (`summary`, `list_recordings`, `search_recordings`) read
-//! from the cache (populated by the periodic sync) in Python, via
-//! `cache.search`. That module isn't ported yet, so these read `cache_record`
-//! directly here; `search_recordings` here is a plain case-insensitive
-//! substring match rather than `cache.search`'s hybrid BM25+embedding search,
-//! since the embedding half (`embeddings.service`) isn't ported either.
+//! `cache_record` directly.
 
 use async_trait::async_trait;
-use chrono::{DateTime, Duration, Utc};
+use chrono::{Duration, Utc};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::connectors::clients::PocketAIClient;
 use crate::error::AppResult;
-use crate::sources::base::{datetime_to_chrono, Source, SourceCtx, SyncResult};
-use crate::sources::registry::{connector_for, credentials_for};
-
-fn parse_dt(value: Option<&str>) -> Option<String> {
-    // cache_record.occurred_at is a SurrealDB `option<datetime>` field; the
-    // driver only coerces real datetime values, not arbitrary strings, so
-    // every mapper normalizes to RFC3339 before building the envelope.
-    let raw = value?;
-    DateTime::parse_from_rfc3339(raw).ok().map(|dt| dt.with_timezone(&Utc).to_rfc3339())
-}
+use crate::sources::base::{datetime_to_chrono, envelope, items, rfc3339, s, Conn, Source, SourceCtx, SyncResult};
 
 pub struct HeyPocketSource;
 
@@ -49,31 +38,29 @@ impl Source for HeyPocketSource {
         &["heypocket.recording"]
     }
 
-    fn auth_kind(&self) -> &'static str {
-        "api_key"
+    async fn check(&self, conn: &Conn) -> AppResult<()> {
+        PocketAIClient::new(&conn.credentials, &conn.config)?.ping().await
     }
 
-    async fn sync(&self, ctx: &SourceCtx<'_>, _mode: &str, cursor: Option<String>) -> AppResult<SyncResult> {
-        let start = cursor.clone().unwrap_or_else(|| (Utc::now() - Duration::days(30)).date_naive().to_string());
-        let client = client_for(ctx, self).await?;
+    async fn fetch(&self, conn: &Conn, cursor: Option<String>) -> AppResult<SyncResult> {
+        let client = PocketAIClient::new(&conn.credentials, &conn.config)?;
+        // `start_date` is a calendar date; the cursor is the newest
+        // recording's timestamp, so re-read that whole day (dedupe is free).
+        let start = cursor
+            .as_deref()
+            .map(|c| c.chars().take(10).collect::<String>())
+            .unwrap_or_else(|| (Utc::now() - Duration::days(30)).date_naive().to_string());
 
         let page = client.recordings(&[("start_date", start.clone()), ("limit", "200".to_string())]).await?;
-        let mut data: Vec<Value> = page.get("data").and_then(|d| d.as_array()).cloned().unwrap_or_default();
+        let mut data = items(&page, "/data");
 
         // The list endpoint has no transcript/summary -- fetch each
-        // recording's detail so body_text carries real content instead of
-        // silently falling back to just the title.
+        // recording's detail so body_text carries real content.
         for r in data.iter_mut() {
             let rid = r.get("id").or_else(|| r.get("recording_id")).and_then(|v| v.as_str()).map(String::from);
             let Some(rid) = rid else { continue };
-            let Ok(detail_resp) = client.recording(&rid).await else { continue };
-            let detail = detail_resp.get("data").cloned().unwrap_or(json!({}));
-            let segments = detail
-                .pointer("/transcript/segments")
-                .and_then(|s| s.as_array())
-                .cloned()
-                .unwrap_or_default();
-            let transcript_text = segments
+            let detail = client.recording(&rid).await?.get("data").cloned().unwrap_or(json!({}));
+            let transcript_text = items(&detail, "/transcript/segments")
                 .iter()
                 .filter_map(|s| s.get("text").and_then(|t| t.as_str()))
                 .filter(|t| !t.is_empty())
@@ -91,54 +78,42 @@ impl Source for HeyPocketSource {
             .filter_map(|r| r.get("recording_at").or_else(|| r.get("created_at")).and_then(|v| v.as_str()))
             .max()
             .map(String::from)
-            .unwrap_or_else(|| cursor.unwrap_or(start));
+            .or(cursor)
+            .unwrap_or(start);
 
         Ok(SyncResult { records: data, cursor: Some(newest) })
     }
 
     fn map(&self, raw: &Value) -> Option<Value> {
         let rid = raw.get("id").or_else(|| raw.get("recording_id")).and_then(|v| v.as_str())?.to_string();
-        let tags: Vec<String> = raw
-            .get("tags")
-            .and_then(|t| t.as_array())
-            .map(|arr| arr.iter().filter_map(|t| t.get("name").and_then(|n| n.as_str()).map(String::from)).collect())
-            .unwrap_or_default();
+        let tags: Vec<String> = items(raw, "/tags")
+            .iter()
+            .filter_map(|t| t.get("name").and_then(|n| n.as_str()).map(String::from))
+            .collect();
 
         let parts: Vec<&str> = [raw.get("summary"), raw.get("transcript_text"), raw.get("notes")]
             .into_iter()
             .filter_map(|v| v.and_then(|v| v.as_str()))
             .filter(|s| !s.is_empty())
             .collect();
-        let body = if parts.is_empty() {
-            raw.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string()
-        } else {
-            parts.join(" ")
-        };
+        let title = s(raw, "/title");
+        let body = if parts.is_empty() { title.to_string() } else { parts.join(" ") };
+        let at = raw.get("recording_at").or_else(|| raw.get("created_at")).and_then(|v| v.as_str()).unwrap_or("");
+        let url = raw.get("url").or_else(|| raw.get("share_url")).and_then(|v| v.as_str()).unwrap_or("");
 
-        Some(json!({
-            "id": format!("heypocket:heypocket.recording:{rid}"),
-            "source": "heypocket",
-            "type": "heypocket.recording",
-            "external_id": rid,
-            "title": raw.get("title").and_then(|v| v.as_str()).unwrap_or(""),
-            "body_text": body,
-            "occurred_at": parse_dt(raw.get("recording_at").and_then(|v| v.as_str()).or_else(|| raw.get("created_at").and_then(|v| v.as_str()))),
-            "url": raw.get("url").or_else(|| raw.get("share_url")).and_then(|v| v.as_str()).unwrap_or(""),
-            "payload": {
-                "duration_seconds": raw.get("duration").cloned().unwrap_or(json!(0)),
-                "tags": tags,
-            },
-            "links": [],
-            "deleted": raw.get("deleted").and_then(|v| v.as_bool()).unwrap_or(false),
-        }))
+        let mut env = envelope(
+            "heypocket",
+            "heypocket.recording",
+            &rid,
+            title,
+            &body,
+            rfc3339(at),
+            url,
+            json!({"duration_seconds": raw.get("duration").cloned().unwrap_or(json!(0)), "tags": tags}),
+        );
+        env["deleted"] = json!(raw.get("deleted").and_then(|v| v.as_bool()).unwrap_or(false));
+        Some(env)
     }
-}
-
-async fn client_for(ctx: &SourceCtx<'_>, src: &HeyPocketSource) -> AppResult<PocketAIClient> {
-    let conn = connector_for(ctx.db, ctx.owner, src).await?;
-    let base = conn.as_ref().and_then(|c| c.config.get("base_url")).and_then(|v| v.as_str()).map(String::from);
-    let creds = credentials_for(ctx.db, ctx.encryption_key, ctx.owner, src).await?;
-    Ok(PocketAIClient::new(&creds, base.as_deref()))
 }
 
 #[derive(Debug, Deserialize)]
@@ -293,10 +268,42 @@ mod tests {
         assert_eq!(summary["tag_breakdown"], json!([]));
     }
 
-    #[test]
-    fn parse_dt_normalizes_to_rfc3339() {
-        assert!(parse_dt(Some("2024-01-02T03:04:05Z")).is_some());
-        assert_eq!(parse_dt(None), None);
-        assert_eq!(parse_dt(Some("not-a-date")), None);
+    use crate::sources::mock::{assert_fetch_fails, envelopes, route, serve};
+
+    #[tokio::test]
+    async fn fetch_lists_since_the_cursor_day_and_pulls_each_transcript() {
+        let mock = serve(vec![
+            route("GET", "/public/recordings", json!({"data": [
+                {"id": "rec_1", "title": "Weekly standup", "duration": 900, "recording_at": "2024-05-02T09:00:00Z",
+                 "tags": [{"id": "t1", "name": "work"}]},
+            ]}))
+            .query("start_date=2024-05-01"),
+            route("GET", "/public/recordings/rec_1", json!({"data": {
+                "id": "rec_1", "summary": "Agreed to ship the importer on Friday.",
+                "transcript": {"segments": [{"speaker": "A", "text": "Morning all."}, {"speaker": "B", "text": "Importer is ready."}]},
+            }})),
+        ])
+        .await;
+
+        let res = HeyPocketSource
+            .fetch(&mock.conn(json!({"api_key": "pk_test"})), Some("2024-05-01T08:00:00Z".into()))
+            .await
+            .unwrap();
+        assert_eq!(res.cursor.as_deref(), Some("2024-05-02T09:00:00Z"));
+        assert!(mock.requests().iter().all(|r| r.header("authorization") == "Bearer pk_test"));
+
+        let envs = envelopes(&HeyPocketSource, &res.records);
+        assert_eq!(envs.len(), 1);
+        assert_eq!(envs[0].title, "Weekly standup");
+        assert_eq!(envs[0].body_text, "Agreed to ship the importer on Friday. Morning all. Importer is ready.");
+        assert_eq!(envs[0].payload["tags"], json!(["work"]));
+    }
+
+    #[tokio::test]
+    async fn fetch_errors_are_visible() {
+        let creds = json!({"api_key": "bad"});
+        assert_fetch_fails(&HeyPocketSource, 401, "/public/recordings", creds.clone(), "HTTP 401").await;
+        assert_fetch_fails(&HeyPocketSource, 429, "/public/recordings", creds.clone(), "HTTP 429").await;
+        assert_fetch_fails(&HeyPocketSource, 503, "/public/recordings", creds, "HTTP 503").await;
     }
 }

@@ -3,8 +3,17 @@
 import { use, useEffect, useState } from "react";
 import Link from "next/link";
 import { ArrowLeft, ArrowRight } from "lucide-react";
-import { apiOrigin, auth as authApi, connectors as connectorsApi, settings as settingsApi, type AppSettings, type Connector, type ConnectorKind } from "@/lib/api";
-import { CONNECTOR_META, connectorStatus } from "@/lib/connectorMeta";
+import {
+  apiOrigin,
+  auth as authApi,
+  connectors as connectorsApi,
+  settings as settingsApi,
+  sources as sourcesApi,
+  type AppSettings,
+  type Connector,
+  type ConnectorKind,
+} from "@/lib/api";
+import { CONNECTOR_META, CONNECTOR_ORDER, connectorStatus } from "@/lib/connectorMeta";
 
 // Presets for the sync-interval select, in seconds.
 const SYNC_INTERVAL_PRESETS = [
@@ -17,17 +26,13 @@ const SYNC_INTERVAL_PRESETS = [
 ];
 
 // Fallback interval a source runs at when the user hasn't set an override,
-// per backend/sources/scheduler.py (heypocket defaults to 24h there; every
-// other source falls back to the scheduler's generic 900s/15min default).
-const SOURCE_DEFAULT_INTERVAL: Record<string, number> = {
-  up_bank: 900,
-  heypocket: 86400,
-};
-
-const KNOWN_KINDS: ConnectorKind[] = ["up_bank", "pocketai", "open_connector"];
+// per backend/src/sources/scheduler.rs (heypocket 24h, everything else 15min).
+function defaultInterval(sourceKey: string): number {
+  return sourceKey === "heypocket" ? 86400 : 900;
+}
 
 function isConnectorKind(kind: string): kind is ConnectorKind {
-  return (KNOWN_KINDS as string[]).includes(kind);
+  return (CONNECTOR_ORDER as string[]).includes(kind);
 }
 
 export default function ConnectorSetupPage({ params }: { params: Promise<{ kind: string }> }) {
@@ -58,6 +63,8 @@ function ConnectorSetup({ kind }: { kind: ConnectorKind }) {
   const [connector, setConnector] = useState<Connector | undefined>(undefined);
   const [values, setValues] = useState<Record<string, string>>({});
   const [testResult, setTestResult] = useState<string | null>(null);
+  const [syncResult, setSyncResult] = useState<string | null>(null);
+  const [syncing, setSyncing] = useState(false);
   const [savedFlash, setSavedFlash] = useState(false);
   const [appSettings, setAppSettings] = useState<AppSettings | undefined>(undefined);
   const [intervalSavedFlash, setIntervalSavedFlash] = useState(false);
@@ -102,6 +109,19 @@ function ConnectorSetup({ kind }: { kind: ConnectorKind }) {
   async function test() {
     const res = await connectorsApi.test(kind);
     setTestResult(res.ok ? "connected" : res.error || "failed");
+  }
+
+  async function syncNow() {
+    setSyncing(true);
+    setSyncResult(null);
+    try {
+      const r = await sourcesApi.sync(meta.sourceKey);
+      setSyncResult(r.error ? `Sync failed: ${String(r.error)}` : `Synced: ${r.written} new or changed, ${r.skipped} unchanged`);
+    } catch (e) {
+      setSyncResult(`Sync failed: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setSyncing(false);
+    }
   }
 
   async function saveInterval(seconds: number) {
@@ -178,9 +198,9 @@ function ConnectorSetup({ kind }: { kind: ConnectorKind }) {
           )}
 
           {meta.help && (
-            <p className="text-[12px]" style={{ color: "var(--ink-faint)" }}>
+            <div className="text-[12px] break-words" style={{ color: "var(--ink-faint)" }}>
               {meta.help}
-            </p>
+            </div>
           )}
 
           <div className="grid sm:grid-cols-2 gap-3">
@@ -216,20 +236,20 @@ function ConnectorSetup({ kind }: { kind: ConnectorKind }) {
             (() => {
               const sourceKey = meta.sourceKey as string;
               const override = appSettings?.sync_intervals?.[sourceKey];
-              const defaultInterval = SOURCE_DEFAULT_INTERVAL[sourceKey];
+              const fallback = defaultInterval(sourceKey);
               return (
                 <label className="text-[12px] flex flex-col gap-1.5 pt-1" style={{ color: "var(--ink-dim)", borderTop: "1px solid var(--border)" }}>
                   <span className="pt-4">Sync interval</span>
                   <div className="flex items-center gap-3">
                     <select
                       className="field px-3 py-2 text-[13px]"
-                      value={override ?? defaultInterval}
+                      value={override ?? fallback}
                       onChange={(e) => saveInterval(Number(e.target.value))}
                     >
                       {SYNC_INTERVAL_PRESETS.map((p) => (
                         <option key={p.value} value={p.value}>
                           {p.label}
-                          {override === undefined && p.value === defaultInterval ? " (default)" : ""}
+                          {override === undefined && p.value === fallback ? " (default)" : ""}
                         </option>
                       ))}
                     </select>
@@ -258,6 +278,23 @@ function ConnectorSetup({ kind }: { kind: ConnectorKind }) {
               )}
             </div>
           </div>
+
+          {connected && (
+            <div className="flex items-center gap-3 flex-wrap">
+              <button onClick={syncNow} disabled={syncing} className="field px-3 py-1.5 text-[12px] disabled:opacity-40" style={{ color: "var(--ink)" }}>
+                {syncing ? "Syncing…" : "Sync now"}
+              </button>
+              {syncResult && (
+                <span
+                  role="status"
+                  className="text-[12px] font-mono break-all"
+                  style={{ color: syncResult.startsWith("Sync failed") ? "var(--critical)" : "var(--good)" }}
+                >
+                  {syncResult}
+                </span>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </div>

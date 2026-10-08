@@ -138,7 +138,7 @@ async fn sync_now(State(state): State<AppState>, user: User, Path(key): Path<Str
     if registry::get(&key).is_none() {
         return Err(AppError::not_found(format!("no source {key:?}")));
     }
-    let report = sync_source(&state.db, &state.settings.encryption_key, &user.id, &key, "poll").await;
+    let report = sync_source(&state.db, &state.settings, &user.id, &key).await;
     Ok(Json(report))
 }
 
@@ -158,8 +158,8 @@ async fn source_webhook(
         .await
         .map_err(|e| AppError::bad_request(e.to_string()))?;
 
-    let ctx = registry::ctx(&state.db, &state.settings.encryption_key, &owner);
-    let raw_records = src.webhook(&ctx, &parts.headers, &body_bytes).await?;
+    let conn = registry::conn_for(&state.db, &state.settings.encryption_key, &owner, src.as_ref()).await?;
+    let raw_records = src.webhook(&conn, &parts.headers, &body_bytes).await?;
 
     let Some(raw_records) = raw_records.filter(|r| !r.is_empty()) else {
         // Covers both "signature didn't verify" and "nothing worth
@@ -170,10 +170,10 @@ async fn source_webhook(
         return Ok(Json(json!({"status": "ignored"})));
     };
 
-    let report = registry::ingest(&state.db, &owner, &key, &raw_records, src.as_ref()).await;
-    tracing::info!(source = %key, owner = %owner, report = ?report.as_value(), "webhook: processed");
+    let report = registry::ingest(&state.db, &state.settings, &owner, &raw_records, src.as_ref()).await?;
+    tracing::info!(source = %key, owner = %owner, report = ?report.as_dict(), "webhook: processed");
 
-    let mut out = report.as_value();
+    let mut out = report.as_dict();
     out.as_object_mut().unwrap().insert("status".to_string(), json!("ok"));
     Ok(Json(out))
 }
