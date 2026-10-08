@@ -164,11 +164,11 @@ fn raw_database_access_stays_in_its_modules() {
     let use_stmt = Regex::new(r"(?i)\bUSE\s+(NS|DB|DATABASE|NAMESPACE)\b").unwrap();
     // (what, text that gives it away, where it may appear)
     let rules: [(&str, &[&str], &[&str]); 5] = [
-        ("a query on the raw client", &[".query(", ".raw()", ".select::<", ".live()"], &["src/store/", "src/pool.rs"]),
+        ("a query on the raw client", &[".query(", ".raw(", ".select::<", ".live()"], &["src/store/", "src/pool.rs"]),
         ("a root sign-in", &["auth::Root", "Root {"], &["src/provisioning/", "src/db.rs"]),
         ("signing in", &["signin("], &["src/provisioning/", "src/pool.rs"]),
         ("switching database", &[".use_db(", ".use_ns("], &["src/provisioning/", "src/pool.rs"]),
-        ("the raw accessor", &[".raw()"], &["src/store/", "src/pool.rs", "src/provisioning/"]),
+        ("the raw accessor", &[".raw("], &["src/store/", "src/pool.rs"]),
     ];
     let mut offenders = Vec::new();
     for entry in walk("src") {
