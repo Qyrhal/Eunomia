@@ -14,7 +14,13 @@ async fn main() {
     }
     let _otel = eunomia_backend::telemetry::init(&settings.log_level);
     let role = Role::from_env();
-    let state = AppState::build(&settings, surrealdb::opt::Config::new()).await.expect("failed to set up the databases");
+    let state = match AppState::build(&settings, surrealdb::opt::Config::new()).await {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!("failed to set up the databases: {}", e.source.as_deref().unwrap_or(&e.message));
+            std::process::exit(1);
+        }
+    };
 
     let (stop, stopped) = watch::channel(false);
     let mut background = Vec::new();

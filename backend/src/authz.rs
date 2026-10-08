@@ -216,12 +216,19 @@ pub fn require_unrestricted() -> AppResult<()> {
     }
 }
 
-/// An email listed in `EUNOMIA_ADMIN_EMAILS` (comma separated): an operator of the whole instance.
-pub fn is_operator(user: &User) -> bool {
+/// True for an email listed in `EUNOMIA_ADMIN_EMAILS` (comma separated).
+pub fn operator_email_listed(email: &str) -> bool {
     std::env::var("EUNOMIA_ADMIN_EMAILS")
         .unwrap_or_default()
         .split(',')
-        .any(|e| !e.trim().is_empty() && e.trim().eq_ignore_ascii_case(&user.email))
+        .any(|e| !e.trim().is_empty() && e.trim().eq_ignore_ascii_case(email.trim()))
+}
+
+/// An email listed in `EUNOMIA_ADMIN_EMAILS`: an operator of the whole instance. Emails are not
+/// verified, so signup refuses a listed address once the install has users (`routers/auth.rs`):
+/// an operator must register the account first, then add it to the list.
+pub fn is_operator(user: &User) -> bool {
+    operator_email_listed(&user.email)
 }
 
 /// Admin = the instance's first user, or an operator.

@@ -52,6 +52,7 @@ pub const ALL: &[&ControlStmt] = &[
     &ORG_MEMBERS,
     &EMAIL_IN_ORG,
     &MEMBERSHIP_ADD,
+    &MEMBERSHIP_DELETE_USER,
 ];
 
 pub const AUTH_SESSION_CREATE: ControlStmt =
@@ -86,13 +87,13 @@ pub const AUTH_SESSION_LIST: ControlStmt = ControlStmt::new(
 );
 
 pub const AUTH_USER_ID_BY_EMAIL: ControlStmt =
-    ControlStmt::new("app.auth_user_id_by_email", "SELECT id FROM user WHERE string::lowercase(email) = $email LIMIT 1");
+    ControlStmt::new("app.auth_user_id_by_email", "SELECT id FROM user WHERE email_lc = $email LIMIT 1");
 
 pub const AUTH_USER_CREATE: ControlStmt =
-    ControlStmt::new("app.auth_user_create", "CREATE user SET email = $email, password_hash = $password_hash RETURN AFTER");
+    ControlStmt::new("app.auth_user_create", "CREATE user SET email = $email, email_lc = $email, password_hash = $password_hash RETURN AFTER");
 
 pub const AUTH_USER_BY_EMAIL: ControlStmt =
-    ControlStmt::new("app.auth_user_by_email", "SELECT * FROM user WHERE string::lowercase(email) = $email LIMIT 1");
+    ControlStmt::new("app.auth_user_by_email", "SELECT * FROM user WHERE email_lc = $email LIMIT 1");
 
 pub const AUTH_USER_COUNT: ControlStmt = ControlStmt::new("app.auth_user_count", "SELECT count() FROM user GROUP ALL");
 
@@ -259,11 +260,24 @@ pub const ORG_MEMBERS: ControlStmt = ControlStmt::new("control.org_members", "SE
 /// An invitee is looked up by email inside the inviter's org only, so an email cannot be probed across orgs.
 pub const EMAIL_IN_ORG: ControlStmt = ControlStmt::new(
     "control.email_in_org",
-    "SELECT id FROM user WHERE string::lowercase(email) = $email AND id IN (SELECT VALUE user FROM membership WHERE org = $org) LIMIT 1",
+    "SELECT id FROM user WHERE email_lc = $email AND id IN (SELECT VALUE user FROM membership WHERE org = $org) LIMIT 1",
 );
 
-pub const MEMBERSHIP_ADD: ControlStmt =
-    ControlStmt::new("control.membership_add", "CREATE membership SET user = $user, org = $org, role = $role RETURN AFTER");
+/// Adds `$user` to `$org`: as its owner if it has none yet, else as a member. `slot` is unique per
+/// (org, user) for members and one fixed value per org for the owner, so two signups racing for an
+/// org's first owner cannot both win (the loser's commit fails and is retried, see `assign_org`).
+pub const MEMBERSHIP_ADD: ControlStmt = ControlStmt::new(
+    "control.membership_add",
+    r#"BEGIN TRANSACTION;
+        LET $role = IF array::len((SELECT VALUE id FROM membership WHERE org = $org AND role = 'owner' LIMIT 1)) = 0 { 'owner' } ELSE { 'member' };
+        CREATE membership SET user = $user, org = $org, role = $role,
+            slot = IF $role = 'owner' { string::concat(<string>$org, '/owner') } ELSE { string::concat(<string>$org, '/', <string>$user) }
+            RETURN AFTER;
+        COMMIT TRANSACTION;"#,
+);
+
+/// Signup cleanup: every membership of a user whose signup failed.
+pub const MEMBERSHIP_DELETE_USER: ControlStmt = ControlStmt::new("control.membership_delete_user", "DELETE membership WHERE user = $user");
 
 /// `/readyz`: the control database answers.
 pub const READY_PING: ControlStmt = ControlStmt::new("app.ready_ping", "RETURN 1");

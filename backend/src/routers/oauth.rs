@@ -124,6 +124,8 @@ async fn consent_decide(State(state): State<AppState>, user: User, Json(d): Json
     } else {
         server::fail_redirect(&state, &d.request, "access_denied", "The user denied the request")
     };
+    let client: String = v.client.client_id.chars().take(256).collect();
+    crate::audit::record_as_caller(&state.control, &user.id, "oauth.consent", &client, if d.approve { "ok" } else { "access_denied" }).await;
     Ok(Json(ConsentResult { redirect_to }))
 }
 
@@ -188,12 +190,14 @@ async fn list_grants(State(state): State<AppState>, user: User) -> AppResult<Jso
 )]
 async fn revoke_grant(State(state): State<AppState>, user: User, Path(grant_id): Path<String>) -> AppResult<Json<crate::openapi::DeletedBody>> {
     crate::authz::require_session()?;
+    let user_id = user.id.clone();
     let id = RecordId::from_table_key("oauth_grant", grant_id);
-    let mut res = crate::store::control::OAUTH_GRANT_DELETE.on(&state.control).bind(("id", id.clone())).bind(("owner", user.id)).await?;
+    let mut res = crate::store::control::OAUTH_GRANT_DELETE.on(&state.control).bind(("id", id.clone())).bind(("owner", user.id.clone())).await?;
     let removed: Vec<server::Gone> = res.take(0)?;
     if removed.is_empty() {
         return Err(AppError::coded(ErrorCode::ResourceNotFound, "No such connected app."));
     }
-    crate::store::control::OAUTH_TOKENS_DELETE_FAMILY.on(&state.control).bind(("family", id)).await?.check()?;
+    crate::store::control::OAUTH_TOKENS_DELETE_FAMILY.on(&state.control).bind(("family", id.clone())).await?.check()?;
+    crate::audit::record_as_caller(&state.control, &user_id, "oauth.grant_revoke", &id.to_string(), "ok").await;
     Ok(Json(crate::openapi::DeletedBody { deleted: true }))
 }

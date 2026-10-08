@@ -184,6 +184,14 @@ expression: first
         },
         {
           "cols": [
+            "slot"
+          ],
+          "index": "UNIQUE",
+          "name": "membership_slot_unique",
+          "table": "membership"
+        },
+        {
+          "cols": [
             "user",
             "org"
           ],
@@ -391,6 +399,14 @@ expression: first
         "update": false
       },
       "indexes": [
+        {
+          "cols": [
+            "email_lc"
+          ],
+          "index": "UNIQUE",
+          "name": "user_email_lc_unique",
+          "table": "user"
+        },
         {
           "cols": [
             "email"

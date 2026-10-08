@@ -347,11 +347,27 @@ fn token_response(t: super::IssuedTokens, scope: &[String]) -> Response {
 }
 
 pub async fn token(State(state): State<AppState>, Form(f): Form<TokenForm>) -> Result<Response, OAuthError> {
-    match f.grant_type.as_deref() {
+    // failed grants per client, whatever the address they come from; a success clears the count
+    let fail_key = f.client_id.as_deref().filter(|c| !c.is_empty()).map(|c| format!("oauth-fail:{c}"));
+    if let Some(k) = &fail_key
+        && let Err(wait) = state.fail_throttle.check(k, crate::ratelimit::OAUTH_CLIENT_FAILS)
+    {
+        return Ok(crate::gate::rate_limited(wait));
+    }
+    let out = match f.grant_type.as_deref() {
         Some("authorization_code") => exchange_code(&state, &f).await,
         Some("refresh_token") => refresh(&state, &f).await,
         _ => Err(OAuthError::bad("unsupported_grant_type", "grant_type must be authorization_code or refresh_token")),
+    };
+    if let Some(k) = &fail_key {
+        match &out {
+            // a server fault is not the client's failure
+            Err(e) if e.status != StatusCode::INTERNAL_SERVER_ERROR => state.fail_throttle.fail(k),
+            Ok(_) => state.fail_throttle.clear(k),
+            _ => {}
+        }
     }
+    out
 }
 
 fn check_resource(state: &AppState, resource: &Option<String>) -> Result<(), OAuthError> {

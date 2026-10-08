@@ -21,5 +21,34 @@ pub(crate) async fn connect_raw(settings: &Settings, config: surrealdb::opt::Con
     } else {
         config
     };
-    surrealdb::engine::any::connect((settings.surreal_url.as_str(), config)).await
+    surrealdb::engine::any::connect((settings.surreal_url.as_str(), config)).await.map_err(|e| match old_server_hint(&e.to_string()) {
+        Some(hint) => surrealdb::Error::internal(hint),
+        None => e,
+    })
+}
+
+/// The client refuses a SurrealDB 2.x server with a bare "server version ... does not match" text.
+/// Name the way out instead of leaving the operator to decode it.
+fn old_server_hint(err: &str) -> Option<String> {
+    let version = err.split_once("server version `")?.1.split('`').next()?;
+    version.starts_with("2.").then(|| {
+        format!(
+            "the database server is SurrealDB {version} but Eunomia needs 3.x. Upgrade it with scripts/upgrade-surreal-v3.sh \
+             (it exports first; see docs/upgrading-to-surrealdb-3.md), then start Eunomia again"
+        )
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::old_server_hint;
+
+    #[test]
+    fn a_2x_server_gets_the_upgrade_hint_and_nothing_else_does() {
+        let raw = "server version `2.3.7` does not match the range supported by the client `>=3.0.0-alpha.1, <4.0.0`";
+        let hint = old_server_hint(raw).unwrap();
+        assert!(hint.contains("scripts/upgrade-surreal-v3.sh") && hint.contains("docs/upgrading-to-surrealdb-3.md") && hint.contains("2.3.7"));
+        assert!(old_server_hint(&raw.replace("2.3.7", "4.0.1")).is_none());
+        assert!(old_server_hint("connection refused").is_none());
+    }
 }

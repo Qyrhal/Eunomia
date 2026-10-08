@@ -150,8 +150,10 @@ async fn register(
     Json(body): Json<Credentials>,
 ) -> AppResult<Response> {
     let has_users = crate::capsules::first_user(&state.control).await?.is_some();
-    let allowlist = format!("{},{}", std::env::var("SIGNUP_ALLOWLIST").unwrap_or_default(), std::env::var("EUNOMIA_ADMIN_EMAILS").unwrap_or_default());
-    if !signup_allowed(&std::env::var("SIGNUP").unwrap_or_default(), has_users, &body.email, &allowlist) {
+    // an operator address is not verified, so whoever signed up with it first would become operator:
+    // it must already have an account before it is listed (same refusal text, nothing to probe)
+    let reserved = has_users && authz::operator_email_listed(&body.email);
+    if reserved || !signup_allowed(&std::env::var("SIGNUP").unwrap_or_default(), has_users, &body.email, &std::env::var("SIGNUP_ALLOWLIST").unwrap_or_default()) {
         return Err(AppError::coded(ErrorCode::AuthForbidden, "Signup is not open on this server. Ask the admin for access."));
     }
     let user = models_user::register_user(&state, &body.email, &body.password)
@@ -193,7 +195,13 @@ async fn login(
     headers: HeaderMap,
     Json(body): Json<Credentials>,
 ) -> AppResult<Response> {
+    // per account, whatever the client address: checked before the bcrypt work, only failures count
+    let fail_key = format!("login-fail:{}", models_user::normalize_email(&body.email));
+    if let Err(wait) = state.fail_throttle.check(&fail_key, crate::ratelimit::LOGIN_FAILS) {
+        return Ok(crate::gate::rate_limited(wait));
+    }
     let Some(user) = models_user::authenticate(&state.control, &body.email, &body.password).await? else {
+        state.fail_throttle.fail(&fail_key);
         let email = models_user::normalize_email(&body.email);
         let event = Event {
             user: None,
@@ -207,6 +215,7 @@ async fn login(
         return Err(AppError::unauthorized("Invalid email or password."));
     };
 
+    state.fail_throttle.clear(&fail_key);
     let token = auth::start_session(&state.control, &state.settings.jwt_secret, &user, user_agent_from(&headers).as_deref())
         .await?;
     audit::record_as_caller(&state.control, &user.id, "auth.login", "", "ok").await;

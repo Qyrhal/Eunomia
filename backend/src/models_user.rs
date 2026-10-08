@@ -12,6 +12,7 @@ use crate::pool::{ControlDb, OrgId};
 use crate::state::AppState;
 use crate::store;
 use crate::error::{AppError, AppResult, ErrorCode};
+use crate::rid::RecordIdExt;
 use crate::scopes;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -146,8 +147,8 @@ async fn assign_org(state: &AppState, user: &RecordId, email: &str, personal: bo
         .into_iter()
         .filter(|r| r.status == "ready")
         .find_map(|r| crate::rid::key_string(&r.org.key).and_then(|k| OrgId::parse(&k)));
-    let (org, role) = match existing {
-        Some(org) if !personal => (org, "member"),
+    let org = match existing {
+        Some(org) if !personal => org,
         found => {
             let Some(p) = &state.provisioner else {
                 return Err(AppError::coded(ErrorCode::TenantProvisioningDisabled, "This server cannot create organisations."));
@@ -155,25 +156,28 @@ async fn assign_org(state: &AppState, user: &RecordId, email: &str, personal: bo
             // The install's first org has a fixed id: two replicas that both see an empty install
             // converge on one org (provisioning is idempotent) instead of making two "Default"s.
             let org = if found.is_none() { OrgId::from_label(&format!("default:{}", state.settings.surreal_ns)) } else { OrgId::new() };
-            let role = match p.provision_org(&state.control, org, if found.is_none() { "Default" } else { email }).await {
-                Ok(()) => "owner",
+            match p.provision_org(&state.control, org, if found.is_none() { "Default" } else { email }).await {
+                Ok(()) => {}
                 // another replica is provisioning the same first org and got there first: wait for it, then join
                 Err(e) if found.is_none() && wait_ready(state, &org).await => {
                     tracing::info!(error = %e.message, "first org provisioned by another process, joining it");
-                    "member"
                 }
                 Err(e) => return Err(e),
-            };
-            (org, role)
+            }
+            org
         }
     };
-    store::control::MEMBERSHIP_ADD
-        .on(&state.control)
-        .bind(("user", user.clone()))
-        .bind(("org", org.record()))
-        .bind(("role", role))
-        .await?
-        .check()?;
+    // `role` is what we hoped for; the statement decides atomically (one owner per org, enforced by a unique slot),
+    // and a lost race is retried so the loser re-reads and joins as a member
+    crate::tx::with_retry_dup(|| async {
+        store::control::MEMBERSHIP_ADD
+            .on(&state.control)
+            .bind(("user", user.clone()))
+            .bind(("org", org.record()))
+            .await?
+            .check()
+    })
+    .await?;
     Ok(org)
 }
 
@@ -223,8 +227,14 @@ pub async fn register_user_with(state: &AppState, email: &str, password: &str, p
     let rows: Vec<UserRow> = res.take(0)?;
     let row = rows.into_iter().next().ok_or_else(|| AppError::internal("insert returned no row"))?;
 
+    let mut joined = None;
     let setup = async {
         let org = assign_org(state, &row.id, email, personal).await?;
+        joined = Some(org);
+        #[cfg(feature = "test-support")]
+        if FAIL_SETUP_FOR.lock().is_ok_and(|f| f.as_deref() == Some(email.as_str())) {
+            return Err(AppError::internal("injected signup failure"));
+        }
         let orgdb = state.pool.for_org(&org).await?;
         crate::vaults::service::create_personal_vault(&orgdb, &row.id).await?;
         AppResult::Ok(org)
@@ -233,15 +243,25 @@ pub async fn register_user_with(state: &AppState, email: &str, password: &str, p
     match setup {
         Ok(org) => Ok(User { id: row.id, email: row.email, org }),
         Err(e) => {
-            // do not leave an account that cannot log in
+            // do not leave an account that cannot log in, nor the rows signup made for it
+            if let Some(org) = joined
+                && let Ok(orgdb) = state.pool.for_org(&org).await
+            {
+                let vault = RecordId::from_table_key("vault", crate::tx::stable_key('p', &row.id.to_string()));
+                let _ = store::vaults::DELETE_VAULT.on(&orgdb).bind(("vault", vault)).await;
+            }
+            let _ = store::control::MEMBERSHIP_DELETE_USER.on(db).bind(("user", row.id.clone())).await;
             let _ = store::control::AUTH_USER_DELETE.on(db).bind(("id", row.id.clone())).await;
             Err(e)
         }
     }
 }
 
+/// Test-only: the signup for this (normalized) email fails after its org is assigned, to prove the cleanup.
+#[cfg(feature = "test-support")]
+pub static FAIL_SETUP_FOR: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
 pub async fn authenticate(db: &ControlDb, email: &str, password: &str) -> AppResult<Option<User>> {
-    // ponytail: string::lowercase() scan, no index -- add a normalized-email index if user counts get large
     let mut res = store::control::AUTH_USER_BY_EMAIL
         .on(db)
         .bind(("email", normalize_email(email)))

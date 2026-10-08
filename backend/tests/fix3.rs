@@ -51,11 +51,11 @@ async fn readyz_checks_the_control_database_and_its_migration_version() {
     let ((status, _), _) = common::http(&app.router, "GET", "/healthz", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
 
-    app.control().test_raw().query("DELETE _migration WHERE version = 3").await.unwrap().check().unwrap();
+    app.control().test_raw().query("DELETE _migration WHERE version = 4").await.unwrap().check().unwrap();
     let ((status, body), _) = common::http(&app.router, "GET", "/readyz", None, None, None).await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(body["code"], "internal");
-    assert!(body["detail"].as_str().unwrap().contains("migration 2"), "{body}");
+    assert!(body["detail"].as_str().unwrap().contains("migration 3"), "{body}");
 }
 
 /// The old export ran three queries per entity. The batched one must produce the same document.
