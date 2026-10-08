@@ -23,6 +23,7 @@ use sha2::Sha256;
 
 use crate::connectors::clients::UpBankClient;
 use crate::error::AppResult;
+use crate::store;
 use crate::sources::base::{datetime_to_chrono, Source, SourceCtx, SyncResult};
 use crate::sources::registry::credentials_for;
 
@@ -243,9 +244,8 @@ fn iso(dt: &Option<surrealdb::Datetime>) -> Option<String> {
 }
 
 async fn cached_by_type(ctx: &SourceCtx<'_>, type_: &str, limit: i64) -> AppResult<Vec<CachedRecord>> {
-    let mut res = ctx
-        .db
-        .query("SELECT title, external_id, occurred_at, payload FROM cache_record WHERE owner = $owner AND type = $type ORDER BY occurred_at DESC LIMIT $limit")
+    let mut res = store::app::SOURCES_UP_BY_TYPE
+        .on(ctx.db)
         .bind(("owner", ctx.owner.clone()))
         .bind(("type", type_.to_string()))
         .bind(("limit", limit))

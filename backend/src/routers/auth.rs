@@ -15,6 +15,7 @@ use surrealdb::{Datetime, RecordId};
 
 use crate::auth::{self, SESSION_COOKIE};
 use crate::error::{AppError, AppResult, ErrorCode};
+use crate::store;
 use crate::models_user::{self, User};
 use crate::state::AppState;
 
@@ -283,12 +284,8 @@ struct SessionOut {
     security(("cookie" = []), ("bearer" = [])),
 )]
 async fn get_sessions(State(state): State<AppState>, user: User) -> AppResult<Json<Vec<SessionOut>>> {
-    let mut res = state
-        .db
-        .query(
-            "SELECT id, user_agent, created_at, last_seen_at FROM session \
-             WHERE owner = $owner AND revoked = false ORDER BY last_seen_at DESC",
-        )
+    let mut res = store::app::AUTH_SESSION_LIST
+        .on(&state.db)
         .bind(("owner", user.id.clone()))
         .await?;
     let rows: Vec<SessionRow> = res.take(0)?;
@@ -328,7 +325,7 @@ async fn revoke_session_route(
         Some(r) if r.owner == user.id => {}
         _ => return Err(AppError::coded(ErrorCode::AuthNotFound, "Session not found.")),
     }
-    state.db.query("UPDATE $id SET revoked = true").bind(("id", rid)).await?;
+    store::app::AUTH_SESSION_REVOKE.on(&state.db).bind(("id", rid)).await?;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -345,7 +342,7 @@ async fn bootstrap(State(state): State<AppState>) -> AppResult<Json<BootstrapOut
     struct CountRow {
         count: i64,
     }
-    let mut res = state.db.query("SELECT count() FROM user GROUP ALL").await?;
+    let mut res = store::app::AUTH_USER_COUNT.on(&state.db).await?;
     let rows: Vec<CountRow> = res.take(0)?;
     let has_users = rows.first().map(|r| r.count > 0).unwrap_or(false);
     Ok(Json(BootstrapOut { has_users }))

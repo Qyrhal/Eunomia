@@ -18,6 +18,7 @@ use serde_json::{json, Value};
 
 use crate::connectors::clients::PocketAIClient;
 use crate::error::AppResult;
+use crate::store;
 use crate::sources::base::{datetime_to_chrono, Source, SourceCtx, SyncResult};
 use crate::sources::registry::{connector_for, credentials_for};
 
@@ -155,13 +156,8 @@ pub(crate) struct CachedRecording {
 
 async fn cached_recordings(ctx: &SourceCtx<'_>, days: i64) -> AppResult<Vec<CachedRecording>> {
     let since = Utc::now() - Duration::days(days);
-    let mut res = ctx
-        .db
-        .query(
-            "SELECT title, occurred_at, url, payload FROM cache_record \
-             WHERE owner = $owner AND type = 'heypocket.recording' AND deleted = false \
-             AND occurred_at != NONE AND occurred_at >= $since ORDER BY occurred_at DESC LIMIT 2000",
-        )
+    let mut res = store::app::SOURCES_HEYPOCKET_RECENT
+        .on(ctx.db)
         .bind(("owner", ctx.owner.clone()))
         .bind(("since", surrealdb::Datetime::from(since)))
         .await?;
@@ -240,14 +236,8 @@ pub async fn list_recordings(ctx: &SourceCtx<'_>, days: i64, tag: Option<&str>, 
 /// plain case-insensitive substring match over cached title/body_text.
 pub async fn search_recordings(ctx: &SourceCtx<'_>, query: &str) -> AppResult<Value> {
     let needle = query.to_lowercase();
-    let mut res = ctx
-        .db
-        .query(
-            "SELECT title, occurred_at, url, payload FROM cache_record \
-             WHERE owner = $owner AND type = 'heypocket.recording' AND deleted = false \
-             AND (string::contains(string::lowercase(title), $q) OR string::contains(string::lowercase(body_text), $q)) \
-             LIMIT 20",
-        )
+    let mut res = store::app::SOURCES_HEYPOCKET_SEARCH
+        .on(ctx.db)
         .bind(("owner", ctx.owner.clone()))
         .bind(("q", needle))
         .await?;

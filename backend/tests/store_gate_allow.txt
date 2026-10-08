@@ -1,16 +1,3 @@
-src/auth.rs
-src/chat/service.rs
 src/connectors/clients.rs
-src/connectors/service.rs
 src/db.rs
-src/models_user.rs
-src/routers/audit.rs
-src/routers/auth.rs
-src/routers/export.rs
-src/routers/settings.rs
-src/routers/sources.rs
-src/sources/heypocket.rs
-src/sources/registry.rs
-src/sources/scheduler.rs
-src/sources/up_bank.rs
 src/vaults/service.rs

@@ -21,6 +21,7 @@ use serde_json::{json, Value};
 use surrealdb::RecordId;
 
 use crate::db::Db;
+use crate::store;
 use crate::error::AppResult;
 use crate::sources::base::{datetime_to_chrono, owner_key_str};
 use crate::sources::registry;
@@ -43,7 +44,7 @@ async fn all_user_ids(db: &Db) -> AppResult<Vec<RecordId>> {
     struct Row {
         id: RecordId,
     }
-    let mut res = db.query("SELECT id FROM user").await?;
+    let mut res = store::app::SOURCES_USER_IDS.on(db).await?;
     let rows: Vec<Row> = res.take(0)?;
     Ok(rows.into_iter().map(|r| r.id).collect())
 }
@@ -63,11 +64,8 @@ async fn get_sync_status(db: &Db, owner: &RecordId, key: &str) -> AppResult<Sync
     if let Some(row) = db.select::<Option<SyncStatusRow>>(rid.clone()).await? {
         return Ok(row);
     }
-    let mut res = db
-        .query(
-            "UPSERT $id SET owner = $owner, cursor = '', consecutive_failures = 0, last_error = '', \
-             last_report = {} RETURN AFTER",
-        )
+    let mut res = store::app::SOURCES_SYNC_STATUS_UPSERT
+        .on(db)
         .bind(("id", rid))
         .bind(("owner", owner.clone()))
         .await?;
@@ -91,11 +89,8 @@ pub async fn sync_source(db: &Db, encryption_key: &str, owner: &RecordId, key: &
     match registry::run_sync(db, encryption_key, owner, key, mode, cursor).await {
         Ok((report, next_cursor)) => {
             let report_value = report.as_value();
-            let _ = db
-                .query(
-                    "UPDATE $id SET last_run = $now, cursor = $cursor, last_ok = $now, \
-                     last_error = '', consecutive_failures = 0, last_report = $report",
-                )
+            let _ = store::app::SOURCES_SYNC_OK
+                .on(db)
                 .bind(("id", sync_status_id(owner, key)))
                 .bind(("now", surrealdb::Datetime::from(now)))
                 .bind(("cursor", next_cursor.unwrap_or_default()))
@@ -106,8 +101,8 @@ pub async fn sync_source(db: &Db, encryption_key: &str, owner: &RecordId, key: &
         Err(e) => {
             let error = e.message.clone();
             let failures = st.consecutive_failures + 1;
-            let _ = db
-                .query("UPDATE $id SET last_run = $now, consecutive_failures = $failures, last_error = $error")
+            let _ = store::app::SOURCES_SYNC_FAILED
+                .on(db)
                 .bind(("id", sync_status_id(owner, key)))
                 .bind(("now", surrealdb::Datetime::from(now)))
                 .bind(("failures", failures))
@@ -201,7 +196,7 @@ async fn sync_intervals_for(db: &Db, owner: &RecordId) -> AppResult<Value> {
         #[serde(default)]
         sync_intervals: Value,
     }
-    let mut res = db.query("SELECT sync_intervals FROM app_settings WHERE owner = $owner LIMIT 1").bind(("owner", owner.clone())).await?;
+    let mut res = store::app::SOURCES_SYNC_INTERVALS.on(db).bind(("owner", owner.clone())).await?;
     let rows: Vec<Row> = res.take(0)?;
     Ok(rows.into_iter().next().map(|r| r.sync_intervals).unwrap_or(json!({})))
 }

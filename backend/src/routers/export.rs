@@ -23,6 +23,7 @@ use serde_json::{json, Value};
 use surrealdb::{Datetime, RecordId};
 
 use crate::db::Db;
+use crate::store;
 use crate::error::{AppError, AppResult};
 use crate::models_user::User;
 use crate::state::AppState;
@@ -99,8 +100,8 @@ struct UserEmailRow {
 /// `owner`'s personal vault -- the implicit scope for an export, matching
 /// `vaults/service.py::default_vault_id`.
 async fn resolve_personal_vault(db: &Db, owner: &RecordId) -> AppResult<RecordId> {
-    let mut res = db
-        .query("SELECT vault FROM vault_member WHERE user = $user AND vault.kind = \"personal\" LIMIT 1")
+    let mut res = store::app::EXPORT_PERSONAL_VAULT
+        .on(db)
         .bind(("user", owner.clone()))
         .await?;
     let rows: Vec<VaultRow> = res.take(0)?;
@@ -120,8 +121,8 @@ async fn fetch_emails(db: &Db, ids: &[RecordId]) -> AppResult<HashMap<String, St
             dedup.push(id.clone());
         }
     }
-    let mut res = db
-        .query("SELECT id, email FROM user WHERE id IN $ids")
+    let mut res = store::app::EXPORT_USER_EMAILS
+        .on(db)
         .bind(("ids", dedup))
         .await?;
     let rows: Vec<UserEmailRow> = res.take(0)?;
@@ -160,7 +161,8 @@ async fn export_data(State(state): State<AppState>, user: User) -> AppResult<Res
 
     for kind in KINDS {
         let query = format!("SELECT * FROM {kind} WHERE vault = $vault ORDER BY name");
-        let mut res = db.query(query).bind(("vault", vault.clone())).await?;
+        // dynamic: the table name is the entity kind
+        let mut res = store::dynamic(db, "app.export_entities", query).bind(("vault", vault.clone())).await?;
         let rows: Vec<EntityRow> = res.take(0)?;
 
         for row in rows {
@@ -168,8 +170,8 @@ async fn export_data(State(state): State<AppState>, user: User) -> AppResult<Res
                 owner_ids.push(o.clone());
             }
 
-            let mut mem_res = db
-                .query("SELECT * FROM memory WHERE subject = $id ORDER BY created_at DESC")
+            let mut mem_res = store::app::EXPORT_MEMORIES
+                .on(db)
                 .bind(("id", row.id.clone()))
                 .await?;
             let memories: Vec<MemoryRow> = mem_res.take(0)?;
@@ -179,14 +181,14 @@ async fn export_data(State(state): State<AppState>, user: User) -> AppResult<Res
                 }
             }
 
-            let mut out_res = db
-                .query("SELECT * FROM relates_to WHERE in = $id")
+            let mut out_res = store::app::EXPORT_RELATIONS_OUT
+                .on(db)
                 .bind(("id", row.id.clone()))
                 .await?;
             let outgoing: Vec<RelationRow> = out_res.take(0)?;
 
-            let mut in_res = db
-                .query("SELECT * FROM relates_to WHERE out = $id")
+            let mut in_res = store::app::EXPORT_RELATIONS_IN
+                .on(db)
                 .bind(("id", row.id.clone()))
                 .await?;
             let incoming: Vec<RelationRow> = in_res.take(0)?;
@@ -269,8 +271,8 @@ async fn export_data(State(state): State<AppState>, user: User) -> AppResult<Res
         })
         .collect();
 
-    let mut chat_res = db
-        .query("SELECT * FROM chat_message WHERE owner = $owner ORDER BY created_at")
+    let mut chat_res = store::app::CHAT_MESSAGES_FOR_OWNER
+        .on(db)
         .bind(("owner", user.id.clone()))
         .await?;
     let chat_rows: Vec<ChatMessageRow> = chat_res.take(0)?;
