@@ -76,12 +76,17 @@ main() {
   else
     echo "EUNOMIA_IMAGE_TAG=$latest" >> .env
   fi
+  # Installs from before nightly backups have no backup key yet.
+  if ! grep -q '^BACKUP_ENCRYPTION_KEY=.' .env; then
+    sed -i.bak '/^BACKUP_ENCRYPTION_KEY=/d' .env && rm -f .env.bak
+    echo "BACKUP_ENCRYPTION_KEY=$(head -c 32 /dev/urandom | base64 | tr -d '\n')" >> .env
+  fi
 
   # Everything except the updater itself (recreating it here would kill this
   # run); it is refreshed last, after the status is written.
   local services
   services="$(docker compose config --services 2>/dev/null | grep -vx updater | tr '\n' ' ')"
-  if ! { docker compose pull backend frontend && docker compose up -d --remove-orphans $services; } >/dev/null 2>"$status_dir/.last-error"; then
+  if ! { docker compose pull backend frontend backup && docker compose up -d --remove-orphans $services; } >/dev/null 2>"$status_dir/.last-error"; then
     write_status "$status_dir" "$latest" "$latest" false "restart failed: $(tail -5 "$status_dir/.last-error")"
     exit 1
   fi
