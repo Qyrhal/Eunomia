@@ -33,6 +33,7 @@ use surrealdb::RecordId;
 use crate::config::Settings;
 use crate::db::Db;
 use crate::error::{AppError, AppResult};
+use crate::store::entities as q;
 
 use super::service;
 
@@ -125,7 +126,7 @@ pub(super) async fn app_settings_row(db: &Db, owner: &RecordId) -> AppResult<App
             // Relies on the `app_settings` table's own field DEFAULTs (see
             // `db.rs`'s SCHEMA_STATEMENTS) for everything but `owner`.
             let mut res =
-                db.query("UPSERT $id SET owner = $owner RETURN AFTER").bind(("id", rid)).bind(("owner", owner.clone())).await?;
+                q::UPSERT_APP_SETTINGS.on(db).bind(("id", rid)).bind(("owner", owner.clone())).await?;
             let rows: Vec<AppSettingsRow> = res.take(0)?;
             Ok(rows.into_iter().next().unwrap_or_default())
         }

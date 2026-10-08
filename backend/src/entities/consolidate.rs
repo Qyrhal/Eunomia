@@ -29,6 +29,7 @@ use surrealdb::RecordId;
 use crate::config::Settings;
 use crate::db::Db;
 use crate::error::{AppError, AppResult};
+use crate::store::entities as q;
 use crate::tx::with_retry;
 
 use super::service::observation_rid;
@@ -157,14 +158,14 @@ pub async fn consolidate_subject(
     let subject_row: Option<SubjectRow> = db.select(subject_id.clone()).await?;
     let Some(subject_row) = subject_row else { return Ok(None) };
 
-    let mut raw_res = db
-        .query(r#"SELECT * FROM memory WHERE subject = $id AND type IN ["world","experience"] ORDER BY created_at"#)
+    let mut raw_res = q::RAW_MEMORIES
+        .on(db)
         .bind(("id", subject_id.clone()))
         .await?;
     let raw_rows: Vec<RawMemoryRow> = raw_res.take(0)?;
 
-    let mut existing_res = db
-        .query(r#"SELECT * FROM memory WHERE subject = $id AND type = "observation" LIMIT 1"#)
+    let mut existing_res = q::OBSERVATION_OF
+        .on(db)
         .bind(("id", subject_id.clone()))
         .await?;
     let existing_rows: Vec<ObservationRow> = existing_res.take(0)?;
@@ -207,29 +208,13 @@ pub async fn consolidate_subject(
     // is optimistic: it only lands if the observation is still the one we read
     // (same version, or still absent). Otherwise someone else revised it
     // meanwhile; skip, and the next consolidation recomputes from the new state.
-    let (sql, proof_count) = match &existing {
-        None => (
-            r#"BEGIN TRANSACTION;
-            LET $cur = (SELECT VALUE id FROM memory WHERE subject = $subject AND type = "observation" LIMIT 1);
-            LET $row = IF array::len($cur) > 0 { [] } ELSE {
-                (CREATE $obs_id SET owner = $owner, vault = $vault, subject = $subject, text = $text,
-                    type = "observation", version = 1, proof_count = $proof_count, status = "fresh",
-                    source_memories = $source_memories, updated_at = time::now() RETURN AFTER)
-            };
-            RETURN $row;
-            COMMIT TRANSACTION;"#,
-            fresh.len() as i64,
-        ),
-        Some(_) => (
-            "UPDATE $id SET text = $text, version = version + 1, proof_count = $proof_count, \
-             status = \"fresh\", source_memories = $source_memories, updated_at = time::now() \
-             WHERE version = $expected_version RETURN AFTER",
-            all_source_ids.len() as i64,
-        ),
+    let (stmt, proof_count) = match &existing {
+        None => (&q::CONSOLIDATE_CREATE, fresh.len() as i64),
+        Some(_) => (&q::CONSOLIDATE_UPDATE, all_source_ids.len() as i64),
     };
     let row = with_retry(|| async {
-        let mut res = db
-            .query(sql)
+        let mut res = stmt
+            .on(db)
             .bind(("owner", owner.clone()))
             .bind(("vault", subject_row.vault.clone()))
             .bind(("subject", subject_id.clone()))

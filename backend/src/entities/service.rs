@@ -27,6 +27,7 @@ use surrealdb::{Datetime, RecordId};
 
 use crate::db::Db;
 use crate::error::{AppError, AppResult};
+use crate::store::entities as q;
 use crate::tx::{lock, with_retry};
 use crate::vaults::service as vaults_service;
 
@@ -301,7 +302,7 @@ async fn emails_for(db: &Db, user_ids: Vec<Option<RecordId>>) -> AppResult<HashM
         id: RecordId,
         email: String,
     }
-    let mut res = db.query("SELECT id, email FROM user WHERE id IN $ids").bind(("ids", ids)).await?;
+    let mut res = q::EMAILS_FOR.on(db).bind(("ids", ids)).await?;
     let rows: Vec<Row> = res.take(0)?;
     Ok(rows.into_iter().map(|r| (r.id.to_string(), r.email)).collect())
 }
@@ -334,8 +335,7 @@ pub async fn upsert_entity(
     // Read-then-write: a concurrent upsert of the same name loses on the
     // `{table}_vault_name_unique` index, and the retry's re-read finds the winner.
     let row = with_retry(|| async {
-        let mut res =
-            db.query(format!("SELECT * FROM {table} WHERE vault = $vault")).bind(("vault", vault.clone())).await?.check()?;
+        let mut res = q::select_by_vault(db, table, false).bind(("vault", vault.clone())).await?.check()?;
         let rows: Vec<EntityRow> = res.take(0)?;
 
         for row in rows {
@@ -346,8 +346,8 @@ pub async fn upsert_entity(
                     return Ok(row);
                 }
                 // array::union is atomic, so two alias merges cannot lose each other's update.
-                let mut updated = db
-                    .query("UPDATE $id SET aliases = array::sort(array::union(aliases, $aliases)), updated_at = time::now() RETURN AFTER")
+                let mut updated = q::MERGE_ALIASES
+                    .on(db)
                     .bind(("id", row.id.clone()))
                     .bind(("aliases", aliases.clone()))
                     .await?
@@ -357,10 +357,7 @@ pub async fn upsert_entity(
             }
         }
 
-        let mut created = db
-            .query(format!(
-                "CREATE {table} SET owner = $owner, vault = $vault, name = $name, aliases = $aliases RETURN AFTER"
-            ))
+        let mut created = q::create_entity(db, table)
             .bind(("owner", owner.clone()))
             .bind(("vault", vault.clone()))
             .bind(("name", name.to_string()))
@@ -421,35 +418,11 @@ pub async fn add_memory(
     // range read would conflict with every concurrent insert for the subject.
     // The range read remains as a fallback for observations that predate
     // deterministic ids.
-    let sql = if is_obs {
-        r#"BEGIN TRANSACTION;
-        LET $cur = (SELECT VALUE id FROM $obs_id);
-        LET $legacy = IF array::len($cur) > 0 { [] } ELSE {
-            (SELECT VALUE id FROM memory WHERE subject = $subject AND type = "observation" LIMIT 1)
-        };
-        LET $target = array::concat($cur, $legacy);
-        LET $row = IF array::len($target) > 0 {
-            (UPDATE $target[0] SET text = $text, version = version + 1, status = "fresh", updated_at = time::now() RETURN AFTER)
-        } ELSE {
-            (CREATE $obs_id SET owner = $owner, vault = $vault, subject = $subject, text = $text, type = "observation", source = $source RETURN AFTER)
-        };
-        RETURN $row;
-        COMMIT TRANSACTION;"#
-    } else {
-        r#"BEGIN TRANSACTION;
-        CREATE memory SET owner = $owner, vault = $vault, subject = $subject, text = $text, type = $type, source = $source RETURN AFTER;
-        LET $cur = (SELECT VALUE id FROM $obs_id);
-        IF array::len($cur) > 0 {
-            UPDATE $obs_id SET status = "stale" WHERE status != "stale"
-        } ELSE {
-            UPDATE memory SET status = "stale" WHERE subject = $subject AND type = "observation" AND status != "stale"
-        };
-        COMMIT TRANSACTION;"#
-    };
+    let stmt = if is_obs { &q::WRITE_OBSERVATION } else { &q::WRITE_FACT };
     let _guard = lock(&subject_id.to_string()).await;
     let memory = with_retry(|| async {
-        let mut res = db
-            .query(sql)
+        let mut res = stmt
+            .on(db)
             .bind(("owner", owner.clone()))
             .bind(("vault", subject_row.vault.clone()))
             .bind(("subject", subject_id.clone()))
@@ -528,8 +501,8 @@ pub async fn add_relation(
     }
 
     let source = source_record_id.map(|r| cache_record_rid(owner, r));
-    let res = db
-        .query("RELATE $in->relates_to->$out SET label = $label, owner = $owner, source = $source RETURN AFTER")
+    let res = q::RELATE_RETURNING
+        .on(db)
         .bind(("in", from_id.clone()))
         .bind(("out", to_id.clone()))
         .bind(("label", label.to_string()))
@@ -559,8 +532,8 @@ pub async fn add_relation(
 }
 
 async fn find_relation(db: &Db, from_id: &RecordId, to_id: &RecordId, label: &str) -> AppResult<Option<RelationRow>> {
-    let mut res = db
-        .query("SELECT * FROM relates_to WHERE in = $in AND out = $out AND label = $label LIMIT 1")
+    let mut res = q::FIND_RELATION
+        .on(db)
         .bind(("in", from_id.clone()))
         .bind(("out", to_id.clone()))
         .bind(("label", label.to_string()))
@@ -578,7 +551,7 @@ pub async fn delete_memory(db: &Db, owner: &RecordId, memory_id: &RecordId) -> A
     if !accessible(db, owner, &row.vault).await? {
         return Ok(false);
     }
-    db.query("DELETE $id").bind(("id", memory_id.clone())).await?;
+    q::DELETE_RECORD.on(db).bind(("id", memory_id.clone())).await?;
     Ok(true)
 }
 
@@ -621,26 +594,24 @@ pub async fn update_memory(
     }
     check_memory_edit(&row.mem_type, text, new_type)?;
 
-    let mut set = vec!["version = version + 1", "updated_at = time::now()"];
-    if text.is_some() {
-        set.push("text = $text");
-    }
-    if new_type.is_some() {
-        set.push("type = $type");
-    }
-    let mut q = db.query(format!("UPDATE $id SET {} RETURN AFTER", set.join(", "))).bind(("id", memory_id.clone()));
+    let stmt = match (text, new_type) {
+        (Some(_), Some(_)) => &q::UPDATE_MEMORY_TEXT_TYPE,
+        (Some(_), None) => &q::UPDATE_MEMORY_TEXT,
+        _ => &q::UPDATE_MEMORY_TYPE,
+    };
+    let mut qry = stmt.on(db).bind(("id", memory_id.clone()));
     if let Some(t) = text {
-        q = q.bind(("text", t.to_string()));
+        qry = qry.bind(("text", t.to_string()));
     }
     if let Some(t) = new_type {
-        q = q.bind(("type", t.to_string()));
+        qry = qry.bind(("type", t.to_string()));
     }
-    let mut res = q.await?;
+    let mut res = qry.await?;
     let rows: Vec<MemoryRow> = res.take(0)?;
     let updated = rows.into_iter().next().ok_or_else(|| AppError::internal("memory update returned no row"))?;
 
     if updated.mem_type != "observation" {
-        db.query(r#"UPDATE memory SET status = "stale" WHERE subject = $subject AND type = "observation""#)
+        q::STALE_OBSERVATIONS.on(db)
             .bind(("subject", updated.subject.clone()))
             .await?;
     }
@@ -676,18 +647,17 @@ pub async fn update_entity(
 
     if !set_clauses.is_empty() {
         set_clauses.push("updated_at = time::now()");
-        let query = format!("UPDATE $id SET {} RETURN AFTER", set_clauses.join(", "));
-        let mut q = db.query(query).bind(("id", entity_id.clone()));
+        let mut qry = q::update_entity(db, &set_clauses.join(", ")).bind(("id", entity_id.clone()));
         if let Some(n) = name {
-            q = q.bind(("name", n.to_string()));
+            qry = qry.bind(("name", n.to_string()));
         }
         if let Some(a) = aliases {
-            q = q.bind(("aliases", a));
+            qry = qry.bind(("aliases", a));
         }
         if let Some(s) = summary {
-            q = q.bind(("summary", s.to_string()));
+            qry = qry.bind(("summary", s.to_string()));
         }
-        let mut res = q.await?;
+        let mut res = qry.await?;
         let rows: Vec<EntityRow> = res.take(0)?;
         row = rows.into_iter().next().ok_or_else(|| AppError::internal("entity update returned no row"))?;
     }
@@ -704,10 +674,8 @@ pub async fn delete_entity(db: &Db, owner: &RecordId, entity_id: &RecordId) -> A
         return Ok(false);
     }
     with_retry(|| async {
-        db.query(
-            "BEGIN TRANSACTION; DELETE memory WHERE subject = $id; \
-             DELETE relates_to WHERE in = $id OR out = $id; DELETE $id; COMMIT TRANSACTION;",
-        )
+        q::DELETE_ENTITY
+        .on(db)
         .bind(("id", entity_id.clone()))
         .await?
         .check()
@@ -755,7 +723,8 @@ pub async fn merge_entities(
         return Err(AppError::bad_request(format!("loser entity not found: {loser_id}")));
     }
 
-    db.query("UPDATE memory SET subject = $winner WHERE subject = $loser")
+    q::REASSIGN_MEMORIES
+        .on(db)
         .bind(("winner", winner_id.clone()))
         .bind(("loser", loser_id.clone()))
         .await?;
@@ -765,14 +734,14 @@ pub async fn merge_entities(
     // the winner instead, skip self-loops this would create, and leave the
     // (in, out, label) unique index to protect against a duplicate the
     // winner already has, then drop all of the loser's edges.
-    let mut outgoing = db.query("SELECT * FROM relates_to WHERE in = $id").bind(("id", loser_id.clone())).await?;
+    let mut outgoing = q::EDGES_OUT.on(db).bind(("id", loser_id.clone())).await?;
     let outgoing_rows: Vec<RelationRow> = outgoing.take(0)?;
     for edge in outgoing_rows {
         if edge.out_ == *winner_id {
             continue;
         }
-        let _ = db
-            .query("RELATE $in->relates_to->$out SET label = $label, owner = $owner, source = $source")
+        let _ = q::RELATE
+            .on(db)
             .bind(("in", winner_id.clone()))
             .bind(("out", edge.out_))
             .bind(("label", edge.label))
@@ -780,14 +749,14 @@ pub async fn merge_entities(
             .bind(("source", edge.source))
             .await; // winner already has this edge -- unique index, safe no-op
     }
-    let mut incoming = db.query("SELECT * FROM relates_to WHERE out = $id").bind(("id", loser_id.clone())).await?;
+    let mut incoming = q::EDGES_IN.on(db).bind(("id", loser_id.clone())).await?;
     let incoming_rows: Vec<RelationRow> = incoming.take(0)?;
     for edge in incoming_rows {
         if edge.in_ == *winner_id {
             continue;
         }
-        let _ = db
-            .query("RELATE $in->relates_to->$out SET label = $label, owner = $owner, source = $source")
+        let _ = q::RELATE
+            .on(db)
             .bind(("in", edge.in_))
             .bind(("out", winner_id.clone()))
             .bind(("label", edge.label))
@@ -795,7 +764,7 @@ pub async fn merge_entities(
             .bind(("source", edge.source))
             .await;
     }
-    db.query("DELETE relates_to WHERE in = $id OR out = $id").bind(("id", loser_id.clone())).await?;
+    q::DELETE_EDGES.on(db).bind(("id", loser_id.clone())).await?;
 
     let mut new_aliases: HashSet<String> = winner.aliases.iter().cloned().collect();
     if !loser.name.is_empty() {
@@ -804,15 +773,15 @@ pub async fn merge_entities(
     let mut new_aliases: Vec<String> = new_aliases.into_iter().collect();
     new_aliases.sort();
 
-    let mut updated = db
-        .query("UPDATE $id SET aliases = $aliases, updated_at = time::now() RETURN AFTER")
+    let mut updated = q::SET_ALIASES
+        .on(db)
         .bind(("id", winner_id.clone()))
         .bind(("aliases", new_aliases))
         .await?;
     let updated_rows: Vec<EntityRow> = updated.take(0)?;
     winner = updated_rows.into_iter().next().ok_or_else(|| AppError::internal("winner update returned no row"))?;
 
-    db.query("DELETE $id").bind(("id", loser_id.clone())).await?;
+    q::DELETE_RECORD.on(db).bind(("id", loser_id.clone())).await?;
 
     Ok(entity_out(winner_id.table(), &winner))
 }
@@ -827,15 +796,15 @@ pub async fn get_entity(db: &Db, owner: &RecordId, entity_id: &RecordId) -> AppR
         return Ok(None);
     }
 
-    let mut mem_res = db
-        .query("SELECT * FROM memory WHERE subject = $id ORDER BY created_at DESC")
+    let mut mem_res = q::MEMORIES_OF
+        .on(db)
         .bind(("id", entity_id.clone()))
         .await?;
     let memories: Vec<MemoryRow> = mem_res.take(0)?;
 
-    let mut out_res = db.query("SELECT * FROM relates_to WHERE in = $id").bind(("id", entity_id.clone())).await?;
+    let mut out_res = q::EDGES_OUT.on(db).bind(("id", entity_id.clone())).await?;
     let outgoing: Vec<RelationRow> = out_res.take(0)?;
-    let mut in_res = db.query("SELECT * FROM relates_to WHERE out = $id").bind(("id", entity_id.clone())).await?;
+    let mut in_res = q::EDGES_IN.on(db).bind(("id", entity_id.clone())).await?;
     let incoming: Vec<RelationRow> = in_res.take(0)?;
 
     let mut owner_ids: Vec<Option<RecordId>> = vec![row.owner.clone()];
@@ -891,7 +860,7 @@ pub async fn list_entities(
     let mut rows_by_kind: Vec<(&str, EntityRow)> = Vec::new();
     for k in kinds {
         let mut res =
-            db.query(format!("SELECT * FROM {k} WHERE vault = $vault ORDER BY name")).bind(("vault", vault.clone())).await?;
+            q::select_by_vault(db, k, true).bind(("vault", vault.clone())).await?;
         let rows: Vec<EntityRow> = res.take(0)?;
         rows_by_kind.extend(rows.into_iter().map(|r| (k, r)));
     }
@@ -934,7 +903,7 @@ pub async fn graph(
     let mut rows_by_kind: Vec<(&str, EntityRow)> = Vec::new();
     for k in &requested {
         let mut res =
-            db.query(format!("SELECT * FROM {k} WHERE vault = $vault")).bind(("vault", vault.clone())).await?;
+            q::select_by_vault(db, k, false).bind(("vault", vault.clone())).await?;
         let rows: Vec<EntityRow> = res.take(0)?;
         rows_by_kind.extend(rows.into_iter().map(|r| (*k, r)));
     }
@@ -955,8 +924,8 @@ pub async fn graph(
     if !ids.is_empty() {
         // `in IN $ids` doesn't match against a union-typed `record<a|b|c>`
         // field reliably -- `$ids CONTAINS field` does.
-        let mut res = db
-            .query("SELECT * FROM relates_to WHERE $ids CONTAINS in AND $ids CONTAINS out")
+        let mut res = q::EDGES_AMONG
+            .on(db)
             .bind(("ids", ids))
             .await?;
         let rows: Vec<RelationRow> = res.take(0)?;
@@ -1010,8 +979,8 @@ pub async fn upsert_code_entity(
     let entity_rid: RecordId = entity.id.parse().map_err(|_| AppError::internal("entity id did not round-trip"))?;
 
     if let Some(summary) = summary {
-        let mut updated = db
-            .query("UPDATE $id SET summary = $summary, updated_at = time::now() RETURN AFTER")
+        let mut updated = q::SET_SUMMARY
+            .on(db)
             .bind(("id", entity_rid.clone()))
             .bind(("summary", summary.to_string()))
             .await?;
