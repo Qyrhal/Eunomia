@@ -618,7 +618,16 @@ async fn removing_both_layers_leaks() {
     assert!(text.contains(&w.b.canary), "with the database wall and the filters gone, A sees B's thread: {text}");
 }
 
-/// The harness can fail: take one filter out of one statement and the suite reports the leak.
+/// What a mutation case calls as the attacker, with the victim's ids at hand.
+enum Call {
+    Route(String),
+    Tool(&'static str, Value),
+}
+
+/// The harness can fail: take the owner or vault filter out of one statement (or the small group that
+/// guards one read) and the attacker, calling the matching route or tool as an ordinary user, gets the
+/// victim's data. Shared-database mode, so only the app filters stand between the orgs. Eleven
+/// statements across vaults, entities, cache, chat, connectors, audit and sync status.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn mutation_check_removing_one_filter_turns_the_suite_red() {
     let _g = SERIAL.lock().await;
@@ -628,17 +637,46 @@ async fn mutation_check_removing_one_filter_turns_the_suite_red() {
     let w = build(Mode::SharedDb).await;
     assert!(attack(&w, &w.a, &w.b, true).await.is_empty(), "baseline must be clean before mutating");
 
-    let cases = [
-        // (statement, text to remove, what leaks)
-        ("app.chat_thread_list", "WHERE owner = $owner", "GET /api/chat/threads"),
-        ("app.audit_list", "WHERE owner = $owner", "GET /api/audit"),
-        ("entities.list_by_vault", "WHERE vault = $vault", "GET /api/entities"),
+    type Case = (&'static str, &'static [(&'static str, &'static str)], fn(&Org) -> Call);
+    // (what it covers, [(statement, filter text)], the call that reads it)
+    let cases: [Case; 10] = [
+        ("chat threads", &[("app.chat_thread_list", "WHERE owner = $owner")], |_| Call::Route("/api/chat/threads".into())),
+        ("chat messages", &[("app.chat_messages_for_owner", "WHERE owner = $owner")], |_| Call::Route("/api/export".into())),
+        ("audit", &[("app.audit_list", "WHERE owner = $owner")], |_| Call::Route("/api/audit".into())),
+        ("vault list", &[("vaults.list_mine", "WHERE user = $user")], |_| Call::Tool("vault_list", json!({}))),
+        ("vault membership", &[("vaults.membership_active", "WHERE vault = $vault")], |v| Call::Tool("entities_get", json!({"id": v.ids.entities[0]}))),
+        ("connectors", &[("app.connector_by_kind", "WHERE owner = $owner")], |_| Call::Route("/api/connectors/github".into())),
+        ("sync status", &[("app.sources_sync_status_list", "WHERE owner = $owner")], |_| Call::Route("/api/sources/status".into())),
+        ("entity list", &[("entities.list_by_vault", "WHERE vault = $vault")], |_| Call::Route("/api/entities".into())),
+        ("entity graph", &[("entities.select_by_vault", "WHERE vault = $vault")], |_| Call::Tool("entities_graph", json!({}))),
+        ("cache list", &[("cache.generic_list", "owner = $owner"), ("cache.generic_count", "owner = $owner")], |_| Call::Tool("list", json!({"type": "note"}))),
     ];
-    for (stmt, from, route) in cases {
-        isolation::mutate(stmt, from, "WHERE true");
-        let hits = attack(&w, &w.a, &w.b, false).await; // a mutated write statement may legitimately change B
+    let probe = |caller: &Org, victim: &Org, call: Call| {
+        let w = &w;
+        let (token, user, secrets) = (caller.token.clone(), caller.user.clone(), victim.secrets());
+        async move {
+            let body = match call {
+                Call::Route(path) => raw(&w.router, "GET", &path, None, Some(&token), None).await.1,
+                Call::Tool(name, args) => registry::call(&w.state, &user, name, args).await.map(|v| v.to_string()).unwrap_or_default(),
+            };
+            secrets.iter().any(|s| body.contains(s.as_str()))
+        }
+    };
+    let mk = |f: fn(&Org) -> Call, victim: &Org| f(victim);
+
+    // clean first: no case leaks without a mutation, in either direction
+    for (what, _, call) in &cases {
+        assert!(!probe(&w.a, &w.b, mk(*call, &w.b)).await && !probe(&w.b, &w.a, mk(*call, &w.a)).await, "{what} leaks before any mutation");
+    }
+    for (what, stmts, call) in &cases {
+        for (stmt, from) in *stmts {
+            let to = from.replace(&from[from.find(|c: char| c.is_lowercase()).unwrap()..], "true");
+            isolation::mutate(stmt, from, &to);
+        }
+        // a mutated filter shows in whichever direction the rows sort the victim's after the caller's
+        let leaked = probe(&w.a, &w.b, mk(*call, &w.b)).await || probe(&w.b, &w.a, mk(*call, &w.a)).await;
         isolation::clear_mutations();
-        assert!(hits.iter().any(|h| h.call.contains(route)), "removing `{from}` from {stmt} must leak through {route}, got: {}", report(&hits));
+        assert!(leaked, "removing the filter from {stmts:?} ({what}) must leak the other org's data");
     }
 }
 
@@ -666,46 +704,38 @@ async fn credential_wall_org_a_cannot_read_org_b() {
     // the right credentials do work (the wall is not just a broken login)
     assert!(state.pool.test_session(a.org, &a_db, "app", &pass_a).await.is_ok());
 
-    // 2. A's live handle cannot be pointed at B's database, by the client or inside a query
+    // 2. A's live handle cannot be pointed at B's database, by the client or inside a query. The exact
+    // refusal is asserted, not "some error": a wrong-password or network failure must not pass for the wall.
     let a_handle: OrgDb = common::org_db(&state, &a).await;
+    let refusal = |db: &str| format!("You don't have permission to change to the {db} database");
     let session = a_handle.test_raw().clone();
-    let switched = session.use_db(&b_db).await;
-    let read = match switched {
-        Ok(_) => session.query("SELECT * FROM memory").await.map(|mut r| r.take_errors().len()),
-        Err(e) => Err(e),
-    };
-    let denied = match read {
-        Err(_) => true,
-        Ok(n_errors) => n_errors > 0,
-    };
-    assert!(denied, "A's session read org B's database after USE DB");
+    let err = session.use_db(&b_db).await.expect_err("A's session switched to B's database");
+    assert_eq!(err.to_string(), refusal(&b_db));
     let sneaky = a_handle.test_raw().clone();
-    let inline = sneaky.query(format!("USE DB `{b_db}`; SELECT * FROM memory;")).await;
-    let leaked = match inline {
-        Ok(mut r) => r.take::<Vec<Value>>(1).map(|v| serde_json::to_string(&v).unwrap().contains("b-only fact")).unwrap_or(false),
-        Err(_) => false,
-    };
-    assert!(!leaked, "USE DB inside a query reached org B");
+    let mut inline = sneaky.query(format!("USE DB `{b_db}`; SELECT * FROM memory;")).await.expect("the query is sent");
+    let errors: Vec<(usize, String)> = inline.take_errors().into_iter().map(|(i, e)| (i, e.to_string())).collect();
+    assert_eq!(errors, [(0, refusal(&b_db))], "USE DB inside a query must be refused");
+    // the SELECT after it still runs, in A's own database: none of B's rows
+    let after: Vec<Value> = inline.take(1).expect("the statement after the refused USE ran in A's database");
+    assert!(!serde_json::to_string(&after).unwrap().contains("b-only fact"), "USE DB inside a query reached org B");
 
     // 3. and not the control database either (accounts, credentials, every org's password)
-    let to_control = a_handle.test_raw().clone();
-    let c = match to_control.use_db(eunomia_backend::pool::CONTROL_DB).await {
-        Ok(_) => to_control.query("SELECT * FROM tenant").await.map(|mut r| (r.take_errors().len(), r.take::<Vec<Value>>(0).map(|v| v.len()).unwrap_or(0))),
-        Err(e) => Err(e),
-    };
-    assert!(matches!(c, Err(_) | Ok((1.., _)) | Ok((_, 0))), "an org handle read the control database: {c:?}");
+    let err = a_handle.test_raw().clone().use_db(eunomia_backend::pool::CONTROL_DB).await.expect_err("an org handle switched to control");
+    assert_eq!(err.to_string(), refusal(eunomia_backend::pool::CONTROL_DB));
 
     // 4. an org user cannot manage users or read the root-level info
-    let manage = a_handle.test_raw().clone().query("DEFINE USER intruder ON DATABASE PASSWORD 'x' ROLES OWNER").await;
-    assert!(manage.map(|mut r| !r.take_errors().is_empty()).unwrap_or(true), "an org handle created a database user");
+    let mut manage = a_handle.test_raw().clone().query("DEFINE USER intruder ON DATABASE PASSWORD 'x' ROLES OWNER").await.expect("the query is sent");
+    let errors: Vec<(usize, String)> = manage.take_errors().into_iter().map(|(i, e)| (i, e.to_string())).collect();
+    assert_eq!(errors, [(0, "IAM error: Not enough permissions to perform this action".to_string())]);
 
     // 5. the control handle is not an org handle either
-    let from_control = state.control.test_raw().clone();
-    let r = match from_control.use_db(&b_db).await {
-        Ok(_) => from_control.query("SELECT * FROM memory").await.map(|mut r| r.take_errors().len()),
-        Err(e) => Err(e),
-    };
-    assert!(matches!(r, Err(_) | Ok(1..)), "the control handle read an org database");
+    let err = state.control.test_raw().clone().use_db(&b_db).await.expect_err("the control handle switched to an org database");
+    assert_eq!(err.to_string(), refusal(&b_db));
+
+    // the refusals did not break A's own handle, and it sees its own data (none of B's)
+    let mut own = a_handle.test_raw().query("SELECT * FROM memory").await.unwrap();
+    let rows: Vec<Value> = own.take(0).unwrap();
+    assert!(!serde_json::to_string(&rows).unwrap().contains("b-only fact"));
 }
 
 /// Inviting an email from another org looks exactly like inviting nobody.
