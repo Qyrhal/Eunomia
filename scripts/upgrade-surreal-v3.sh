@@ -7,10 +7,15 @@
 # 3.x cannot read 2.x data and refuses downgrades, so the data is never
 # upgraded in place:
 #   1. stop the backend (nothing writes from here on)
-#   2. encrypted backup through the compose `backup` service (kept, "pre-v3-*")
-#   3. `surreal export --v3` from the running 2.x server, then rewrite the two
+#   2. encrypted backup (kept, "pre-v3-*"), taken by a one-off container of the NEW release's
+#      backup image that runs the RUNNING server's own `surreal` binary (copied out of its
+#      image), so no `backup` service has to exist yet and a 2.3 server is never exported
+#      by a 3.x CLI
+#   3. stop the old server and COPY its volume to a scratch volume; start a 2.7 server on the
+#      copy (the old volume is never opened by a newer version, because 2.6 -> 2.7 cannot be
+#      reverted in place); `surreal export --v3` from that copy, then rewrite the two
 #      index kinds 3.x dropped (MTREE -> HNSW, multi-field FULLTEXT -> one per field)
-#   4. stop the 2.x server, start the 3.x image from the compose file on a NEW
+#   4. start the 3.x image from the compose file on a NEW
 #      volume (SURREAL_DATA_VOLUME=eunomia-surreal-data-v3), import
 #   5. compare per-table record counts and the _migration ledger with 2.x
 #   6. match: record the new volume in .env. Mismatch or any error: delete the
@@ -20,8 +25,8 @@
 # lives in a temp dir that is shredded on exit.
 #
 # Environment: EUNOMIA_DIR (repo root), COMPOSE_PROJECT_NAME / COMPOSE_FILE (as
-# docker compose), EUNOMIA_SURREAL_EXPORT_IMAGE (CLI used against the 2.x server,
-# default surrealdb/surrealdb:v2.7.0, the first release with `export --v3`).
+# docker compose), EUNOMIA_SURREAL_EXPORT_IMAGE (2.x server run on the copy of the data,
+# and its CLI for the export; default surrealdb/surrealdb:v2.7.0, with `export --v3`).
 set -uo pipefail
 export PATH="$PATH:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin"
 
@@ -49,6 +54,7 @@ export SURREAL_USER SURREAL_PASS
 SURREAL_USER="$(envval SURREAL_USER root)"; SURREAL_PASS="$(envval SURREAL_PASS root)"
 NS="$(envval SURREAL_NS eunomia)"; DB="$(envval SURREAL_DB eunomia)"
 ENDPOINT=http://surrealdb:8000
+SCRATCH_HOST=v2scratch   # the 2.7 server on the copy of the data
 
 # --- 1. what is running, what does the compose file want ---
 cid="$(compose ps -q surrealdb 2>/dev/null | head -1)"
@@ -73,6 +79,8 @@ case "$old_major" in
   *) die "cannot tell the running SurrealDB version (image $old_image)" ;;
 esac
 NET="$(docker inspect -f '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{"\n"}}{{end}}' "$cid" | head -1)"
+OLD_VOLUME="$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Name}}{{end}}{{end}}' "$cid")"
+[ -n "$OLD_VOLUME" ] || die "cannot find the data volume of the running SurrealDB"
 PROJECT="$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project"}}' "$cid")"
 bid="$(compose ps -q backend 2>/dev/null | head -1)"
 base_compose="${COMPOSE_FILE:-docker-compose.yml}"
@@ -89,6 +97,12 @@ shred_tmp() {
 v3_volume_names() {
   docker volume ls -q --filter "label=com.docker.compose.volume=$V3_VOLUME" --filter "label=com.docker.compose.project=$PROJECT"
 }
+SCRATCH_VOLUME="${PROJECT}_eunomia-surreal-v2copy"; BIN_VOLUME="${PROJECT}_eunomia-surreal-oldbin"
+SCRATCH_CTR="${PROJECT}-v2scratch"
+cleanup_scratch() {
+  docker rm -f "$SCRATCH_CTR" >/dev/null 2>&1
+  docker volume rm "$SCRATCH_VOLUME" "$BIN_VOLUME" >/dev/null 2>&1
+}
 rollback() {
   log "ROLLING BACK: the old volume was not modified"
   if [ "$phase" -ge 2 ]; then
@@ -104,6 +118,7 @@ rollback() {
 }
 on_exit() {
   if [ "$DONE" != 1 ] && [ "$phase" -ge 1 ]; then rollback; fi
+  cleanup_scratch
   shred_tmp
 }
 trap on_exit EXIT
@@ -124,9 +139,32 @@ ledger() { echo 'SELECT version, name, checksum FROM _migration ORDER BY version
 phase=1
 if [ -n "$bid" ]; then compose stop backend >/dev/null || die "could not stop the backend"; fi
 log "backend stopped; taking the encrypted pre-upgrade backup"
-compose exec -T backup eunomia-backup now pre-v3 || die "backup failed (is the backup service running and BACKUP_ENCRYPTION_KEY set in .env?)"
+# The backup image comes from the NEW compose file (its tag is already in .env); no `backup` service
+# needs to be running, or to have ever existed. It runs the old server's own CLI via SURREAL_BIN.
+cleanup_scratch
+bc="$(docker create -v "$BIN_VOLUME:/o" busybox:1.36 true)" || die "could not create the CLI volume"
+oc="$(docker create "$old_image")" && docker cp "$oc:/surreal" "$T/surreal-old" >/dev/null && docker rm "$oc" >/dev/null \
+  || die "could not copy the surreal binary out of $old_image"
+docker cp "$T/surreal-old" "$bc:/o/surreal" >/dev/null; docker rm "$bc" >/dev/null
+compose pull -q backup >/dev/null 2>&1 || compose build -q backup >/dev/null || die "could not get the backup image (pull and build both failed)"
+compose run --rm --no-deps -T -v "$BIN_VOLUME:/opt/oldbin:ro" -e SURREAL_BIN=/opt/oldbin/surreal backup now pre-v3 \
+  || die "backup failed (is BACKUP_ENCRYPTION_KEY set in .env?)"
 
-# --- 3. export for 3.x and convert what 3.x dropped ---
+# --- 3. copy the data, run 2.7 on the copy, export for 3.x and convert what 3.x dropped ---
+phase=2
+compose stop surrealdb >/dev/null || die "could not stop surrealdb"
+log "copying volume $OLD_VOLUME to $SCRATCH_VOLUME and starting $EXPORT_IMAGE on the copy"
+docker volume create "$SCRATCH_VOLUME" >/dev/null
+docker run --rm -v "$OLD_VOLUME:/from:ro" -v "$SCRATCH_VOLUME:/to" busybox:1.36 cp -a /from/. /to/ || die "could not copy the data volume"
+docker run -d --name "$SCRATCH_CTR" --network "$NET" --network-alias "$SCRATCH_HOST" --user root -v "$SCRATCH_VOLUME:/data" \
+  --entrypoint /surreal "$EXPORT_IMAGE" start --user "$SURREAL_USER" --pass "$SURREAL_PASS" rocksdb:/data/eunomia.db >/dev/null \
+  || die "could not start $EXPORT_IMAGE on the copy"
+ENDPOINT="http://$SCRATCH_HOST:8000"
+for i in $(seq 1 150); do
+  docker run --rm --network "$NET" "$EXPORT_IMAGE" isready --endpoint "$ENDPOINT" >/dev/null 2>&1 && break
+  [ "$i" -lt 150 ] || die "$EXPORT_IMAGE did not come up on the copy of the data (see: docker logs $SCRATCH_CTR)"
+  sleep 2
+done
 log "exporting with $EXPORT_IMAGE export --v3"
 # create + start -a instead of `run --rm`: with --rm, docker can drop the tail of a large stdout.
 # A truncated export (last statement not closed by `;`) is retried, never imported.
@@ -153,7 +191,7 @@ awk '
   }
   { print }' "$T/export.surql" > "$T/import.surql"
 
-# --- 4. the 2.x truth: counts and ledger, taken with the backend stopped ---
+# --- 4. the 2.x truth: counts and ledger, taken from the copy with the backend stopped ---
 counts2="$(count_tables "$EXPORT_IMAGE" "${tables[@]}")"
 [ "$(wc -l <<<"$counts2")" -eq "${#tables[@]}" ] || die "could not count every table on 2.x"
 has_ledger=false; printf '%s\n' "${tables[@]}" | grep -qx _migration && has_ledger=true
@@ -161,8 +199,8 @@ ledger2=""; $has_ledger && ledger2="$(ledger "$EXPORT_IMAGE")"
 log "2.x counts: $(tr '\n' ' ' <<<"$counts2")"
 
 # --- 5. swap in 3.x on a new volume and import ---
-phase=2
-compose stop surrealdb >/dev/null || die "could not stop surrealdb"
+docker rm -f "$SCRATCH_CTR" >/dev/null 2>&1
+ENDPOINT=http://surrealdb:8000
 v3_volume_names | while read -r v; do docker volume rm "$v" >/dev/null 2>&1 && log "removed leftover volume $v from an earlier attempt"; done
 export SURREAL_DATA_VOLUME="$V3_VOLUME"
 compose up -d --wait surrealdb >/dev/null || die "SurrealDB $target_image did not start on the new volume"

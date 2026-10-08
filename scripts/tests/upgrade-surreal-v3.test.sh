@@ -146,5 +146,32 @@ echo "=== run 3: idempotent re-run ==="
 bash "$W/upgrade.sh"; rc=$?
 check "re-run on 3.x exits 0 and changes nothing" test "$rc" -eq 0 -a "$(running_image)" = "$NEW_IMG"
 
+# --- case B: the REAL released install. v1.2.2 ships surrealdb:v2.3 and has NO `backup` service. ---
+# Needs Docker and the v1.2.2 tag in the checkout (CI: fetch-depth 0). Starts over from nothing.
+echo "=== case B: upgrade from the released v1.2.2 compose file ==="
+REL="$(git -C "$ROOT" show v1.2.2:docker-compose.yml 2>/dev/null)"
+if [ -z "$REL" ]; then echo "SKIP case B: tag v1.2.2 not available"; else
+  docker compose down -v --remove-orphans >/dev/null 2>&1
+  docker volume ls -q --filter label=com.docker.compose.project=fw-upgrade | xargs docker volume rm >/dev/null 2>&1
+  rm -f "$W/.env.bak"; printf 'JWT_SECRET=x\nENCRYPTION_KEY=y\nBACKUP_ENCRYPTION_KEY=%s\nEUNOMIA_IMAGE_TAG=fw-local\n' "$BACKUP_ENCRYPTION_KEY" > "$W/.env"
+  cp "$ROOT/backend/scripts/backup/Dockerfile" "$W/backend/scripts/backup/Dockerfile"   # pristine: 3.x CLI inside
+  printf '%s\n' "$REL" > "$W/docker-compose.yml"
+  check "case B: the released compose file has no backup service" bash -c "! docker compose config --services | grep -qx backup"
+  check "case B: the released compose file pins surrealdb:v2.3" bash -c "docker compose config --images | grep -qx 'surrealdb/surrealdb:v2.3'"
+  docker compose up -d --wait --pull never surrealdb backend >/dev/null || { echo "case B stack did not start"; FAIL=$((FAIL + 1)); }
+  OLD23=surrealdb/surrealdb:v2.3
+  printf 'DEFINE TABLE person SCHEMALESS;\nCREATE person:a SET name = "a";\nCREATE person:b SET name = "b";\nCREATE person:c SET name = "c";\n' | sq "$OLD23" >/dev/null
+  check "case B: 2.3 holds the rows" test "$(count "$OLD23" person)" = 3
+  # the "update": new release's compose file (has a backup service, pins 3.x); the .env tag selects a local build
+  cp "$W/compose.new" "$W/docker-compose.yml"
+  bash "$W/upgrade.sh"; rc=$?
+  echo "=== case B exit code $rc ==="
+  check "case B: script exits 0 with no pre-existing backup service" test "$rc" -eq 0
+  check "case B: 3.3 is running with the same rows" test "$(running_image)" = "$NEW_IMG" -a "$(count "$NEW_IMG" person)" = 3
+  check "case B: an encrypted pre-v3 backup was written" bash -c "docker compose run --rm --no-deps -T backup list | grep -q 'pre-v3-.*surql.enc'"
+  check "case B: the backup restores (integrity check passes) with the key" bash -c "f=\$(docker compose run --rm --no-deps -T backup list | grep -o 'pre-v3-[^ ]*surql.enc' | head -1); docker compose run --rm --no-deps -T --entrypoint sh backup -c \"head -n1 /backups/\$f | grep -q '^EUNOMIA-BK2 '\""
+  check "case B: scratch container and volumes are gone" test -z "$(docker ps -aq --filter name=fw-upgrade-v2scratch; docker volume ls -q --filter name=v2copy --filter name=oldbin)"
+fi
+
 echo "upgrade-surreal-v3: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

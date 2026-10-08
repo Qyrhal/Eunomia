@@ -136,10 +136,13 @@ jobs:
       - run: bash -n scripts/auto-update.sh scripts/connect-agents.sh scripts/upgrade-surreal-v3.sh
 
   # Real SurrealDB 2.7 -> 3.3 data move (scripts/upgrade-surreal-v3.sh), including a
-  # forced mismatch that must roll back. Throwaway compose project fw-upgrade.
+  # forced mismatch that must roll back, and an upgrade from the released v1.2.2
+  # compose file (surrealdb:v2.3, no backup service). Throwaway compose project fw-upgrade.
   upgrade-surreal-v3:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # case B reads the released v1.2.2 compose file from its tag
       - run: bash scripts/tests/upgrade-surreal-v3.test.sh
