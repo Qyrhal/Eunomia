@@ -45,8 +45,8 @@ export default function AuthorTag({ name, cursor = false, title }: { name: strin
   if (!cursor) return tag;
   return (
     <span className="inline-flex items-start gap-0.5">
-      <CursorGlyph color={color} />
-      <span className="mt-2">{tag}</span>
+      <CursorGlyph color={color} size={18} />
+      <span className="mt-3">{tag}</span>
     </span>
   );
 }

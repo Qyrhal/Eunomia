@@ -441,7 +441,7 @@ function Agents({ tokens }: { tokens: ApiToken[] | null | "error" }) {
                   </time>
                 ) : (
                   <span className="text-[11.5px] pb-[3px]" style={{ color: "var(--ink-faint)" }}>
-                    unused
+                    never used
                   </span>
                 )}
               </li>

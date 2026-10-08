@@ -574,11 +574,11 @@ export default function EntityGraph({
         <div className="flex items-center gap-3 min-w-0">
           {selected.kind === "person" && <Blobatar name={selected.name || selected.id} animate="hover" size={36} background="circle" />}
           <div className="min-w-0">
-            <span className="label inline-flex items-center gap-1.5">
+            <h2 className="text-[16px] font-semibold tracking-[-0.015em] truncate">{selected.name}</h2>
+            <span className="text-[12px] inline-flex items-center gap-1.5 mt-0.5" style={{ color: "var(--ink-dim)" }}>
               <span className="w-2 h-2 rounded-full" style={{ background: KIND_COLOR[selected.kind] }} aria-hidden />
               {KIND_LABEL[selected.kind]}
             </span>
-            <h2 className="text-[16px] font-semibold tracking-[-0.015em] mt-0.5 truncate">{selected.name}</h2>
           </div>
         </div>
         <div className="flex items-center gap-0.5 shrink-0 -mr-1">
