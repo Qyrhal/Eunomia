@@ -17,17 +17,17 @@ async fn a_statement_naming_the_other_databases_tables_fails_with_tenant_denied(
     assert_eq!(NO_ORG_CONTEXT.load(Ordering::Relaxed), 0);
 
     // tenant handle, control table
-    let err = store::dynamic(&org, "test.crossing", "SELECT * FROM session").await.err().expect("must be refused");
+    let err = store::dynamic(&org, "test.crossing", "SELECT * FROM session").await.expect_err("must be refused");
     assert_eq!(AppError::from(err).code, ErrorCode::TenantDenied);
     assert_eq!(NO_ORG_CONTEXT.load(Ordering::Relaxed), 1, "still counted");
 
     // control handle, tenant table
-    let err = store::dynamic_control(app.control(), "test.crossing", "SELECT * FROM memory").await.err().expect("must be refused");
+    let err = store::dynamic_control(app.control(), "test.crossing", "SELECT * FROM memory").await.expect_err("must be refused");
     assert_eq!(AppError::from(err).code, ErrorCode::TenantDenied);
     assert_eq!(NO_ORG_CONTEXT.load(Ordering::Relaxed), 2);
 
     // the refusal is up front: a write naming a control table changes nothing
-    let err = store::dynamic(&org, "test.crossing", "CREATE user SET email = 'x'").await.err().expect("must be refused");
+    let err = store::dynamic(&org, "test.crossing", "CREATE user SET email = 'x'").await.expect_err("must be refused");
     assert_eq!(AppError::from(err).code, ErrorCode::TenantDenied);
 
     // own tables, and a field that happens to be named like a table, still run

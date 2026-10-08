@@ -27,6 +27,8 @@ use crate::error::{AppError, AppResult, ErrorCode};
 use crate::models_user::User;
 use crate::state::{AppState, OrgState};
 
+use super::schemas::{FinanceSummary, PocketaiSummary, SnapshotOut};
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/connectors", get(list_all))
@@ -71,93 +73,6 @@ struct TestOut {
     /// Present only when the ping failed with an error.
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
-}
-
-// The shapes below document what `connectors::clients::compute_*` builds with
-// `json!`; they are schema only (the handlers pass the computed value through).
-#[derive(Serialize, utoipa::ToSchema)]
-#[allow(dead_code)]
-struct FinanceAccount {
-    name: String,
-    balance: String,
-}
-
-#[derive(Serialize, utoipa::ToSchema)]
-#[allow(dead_code)]
-struct SpendByCategory {
-    category: String,
-    amount: f64,
-}
-
-#[derive(Serialize, utoipa::ToSchema)]
-#[allow(dead_code)]
-struct SpendByDay {
-    day: String,
-    amount: f64,
-}
-
-#[derive(Serialize, utoipa::ToSchema)]
-#[allow(dead_code)]
-struct FinanceTransaction {
-    description: String,
-    amount: String,
-    created_at: String,
-}
-
-#[derive(Serialize, utoipa::ToSchema)]
-#[allow(dead_code)]
-struct FinanceSummary {
-    balance: f64,
-    accounts: Vec<FinanceAccount>,
-    spend_by_category: Vec<SpendByCategory>,
-    spend_by_day: Vec<SpendByDay>,
-    recent_transactions: Vec<FinanceTransaction>,
-}
-
-#[derive(Serialize, utoipa::ToSchema)]
-#[allow(dead_code)]
-struct WeekSummary {
-    transaction_count: i64,
-    spent: f64,
-}
-
-#[derive(Serialize, utoipa::ToSchema)]
-#[allow(dead_code)]
-struct TagCount {
-    tag: String,
-    count: i64,
-}
-
-#[derive(Serialize, utoipa::ToSchema)]
-#[allow(dead_code)]
-struct RecentRecording {
-    title: String,
-    duration_minutes: f64,
-    recorded_at: Option<String>,
-    tags: Vec<String>,
-}
-
-#[derive(Serialize, utoipa::ToSchema)]
-#[allow(dead_code)]
-struct PocketaiSummary {
-    recordings_count: i64,
-    total_duration_minutes: f64,
-    tag_breakdown: Vec<TagCount>,
-    recent_recordings: Vec<RecentRecording>,
-}
-
-#[derive(Serialize, utoipa::ToSchema)]
-#[allow(dead_code)]
-struct PocketaiWeek {
-    recordings_count: i64,
-}
-
-/// Each side is null when that connector is not connected or its call failed.
-#[derive(Serialize, utoipa::ToSchema)]
-#[allow(dead_code)]
-struct SnapshotOut {
-    up_bank: Option<WeekSummary>,
-    pocketai: Option<PocketaiWeek>,
 }
 
 enum AnyClient {
