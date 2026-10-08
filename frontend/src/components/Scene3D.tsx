@@ -1,8 +1,7 @@
 "use client";
 
-// One small three.js scene shared by the 3D entity graph and the vector
-// cloud: instanced spheres (cheap for thousands of points), optional link
-// lines and labelled axes, orbit/zoom, hover tooltip, click to select.
+// The vector cloud's three.js scene: instanced spheres (cheap for thousands
+// of points), labelled axes, orbit/zoom, hover tooltip, click to select.
 // Coordinates can be any scale -- they're fitted into a unit sphere.
 
 import { useEffect, useRef, useState } from "react";
@@ -10,21 +9,15 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 
 export type ScenePoint = { id: string; x: number; y: number; z: number; color: string; label: string; size?: number };
-export type SceneLink = { source: string; target: string };
-
 type Props = {
   points: ScenePoint[];
-  links?: SceneLink[];
   axes?: [string, string, string];
   selectedId?: string | null;
   onSelect?: (id: string) => void;
   ariaLabel: string;
-  /** draw every point's label (only sensible for small graphs) */
-  labels?: boolean;
 };
 
 const CLICK_SLOP = 4; // px a pointer may move and still count as a click
-const MAX_LABELS = 80;
 
 // "var(--kind-person)" -> the computed color; three can't read CSS variables.
 function cssColor(c: string): THREE.Color {
@@ -33,7 +26,7 @@ function cssColor(c: string): THREE.Color {
   return new THREE.Color(value || "#888888");
 }
 
-export default function Scene3D({ points, links = [], axes, selectedId, onSelect, ariaLabel, labels }: Props) {
+export default function Scene3D({ points, axes, selectedId, onSelect, ariaLabel }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
   const onSelectRef = useRef(onSelect);
@@ -83,7 +76,7 @@ export default function Scene3D({ points, links = [], axes, selectedId, onSelect
     const pos = points.map((p) => new THREE.Vector3((p.x - c[0]) / radius, (p.y - c[1]) / radius, (p.z - c[2]) / radius));
     const index = new Map(points.map((p, i) => [p.id, i]));
 
-    const baseSize = n > 400 ? 0.016 : links.length || labels ? 0.045 : 0.035;
+    const baseSize = n > 400 ? 0.016 : 0.035;
     const mesh = new THREE.InstancedMesh(
       new THREE.SphereGeometry(1, 14, 10),
       new THREE.MeshStandardMaterial({ roughness: 0.55, metalness: 0.05 }),
@@ -101,19 +94,6 @@ export default function Scene3D({ points, links = [], axes, selectedId, onSelect
       mesh.setColorAt(i, cssColor(p.color));
     });
     scene.add(mesh);
-
-    if (links.length) {
-      const verts: number[] = [];
-      for (const l of links) {
-        const a = index.get(l.source);
-        const b = index.get(l.target);
-        if (a === undefined || b === undefined) continue;
-        verts.push(pos[a].x, pos[a].y, pos[a].z, pos[b].x, pos[b].y, pos[b].z);
-      }
-      const g = new THREE.BufferGeometry();
-      g.setAttribute("position", new THREE.Float32BufferAttribute(verts, 3));
-      scene.add(new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color: cssColor("var(--ink-faint)"), transparent: true, opacity: 0.45 })));
-    }
 
     // axis lines + labels at their positive ends
     const axisEnds: THREE.Vector3[] = [];
@@ -138,7 +118,6 @@ export default function Scene3D({ points, links = [], axes, selectedId, onSelect
 
     // HTML labels, repositioned every frame (no React re-render)
     overlay.replaceChildren();
-    const labelled = labels && n <= MAX_LABELS ? points.map((_, i) => i) : [];
     const tag = (text: string, faint = false) => {
       const el = document.createElement("span");
       el.textContent = text;
@@ -147,7 +126,6 @@ export default function Scene3D({ points, links = [], axes, selectedId, onSelect
       overlay.appendChild(el);
       return el;
     };
-    const pointTags = labelled.map((i) => tag(points[i].label.length > 18 ? `${points[i].label.slice(0, 17)}…` : points[i].label));
     const axisTags = (axes ?? []).map((a) => tag(a, true));
     const selectedTag = tag("");
 
@@ -184,9 +162,8 @@ export default function Scene3D({ points, links = [], axes, selectedId, onSelect
         lastSelected = sel;
       }
       renderer.render(scene, camera);
-      labelled.forEach((i, k) => project(pointTags[k], pos[i], 10));
       axisEnds.forEach((p, k) => project(axisTags[k], p));
-      if (sel !== undefined && !labelled.includes(sel)) {
+      if (sel !== undefined) {
         selectedTag.textContent = points[sel].label;
         project(selectedTag, pos[sel], 12);
       } else selectedTag.style.display = "none";
@@ -238,7 +215,7 @@ export default function Scene3D({ points, links = [], axes, selectedId, onSelect
       canvas.remove();
       overlay.replaceChildren();
     };
-  }, [points, links, axes, labels]);
+  }, [points, axes]);
 
   return (
     <div ref={wrapRef} className="relative w-full h-full overflow-hidden" role="img" aria-label={ariaLabel}>

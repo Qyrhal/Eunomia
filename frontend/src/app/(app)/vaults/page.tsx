@@ -381,7 +381,7 @@ function CreateVaultCard({ onCreated }: { onCreated: () => void }) {
         style={{ color: "var(--ink-dim)" }}
       >
         <Plus size={15} />
-        New org vault
+        New vault
       </button>
     );
   }
@@ -391,7 +391,7 @@ function CreateVaultCard({ onCreated }: { onCreated: () => void }) {
       <input
         autoFocus
         className="field flex-1 px-3 py-2 text-[13px]"
-        placeholder="Vault name (e.g. Acme Team)"
+        placeholder="Vault name, e.g. a project, service, client, team or homelab"
         value={name}
         onChange={(e) => setName(e.target.value)}
         onKeyDown={(e) => e.key === "Enter" && create()}
@@ -510,8 +510,9 @@ export default function VaultsPage() {
         <div className="eyebrow mb-2">Vaults</div>
         <h1 className="font-display text-3xl">Who sees what</h1>
         <p className="text-[13px] mt-2" style={{ color: "var(--ink-faint)" }}>
-          A vault is a scope of shared entities and memory. Your personal vault is always
-          private; invite someone to an org vault to share knowledge with them.
+          A vault is a separate scope of entities and memory. Your personal vault is always private.
+          Make more for anything you want kept apart (a project or service, a client, a team, your homelab), and share one
+          by inviting people. Agents can refer to a vault by its name.
         </p>
       </div>
 
@@ -527,10 +528,10 @@ export default function VaultsPage() {
       </section>
 
       <section className="flex flex-col gap-3">
-        <div className="eyebrow">Shared &amp; organisation</div>
+        <div className="eyebrow">Other vaults</div>
         {org.length === 0 && (
           <p className="text-[12.5px]" style={{ color: "var(--ink-faint)" }}>
-            No shared vaults yet — create one, or wait for an invite.
+            No other vaults yet. Create one for anything you want kept apart, or accept an invite.
           </p>
         )}
         {org.map((v) => (

@@ -56,7 +56,9 @@ async fn main() {
         .layer(cors)
         .with_state(state);
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:8001").await.unwrap();
+    // PORT: lets several dev/test backends run side by side; containers keep 8001
+    let port = std::env::var("PORT").unwrap_or_else(|_| "8001".to_string());
+    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}")).await.unwrap();
     tracing::info!("listening on {}", listener.local_addr().unwrap());
     axum::serve(listener, app).await.unwrap();
 }

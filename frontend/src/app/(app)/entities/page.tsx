@@ -20,7 +20,7 @@ export default function EntitiesPage() {
           </h1>
           <p className="text-[12.5px] mt-1" style={{ color: "var(--ink-dim)" }}>
             {view === "graph"
-              ? "People, organisations and locations, and how they relate, in 3D."
+              ? "People, organisations and locations, and how they relate."
               : "The shape of everything stored, projected from vector space to 3D."}
           </p>
         </div>

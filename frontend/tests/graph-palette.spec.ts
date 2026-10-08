@@ -22,19 +22,33 @@ async function seedTwoRelatedPeople(page: Page) {
 }
 
 test.describe("Entity graph", () => {
-  test("renders in 3D, selects a node, clears selection on vault switch", async ({ page }) => {
+  test("draws relations that follow dragged nodes, selects on click, clears selection on vault switch", async ({ page }) => {
     await registerAndOnboard(page, uniqueEmail("graph"));
     await seedTwoRelatedPeople(page);
     await tool(page, "vault_create", { name: "Other vault" });
 
     await page.goto("/entities");
-    const graph = page.getByRole("img", { name: "Entity relationship graph" });
-    await expect(graph.locator("canvas")).toBeVisible();
-    // labels are drawn over the WebGL canvas for small graphs
-    await expect(graph.locator(".scene3d-label", { hasText: "Ada Lovelace" })).toBeAttached();
+    const svg = page.getByRole("img", { name: "Entity relationship graph" });
+    const link = svg.locator("line");
+    await expect(link).toHaveCount(1);
 
-    // every node is reachable without a mouse, and selecting opens the panel
-    await page.getByRole("button", { name: "Ada Lovelace" }).press("Enter");
+    const adaNode = svg.locator("g").filter({ has: page.locator("title", { hasText: /^Ada Lovelace/ }) }).last();
+    await expect(adaNode).toBeVisible();
+
+    // Dragging a node moves the end of its link with it.
+    await page.waitForTimeout(1500); // let the force layout settle
+    const before = [await link.getAttribute("x1"), await link.getAttribute("x2")];
+    const box = (await adaNode.boundingBox())!;
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width / 2 + 120, box.y + box.height / 2 + 90, { steps: 8 });
+    await page.mouse.up();
+    await expect
+      .poll(async () => [await link.getAttribute("x1"), await link.getAttribute("x2")])
+      .not.toEqual(before);
+
+    // A click (no drag) selects the node.
+    await adaNode.click();
     await expect(page.getByRole("button", { name: "Edit" })).toBeVisible();
 
     // Switching vault drops the selection from the old vault.

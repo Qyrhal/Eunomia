@@ -1,7 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Check, Copy, Download, Plug, RefreshCw, Trash2 } from "lucide-react";
 import {
   auth,
@@ -355,11 +356,23 @@ const TABS = [
 
 type TabId = (typeof TABS)[number]["id"];
 
+// useSearchParams needs a Suspense boundary for the static build.
 export default function SettingsPage() {
-  // ?tab=updates (the sidebar's "Update available" link) opens that tab
-  const [tab, setTab] = useState<TabId>(() =>
-    typeof window !== "undefined" && new URLSearchParams(window.location.search).get("tab") === "updates" ? "updates" : "general"
+  return (
+    <Suspense>
+      <Settings />
+    </Suspense>
   );
+}
+
+function Settings() {
+  // The tab lives in the URL (?tab=updates), so links to it -- like the
+  // sidebar's "Update available" badge -- work from any page, this one included.
+  const router = useRouter();
+  const params = useSearchParams();
+  const requested = params.get("tab");
+  const tab: TabId = TABS.some((t) => t.id === requested) ? (requested as TabId) : "general";
+  const setTab = (id: TabId) => router.replace(id === "general" ? "/settings" : `/settings?tab=${id}`, { scroll: false });
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [apiKeyInput, setApiKeyInput] = useState("");
   const [baseUrlInput, setBaseUrlInput] = useState("");

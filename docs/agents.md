@@ -83,7 +83,7 @@ No. The connected agent is the model.
 | `entity_update` / `entity_merge` / `entity_delete` | Edit, de-duplicate, delete entities |
 | `code_entity_upsert` / `code_relate` | Map repositories, files, symbols and their relations |
 | `consolidate_observations` | Fold new facts into each entity's belief |
-| `vault_list` / `vault_create` / `vault_clone` / `vault_merge` | Manage vaults; merge two into a new one |
+| `vault_list` / `vault_create` / `vault_clone` / `vault_merge` | Manage vaults (separate scopes for projects, clients, teams, …); merge two into a new one. Any tool's `vault_id` also accepts a vault's name |
 | `vault_invite` / `vault_members` / `vault_remove_member` / `vault_leave` / `vault_rename` / `vault_delete` | Sharing |
 
 Destructive tools are flagged `destructiveHint` so clients can ask first.
