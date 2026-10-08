@@ -113,7 +113,19 @@ struct EntityRow {
 /// source `cache_record`, and any `cache_record`s `linked_to` that source --
 /// that's the "follow the entity graph" hop the diagram's Graph arm
 /// describes. Mirrors `cache/recall.py`'s `_graph_arm`.
-async fn graph_arm(db: &Db, owner: &RecordId, vault: &RecordId, query: &str, limit: usize) -> AppResult<Vec<String>> {
+///
+/// Records are the caller's own synced data, not the vault's, so they're
+/// followed only in the caller's personal vault (`include_cache_record`) --
+/// in a shared vault a memory's source would otherwise surface the caller's
+/// own same-id record as if it belonged there.
+async fn graph_arm(
+    db: &Db,
+    owner: &RecordId,
+    vault: &RecordId,
+    query: &str,
+    limit: usize,
+    include_cache_record: bool,
+) -> AppResult<Vec<String>> {
     let q_lower = query.to_lowercase();
 
     let mut matches: Vec<(usize, RecordId)> = Vec::new();
@@ -149,7 +161,7 @@ async fn graph_arm(db: &Db, owner: &RecordId, vault: &RecordId, query: &str, lim
         let mem_rows: Vec<MemRow> = res.take(0)?;
         for mem in mem_rows {
             keys.push(format!("memory:{}", mem.id));
-            if let Some(source) = mem.source {
+            if let Some(source) = mem.source.filter(|_| include_cache_record) {
                 let src_literal = cs::literal(&source);
                 keys.push(format!("cache_record:{src_literal}"));
                 for link in cs::links(db, owner, &src_literal, None).await? {
@@ -389,7 +401,7 @@ pub async fn recall(
     } else {
         Vec::new()
     };
-    let graph_keys = graph_arm(db, owner, &vault, query, pool).await?;
+    let graph_keys = graph_arm(db, owner, &vault, query, pool, personal).await?;
     let temporal_keys = temporal_ids(db, owner, &vault, time_range, pool, personal).await?;
 
     let keyword_keys: Vec<String> = keyword_ids.iter().map(|i| format!("cache_record:{i}")).collect();

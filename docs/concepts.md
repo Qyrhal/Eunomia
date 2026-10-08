@@ -19,6 +19,15 @@ vaults only when you ask.
   relations are de-duplicated, and two observations are joined. Use it from
   the Vaults page or the `vault_merge` tool.
 
+**Isolation guarantees.** Every read and write checks that you are an
+active member of the vault right now: a pending invitation gives no access,
+and removing someone or leaving takes effect on the next call. A vault name
+only matches vaults you belong to. Relations and entity merges stay inside one
+vault. Tools without a `vault_id` (and the export) always use your own
+personal vault, even if you've joined someone else's. Synced records belong
+to you, not to a vault: they show up only in your personal vault's recall and
+vector cloud, and other members never see them.
+
 ## Entities and memories
 
 Entities are people, organisations, locations, repositories, files and

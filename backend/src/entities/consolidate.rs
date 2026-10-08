@@ -148,8 +148,16 @@ pub async fn consolidate_subject(
     subject_id: &RecordId,
     mission: Option<&str>,
 ) -> AppResult<Option<ConsolidatedObservation>> {
+    if !super::service::is_entity_id(subject_id) {
+        return Ok(None);
+    }
     let subject_row: Option<SubjectRow> = db.select(subject_id.clone()).await?;
     let Some(subject_row) = subject_row else { return Ok(None) };
+    // Not a member: same as not found -- the facts must never reach the
+    // caller's model, nor the observation land in someone else's vault.
+    if !crate::vaults::service::accessible_vault_ids(db, owner).await?.contains(&subject_row.vault) {
+        return Ok(None);
+    }
 
     let mut raw_res = db
         .query(r#"SELECT * FROM memory WHERE subject = $id AND type IN ["world","experience"] ORDER BY created_at"#)

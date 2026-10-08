@@ -198,13 +198,19 @@ pub async fn accessible_vault_ids(db: &Db, user_id: &RecordId) -> AppResult<Vec<
 
 /// `user_id`'s personal vault -- the implicit scope for any tool call that
 /// doesn't pass `vault_id`, so existing single-user callers need no changes.
+/// Kind alone is ambiguous (joining someone else's personal vault, or making
+/// another `personal` one, adds more), so it's the oldest membership: the
+/// vault registration created.
 pub async fn default_vault_id(db: &Db, user_id: &RecordId) -> AppResult<RecordId> {
     #[derive(Deserialize)]
     struct Row {
         vault: RecordId,
     }
     let mut res = db
-        .query("SELECT vault FROM vault_member WHERE user = $user AND status = \"active\" AND vault.kind = \"personal\" LIMIT 1")
+        .query(
+            "SELECT vault, created_at FROM vault_member WHERE user = $user AND status = \"active\" \
+             AND vault.kind = \"personal\" ORDER BY created_at ASC LIMIT 1",
+        )
         .bind(("user", user_id.clone()))
         .await?;
     let rows: Vec<Row> = res.take(0)?;
@@ -397,9 +403,9 @@ pub async fn remove_member(db: &Db, user_id: &RecordId, vault_id: &RecordId, ema
         .await?
         .ok_or_else(|| AppError::bad_request(format!("{email} is not a member or invitee")))?;
 
-    if target_membership.role == "owner" {
+    if target_membership.role == "owner" && target_membership.status == "active" {
         let mut res = db
-            .query("SELECT count() FROM vault_member WHERE vault = $vault AND role = \"owner\" GROUP ALL")
+            .query("SELECT count() FROM vault_member WHERE vault = $vault AND role = \"owner\" AND status = \"active\" GROUP ALL")
             .bind(("vault", vault_id.clone()))
             .await?;
         let rows: Vec<CountRow> = res.take(0)?;
@@ -544,8 +550,9 @@ async fn copy_into(db: &Db, user_id: &RecordId, src: &RecordId, dest: &RecordId,
 
     for (old_id, new_id) in id_map.clone() {
         let mut res = db
-            .query("SELECT * FROM memory WHERE subject = $id")
+            .query("SELECT * FROM memory WHERE subject = $id AND vault = $vault")
             .bind(("id", old_id))
+            .bind(("vault", src.clone()))
             .await?;
         let memories: Vec<MemoryRow> = res.take(0)?;
         for mem in memories {
@@ -715,7 +722,7 @@ pub async fn leave_vault(db: &Db, user_id: &RecordId, vault_id: &RecordId) -> Ap
         let others = others_rows.first().map(|r| r.count).unwrap_or(0);
 
         let mut res = db
-            .query("SELECT count() FROM vault_member WHERE vault = $vault AND role = \"owner\" GROUP ALL")
+            .query("SELECT count() FROM vault_member WHERE vault = $vault AND role = \"owner\" AND status = \"active\" GROUP ALL")
             .bind(("vault", vault_id.clone()))
             .await?;
         let owners_rows: Vec<CountRow> = res.take(0)?;

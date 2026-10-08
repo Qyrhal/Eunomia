@@ -304,9 +304,38 @@ async fn emails_for(db: &Db, user_ids: Vec<Option<RecordId>>) -> AppResult<HashM
     Ok(rows.into_iter().map(|r| (r.id.to_string(), r.email)).collect())
 }
 
+/// Whether `rid` points into an entity table. Any other row with a `vault`
+/// field (a `memory`, a `vault_member`) must never be read, edited or deleted
+/// as an "entity".
+pub fn is_entity_id(rid: &RecordId) -> bool {
+    KINDS.contains(&rid.table())
+}
+
 async fn select_entity(db: &Db, rid: &RecordId) -> AppResult<Option<EntityRow>> {
+    if !is_entity_id(rid) {
+        return Ok(None);
+    }
     let row: Option<EntityRow> = db.select(rid.clone()).await?;
     Ok(row)
+}
+
+/// Same guard for memory ids.
+async fn select_memory(db: &Db, rid: &RecordId) -> AppResult<Option<MemoryRow>> {
+    if rid.table() != "memory" {
+        return Ok(None);
+    }
+    let row: Option<MemoryRow> = db.select(rid.clone()).await?;
+    Ok(row)
+}
+
+/// Relations and merges stay inside one vault: an edge from a shared vault's
+/// entity into someone's personal one would show its label and endpoint to
+/// every member, and deleting/merging in one vault would rewrite the other.
+fn same_vault(a: &EntityRow, b: &EntityRow) -> AppResult<()> {
+    if a.vault != b.vault {
+        return Err(AppError::bad_request("both entities must be in the same vault"));
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -474,8 +503,7 @@ pub async fn write_memory(
 
 /// RELATE two entities, idempotent on the (in, out, label) unique index -- a
 /// duplicate relation is a no-op that returns the existing edge. Both
-/// endpoints must be in vaults `owner` belongs to (they may be different
-/// vaults, as long as `owner` is a member of both).
+/// endpoints must be in the same vault, one `owner` belongs to.
 pub async fn add_relation(
     db: &Db,
     owner: &RecordId,
@@ -484,19 +512,13 @@ pub async fn add_relation(
     label: &str,
     source_record_id: Option<&str>,
 ) -> AppResult<RelationOut> {
-    let in_row = select_entity(db, from_id).await?;
-    let out_row = select_entity(db, to_id).await?;
-    let in_ok = match &in_row {
-        Some(r) => accessible(db, owner, &r.vault).await?,
-        None => false,
+    let (Some(in_row), Some(out_row)) = (select_entity(db, from_id).await?, select_entity(db, to_id).await?) else {
+        return Err(AppError::new(axum::http::StatusCode::FORBIDDEN, "not a member of both entities' vaults"));
     };
-    let out_ok = match &out_row {
-        Some(r) => accessible(db, owner, &r.vault).await?,
-        None => false,
-    };
-    if !in_ok || !out_ok {
+    if !accessible(db, owner, &in_row.vault).await? || !accessible(db, owner, &out_row.vault).await? {
         return Err(AppError::new(axum::http::StatusCode::FORBIDDEN, "not a member of both entities' vaults"));
     }
+    same_vault(&in_row, &out_row)?;
 
     if let Some(existing) = find_relation(db, from_id, to_id, label).await? {
         return Ok(relation_out(&existing, None, None));
@@ -548,7 +570,7 @@ async fn find_relation(db: &Db, from_id: &RecordId, to_id: &RecordId, label: &st
 /// doesn't exist or `owner` isn't a member of its vault, rather than
 /// erroring -- mirrors `get_entity`'s not-found-is-None convention.
 pub async fn delete_memory(db: &Db, owner: &RecordId, memory_id: &RecordId) -> AppResult<bool> {
-    let row: Option<MemoryRow> = db.select(memory_id.clone()).await?;
+    let row = select_memory(db, memory_id).await?;
     let Some(row) = row else { return Ok(false) };
     if !accessible(db, owner, &row.vault).await? {
         return Ok(false);
@@ -590,7 +612,7 @@ pub async fn update_memory(
     text: Option<&str>,
     new_type: Option<&str>,
 ) -> AppResult<Option<MemoryOut>> {
-    let row: Option<MemoryRow> = db.select(memory_id.clone()).await?;
+    let row = select_memory(db, memory_id).await?;
     let Some(row) = row else { return Ok(None) };
     if !accessible(db, owner, &row.vault).await? {
         return Ok(None);
@@ -691,7 +713,7 @@ pub async fn delete_entity(db: &Db, owner: &RecordId, entity_id: &RecordId) -> A
 /// as an alias of the winner (if not already present), then deletes the
 /// loser. Returns the winner's row after the merge.
 ///
-/// Errors (400) if the two ids are the same, of different kinds, or not
+/// Errors (400) if the two ids are the same, of different kinds or vaults, or not
 /// found / `owner` isn't a member of either one's vault.
 pub async fn merge_entities(
     db: &Db,
@@ -723,6 +745,7 @@ pub async fn merge_entities(
     if !accessible(db, owner, &loser.vault).await? {
         return Err(AppError::bad_request(format!("loser entity not found: {loser_id}")));
     }
+    same_vault(&winner, &loser)?;
 
     db.query("UPDATE memory SET subject = $winner WHERE subject = $loser")
         .bind(("winner", winner_id.clone()))
@@ -796,15 +819,26 @@ pub async fn get_entity(db: &Db, owner: &RecordId, entity_id: &RecordId) -> AppR
         return Ok(None);
     }
 
+    // Only rows in the entity's own vault: a cross-vault edge or memory left
+    // over from before relations/merges were confined to one vault stays hidden.
     let mut mem_res = db
-        .query("SELECT * FROM memory WHERE subject = $id ORDER BY created_at DESC")
+        .query("SELECT * FROM memory WHERE subject = $id AND vault = $vault ORDER BY created_at DESC")
         .bind(("id", entity_id.clone()))
+        .bind(("vault", row.vault.clone()))
         .await?;
     let memories: Vec<MemoryRow> = mem_res.take(0)?;
 
-    let mut out_res = db.query("SELECT * FROM relates_to WHERE in = $id").bind(("id", entity_id.clone())).await?;
+    let mut out_res = db
+        .query("SELECT * FROM relates_to WHERE in = $id AND out.vault = $vault")
+        .bind(("id", entity_id.clone()))
+        .bind(("vault", row.vault.clone()))
+        .await?;
     let outgoing: Vec<RelationRow> = out_res.take(0)?;
-    let mut in_res = db.query("SELECT * FROM relates_to WHERE out = $id").bind(("id", entity_id.clone())).await?;
+    let mut in_res = db
+        .query("SELECT * FROM relates_to WHERE out = $id AND in.vault = $vault")
+        .bind(("id", entity_id.clone()))
+        .bind(("vault", row.vault.clone()))
+        .await?;
     let incoming: Vec<RelationRow> = in_res.take(0)?;
 
     let mut owner_ids: Vec<Option<RecordId>> = vec![row.owner.clone()];
@@ -1063,5 +1097,31 @@ mod tests {
     #[test]
     fn default_memory_type_is_world() {
         assert_eq!(default_memory_type(), "world");
+    }
+
+    #[test]
+    fn only_entity_tables_are_entity_ids() {
+        assert!(is_entity_id(&"person:a".parse().unwrap()));
+        assert!(is_entity_id(&"symbol:a".parse().unwrap()));
+        for other in ["memory:a", "vault_member:a", "vault:a", "user:a", "cache_record:a"] {
+            assert!(!is_entity_id(&other.parse().unwrap()), "{other}");
+        }
+    }
+
+    fn entity_in(vault: &str) -> EntityRow {
+        EntityRow {
+            id: "person:x".parse().unwrap(),
+            owner: None,
+            vault: vault.parse().unwrap(),
+            name: String::new(),
+            aliases: Vec::new(),
+            summary: String::new(),
+        }
+    }
+
+    #[test]
+    fn relations_and_merges_need_one_vault() {
+        assert!(same_vault(&entity_in("vault:a"), &entity_in("vault:a")).is_ok());
+        assert!(same_vault(&entity_in("vault:a"), &entity_in("vault:b")).is_err());
     }
 }

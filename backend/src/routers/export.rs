@@ -86,28 +86,9 @@ struct ChatMessageRow {
 }
 
 #[derive(Debug, Deserialize)]
-struct VaultRow {
-    vault: RecordId,
-}
-
-#[derive(Debug, Deserialize)]
 struct UserEmailRow {
     id: RecordId,
     email: String,
-}
-
-/// `owner`'s personal vault -- the implicit scope for an export, matching
-/// `vaults/service.py::default_vault_id`.
-async fn resolve_personal_vault(db: &Db, owner: &RecordId) -> AppResult<RecordId> {
-    let mut res = db
-        .query("SELECT vault FROM vault_member WHERE user = $user AND vault.kind = \"personal\" LIMIT 1")
-        .bind(("user", owner.clone()))
-        .await?;
-    let rows: Vec<VaultRow> = res.take(0)?;
-    rows.into_iter()
-        .next()
-        .map(|r| r.vault)
-        .ok_or_else(|| AppError::internal("user has no personal vault"))
 }
 
 async fn fetch_emails(db: &Db, ids: &[RecordId]) -> AppResult<HashMap<String, String>> {
@@ -134,7 +115,9 @@ fn datetime_str(d: &Option<Datetime>) -> Value {
 
 async fn export_data(State(state): State<AppState>, user: User) -> AppResult<Response> {
     let db = &state.db;
-    let vault = resolve_personal_vault(db, &user.id).await?;
+    // the caller's own personal vault (active membership only, never one
+    // they were merely invited to or joined)
+    let vault = crate::vaults::service::default_vault_id(db, &user.id).await?;
 
     // Pass 1: gather every entity + its memory/relations, collecting the
     // owner ids we'll need emails for.
