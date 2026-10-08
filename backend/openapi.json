@@ -1892,6 +1892,237 @@
         ]
       }
     },
+    "/api/oauth/consent": {
+      "get": {
+        "tags": [
+          "oauth"
+        ],
+        "summary": "Validate an authorization request and describe it for the consent page",
+        "operationId": "consent_info",
+        "parameters": [
+          {
+            "name": "response_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "client_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "redirect_uri",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "code_challenge",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "code_challenge_method",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "scope",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "resource",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConsentInfo"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "oauth"
+        ],
+        "summary": "Approve or deny an authorization request",
+        "operationId": "consent_decide",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConsentDecision"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConsentResult"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          }
+        ]
+      }
+    },
+    "/api/oauth/grants": {
+      "get": {
+        "tags": [
+          "oauth"
+        ],
+        "summary": "List the apps connected through OAuth",
+        "operationId": "list_grants",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Grant"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          }
+        ]
+      }
+    },
+    "/api/oauth/grants/{grant_id}": {
+      "delete": {
+        "tags": [
+          "oauth"
+        ],
+        "summary": "Disconnect an app: revoke all its tokens",
+        "operationId": "revoke_grant",
+        "parameters": [
+          {
+            "name": "grant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeletedBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          }
+        ]
+      }
+    },
     "/api/openapi.json": {
       "get": {
         "tags": [
@@ -3186,6 +3417,52 @@
           }
         }
       },
+      "AuthzParams": {
+        "type": "object",
+        "properties": {
+          "client_id": {
+            "type": "string",
+            "default": ""
+          },
+          "code_challenge": {
+            "type": "string",
+            "default": ""
+          },
+          "code_challenge_method": {
+            "type": "string",
+            "default": ""
+          },
+          "redirect_uri": {
+            "type": "string",
+            "default": ""
+          },
+          "resource": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          },
+          "response_type": {
+            "type": "string",
+            "default": ""
+          },
+          "scope": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          },
+          "state": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          }
+        }
+      },
       "BootstrapOut": {
         "type": "object",
         "required": [
@@ -3218,6 +3495,106 @@
               "boolean",
               "null"
             ]
+          }
+        }
+      },
+      "ConsentClient": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "client_uri": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "logo_uri": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "ConsentDecision": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/AuthzParams"
+          },
+          {
+            "type": "object",
+            "required": [
+              "approve"
+            ],
+            "properties": {
+              "approve": {
+                "type": "boolean"
+              }
+            }
+          }
+        ]
+      },
+      "ConsentInfo": {
+        "type": "object",
+        "required": [
+          "client",
+          "redirect_host",
+          "loopback",
+          "scopes",
+          "user_email"
+        ],
+        "properties": {
+          "client": {
+            "$ref": "#/components/schemas/ConsentClient"
+          },
+          "loopback": {
+            "type": "boolean",
+            "description": "True when the redirect goes to this computer only (localhost); the page warns about it."
+          },
+          "redirect_host": {
+            "type": "string",
+            "description": "Host the user is sent back to after deciding."
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConsentScope"
+            }
+          },
+          "user_email": {
+            "type": "string"
+          }
+        }
+      },
+      "ConsentResult": {
+        "type": "object",
+        "required": [
+          "redirect_to"
+        ],
+        "properties": {
+          "redirect_to": {
+            "type": "string",
+            "description": "Send the browser here: the client's redirect URI with the code (or the denial)."
+          }
+        }
+      },
+      "ConsentScope": {
+        "type": "object",
+        "required": [
+          "scope",
+          "description"
+        ],
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string"
           }
         }
       },
@@ -3311,6 +3688,48 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "Grant": {
+        "type": "object",
+        "required": [
+          "id",
+          "client_id",
+          "client_name",
+          "scope",
+          "created_at"
+        ],
+        "properties": {
+          "client_id": {
+            "type": "string"
+          },
+          "client_logo": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "client_name": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "last_used_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scope": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         }
       },

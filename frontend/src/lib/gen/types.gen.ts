@@ -10,6 +10,17 @@ export type AuthOut = {
     onboarded: boolean;
 };
 
+export type AuthzParams = {
+    client_id?: string;
+    code_challenge?: string;
+    code_challenge_method?: string;
+    redirect_uri?: string;
+    resource?: string | null;
+    response_type?: string;
+    scope?: string | null;
+    state?: string | null;
+};
+
 export type BootstrapOut = {
     has_users: boolean;
 };
@@ -22,6 +33,42 @@ export type ConnectorUpdateBody = {
     config?: unknown;
     credentials?: unknown;
     enabled?: boolean | null;
+};
+
+export type ConsentClient = {
+    client_uri?: string | null;
+    logo_uri?: string | null;
+    name: string;
+};
+
+export type ConsentDecision = AuthzParams & {
+    approve: boolean;
+};
+
+export type ConsentInfo = {
+    client: ConsentClient;
+    /**
+     * True when the redirect goes to this computer only (localhost); the page warns about it.
+     */
+    loopback: boolean;
+    /**
+     * Host the user is sent back to after deciding.
+     */
+    redirect_host: string;
+    scopes: Array<ConsentScope>;
+    user_email: string;
+};
+
+export type ConsentResult = {
+    /**
+     * Send the browser here: the client's redirect URI with the code (or the denial).
+     */
+    redirect_to: string;
+};
+
+export type ConsentScope = {
+    description: string;
+    scope: string;
 };
 
 export type Credentials = {
@@ -48,6 +95,16 @@ export type EntityUpdate = {
     aliases?: Array<string> | null;
     name?: string | null;
     summary?: string | null;
+};
+
+export type Grant = {
+    client_id: string;
+    client_logo?: string | null;
+    client_name: string;
+    created_at: string;
+    id: string;
+    last_used_at?: string | null;
+    scope: Array<string>;
 };
 
 export type InviteRequest = {
@@ -1129,6 +1186,105 @@ export type ExportDataResponses = {
 };
 
 export type ExportDataResponse = ExportDataResponses[keyof ExportDataResponses];
+
+export type ConsentInfoData = {
+    body?: never;
+    path?: never;
+    query?: {
+        response_type?: string;
+        client_id?: string;
+        redirect_uri?: string;
+        code_challenge?: string;
+        code_challenge_method?: string;
+        state?: string;
+        scope?: string;
+        resource?: string;
+    };
+    url: '/api/oauth/consent';
+};
+
+export type ConsentInfoErrors = {
+    /**
+     * Error
+     */
+    default: Problem;
+};
+
+export type ConsentInfoError = ConsentInfoErrors[keyof ConsentInfoErrors];
+
+export type ConsentInfoResponses = {
+    200: ConsentInfo;
+};
+
+export type ConsentInfoResponse = ConsentInfoResponses[keyof ConsentInfoResponses];
+
+export type ConsentDecideData = {
+    body: ConsentDecision;
+    path?: never;
+    query?: never;
+    url: '/api/oauth/consent';
+};
+
+export type ConsentDecideErrors = {
+    /**
+     * Error
+     */
+    default: Problem;
+};
+
+export type ConsentDecideError = ConsentDecideErrors[keyof ConsentDecideErrors];
+
+export type ConsentDecideResponses = {
+    200: ConsentResult;
+};
+
+export type ConsentDecideResponse = ConsentDecideResponses[keyof ConsentDecideResponses];
+
+export type ListGrantsData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/oauth/grants';
+};
+
+export type ListGrantsErrors = {
+    /**
+     * Error
+     */
+    default: Problem;
+};
+
+export type ListGrantsError = ListGrantsErrors[keyof ListGrantsErrors];
+
+export type ListGrantsResponses = {
+    200: Array<Grant>;
+};
+
+export type ListGrantsResponse = ListGrantsResponses[keyof ListGrantsResponses];
+
+export type RevokeGrantData = {
+    body?: never;
+    path: {
+        grant_id: string;
+    };
+    query?: never;
+    url: '/api/oauth/grants/{grant_id}';
+};
+
+export type RevokeGrantErrors = {
+    /**
+     * Error
+     */
+    default: Problem;
+};
+
+export type RevokeGrantError = RevokeGrantErrors[keyof RevokeGrantErrors];
+
+export type RevokeGrantResponses = {
+    200: DeletedBody;
+};
+
+export type RevokeGrantResponse = RevokeGrantResponses[keyof RevokeGrantResponses];
 
 export type OpenapiJsonData = {
     body?: never;
