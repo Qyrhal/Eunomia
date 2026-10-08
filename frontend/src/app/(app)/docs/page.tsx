@@ -1,5 +1,6 @@
 "use client";
 
+import Select from "@/components/Select";
 import { isValidElement, useEffect, useRef, useState, type ReactNode } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -155,17 +156,17 @@ export default function DocsPage() {
             </li>
           ))}
         </ul>
-        <label className="md:hidden flex flex-col gap-1.5">
-          <span className="label">Doc</span>
-          <select className="field h-9 px-2.5 text-[14px]" value={topic} onChange={(e) => setTopic(e.target.value)}>
-            {topics.length === 0 && <option value={topic}>Loading docs</option>}
-            {topics.map((t) => (
-              <option key={t.topic} value={t.topic}>
-                {t.title}
-              </option>
-            ))}
-          </select>
-        </label>
+        <div className="md:hidden flex flex-col gap-1.5">
+          <span className="label" aria-hidden>Doc</span>
+          <Select
+            aria-label="Doc"
+            className="h-9 text-[14px] w-full"
+            value={topic}
+            onChange={setTopic}
+            placeholder="Loading docs"
+            options={topics.map((t) => ({ value: t.topic, label: t.title }))}
+          />
+        </div>
       </nav>
 
       <div className="min-w-0 flex flex-col gap-4">

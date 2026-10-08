@@ -1,5 +1,6 @@
 "use client";
 
+import Select from "@/components/Select";
 import { use, useEffect, useState } from "react";
 import Link from "next/link";
 import { ArrowRight, ChevronRight, Eye, EyeOff } from "lucide-react";
@@ -374,14 +375,17 @@ function ConnectorSetup({ kind }: { kind: ConnectorKind }) {
               <span className="text-[12px] w-12 text-right" aria-live="polite" style={{ color: intervalState === "error" ? "var(--critical)" : "var(--good)" }}>
                 {intervalState === "saved" ? "Saved" : intervalState === "error" ? "Not saved" : ""}
               </span>
-              <select id="sync-interval" className="field h-8 px-2.5 text-[13px]" value={override ?? defaultInterval} onChange={(e) => saveInterval(Number(e.target.value))}>
-                {SYNC_INTERVAL_PRESETS.map((p) => (
-                  <option key={p.value} value={p.value}>
-                    {p.label}
-                    {override === undefined && p.value === defaultInterval ? " (default)" : ""}
-                  </option>
-                ))}
-              </select>
+              <Select
+                id="sync-interval"
+                className="h-8 text-[13px] w-44"
+                value={String(override ?? defaultInterval)}
+                onChange={(v) => saveInterval(Number(v))}
+                options={SYNC_INTERVAL_PRESETS.map((p) => ({
+                  value: String(p.value),
+                  label: p.label,
+                  hint: override === undefined && p.value === defaultInterval ? "default" : undefined,
+                }))}
+              />
             </div>
           </div>
         </section>

@@ -1,5 +1,6 @@
 "use client";
 
+import Select from "@/components/Select";
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { AlertCircle, ArrowUp, Square, ChevronRight, CornerDownLeft, RotateCcw, Plus, Trash2, Wrench } from "lucide-react";
@@ -486,18 +487,13 @@ export default function ChatPage() {
         <section aria-label="Conversation" className="ledger flex-1 min-w-0 min-h-0 flex flex-col overflow-hidden">
           {/* compact thread switcher where there is no room for the list */}
           <div className="md:hidden flex items-center gap-2 p-2 shrink-0" style={{ borderBottom: "var(--hair) solid var(--border)" }}>
-            <select
+            <Select
               aria-label="Thread"
-              className="field h-8 px-2 text-[13px] flex-1 min-w-0"
+              className="h-8 text-[13px] flex-1 min-w-0"
               value={activeId ?? ""}
-              onChange={(e) => selectThread(e.target.value)}
-            >
-              {threads?.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.title}
-                </option>
-              ))}
-            </select>
+              onChange={selectThread}
+              options={(threads ?? []).map((t) => ({ value: t.id, label: t.title }))}
+            />
             <Tooltip label="New chat">
               <button onClick={createThread} aria-label="New chat" className="btn btn-icon h-8 w-8">
                 <Plus size={15} strokeWidth={1.75} />

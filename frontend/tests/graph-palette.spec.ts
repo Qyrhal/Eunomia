@@ -38,7 +38,8 @@ test.describe("Entity graph", () => {
     await expect(page.getByRole("button", { name: "Edit" })).toBeVisible();
 
     // Switching vault drops the selection from the old vault.
-    await page.getByLabel("Vault").selectOption({ label: "Other vault" });
+    await page.getByRole("combobox", { name: "Vault" }).click();
+    await page.getByRole("option", { name: "Other vault" }).click();
     await expect(page.getByRole("button", { name: "Edit" })).toHaveCount(0);
   });
 

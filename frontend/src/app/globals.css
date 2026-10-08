@@ -492,6 +492,47 @@ button.pill:active {
   }
 }
 
+/* Custom select (components/Select.tsx). */
+.select-trigger {
+  cursor: default;
+}
+.select-trigger[data-open] {
+  border-color: var(--accent);
+}
+.select-chevron {
+  color: var(--ink-faint);
+}
+.select-list {
+  position: fixed;
+  z-index: 60;
+  overflow-y: auto;
+  padding: 4px;
+  box-shadow: var(--shadow-pop);
+  overscroll-behavior: contain;
+}
+.select-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 0 8px;
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--ink-dim);
+  cursor: default;
+  user-select: none;
+}
+.select-option[aria-selected="true"] {
+  color: var(--ink);
+}
+.select-option[aria-selected="true"] svg {
+  color: var(--accent-text);
+}
+.select-option[data-active] {
+  background: var(--surface-raised);
+  color: var(--ink);
+}
+
 /* Mobile drawer slides from the left edge. */
 .drawer-in {
   transition: transform var(--dur-drawer) var(--ease-drawer);

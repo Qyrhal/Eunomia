@@ -1,5 +1,6 @@
 "use client";
 
+import Select from "@/components/Select";
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { Check, ChevronRight, Download, KeyRound, Monitor, Plug, RefreshCw, Trash2, X } from "lucide-react";
@@ -666,14 +667,14 @@ function GeneralSection({ settings, onSaved }: { settings: AppSettings; onSaved:
             </label>
             <div className="flex flex-col gap-1">
               {models.length > 0 ? (
-                <select id="model" className="field h-8 px-2 text-[13px] font-mono" value={modelInput} onChange={(e) => setModelInput(e.target.value)}>
-                  {!models.includes(modelInput) && modelInput && <option value={modelInput}>{modelInput}</option>}
-                  {models.map((m) => (
-                    <option key={m} value={m}>
-                      {m}
-                    </option>
-                  ))}
-                </select>
+                <Select
+                  id="model"
+                  mono
+                  className="h-8 text-[13px] w-full"
+                  value={modelInput}
+                  onChange={setModelInput}
+                  options={[...(!models.includes(modelInput) && modelInput ? [modelInput] : []), ...models].map((m) => ({ value: m, label: m }))}
+                />
               ) : (
                 <input
                   id="model"

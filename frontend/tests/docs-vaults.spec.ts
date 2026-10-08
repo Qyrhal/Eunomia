@@ -17,8 +17,10 @@ test("merging two vaults from the Vaults page creates a new vault and keeps both
   await registerAndOnboard(page, uniqueEmail("merge"));
   await page.request.post("/api/tools/vault_create", { data: { name: "Alpha" } });
   await page.goto("/vaults");
-  await page.getByLabel("First vault").selectOption({ label: "Personal" });
-  await page.getByLabel("Second vault").selectOption({ label: "Alpha" });
+  await page.getByRole("combobox", { name: "First vault" }).click();
+  await page.getByRole("option", { name: "Personal" }).click();
+  await page.getByRole("combobox", { name: "Second vault" }).click();
+  await page.getByRole("option", { name: "Alpha" }).click();
   await page.getByPlaceholder("New vault name (optional)").fill("Combined");
   await page.getByRole("button", { name: "Merge" }).click();
   await expect(page.getByText("Created “Combined”")).toBeVisible();

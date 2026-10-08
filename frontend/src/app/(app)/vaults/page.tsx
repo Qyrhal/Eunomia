@@ -1,5 +1,6 @@
 "use client";
 
+import Select from "@/components/Select";
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import {
   Check,
@@ -346,15 +347,16 @@ function VaultInspector({
                 onBlur={() => setTouched(true)}
                 style={invalid ? { borderColor: "var(--critical)" } : undefined}
               />
-              <select
-                className="field h-8 px-1.5 text-[12.5px]"
+              <Select
+                className="h-8 text-[12.5px] w-28 shrink-0"
                 value={role}
                 aria-label="Role for invite"
-                onChange={(e) => setRole(e.target.value as VaultRole)}
-              >
-                <option value="member">Member</option>
-                <option value="owner">Owner</option>
-              </select>
+                onChange={(v) => setRole(v as VaultRole)}
+                options={[
+                  { value: "member", label: "Member" },
+                  { value: "owner", label: "Owner" },
+                ]}
+              />
             </div>
             <div className="flex items-start justify-between gap-2">
               <span
@@ -804,21 +806,16 @@ function MergeVaultsCard({
   }
 
   const select = (value: string, set: (v: string) => void, label: string) => (
-    <label className="flex flex-col gap-1.5 flex-1 min-w-[140px]">
+    <div className="flex flex-col gap-1.5 flex-1 min-w-[140px]">
       <span className="label">{label}</span>
-      <select
-        className="field h-8 px-2 text-[13px]"
+      <Select
+        className="h-8 text-[13px] w-full"
         value={value}
-        onChange={(e) => set(e.target.value)}
+        onChange={set}
         aria-label={label}
-      >
-        {vaults.map((v) => (
-          <option key={v.id} value={v.id}>
-            {vaultLabel(v)}
-          </option>
-        ))}
-      </select>
-    </label>
+        options={vaults.map((v) => ({ value: v.id, label: vaultLabel(v) }))}
+      />
+    </div>
   );
 
   return (

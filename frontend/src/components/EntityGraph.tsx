@@ -1,5 +1,6 @@
 "use client";
 
+import Select from "@/components/Select";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { forceCenter, forceLink, forceManyBody, forceSimulation } from "d3-force-3d";
 import { ArrowLeft, ArrowRight, Pencil, Plus, Trash2, X } from "lucide-react";
@@ -433,20 +434,16 @@ export default function EntityGraph({
             <X {...ICON} />
           </button>
         </div>
-        <label className="label flex flex-col gap-1.5">
+        <div className="label flex flex-col gap-1.5">
           Kind
-          <select
-            className="field h-8 px-2.5 text-[13px]"
+          <Select
+            aria-label="Kind"
+            className="h-8 text-[13px] w-full"
             value={createForm.kind}
-            onChange={(e) => setCreateForm((f) => ({ ...f, kind: e.target.value as EntityKind }))}
-          >
-            {shownKinds.map((k) => (
-              <option key={k} value={k}>
-                {KIND_LABEL[k]}
-              </option>
-            ))}
-          </select>
-        </label>
+            onChange={(v) => setCreateForm((f) => ({ ...f, kind: v as EntityKind }))}
+            options={shownKinds.map((k) => ({ value: k, label: KIND_LABEL[k] }))}
+          />
+        </div>
         <label className="label flex flex-col gap-1.5">
           Name
           <input
@@ -484,21 +481,16 @@ export default function EntityGraph({
   );
 
   const vaultSwitcher = myVaults.length > 1 && (
-    <select
-      className="field h-6 px-2 text-[12px]"
+    <Select
+      className="h-6 text-[12px] w-36"
       value={vaultId ?? ""}
-      onChange={(e) => {
-        setVaultId(e.target.value || undefined);
+      onChange={(v) => {
+        setVaultId(v || undefined);
         setSelected(null);
       }}
       aria-label="Vault"
-    >
-      {myVaults.map((v) => (
-        <option key={v.id} value={v.kind === "personal" ? "" : v.id}>
-          {v.kind === "personal" ? "Personal" : v.name}
-        </option>
-      ))}
-    </select>
+      options={myVaults.map((v) => ({ value: v.kind === "personal" ? "" : v.id, label: v.kind === "personal" ? "Personal" : v.name }))}
+    />
   );
 
   const toolbar = (
@@ -799,16 +791,16 @@ export default function EntityGraph({
             </ul>
           )}
           <form onSubmit={submitRelation} className="flex flex-col gap-2">
-            <select className="field h-8 px-2.5 text-[13px]" value={relForm.to} onChange={(e) => setRelForm((f) => ({ ...f, to: e.target.value }))} aria-label="Relate to">
-              <option value="">Relate to…</option>
-              {graph.nodes
+            <Select
+              aria-label="Relate to"
+              placeholder="Relate to…"
+              className="h-8 text-[13px] w-full"
+              value={relForm.to}
+              onChange={(v) => setRelForm((f) => ({ ...f, to: v }))}
+              options={graph.nodes
                 .filter((n) => n.id !== selected.id)
-                .map((n) => (
-                  <option key={n.id} value={n.id}>
-                    {KIND_LABEL[n.kind]}: {n.name}
-                  </option>
-                ))}
-            </select>
+                .map((n) => ({ value: n.id, label: n.name, hint: KIND_LABEL[n.kind] }))}
+            />
             <input
               className="field h-8 px-2.5 text-[13px]"
               placeholder="Relation label, e.g. works_at"
