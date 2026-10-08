@@ -44,11 +44,10 @@ async fn handle(State(state): State<AppState>, headers: HeaderMap, body: String)
     if !origin_allowed(&headers, &state.settings.cors_allowed_origins) {
         return (StatusCode::FORBIDDEN, "origin not allowed").into_response();
     }
-    if let Some(v) = headers.get("mcp-protocol-version").and_then(|v| v.to_str().ok()) {
-        if !SUPPORTED_VERSIONS.contains(&v) {
+    if let Some(v) = headers.get("mcp-protocol-version").and_then(|v| v.to_str().ok())
+        && !SUPPORTED_VERSIONS.contains(&v) {
             return (StatusCode::BAD_REQUEST, format!("unsupported MCP-Protocol-Version {v}")).into_response();
         }
-    }
     let Some(user) = bearer_user(&state, &headers).await else {
         return (
             StatusCode::UNAUTHORIZED,

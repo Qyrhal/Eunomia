@@ -284,6 +284,7 @@ async fn accessible(db: &Db, owner: &RecordId, vault: &RecordId) -> AppResult<bo
 /// in a shared vault -- one query per call site rather than N+1 lookups.
 async fn emails_for(db: &Db, user_ids: Vec<Option<RecordId>>) -> AppResult<HashMap<String, String>> {
     let ids: Vec<RecordId> = {
+        #[allow(clippy::mutable_key_type)] // RecordId hashes by value; the interior mutability is never touched
         let mut seen = HashSet::new();
         user_ids
             .into_iter()
@@ -454,6 +455,7 @@ pub async fn add_memory(
 /// Programmatic memory write -- a direct path for an agent to record a fact
 /// about a person/organisation/location via a tool call. Finds-or-creates
 /// the subject entity by reusing `upsert_entity`'s dedupe logic, then
+#[allow(clippy::too_many_arguments)] // public signature, grouping args would change callers
 /// records the memory against it.
 pub async fn write_memory(
     db: &Db,
@@ -570,13 +572,12 @@ fn check_memory_edit(current_type: &str, text: Option<&str>, new_type: Option<&s
     if text.is_some_and(|t| t.trim().is_empty()) {
         return Err(AppError::bad_request("memory text can't be empty"));
     }
-    if let Some(t) = new_type {
-        if current_type == "observation" || !RAW_MEMORY_TYPES.contains(&t) {
+    if let Some(t) = new_type
+        && (current_type == "observation" || !RAW_MEMORY_TYPES.contains(&t)) {
             return Err(AppError::bad_request(
                 "`type` can only switch a fact between world and experience; observations keep theirs",
             ));
         }
-    }
     Ok(())
 }
 

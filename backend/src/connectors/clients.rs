@@ -20,33 +20,30 @@ fn str_field(credentials: &Value, key: &str) -> String {
 
 fn bearer_headers(token: &str) -> HeaderMap {
     let mut headers = HeaderMap::new();
-    if !token.is_empty() {
-        if let Ok(value) = HeaderValue::from_str(&format!("Bearer {token}")) {
+    if !token.is_empty()
+        && let Ok(value) = HeaderValue::from_str(&format!("Bearer {token}")) {
             headers.insert(AUTHORIZATION, value);
         }
-    }
     headers
 }
 
 /// `Authorization: Bot <token>` -- Discord's scheme, distinct from bearer.
 fn bot_headers(token: &str) -> HeaderMap {
     let mut headers = HeaderMap::new();
-    if !token.is_empty() {
-        if let Ok(value) = HeaderValue::from_str(&format!("Bot {token}")) {
+    if !token.is_empty()
+        && let Ok(value) = HeaderValue::from_str(&format!("Bot {token}")) {
             headers.insert(AUTHORIZATION, value);
         }
-    }
     headers
 }
 
 /// `Authorization: <key>` with no scheme prefix -- Linear's API-key scheme.
 fn raw_key_headers(key: &str) -> HeaderMap {
     let mut headers = HeaderMap::new();
-    if !key.is_empty() {
-        if let Ok(value) = HeaderValue::from_str(key) {
+    if !key.is_empty()
+        && let Ok(value) = HeaderValue::from_str(key) {
             headers.insert(AUTHORIZATION, value);
         }
-    }
     headers
 }
 

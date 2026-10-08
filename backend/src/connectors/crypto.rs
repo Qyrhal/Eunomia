@@ -32,13 +32,12 @@ fn derive_key(key: &str) -> [u8; 32] {
     if key.is_empty() {
         return [0u8; 32];
     }
-    if let Ok(bytes) = URL_SAFE_NO_PAD.decode(key.trim_end_matches('=')) {
-        if bytes.len() == 32 {
+    if let Ok(bytes) = URL_SAFE_NO_PAD.decode(key.trim_end_matches('='))
+        && bytes.len() == 32 {
             let mut out = [0u8; 32];
             out.copy_from_slice(&bytes);
             return out;
         }
-    }
     let mut hasher = Sha256::new();
     hasher.update(key.as_bytes());
     hasher.finalize().into()

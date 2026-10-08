@@ -191,16 +191,14 @@ pub async fn search(
     let scoped_ids: Vec<RecordId> = ids.iter().map(|i| scoped_rid(owner, i)).collect();
 
     // Build the query string once all optional filters are known, then bind.
-    if let Some(sources) = sources {
-        if !sources.is_empty() {
+    if let Some(sources) = sources
+        && !sources.is_empty() {
             conditions.push("source IN $sources".to_string());
         }
-    }
-    if let Some(types) = types {
-        if !types.is_empty() {
+    if let Some(types) = types
+        && !types.is_empty() {
             conditions.push("type IN $types".to_string());
         }
-    }
     if since.is_some() {
         conditions.push("occurred_at >= $since".to_string());
     }
@@ -213,16 +211,14 @@ pub async fn search(
         .query(sql)
         .bind(("ids", scoped_ids))
         .bind(("owner", owner.clone()));
-    if let Some(sources) = sources {
-        if !sources.is_empty() {
+    if let Some(sources) = sources
+        && !sources.is_empty() {
             query = query.bind(("sources", sources.to_vec()));
         }
-    }
-    if let Some(types) = types {
-        if !types.is_empty() {
+    if let Some(types) = types
+        && !types.is_empty() {
             query = query.bind(("types", types.to_vec()));
         }
-    }
     if let Some(since) = since {
         query = query.bind(("since", since.to_string()));
     }
@@ -423,7 +419,7 @@ mod tests {
     #[test]
     fn rrf_single_list_preserves_order() {
         let a = vec!["a".to_string(), "b".to_string(), "c".to_string()];
-        assert_eq!(rrf(&[a.clone()]), a);
+        assert_eq!(rrf(std::slice::from_ref(&a)), a);
     }
 
     #[test]

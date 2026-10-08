@@ -20,13 +20,13 @@ pub fn router() -> Router<AppState> {
         .route("/vaults", get(list_vaults).post(create_vault))
         .route("/vaults/invitations", get(list_invitations))
         .route("/vaults/merge", post(merge_vaults))
-        .route("/vaults/:vault_id", patch(rename_vault).delete(delete_vault))
-        .route("/vaults/:vault_id/clone", post(clone_vault))
-        .route("/vaults/:vault_id/members", get(list_members).post(invite_member))
-        .route("/vaults/:vault_id/members/:email", axum::routing::delete(remove_member))
-        .route("/vaults/:vault_id/leave", post(leave_vault))
-        .route("/vaults/:vault_id/invitations/accept", post(accept_invitation))
-        .route("/vaults/:vault_id/invitations/decline", post(decline_invitation))
+        .route("/vaults/{vault_id}", patch(rename_vault).delete(delete_vault))
+        .route("/vaults/{vault_id}/clone", post(clone_vault))
+        .route("/vaults/{vault_id}/members", get(list_members).post(invite_member))
+        .route("/vaults/{vault_id}/members/{email}", axum::routing::delete(remove_member))
+        .route("/vaults/{vault_id}/leave", post(leave_vault))
+        .route("/vaults/{vault_id}/invitations/accept", post(accept_invitation))
+        .route("/vaults/{vault_id}/invitations/decline", post(decline_invitation))
 }
 
 fn default_kind() -> String {

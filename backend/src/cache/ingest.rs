@@ -126,11 +126,10 @@ pub async fn ingest(
 
                 if !rec.deleted {
                     // No OpenAI key: skip embedding, keyword/graph retrieval still work.
-                    if crate::embeddings::service::available(db, settings, owner).await {
-                        if let Err(e) = embed_record(db, settings, owner, &rec).await {
+                    if crate::embeddings::service::available(db, settings, owner).await
+                        && let Err(e) = embed_record(db, settings, owner, &rec).await {
                             report.errors.push(format!("embed {}: {}", rec.id, e.message));
                         }
-                    }
                     touched_subjects.extend(extract_record_entities(owner, &rec));
                 }
             }

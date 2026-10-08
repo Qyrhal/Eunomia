@@ -21,7 +21,7 @@ use crate::state::AppState;
 use crate::tools::registry;
 
 pub fn router() -> Router<AppState> {
-    Router::new().route("/tools", get(catalogue)).route("/tools/:name", post(invoke))
+    Router::new().route("/tools", get(catalogue)).route("/tools/{name}", post(invoke))
 }
 
 async fn catalogue() -> Json<Value> {

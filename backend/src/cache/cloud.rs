@@ -197,6 +197,7 @@ pub async fn cloud(db: &Db, settings: &Settings, owner: &RecordId, vault_ids: &[
     let vaults: Vec<RecordId> = if vault_ids.is_empty() { vec![personal.clone()] } else { vault_ids.to_vec() };
 
     let mut items = Vec::new();
+    #[allow(clippy::mutable_key_type)] // RecordId hashes by value; the interior mutability is never touched
     let mut seen = HashSet::new();
     for v in &vaults {
         if !seen.insert(v.clone()) {

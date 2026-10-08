@@ -127,16 +127,14 @@ pub async fn poll_all(db: &Db, encryption_key: &str) -> AppResult<Vec<Value>> {
         for src in registry::enabled(db, &owner).await? {
             let rid = sync_status_id(&owner, src.key());
             let row: Option<SyncStatusRow> = db.select(rid).await?;
-            if let Some(row) = &row {
-                if row.consecutive_failures > 0 {
-                    if let Some(last_run) = row.last_run.as_ref().and_then(datetime_to_chrono) {
+            if let Some(row) = &row
+                && row.consecutive_failures > 0
+                    && let Some(last_run) = row.last_run.as_ref().and_then(datetime_to_chrono) {
                         let wait = backoff_seconds(row.consecutive_failures);
                         if (now - last_run).num_seconds() < wait as i64 {
                             continue;
                         }
                     }
-                }
-            }
             out.push(sync_source(db, encryption_key, &owner, src.key(), "poll").await);
         }
     }
