@@ -3,8 +3,10 @@
 import { isValidElement, useEffect, useRef, useState, type ReactNode } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { ArrowLeft, ArrowRight, Check, Copy, Link2 } from "lucide-react";
+import { ArrowLeft, ArrowRight, Link2 } from "lucide-react";
 import { docs } from "@/lib/api";
+import CopyButton from "@/components/bits/CopyButton";
+import Tooltip from "@/components/bits/Tooltip";
 
 type Topic = { topic: string; title: string };
 
@@ -23,28 +25,6 @@ const slugify = (s: string) =>
     .trim()
     .replace(/\s+/g, "-");
 
-function CopyButton({ text, label }: { text: () => string; label: string }) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <button
-      type="button"
-      className="btn btn-sm btn-icon btn-ghost"
-      aria-label={copied ? "Copied" : label}
-      title={copied ? "Copied" : label}
-      onClick={() =>
-        navigator.clipboard?.writeText(text()).then(() => {
-          setCopied(true);
-          setTimeout(() => setCopied(false), 1400);
-        })
-      }
-    >
-      <span key={String(copied)} className="pop-in inline-flex">
-        {copied ? <Check size={14} strokeWidth={1.75} /> : <Copy size={14} strokeWidth={1.75} />}
-      </span>
-    </button>
-  );
-}
-
 function CodeBlock({ children }: { children?: ReactNode }) {
   const ref = useRef<HTMLPreElement>(null);
   return (
@@ -53,7 +33,9 @@ function CodeBlock({ children }: { children?: ReactNode }) {
         {children}
       </pre>
       <div className="absolute top-1.5 right-1.5 rounded-[7px]" style={{ background: "var(--surface-raised)" }}>
-        <CopyButton label="Copy code" text={() => ref.current?.innerText.trimEnd() ?? ""} />
+        <Tooltip label="Copy code">
+          <CopyButton label="Copy code" value={() => ref.current?.innerText.trimEnd() ?? ""} />
+        </Tooltip>
       </div>
     </div>
   );

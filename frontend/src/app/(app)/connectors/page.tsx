@@ -6,6 +6,7 @@ import { ChevronRight, Search, X } from "lucide-react";
 import { connectors as connectorsApi, sources as sourcesApi, type Connector, type SourceRow } from "@/lib/api";
 import { CONNECTOR_META, CONNECTOR_ORDER, ConnectorTile, connectorStatus, kindForSource, relativeTime } from "@/lib/connectorMeta";
 import { isLiveSource, sourceHealth } from "@/lib/sourceState";
+import Tooltip from "@/components/bits/Tooltip";
 
 type StatusFilter = "all" | "connected" | "disconnected";
 
@@ -107,9 +108,11 @@ export default function ConnectorsPage() {
             onChange={(e) => setQuery(e.target.value)}
           />
           {query && (
-            <button type="button" aria-label="Clear search" className="btn btn-ghost btn-sm -mr-1.5 w-6 px-0" onClick={() => setQuery("")}>
-              <X size={13} strokeWidth={1.75} />
-            </button>
+            <Tooltip label="Clear search">
+              <button type="button" aria-label="Clear search" className="btn btn-ghost btn-sm -mr-1.5 w-6 px-0" onClick={() => setQuery("")}>
+                <X size={13} strokeWidth={1.75} aria-hidden />
+              </button>
+            </Tooltip>
           )}
         </div>
         <div className="flex gap-1.5" role="group" aria-label="Filter by status">

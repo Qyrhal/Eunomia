@@ -39,7 +39,11 @@
 /* ---- CopyButton ---- */
 .bits-copy-check {
   --bits-draw-ms: 180ms;
-  color: var(--good);
+  color: var(--bits-done, var(--good));
+}
+/* On a green primary button the green tick would vanish: use the button's ink. */
+.btn-primary {
+  --bits-done: currentColor;
 }
 
 /* ---- DigitRoll ---- */

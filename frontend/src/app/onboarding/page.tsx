@@ -6,6 +6,10 @@ import { ArrowLeft, Loader2, X } from "lucide-react";
 import { auth, settings, type Me, type AppSettings } from "@/lib/api";
 import EunomiaMark from "@/components/EunomiaMark";
 import ThemeToggle from "@/components/ThemeToggle";
+import BlurWords from "@/components/bits/BlurWords";
+import { spark } from "@/components/bits/Spark";
+import { InputModeTracker } from "@/components/bits/motion";
+import ResolveMark from "./ResolveMark";
 
 const STEP_LABELS = ["Welcome", "OpenAI key"];
 
@@ -18,6 +22,8 @@ export default function OnboardingPage() {
   const [apiKeyInput, setApiKeyInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // The welcome moment plays once; coming Back shows it at rest.
+  const [welcomed, setWelcomed] = useState(false);
 
   useEffect(() => {
     auth
@@ -44,12 +50,15 @@ export default function OnboardingPage() {
   const skipOpenAiStep = Boolean(appSettings?.openai_api_key_set);
   const steps = skipOpenAiStep ? STEP_LABELS.slice(0, 1) : STEP_LABELS;
 
-  async function finish() {
+  /** `from` is the button a pointer click started this from; it sparks on success. Navigation is never delayed. */
+  async function finish(from?: Element | null) {
     await settings.completeOnboarding();
+    spark(from, { count: 8 });
     router.replace("/");
   }
 
-  async function saveApiKey() {
+  async function saveApiKey(e: React.MouseEvent<HTMLButtonElement>) {
+    const from = e.detail > 0 ? e.currentTarget : null;
     setBusy(true);
     setError(null);
     try {
@@ -58,17 +67,17 @@ export default function OnboardingPage() {
       if (url && url !== appSettings?.openai_base_url) changes.openai_base_url = url;
       if (apiKeyInput) changes.openai_api_key = apiKeyInput;
       if (Object.keys(changes).length) await settings.update(changes);
-      await finish();
+      await finish(from);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not save the key. Check the URL and key, or skip for now.");
       setBusy(false);
     }
   }
 
-  async function skip() {
+  async function skip(from?: Element | null) {
     setBusy(true);
     try {
-      await finish();
+      await finish(from);
     } catch {
       // Finishing the wizard shouldn't trap the user even if the server
       // call fails: let them into the app and they can set things up
@@ -79,6 +88,12 @@ export default function OnboardingPage() {
 
   return (
     <div className="canvas-grid min-h-screen w-full flex flex-col px-6 py-6 sm:px-10">
+      <InputModeTracker />
+      {/* Progress fills slide in when a pointer moved the step; keyboard steps swap instantly. */}
+      <style>{`
+        .onb-fill { transform-origin: left center; }
+        html[data-input="pointer"] .onb-fill { transition: transform 260ms var(--ease-out); }
+      `}</style>
       <header className="flex items-center justify-between">
         <span className="inline-flex items-center gap-2 text-[14px] font-semibold tracking-[-0.01em]">
           <EunomiaMark size={22} />
@@ -87,7 +102,7 @@ export default function OnboardingPage() {
         <div className="flex items-center gap-1">
           <ThemeToggle />
           {me && (
-            <button onClick={skip} disabled={busy} aria-label="Skip setup" title="Skip setup" className="btn btn-ghost btn-icon btn-sm" style={{ width: 26 }}>
+            <button onClick={() => skip()} disabled={busy} aria-label="Skip setup" title="Skip setup" className="btn btn-ghost btn-icon btn-sm" style={{ width: 26 }}>
               <X size={14} strokeWidth={1.75} />
             </button>
           )}
@@ -109,10 +124,9 @@ export default function OnboardingPage() {
               <ol className="flex gap-2 mb-7" aria-label="Setup progress">
                 {steps.map((label, i) => (
                   <li key={label} className="flex-1" aria-current={i === step ? "step" : undefined}>
-                    <span
-                      className="block h-[3px] rounded-full"
-                      style={{ background: i <= step ? "var(--accent)" : "var(--border-strong)", transition: "background-color 200ms ease" }}
-                    />
+                    <span className="block h-[3px] rounded-full overflow-hidden" style={{ background: "var(--border-strong)" }}>
+                      <span className="onb-fill block h-full" style={{ background: "var(--accent)", transform: i <= step ? "none" : "scaleX(0)" }} />
+                    </span>
                     <span className="mt-2 flex items-center gap-1.5 whitespace-nowrap text-[12px]" style={{ color: i === step ? "var(--ink)" : "var(--ink-faint)" }}>
                       <span className="font-mono">{i + 1}</span>
                       {label}
@@ -124,7 +138,8 @@ export default function OnboardingPage() {
 
               {step === 0 && (
                 <div className="flex flex-col gap-4">
-                  <h1 className="page-title">Welcome to Eunomia</h1>
+                  <ResolveMark size={36} still={welcomed} />
+                  {welcomed ? <h1 className="page-title">Welcome to Eunomia</h1> : <BlurWords text="Welcome to Eunomia" as="h1" className="page-title" />}
                   <p className="text-[14px] leading-[1.6]" style={{ color: "var(--ink-dim)" }}>
                     You&apos;re signed in as{" "}
                     <span className="font-medium" style={{ color: "var(--ink)" }}>
@@ -134,7 +149,7 @@ export default function OnboardingPage() {
                     connect a data source any time from Connectors.
                   </p>
                   <button
-                    onClick={() => (skipOpenAiStep ? skip() : setStep(1))}
+                    onClick={(e) => (skipOpenAiStep ? skip(e.detail > 0 ? e.currentTarget : null) : setStep(1))}
                     disabled={busy}
                     className="btn btn-primary h-9 self-start mt-2 px-4"
                   >
@@ -190,12 +205,17 @@ export default function OnboardingPage() {
                   )}
 
                   <div className="flex items-center gap-2 mt-2">
-                    <button onClick={() => setStep(0)} disabled={busy} className="btn btn-ghost h-9 px-2.5">
+                    <button
+                      onClick={() => {
+                        setWelcomed(true);
+                        setStep(0);
+                      }}
+                      disabled={busy} className="btn btn-ghost h-9 px-2.5">
                       <ArrowLeft size={14} strokeWidth={1.75} aria-hidden />
                       Back
                     </button>
                     <div className="flex-1" />
-                    <button onClick={skip} disabled={busy} className="btn btn-ghost h-9">
+                    <button onClick={() => skip()} disabled={busy} className="btn btn-ghost h-9">
                       Skip &amp; finish
                     </button>
                     <button onClick={saveApiKey} disabled={busy} aria-busy={busy} className="btn btn-primary h-9 px-4">

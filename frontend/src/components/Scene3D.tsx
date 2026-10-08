@@ -11,6 +11,8 @@ import { useEffect, useRef, useState } from "react";
 import { Maximize, Minus, Plus } from "lucide-react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import Tooltip, { TooltipGroup } from "./bits/Tooltip";
+import { cssVar, prefersReducedMotion } from "./bits/motion";
 
 export type ScenePoint = { id: string; x: number; y: number; z: number; color: string; label: string; size?: number };
 export type SceneLink = { source: string; target: string };
@@ -58,11 +60,30 @@ const NO_INSETS: SceneInsets = { top: 0, right: 0, bottom: 0, left: 0 };
 const LABEL_H = 15; // px per label row, for collision nudging
 const SELECTED_SCALE = 1.3;
 
+// Motion for pointer work only (keyboard selection and zoom stay instant).
+const PICK_MS = 260; // pick ring: scale 1 to 2.2 and fade
+const RETICLE_IN_MS = 140; // reticle enter from scale(1.5)
+const RETICLE_MOVE_MS = 120; // reticle glide between nodes
+const EDGE_MS = 200; // incident edges brighten, the rest dim
+const SETTLE_MS = 200; // zoom scrub springs back inside its limits
+// JS stand-ins for --ease-out / --ease-in-out, for per-frame interpolation.
+const easeOut = (t: number) => 1 - (1 - t) ** 4;
+const easeInOut = (t: number) => (t < 0.5 ? 8 * t ** 4 : 1 - (-2 * t + 2) ** 4 / 2);
+type Box = { x0: number; y0: number; x1: number; y1: number };
+const pointerDriven = () => document.documentElement.dataset.input === "pointer" && !prefersReducedMotion();
+
 export default function Scene3D({ points, links = [], axes, selectedId, onSelect, ariaLabel, labels, zoomControls, flat, insets }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
   const zoomTextRef = useRef<HTMLSpanElement>(null);
-  const apiRef = useRef<{ zoom: (factor: number) => void; reset: () => void; refit: () => void } | null>(null);
+  const apiRef = useRef<{
+    zoom: (factor: number) => void;
+    reset: () => void;
+    refit: () => void;
+    scrub: (dx: number, rate: number) => void;
+    scrubEnd: () => void;
+  } | null>(null);
+  const scrubRef = useRef<{ id: number; x: number } | null>(null);
   const insetsRef = useRef<SceneInsets>(insets ?? NO_INSETS);
   const onSelectRef = useRef(onSelect);
   const selectedRef = useRef(selectedId);
@@ -144,19 +165,27 @@ export default function Scene3D({ points, links = [], axes, selectedId, onSelect
     // line materials tinted from --ink-faint, re-tinted on theme change
     const faintLines: THREE.LineBasicMaterial[] = [];
 
-    if (links.length) {
-      const verts: number[] = [];
-      for (const l of links) {
-        const a = index.get(l.source);
-        const b = index.get(l.target);
-        if (a === undefined || b === undefined) continue;
-        verts.push(pos[a].x, pos[a].y, pos[a].z, pos[b].x, pos[b].y, pos[b].z);
-      }
+    // all links in --ink-faint, plus the selected node's links in --ink on top
+    const LINK_OPACITY = 0.4;
+    const pairs: [number, number][] = [];
+    for (const l of links) {
+      const a = index.get(l.source);
+      const b = index.get(l.target);
+      if (a !== undefined && b !== undefined) pairs.push([a, b]);
+    }
+    const segments = (ps: [number, number][]) =>
+      new THREE.Float32BufferAttribute(
+        ps.flatMap(([a, b]) => [pos[a].x, pos[a].y, pos[a].z, pos[b].x, pos[b].y, pos[b].z]),
+        3,
+      );
+    const linkMat = new THREE.LineBasicMaterial({ transparent: true, opacity: LINK_OPACITY });
+    const edgeMat = new THREE.LineBasicMaterial({ transparent: true, opacity: 0 });
+    const edgeGeo = new THREE.BufferGeometry();
+    if (pairs.length) {
       const g = new THREE.BufferGeometry();
-      g.setAttribute("position", new THREE.Float32BufferAttribute(verts, 3));
-      const mat = new THREE.LineBasicMaterial({ transparent: true, opacity: 0.4 });
-      faintLines.push(mat);
-      scene.add(new THREE.LineSegments(g, mat));
+      g.setAttribute("position", segments(pairs));
+      faintLines.push(linkMat);
+      scene.add(new THREE.LineSegments(g, linkMat), new THREE.LineSegments(edgeGeo, edgeMat));
     }
 
     // axis lines + labels at their positive ends
@@ -191,6 +220,7 @@ export default function Scene3D({ points, links = [], axes, selectedId, onSelect
       });
       if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
       if (ring.instanceColor) ring.instanceColor.needsUpdate = true;
+      edgeMat.color.copy(ink);
       const faint = cssColor("var(--ink-faint)", cache);
       faintLines.forEach((m) => {
         m.color.copy(faint);
@@ -230,6 +260,34 @@ export default function Scene3D({ points, links = [], axes, selectedId, onSelect
     selFrame.className = "frame-selected";
     Object.assign(selFrame.style, { position: "absolute", left: "0", top: "0", display: "none" });
     overlay.appendChild(selFrame);
+    // pointer pick ring: positioned per frame, animated by WAAPI on its own scale
+    const pickRing = document.createElement("div");
+    Object.assign(pickRing.style, { position: "absolute", left: "0", top: "0", display: "none" });
+    const pickInner = document.createElement("div");
+    Object.assign(pickInner.style, { width: "100%", height: "100%", borderRadius: "50%", border: "1px solid var(--accent)" });
+    pickRing.appendChild(pickInner);
+    overlay.appendChild(pickRing);
+    let pickIdx: number | undefined;
+    // hover reticle: four corner brackets, each placed per frame
+    const corners = (["top left", "top right", "bottom left", "bottom right"] as const).map((pos) => {
+      const el = document.createElement("span");
+      const [v, h] = pos.split(" ");
+      const edge = "1px solid var(--ink-dim)";
+      Object.assign(el.style, {
+        position: "absolute",
+        left: "0",
+        top: "0",
+        width: "6px",
+        height: "6px",
+        display: "none",
+        [`border${v[0].toUpperCase()}${v.slice(1)}`]: edge,
+        [`border${h[0].toUpperCase()}${h.slice(1)}`]: edge,
+      });
+      overlay.appendChild(el);
+      return el;
+    });
+    let hoverIdx: number | undefined;
+    const reticle: { idx?: number; from?: Box; shown?: Box; start: number; mode: "in" | "move" } = { start: 0, mode: "in" };
 
     const size = { w: 1, h: 1 };
     let baseDistance = START.length();
@@ -283,6 +341,14 @@ export default function Scene3D({ points, links = [], axes, selectedId, onSelect
 
     const focal = () => size.h / 2 / Math.tan((camera.fov * Math.PI) / 360);
     let lastZoom = "";
+    // zoom scrub: log-distance the drag asks for (may run past the limits) and the release settle
+    let scrubLog: number | null = null;
+    let settle: { from: number; to: number; start: number } | null = null;
+    const LIMITS = { min: controls.minDistance, max: controls.maxDistance };
+    const setDistance = (d: number) => {
+      const offset = camera.position.clone().sub(controls.target);
+      camera.position.copy(controls.target).add(offset.setLength(d));
+    };
 
     apiRef.current = {
       zoom: (factor) => {
@@ -303,6 +369,34 @@ export default function Scene3D({ points, links = [], axes, selectedId, onSelect
         if (touched) resize();
         else fit();
       },
+      // dx px of drag; rate is per px in log space (Shift coarse, Alt fine)
+      scrub: (dx, rate) => {
+        controls.autoRotate = false;
+        touched = true;
+        settle = null;
+        scrubLog ??= Math.log(camera.position.distanceTo(controls.target));
+        // dragging right zooms in, so distance shrinks
+        scrubLog -= dx * rate;
+        const lo = Math.log(LIMITS.min);
+        const hi = Math.log(LIMITS.max);
+        // rubber band: past a limit the view gives way less the further you drag (at most ~16%)
+        const band = (over: number) => 0.15 * (1 - Math.exp(-over / 0.15));
+        // past ~0.6 the band is saturated; capping here lets a reversed drag respond at once
+        scrubLog = THREE.MathUtils.clamp(scrubLog, lo - 0.6, hi + 0.6);
+        const eff = scrubLog < lo ? lo - band(lo - scrubLog) : scrubLog > hi ? hi + band(scrubLog - hi) : scrubLog;
+        controls.minDistance = Math.min(LIMITS.min, Math.exp(eff));
+        controls.maxDistance = Math.max(LIMITS.max, Math.exp(eff));
+        setDistance(Math.exp(eff));
+      },
+      scrubEnd: () => {
+        scrubLog = null;
+        const d = camera.position.distanceTo(controls.target);
+        const to = THREE.MathUtils.clamp(d, LIMITS.min, LIMITS.max);
+        if (to === d || prefersReducedMotion()) {
+          setDistance(to);
+          Object.assign(controls, { minDistance: LIMITS.min, maxDistance: LIMITS.max });
+        } else settle = { from: d, to, start: performance.now() };
+      },
     };
 
     // Greedy label collision: the selected label first, then bigger nodes;
@@ -310,7 +404,9 @@ export default function Scene3D({ points, links = [], axes, selectedId, onSelect
     const order = labelled
       .map((_, k) => k)
       .sort((a, b) => (points[labelled[b]].size ?? 1) - (points[labelled[a]].size ?? 1));
-    const placed: { x0: number; x1: number; y0: number; y1: number }[] = [];
+    const placed: Box[] = [];
+    // where each labelled node's label sits this frame, for the hover reticle
+    const labelBox: (Box | undefined)[] = [];
     const placeLabels = (sel: number | undefined, below: (i: number, scale?: number) => number) => {
       if (!labelled.length) return;
       if (widths.length !== labelled.length) measure();
@@ -322,6 +418,7 @@ export default function Scene3D({ points, links = [], axes, selectedId, onSelect
         v.copy(pos[i]).project(camera);
         if (v.z > 1) {
           el.style.display = "none";
+          labelBox[i] = undefined;
           continue;
         }
         const x = ((v.x + 1) / 2) * size.w;
@@ -333,18 +430,41 @@ export default function Scene3D({ points, links = [], axes, selectedId, onSelect
           y += LABEL_H;
         }
         placed.push({ x0: x - half, x1: x + half, y0: y, y1: y + LABEL_H });
+        labelBox[i] = { x0: x - half, x1: x + half, y0: y, y1: y + LABEL_H };
         el.style.display = "block";
         el.style.transform = `translate(-50%, 0) translate(${x}px, ${y}px)`;
       }
     };
 
+    // projected disc of node i: centre and radius in px
+    const disc = (i: number, scale = 1) => {
+      v.copy(pos[i]).project(camera);
+      const r = (baseSize * (points[i].size ?? 1) * scale * focal()) / camera.position.distanceTo(pos[i]);
+      return { x: ((v.x + 1) / 2) * size.w, y: ((1 - v.y) / 2) * size.h, r, hidden: v.z > 1 };
+    };
+    // 0 = no selection emphasis, 1 = incident edges bright and the rest dim
+    const edge = { t: 0, from: 0, to: 0, start: 0 };
+
     let lastSelected: number | undefined;
     let raf = 0;
     const frame = () => {
       raf = requestAnimationFrame(frame);
+      const now = performance.now();
+      if (settle) {
+        const t = Math.min(1, (now - settle.start) / SETTLE_MS);
+        setDistance(settle.from + (settle.to - settle.from) * easeOut(t));
+        if (t === 1) {
+          settle = null;
+          Object.assign(controls, { minDistance: LIMITS.min, maxDistance: LIMITS.max });
+        }
+      }
       controls.update();
       const sel = selectedRef.current ? index.get(selectedRef.current) : undefined;
       if (sel !== lastSelected) {
+        const incident = sel === undefined ? [] : pairs.filter(([a, b]) => a === sel || b === sel);
+        if (incident.length) edgeGeo.setAttribute("position", segments(incident));
+        const to = incident.length ? 1 : 0;
+        if (to !== edge.to) Object.assign(edge, { from: edge.t, to, start: pointerDriven() ? now : -Infinity });
         if (lastSelected !== undefined) {
           place(lastSelected, 1);
           const k = labelled.indexOf(lastSelected);
@@ -359,6 +479,9 @@ export default function Scene3D({ points, links = [], axes, selectedId, onSelect
         ring.instanceMatrix.needsUpdate = true;
         lastSelected = sel;
       }
+      edge.t = edge.from + (edge.to - edge.from) * easeOut(Math.min(1, (now - edge.start) / EDGE_MS));
+      linkMat.opacity = LINK_OPACITY * (1 - 0.6 * edge.t);
+      edgeMat.opacity = 0.85 * edge.t;
       renderer.render(scene, camera);
       // labels sit just under each disc's projected edge
       const f = focal();
@@ -380,9 +503,63 @@ export default function Scene3D({ points, links = [], axes, selectedId, onSelect
           selFrame.style.transform = `translate(${((v.x + 1) / 2) * size.w - box / 2}px, ${((1 - v.y) / 2) * size.h - box / 2}px)`;
         }
       } else selFrame.style.display = "none";
+      if (pickIdx !== undefined) {
+        const p = disc(pickIdx, pickIdx === sel ? SELECTED_SCALE : 1);
+        const d = Math.round(2 * p.r + 4);
+        pickRing.style.display = p.hidden ? "none" : "block";
+        pickRing.style.width = pickRing.style.height = `${d}px`;
+        pickRing.style.transform = `translate(${p.x - d / 2}px, ${p.y - d / 2}px)`;
+      }
+      // reticle: brackets around the hovered node's label (or its disc when unlabelled)
+      let target: Box | undefined;
+      if (hoverIdx !== undefined) {
+        const lb = labelBox[hoverIdx];
+        const p = disc(hoverIdx, hoverIdx === sel ? SELECTED_SCALE : 1);
+        if (lb && !p.hidden) target = { x0: lb.x0 - 3, x1: lb.x1 + 3, y0: lb.y0 - 3, y1: lb.y1 + 2 };
+        else if (!p.hidden) target = { x0: p.x - p.r - 4, x1: p.x + p.r + 4, y0: p.y - p.r - 4, y1: p.y + p.r + 4 };
+      }
+      if (!target) {
+        reticle.idx = reticle.shown = undefined;
+        corners.forEach((c) => (c.style.display = "none"));
+      } else {
+        if (hoverIdx !== reticle.idx) {
+          const still = prefersReducedMotion();
+          Object.assign(reticle, { idx: hoverIdx, from: reticle.shown, start: still ? -Infinity : now, mode: reticle.shown ? "move" : "in" });
+        }
+        let box = target;
+        let opacity = 1;
+        if (reticle.mode === "move" && reticle.from) {
+          const k = easeInOut(Math.min(1, (now - reticle.start) / RETICLE_MOVE_MS));
+          const f = reticle.from;
+          box = { x0: f.x0 + (target.x0 - f.x0) * k, x1: f.x1 + (target.x1 - f.x1) * k, y0: f.y0 + (target.y0 - f.y0) * k, y1: f.y1 + (target.y1 - f.y1) * k };
+        } else if (reticle.mode === "in") {
+          const k = easeOut(Math.min(1, (now - reticle.start) / RETICLE_IN_MS));
+          const s = 1.5 - 0.5 * k;
+          const cx = (target.x0 + target.x1) / 2;
+          const cy = (target.y0 + target.y1) / 2;
+          box = { x0: cx + (target.x0 - cx) * s, x1: cx + (target.x1 - cx) * s, y0: cy + (target.y0 - cy) * s, y1: cy + (target.y1 - cy) * s };
+          opacity = k;
+        }
+        reticle.shown = box;
+        const at = [
+          [box.x0, box.y0],
+          [box.x1 - 6, box.y0],
+          [box.x0, box.y1 - 6],
+          [box.x1 - 6, box.y1 - 6],
+        ];
+        corners.forEach((c, k) => {
+          c.style.display = "block";
+          c.style.opacity = `${opacity}`;
+          c.style.transform = `translate(${at[k][0]}px, ${at[k][1]}px)`;
+        });
+      }
       if (zoomTextRef.current) {
         const z = `${Math.round((baseDistance / camera.position.distanceTo(controls.target)) * 100)}%`;
-        if (z !== lastZoom) zoomTextRef.current.textContent = lastZoom = z;
+        if (z !== lastZoom) {
+          zoomTextRef.current.textContent = lastZoom = z;
+          zoomTextRef.current.setAttribute("aria-valuenow", z.slice(0, -1));
+          zoomTextRef.current.setAttribute("aria-valuetext", z);
+        }
       }
     };
     frame();
@@ -398,10 +575,28 @@ export default function Scene3D({ points, links = [], axes, selectedId, onSelect
     };
     let down: { x: number; y: number } | null = null;
     const onDown = (e: PointerEvent) => (down = { x: e.clientX, y: e.clientY });
+    const fine = window.matchMedia("(hover: hover) and (pointer: fine)");
     const onUp = (e: PointerEvent) => {
       if (down && Math.hypot(e.clientX - down.x, e.clientY - down.y) < CLICK_SLOP) {
         const i = pick(e);
-        if (i !== undefined) onSelectRef.current?.(points[i].id);
+        if (i !== undefined) {
+          onSelectRef.current?.(points[i].id);
+          if (!prefersReducedMotion()) {
+            pickIdx = i;
+            pickInner.getAnimations().forEach((a) => a.cancel());
+            pickInner
+              .animate([{ transform: "scale(1)", opacity: 1 }, { transform: "scale(2.2)", opacity: 0 }], {
+                duration: PICK_MS,
+                easing: cssVar("--ease-out") || "ease-out",
+                fill: "forwards",
+              })
+              .finished.then(() => {
+                pickIdx = undefined;
+                pickRing.style.display = "none";
+              })
+              .catch(() => {}); // cancelled by a newer pick
+          }
+        }
       }
       down = null;
     };
@@ -409,18 +604,27 @@ export default function Scene3D({ points, links = [], axes, selectedId, onSelect
       if (e.buttons) return;
       const i = pick(e);
       const r = wrap.getBoundingClientRect();
-      setHover(i === undefined ? null : { label: points[i].label, x: e.clientX - r.left, y: e.clientY - r.top });
+      hoverIdx = fine.matches && e.pointerType === "mouse" ? i : undefined;
+      // a drawn, untruncated label under the reticle already names the node
+      const named = i !== undefined && hoverIdx === i && labelled.length > 0 && points[i].label.length <= 22;
+      setHover(i === undefined || named ? null : { label: points[i].label, x: e.clientX - r.left, y: e.clientY - r.top });
       renderer.domElement.style.cursor = i === undefined ? "grab" : "pointer";
     };
     const canvas = renderer.domElement;
     canvas.addEventListener("pointerdown", onDown);
     canvas.addEventListener("pointerup", onUp);
     canvas.addEventListener("pointermove", onMove);
-    canvas.addEventListener("pointerleave", () => setHover(null));
+    canvas.addEventListener("pointerleave", () => {
+      hoverIdx = undefined;
+      setHover(null);
+    });
 
     return () => {
       cancelAnimationFrame(raf);
       apiRef.current = null;
+      pickInner.getAnimations().forEach((an) => an.cancel());
+      edgeGeo.dispose();
+      edgeMat.dispose();
       themeWatch.disconnect();
       ro.disconnect();
       controls.dispose();
@@ -450,21 +654,64 @@ export default function Scene3D({ points, links = [], axes, selectedId, onSelect
         </div>
       )}
       {zoomControls && (
-        <div className="panel absolute right-3 bottom-3 hidden md:flex items-center gap-0.5 p-1" role="group" aria-label="Zoom">
-          <button type="button" className="btn btn-ghost btn-sm btn-icon w-[26px]" aria-label="Zoom out" onClick={() => apiRef.current?.zoom(1.25)}>
-            <Minus size={14} strokeWidth={1.75} />
-          </button>
-          <span ref={zoomTextRef} className="font-mono text-[12px] w-12 text-center" style={{ color: "var(--ink-dim)" }}>
-            100%
-          </span>
-          <button type="button" className="btn btn-ghost btn-sm btn-icon w-[26px]" aria-label="Zoom in" onClick={() => apiRef.current?.zoom(0.8)}>
-            <Plus size={14} strokeWidth={1.75} />
-          </button>
-          <span className="w-px h-4 mx-0.5" style={{ background: "var(--border)" }} aria-hidden />
-          <button type="button" className="btn btn-ghost btn-sm btn-icon w-[26px]" aria-label="Reset view" title="Reset view" onClick={() => apiRef.current?.reset()}>
-            <Maximize size={14} strokeWidth={1.75} />
-          </button>
-        </div>
+        <TooltipGroup>
+          <div className="panel absolute right-3 bottom-3 hidden md:flex items-center gap-0.5 p-1" role="group" aria-label="Zoom">
+            <Tooltip label="Zoom out">
+              <button type="button" className="btn btn-ghost btn-sm btn-icon w-[26px]" aria-label="Zoom out" onClick={() => apiRef.current?.zoom(1.25)}>
+                <Minus size={14} strokeWidth={1.75} />
+              </button>
+            </Tooltip>
+            {/* Figma-style scrub: drag left/right (Shift coarse, Alt fine); arrows step like the buttons */}
+            <span
+              ref={zoomTextRef}
+              role="slider"
+              tabIndex={0}
+              aria-label="Zoom level, drag to change"
+              aria-valuenow={100}
+              aria-valuetext="100%"
+              className="font-mono text-[12px] w-12 h-[26px] leading-[26px] text-center rounded-[5px] select-none touch-none cursor-ew-resize hover:bg-[var(--surface-raised)]"
+              style={{ color: "var(--ink-dim)" }}
+              onPointerDown={(e) => {
+                if (e.button !== 0) return;
+                e.currentTarget.setPointerCapture(e.pointerId);
+                scrubRef.current = { id: e.pointerId, x: e.clientX };
+              }}
+              onPointerMove={(e) => {
+                const s = scrubRef.current;
+                if (!s || s.id !== e.pointerId) return;
+                apiRef.current?.scrub(e.clientX - s.x, e.shiftKey ? 0.02 : e.altKey ? 0.0015 : 0.006);
+                s.x = e.clientX;
+              }}
+              onPointerUp={() => {
+                scrubRef.current = null;
+                apiRef.current?.scrubEnd();
+              }}
+              onPointerCancel={() => {
+                scrubRef.current = null;
+                apiRef.current?.scrubEnd();
+              }}
+              onKeyDown={(e) => {
+                const f = e.key === "ArrowRight" || e.key === "ArrowUp" ? 0.8 : e.key === "ArrowLeft" || e.key === "ArrowDown" ? 1.25 : 0;
+                if (!f) return;
+                e.preventDefault();
+                apiRef.current?.zoom(f);
+              }}
+            >
+              100%
+            </span>
+            <Tooltip label="Zoom in">
+              <button type="button" className="btn btn-ghost btn-sm btn-icon w-[26px]" aria-label="Zoom in" onClick={() => apiRef.current?.zoom(0.8)}>
+                <Plus size={14} strokeWidth={1.75} />
+              </button>
+            </Tooltip>
+            <span className="w-px h-4 mx-0.5" style={{ background: "var(--border)" }} aria-hidden />
+            <Tooltip label="Reset view">
+              <button type="button" className="btn btn-ghost btn-sm btn-icon w-[26px]" aria-label="Reset view" onClick={() => apiRef.current?.reset()}>
+                <Maximize size={14} strokeWidth={1.75} />
+              </button>
+            </Tooltip>
+          </div>
+        </TooltipGroup>
       )}
       {/* keyboard / screen-reader access to every point */}
       {onSelect && (

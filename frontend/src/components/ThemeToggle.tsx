@@ -68,7 +68,7 @@ export default function ThemeToggle() {
 
   const label = theme === "dark" ? "Switch to light theme" : "Switch to dark theme";
   return (
-    <button ref={button} onClick={toggle} aria-label={label} title={label} className="btn btn-ghost btn-icon btn-sm" style={{ width: 26 }}>
+    <button ref={button} onClick={toggle} aria-label={label} className="btn btn-ghost btn-icon btn-sm" style={{ width: 26 }}>
       <span className="bits-theme-icon" aria-hidden>
         <Sun size={14} data-on={theme === "dark" ? "" : undefined} />
         <Moon size={14} data-on={theme === "light" ? "" : undefined} />

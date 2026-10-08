@@ -2,9 +2,11 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { AlertCircle, ArrowUp, Square, Check, ChevronRight, CornerDownLeft, Loader2, RotateCcw, Plus, Trash2, Wrench } from "lucide-react";
+import { AlertCircle, ArrowUp, Square, ChevronRight, CornerDownLeft, RotateCcw, Plus, Trash2, Wrench } from "lucide-react";
 import Markdown from "@/components/Markdown";
 import AuthorTag from "@/components/AuthorTag";
+import SyncMark from "@/components/bits/SyncMark";
+import Tooltip, { TooltipGroup } from "@/components/bits/Tooltip";
 import { auth, chat, type ChatMessage, type ChatThread } from "@/lib/api";
 
 // The built-in agent, labelled by the name its system prompt gives it.
@@ -99,6 +101,29 @@ function argsPreview(args: string): string {
   return args;
 }
 
+const secs = (ms: number) => `${(Math.max(0, ms) / 1000).toFixed(1)}s`;
+
+// Ticks on its own so the rest of the page does not re-render every 100ms.
+// aria-hidden: a ticking number inside the live region would chatter.
+function Elapsed({ since }: { since: number }) {
+  const [now, setNow] = useState(since);
+  useEffect(() => {
+    const t = setInterval(() => setNow(performance.now()), 100);
+    return () => clearInterval(t);
+  }, []);
+  return (
+    <span aria-hidden className="font-mono tabular-nums">
+      {secs(now - since)}
+    </span>
+  );
+}
+
+// Fades the transcript's top or bottom edge only when there is more to scroll that way.
+function edgeFade(el: HTMLElement) {
+  el.toggleAttribute("data-fade-top", el.scrollTop > 1);
+  el.toggleAttribute("data-fade-bottom", el.scrollHeight - el.scrollTop - el.clientHeight > 1);
+}
+
 function TurnHeader({ name, at, children }: { name: string; at?: string; children?: React.ReactNode }) {
   return (
     <div className="flex items-center gap-2 h-5 mb-2">
@@ -113,7 +138,7 @@ function TurnHeader({ name, at, children }: { name: string; at?: string; childre
   );
 }
 
-function ToolRow({ step }: { step: ToolStep }) {
+function ToolRow({ step, live }: { step: ToolStep; live?: boolean }) {
   const preview = argsPreview(step.args);
   const inspectable = !step.running && !!(step.args || step.result);
   const row = (
@@ -132,19 +157,13 @@ function ToolRow({ step }: { step: ToolStep }) {
         </span>
       )}
       <span className="ml-auto pl-2 shrink-0 flex items-center gap-1 text-[11.5px]" style={{ color: "var(--ink-faint)" }}>
-        {step.running ? (
-          <>
-            <Loader2 size={12} strokeWidth={1.75} className="animate-spin" /> running
-          </>
-        ) : (
-          <>
-            <Check size={12} strokeWidth={1.75} style={{ color: "var(--good)" }} /> done
-          </>
-        )}
+        {/* history rows mount "done" and sit still; live rows draw the check when their tool returns */}
+        <SyncMark status={step.running ? "running" : "done"} size={12} />
+        {step.running ? "running" : "done"}
       </span>
     </>
   );
-  if (!inspectable) return <div className="flex items-center gap-2 h-8 px-2.5">{row}</div>;
+  if (!inspectable) return <div className={`flex items-center gap-2 h-8 px-2.5 ${live ? "tool-live" : ""}`}>{row}</div>;
   return (
     <details className="tool-row">
       <summary className="press flex items-center gap-2 h-8 px-2.5 cursor-pointer list-none select-none [&::-webkit-details-marker]:hidden">
@@ -168,12 +187,12 @@ function ToolRow({ step }: { step: ToolStep }) {
   );
 }
 
-function ToolSteps({ steps }: { steps: ToolStep[] }) {
+function ToolSteps({ steps, live }: { steps: ToolStep[]; live?: boolean }) {
   if (steps.length === 0) return null;
   return (
     <div className="ledger hairline-rows mb-3 overflow-hidden" role="group" aria-label="Tool calls">
       {steps.map((s, i) => (
-        <ToolRow key={i} step={s} />
+        <ToolRow key={i} step={s} live={live} />
       ))}
     </div>
   );
@@ -243,9 +262,11 @@ function ThreadList({
                   {ageLabel(t.updated_at)}
                 </span>
               </button>
-              <button onClick={() => onDelete(t.id)} aria-label="Delete thread" className="thread-delete btn btn-ghost btn-icon btn-sm w-[26px] mr-0.5 shrink-0">
-                <Trash2 size={13} strokeWidth={1.75} />
-              </button>
+              <Tooltip label="Delete thread">
+                <button onClick={() => onDelete(t.id)} aria-label="Delete thread" className="thread-delete btn btn-ghost btn-icon btn-sm w-[26px] mr-0.5 shrink-0">
+                  <Trash2 size={13} strokeWidth={1.75} />
+                </button>
+              </Tooltip>
             </div>
           );
         })}
@@ -306,6 +327,9 @@ export default function ChatPage() {
   const [needsKey, setNeedsKey] = useState(false);
   const [me, setMe] = useState<string | null>(null);
   const [lastSent, setLastSent] = useState("");
+  // When the current reply was asked for, and how long it took to start answering.
+  const [startedAt, setStartedAt] = useState<number | null>(null);
+  const [thoughtMs, setThoughtMs] = useState<number | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickRef = useRef(true);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -339,7 +363,9 @@ export default function ChatPage() {
   // to reread something holds the view still.
   useEffect(() => {
     const el = scrollRef.current;
-    if (el && stickRef.current) el.scrollTop = el.scrollHeight;
+    if (!el) return;
+    if (stickRef.current) el.scrollTop = el.scrollHeight;
+    edgeFade(el);
   }, [messages, sending, streamingText, liveSteps, error]);
 
   function selectThread(id: string) {
@@ -392,6 +418,9 @@ export default function ChatPage() {
     setSending(true);
     setStreamingText("");
     setLiveSteps([]);
+    const start = performance.now();
+    setStartedAt(start);
+    setThoughtMs(null);
     const steps: ToolStep[] = [];
     const controller = new AbortController();
     abortRef.current = controller;
@@ -399,6 +428,7 @@ export default function ChatPage() {
     try {
       await chat.send(threadId, text, (event) => {
         if (event.type === "text") {
+          if (!reply) setThoughtMs(performance.now() - start);
           reply += event.delta;
           setStreamingText(reply);
         } else if (event.type === "tool_call") {
@@ -441,6 +471,7 @@ export default function ChatPage() {
   const canSend = !!input.trim() && !sending && !!activeId;
 
   return (
+    <TooltipGroup>
     <div className="flex flex-col gap-5 h-[calc(100dvh-6.5rem)] md:h-[calc(100dvh-4rem)]">
       <header className="flex flex-col gap-1">
         <h1 className="page-title">Chat</h1>
@@ -467,13 +498,17 @@ export default function ChatPage() {
                 </option>
               ))}
             </select>
-            <button onClick={createThread} aria-label="New chat" className="btn btn-icon h-8 w-8">
-              <Plus size={15} strokeWidth={1.75} />
-            </button>
-            {activeId && (
-              <button onClick={() => deleteThread(activeId)} aria-label="Delete thread" className="btn btn-ghost btn-icon h-8 w-8">
-                <Trash2 size={14} strokeWidth={1.75} />
+            <Tooltip label="New chat">
+              <button onClick={createThread} aria-label="New chat" className="btn btn-icon h-8 w-8">
+                <Plus size={15} strokeWidth={1.75} />
               </button>
+            </Tooltip>
+            {activeId && (
+              <Tooltip label="Delete thread">
+                <button onClick={() => deleteThread(activeId)} aria-label="Delete thread" className="btn btn-ghost btn-icon h-8 w-8">
+                  <Trash2 size={14} strokeWidth={1.75} />
+                </button>
+              </Tooltip>
             )}
           </div>
 
@@ -482,8 +517,9 @@ export default function ChatPage() {
             onScroll={(e) => {
               const el = e.currentTarget;
               stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+              edgeFade(el);
             }}
-            className="flex-1 min-h-0 overflow-y-auto"
+            className="transcript flex-1 min-h-0 overflow-y-auto"
           >
             <div className="max-w-[720px] mx-auto px-4 md:px-6 py-6 flex flex-col gap-7 min-h-full" aria-live="polite" aria-busy={sending}>
               {turns === null && <LoadingTurns />}
@@ -492,16 +528,22 @@ export default function ChatPage() {
               {sending && (
                 <article className="fade-in">
                   <TurnHeader name={ASSISTANT}>
-                    {!streamingText && (
-                      <span className="flex items-center gap-1.5 text-[12px]" style={{ color: "var(--ink-faint)" }}>
-                        <Loader2 size={12} strokeWidth={1.75} className="animate-spin" />
-                        {activeTool ? `Using ${activeTool}…` : "Thinking…"}
-                      </span>
-                    )}
+                    <span className="flex items-center gap-1.5 text-[12px]" style={{ color: "var(--ink-faint)" }}>
+                      {streamingText ? (
+                        <span>
+                          Thought for <span className="font-mono tabular-nums">{secs(thoughtMs ?? 0)}</span>
+                        </span>
+                      ) : (
+                        <>
+                          <span className="breathe">{activeTool ? `Using ${activeTool}…` : "Thinking…"}</span>
+                          {startedAt !== null && <Elapsed since={startedAt} />}
+                        </>
+                      )}
+                    </span>
                   </TurnHeader>
-                  <ToolSteps steps={liveSteps} />
+                  <ToolSteps steps={liveSteps} live />
                   {streamingText && (
-                    <div className="text-[14px] px-0.5 break-words" style={{ color: "var(--ink)" }}>
+                    <div className="settle text-[14px] px-0.5 break-words" style={{ color: "var(--ink)" }}>
                       <Markdown text={streamingText} />
                     </div>
                   )}
@@ -567,15 +609,21 @@ export default function ChatPage() {
                 <span className="hidden sm:flex items-center gap-1 text-[11.5px]" style={{ color: "var(--ink-faint)" }}>
                   <span className="kbd">Enter</span> send <span className="kbd ml-1.5">Shift Enter</span> new line
                 </span>
-                {sending ? (
-                  <button type="button" onClick={() => abortRef.current?.abort()} aria-label="Stop" title="Stop" className="btn btn-icon ml-auto">
-                    <Square size={12} strokeWidth={2.5} fill="currentColor" />
-                  </button>
-                ) : (
-                <button type="submit" disabled={!canSend} aria-label="Send" className="btn btn-primary btn-icon ml-auto">
-                  <ArrowUp size={16} strokeWidth={2} />
-                </button>
-                )}
+                <div className="ml-auto flex">
+                  {sending ? (
+                    <Tooltip label="Stop">
+                      <button type="button" onClick={() => abortRef.current?.abort()} aria-label="Stop" className="btn btn-icon">
+                        <Square size={12} strokeWidth={2.5} fill="currentColor" />
+                      </button>
+                    </Tooltip>
+                  ) : (
+                    <Tooltip label="Send" shortcut="Enter">
+                      <button type="submit" disabled={!canSend} aria-label="Send" className="btn btn-primary btn-icon">
+                        <ArrowUp size={16} strokeWidth={2} />
+                      </button>
+                    </Tooltip>
+                  )}
+                </div>
               </div>
             </div>
           </form>
@@ -614,7 +662,29 @@ export default function ChatPage() {
           .example-row:hover { background: var(--surface-raised); color: var(--ink); }
           .tool-row summary:hover { background: var(--surface-raised); }
         }
+        /* "Thinking" breathes while the assistant works; the words never change under it. */
+        .breathe { animation: chat-breathe 1.6s var(--ease-in-out) infinite; }
+        @keyframes chat-breathe { 50% { opacity: 0.6; } }
+        /* live tool rows arrive; history rows render in place */
+        .tool-live { transition: opacity 180ms var(--ease-out), transform 180ms var(--ease-out); }
+        @starting-style { .tool-live { opacity: 0; transform: translateY(-4px); } }
+        /* the streamed answer settles into focus once per reply */
+        .settle { transition: opacity 200ms var(--ease-out), filter 200ms var(--ease-out); }
+        @starting-style { .settle { opacity: 0.001; filter: blur(2px); } }
+        /* static edge fade, only on a side with more to scroll (mask reads alpha, so the colour is irrelevant) */
+        .transcript { --fade-top: 0px; --fade-bottom: 0px; }
+        .transcript[data-fade-top] { --fade-top: 24px; }
+        .transcript[data-fade-bottom] { --fade-bottom: 24px; }
+        .transcript[data-fade-top],
+        .transcript[data-fade-bottom] {
+          mask-image: linear-gradient(to bottom, transparent, black var(--fade-top), black calc(100% - var(--fade-bottom)), transparent);
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .breathe { animation: none; }
+          .tool-live, .settle { transition: none; }
+        }
       `}</style>
     </div>
+    </TooltipGroup>
   );
 }

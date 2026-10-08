@@ -1,10 +1,16 @@
 "use client";
 
-import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
-import { AlertTriangle, ArrowRight, Check, Copy, RefreshCw } from "lucide-react";
+import { AlertTriangle, ArrowRight } from "lucide-react";
 import { auth, entities, sources, type ApiToken, type EntityKind, type EntityMemory, type SourceRow } from "@/lib/api";
-import AuthorTag from "@/components/AuthorTag";
+import AuthorTag, { authorColor, CursorGlyph } from "@/components/AuthorTag";
+import CopyButton from "@/components/bits/CopyButton";
+import DecryptReveal from "@/components/bits/DecryptReveal";
+import DigitRoll from "@/components/bits/DigitRoll";
+import SyncMark, { type SyncStatus } from "@/components/bits/SyncMark";
+import { spark } from "@/components/bits/Spark";
+import { prefersReducedMotion } from "@/components/bits/motion";
 import { kindForSource } from "@/lib/connectorMeta";
 import { FAILURE_ALERT_THRESHOLD, isLiveSource, isStubSource, sourceHealth, sourceLabel } from "@/lib/sourceState";
 
@@ -60,21 +66,13 @@ function focusConnect(e: React.MouseEvent) {
 
 // ---- MCP connect card ----
 
-function CopyField({ value }: { value: string }) {
-  const [copied, setCopied] = useState(false);
-  async function copy() {
-    await navigator.clipboard.writeText(value).catch(() => {});
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
-  }
+function CopyField({ value, children }: { value: string; children?: React.ReactNode }) {
   return (
     <div className="field flex items-center gap-2 h-8 pl-2.5 pr-1">
       <code className="flex-1 min-w-0 truncate text-[12px] font-mono" style={{ color: "var(--ink-dim)" }}>
-        {value}
+        {children ?? value}
       </code>
-      <button onClick={copy} aria-label="Copy" className="btn btn-ghost btn-sm shrink-0" style={{ width: 24, height: 24, padding: 0 }}>
-        {copied ? <Check size={13} strokeWidth={1.75} color="var(--good)" /> : <Copy size={13} strokeWidth={1.75} />}
-      </button>
+      <CopyButton value={value} className="shrink-0 w-6! h-6!" />
     </div>
   );
 }
@@ -85,11 +83,16 @@ function McpCard({ onCreated }: { onCreated: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  async function generate() {
+  async function generate(e: React.MouseEvent<HTMLButtonElement>) {
+    // Read before the await: React may have recycled the event by then.
+    const button = e.currentTarget;
+    const pointer = e.detail > 0;
     setBusy(true);
     setError(null);
     try {
       const res = await auth.tokens.create("MCP");
+      // Fired before the button unmounts, so the lines leave from where it stood.
+      if (pointer) spark(button, { count: 8 });
       setToken(res.token);
       onCreated();
     } catch (err) {
@@ -121,7 +124,10 @@ function McpCard({ onCreated }: { onCreated: () => void }) {
         <>
           <label className="label flex flex-col gap-1.5">
             Personal API token, shown once: store it now
-            <CopyField value={token} />
+            <CopyField value={token}>
+              {/* The token only, never the command: it decrypts once as it appears. */}
+              <DecryptReveal key={token} text={token} />
+            </CopyField>
           </label>
           <label className="label flex flex-col gap-1.5">
             Claude Code
@@ -209,18 +215,88 @@ type LiveRow = Memory & { entityName: string; entityKind: EntityKind };
 const ENTITY_CAP = 24;
 const ROW_LIMIT = 12;
 
-async function loadLiveMemory(): Promise<LiveRow[]> {
+async function loadLiveMemory(): Promise<{ rows: LiveRow[]; total: number }> {
   const list = await entities.list();
   const details = await Promise.all(list.results.slice(0, ENTITY_CAP).map((e) => entities.get(e.id).catch(() => null)));
-  return details
+  const rows = details
     .flatMap((d) => (d ? (d.memory as Memory[]).map((m) => ({ ...m, entityName: d.name, entityKind: d.kind })) : []))
     .sort((a, b) => (b.created_at ?? "").localeCompare(a.created_at ?? ""))
     .slice(0, ROW_LIMIT);
+  return { rows, total: list.total };
 }
 
 const authorOf = (m: Memory) => m.owner_email || m.source || null;
 
-function LiveMemory({ rows, selectedId, onSelect }: { rows: LiveRow[] | null; selectedId: string | null; onSelect: (id: string) => void }) {
+// Arrival: rows new since the previous poll fade in under an author-colour wash,
+// and (at most CURSOR_CAP of them) show the author's cursor for a moment.
+const ARRIVAL_MS = 2400;
+const WASH_MS = 1400;
+const CURSOR_CAP = 3;
+
+/** Author tag that can carry the author's cursor glyph at its corner, Figma style, without moving the tag. */
+function RowAuthor({ name, id, cursor }: { name: string; id: string; cursor: boolean }) {
+  return (
+    <span className="relative inline-flex max-w-full">
+      {cursor && (
+        <span data-arrival-cursor={id} className="absolute -left-1.5 -top-2.5 pointer-events-none">
+          <CursorGlyph color={authorColor(name)} size={14} />
+        </span>
+      )}
+      <AuthorTag name={name} />
+    </span>
+  );
+}
+
+function LiveMemory({
+  rows,
+  arrived,
+  selectedId,
+  onSelect,
+}: {
+  rows: LiveRow[] | null;
+  arrived: string[];
+  selectedId: string | null;
+  onSelect: (id: string) => void;
+}) {
+  const body = useRef<HTMLTableSectionElement>(null);
+  // Layout effect: the new rows must start transparent on their first painted frame.
+  useLayoutEffect(() => {
+    const tbody = body.current;
+    if (!tbody || arrived.length === 0) return;
+    const reduced = prefersReducedMotion();
+    const anims: Animation[] = [];
+    for (const id of arrived) {
+      const tr = tbody.querySelector(`[data-memory-id="${id}"]`)?.closest("tr");
+      if (!tr) continue;
+      const author = rows?.find((r) => r.id === id);
+      const name = author ? authorOf(author) : null;
+      // Movement-free, so it stays under reduced motion; only the fade is dropped.
+      if (name)
+        anims.push(
+          tr.animate(
+            [
+              { backgroundColor: `color-mix(in oklab, ${authorColor(name)} 16%, transparent)` },
+              { backgroundColor: `color-mix(in oklab, ${authorColor(name)} 16%, transparent)`, offset: 0.3 },
+              { backgroundColor: "transparent" },
+            ],
+            { duration: WASH_MS, easing: "ease" },
+          ),
+        );
+      if (!reduced) anims.push(tr.animate([{ opacity: 0.001 }, { opacity: 1 }], { duration: 200, easing: "cubic-bezier(0.23, 1, 0.32, 1)" }));
+    }
+    for (const glyph of tbody.querySelectorAll<HTMLElement>("[data-arrival-cursor]"))
+      anims.push(
+        glyph.animate(reduced ? [{ opacity: 1 }, { opacity: 1, offset: 0.92 }, { opacity: 0 }] : [{ opacity: 0 }, { opacity: 1, offset: 0.08 }, { opacity: 1, offset: 0.9 }, { opacity: 0 }], {
+          duration: ARRIVAL_MS,
+          fill: "forwards",
+        }),
+      );
+    return () => anims.forEach((a) => a.cancel());
+    // rows is read for authors only; a new poll always brings a new `arrived`.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [arrived]);
+
+  const cursors = new Set(arrived.slice(0, CURSOR_CAP));
   return (
     <section className="ledger" aria-labelledby="live-memory-title">
       <div className="flex items-center justify-between gap-3 h-11 px-3" style={{ borderBottom: "var(--hair) solid var(--border)" }}>
@@ -261,6 +337,7 @@ function LiveMemory({ rows, selectedId, onSelect }: { rows: LiveRow[] | null; se
             </tr>
           </thead>
           <tbody
+            ref={body}
             onKeyDown={(e) => {
               // Arrow keys walk the selection; no animation on keyboard moves.
               if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
@@ -282,7 +359,7 @@ function LiveMemory({ rows, selectedId, onSelect }: { rows: LiveRow[] | null; se
                   // A row outline, not .frame-selected: its ::after would become an extra table cell.
                   style={selected ? { background: "var(--accent-soft)", outline: "1px solid var(--accent)", outlineOffset: -1 } : undefined}
                 >
-                  <td className="hidden sm:table-cell overflow-hidden">{author && <AuthorTag name={author} />}</td>
+                  <td className="hidden sm:table-cell overflow-hidden">{author && <RowAuthor name={author} id={m.id} cursor={cursors.has(m.id)} />}</td>
                   <td className="overflow-hidden">
                     <div className="py-2 sm:py-0 flex flex-col gap-1 min-w-0">
                       <button
@@ -301,7 +378,7 @@ function LiveMemory({ rows, selectedId, onSelect }: { rows: LiveRow[] | null; se
                       </button>
                       {/* Below sm the author and age ride under the text so the memory keeps the full width. */}
                       <span className="sm:hidden flex items-center gap-2 min-w-0">
-                        {author && <AuthorTag name={author} />}
+                        {author && <RowAuthor name={author} id={m.id} cursor={cursors.has(m.id)} />}
                         <time dateTime={m.created_at} className="font-mono text-[11.5px]" style={{ color: "var(--ink-faint)" }}>
                           {age(m.created_at)}
                         </time>
@@ -369,13 +446,15 @@ function Inspector({ row }: { row: LiveRow }) {
 
 // ---- stats + sources ----
 
-function Stat({ label, value, href, children }: { label: string; value: string; href?: string; children?: React.ReactNode }) {
+/** value is a DigitRoll when it is a number, or plain text ("–", "None", "4m ago"). */
+function Stat({ label, value, href, children }: { label: string; value: React.ReactNode; href?: string; children?: React.ReactNode }) {
+  const numeric = typeof value !== "string" || /\d/.test(value);
   const body = (
     <>
       <span className="label">{label}</span>
       <span
-        className={`flex items-center gap-2 text-[26px] leading-none tracking-[-0.02em] ${/\d/.test(value) ? "font-mono" : "font-medium"}`}
-        style={{ color: /\d/.test(value) ? "var(--ink)" : "var(--ink-dim)" }}
+        className={`flex items-center gap-2 text-[26px] leading-none tracking-[-0.02em] ${numeric ? "font-mono" : "font-medium"}`}
+        style={{ color: numeric ? "var(--ink)" : "var(--ink-dim)" }}
       >
         {children}
         {value}
@@ -394,6 +473,7 @@ function Stat({ label, value, href, children }: { label: string; value: string; 
 
 // The full catalogue lives on /connectors; the dashboard shows a short list.
 const NOT_CONNECTED_SHOWN = 6;
+const SYNC_HOLD_MS = 1200;
 
 // ---- agents presence ----
 
@@ -465,36 +545,64 @@ export default function DashboardPage() {
   const [entityCount, setEntityCount] = useState<number | null>(null);
   const [live, setLive] = useState<LiveRow[] | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [syncingKey, setSyncingKey] = useState<string | null>(null);
+  // One sync mark at a time: running, then done or failed held for SYNC_HOLD_MS.
+  const [syncMark, setSyncMark] = useState<{ key: string; status: SyncStatus } | null>(null);
+  const syncHold = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const [arrived, setArrived] = useState<string[]>([]);
+  const knownIds = useRef<Set<string> | null>(null);
   const [dismissedFailures, setDismissedFailures] = useState<Set<string>>(new Set());
   const [tokens, setTokens] = useState<ApiToken[] | null | "error">(null);
 
   const load = useCallback(() => sources.list().then(setRows).catch(() => setRows([])), []);
   const loadTokens = useCallback(() => auth.tokens.list().then(setTokens).catch(() => setTokens((prev) => (Array.isArray(prev) ? prev : "error"))), []);
   useEffect(() => {
-    load();
-    entities
-      .list()
-      .then((res) => setEntityCount(res.total))
-      .catch(() => setEntityCount(0));
+    let arrivalTimer: ReturnType<typeof setTimeout> | undefined;
     const refresh = () => {
-      loadLiveMemory().then(setLive).catch(() => setLive((prev) => prev ?? []));
+      load();
+      loadLiveMemory()
+        .then(({ rows: next, total }) => {
+          setEntityCount(total);
+          // Never on first load: only rows unseen by an earlier poll count as arrivals.
+          const known = knownIds.current;
+          if (known) {
+            const fresh = next.filter((m) => !known.has(m.id)).map((m) => m.id);
+            if (fresh.length) {
+              setArrived(fresh);
+              clearTimeout(arrivalTimer);
+              arrivalTimer = setTimeout(() => setArrived([]), ARRIVAL_MS);
+            }
+          }
+          knownIds.current = new Set([...(known ?? []), ...next.map((m) => m.id)]);
+          setLive(next);
+        })
+        .catch(() => {
+          setLive((prev) => prev ?? []);
+          setEntityCount((prev) => prev ?? 0);
+        });
       loadTokens();
     };
     refresh();
-    // Live: rows refresh in place on a fixed-layout table, nothing jumps.
+    // Live: rows and counts refresh in place on fixed layouts, nothing jumps.
     const timer = setInterval(refresh, 60_000);
-    return () => clearInterval(timer);
+    return () => {
+      clearInterval(timer);
+      clearTimeout(arrivalTimer);
+    };
   }, [load, loadTokens]);
+  useEffect(() => () => clearTimeout(syncHold.current), []);
 
   async function sync(key: string) {
-    setSyncingKey(key);
+    clearTimeout(syncHold.current);
+    setSyncMark({ key, status: "running" });
+    let status: SyncStatus = "done";
     try {
       await sources.sync(key);
       await load();
-    } finally {
-      setSyncingKey(null);
+    } catch {
+      status = "failed";
     }
+    setSyncMark({ key, status });
+    syncHold.current = setTimeout(() => setSyncMark(null), SYNC_HOLD_MS);
   }
 
   const connected = rows?.filter(isLiveSource) ?? [];
@@ -517,9 +625,12 @@ export default function DashboardPage() {
         className="grid grid-cols-2 lg:grid-cols-4 overflow-hidden rounded-[10px]"
         style={{ gap: "var(--hair)", background: "var(--border)", border: "var(--hair) solid var(--border)" }}
       >
-        <Stat label="Entities" value={entityCount !== null ? entityCount.toLocaleString() : "–"} href="/entities" />
-        <Stat label="Records" value={rows ? totalRecords.toLocaleString() : "–"} />
-        <Stat label="Sources healthy" value={!rows ? "–" : connected.length ? `${healthy}/${connected.length}` : "None"}>
+        <Stat label="Entities" value={entityCount !== null ? <DigitRoll value={entityCount} /> : "–"} href="/entities" />
+        <Stat label="Records" value={rows ? <DigitRoll value={totalRecords} /> : "–"} />
+        <Stat
+          label="Sources healthy"
+          value={!rows ? "–" : connected.length ? <DigitRoll value={healthy} format={(v) => `${v}/${connected.length}`} /> : "None"}
+        >
           {rows && connected.length > 0 && (
             <span className="dot" aria-hidden style={{ background: healthy === connected.length ? "var(--good)" : "var(--warning)" }} />
           )}
@@ -538,7 +649,7 @@ export default function DashboardPage() {
       {/* Mobile order: live memory, inspector + connect, then sources. */}
       <div className="grid gap-x-6 gap-y-8 lg:grid-cols-[minmax(0,1fr)_320px] items-start">
         <div className="min-w-0 lg:col-start-1 lg:row-start-1">
-          <LiveMemory rows={live} selectedId={selected?.id ?? null} onSelect={setSelectedId} />
+          <LiveMemory rows={live} arrived={arrived} selectedId={selected?.id ?? null} onSelect={setSelectedId} />
         </div>
 
         <div className="flex flex-col gap-6 min-w-0 lg:col-start-2 lg:row-start-1 lg:row-span-2 lg:sticky lg:top-8">
@@ -577,7 +688,8 @@ export default function DashboardPage() {
                   <tbody>
                     {connected.map((s) => {
                       const st = s.sync_status;
-                      const busy = syncingKey === s.key;
+                      const mark = syncMark?.key === s.key ? syncMark.status : "idle";
+                      const busy = mark === "running";
                       const health = sourceHealth(s);
                       return (
                         <tr key={s.key}>
@@ -589,7 +701,9 @@ export default function DashboardPage() {
                               <AuthorTag name={s.key} />
                             </div>
                           </td>
-                          <td className="text-right font-mono text-[12.5px]">{s.record_count.toLocaleString()}</td>
+                          <td className="text-right font-mono text-[12.5px]">
+                            <DigitRoll value={s.record_count} />
+                          </td>
                           <td className="hidden sm:table-cell text-[12.5px] whitespace-nowrap">
                             <span className="font-mono" style={{ color: "var(--ink-dim)" }}>
                               {since(st.last_ok)}
@@ -598,7 +712,7 @@ export default function DashboardPage() {
                           </td>
                           <td className="text-right">
                             <button onClick={() => sync(s.key)} disabled={busy} className="btn btn-sm">
-                              <RefreshCw size={12} strokeWidth={1.75} className={busy ? "animate-spin" : undefined} />
+                              <SyncMark status={mark} size={12} />
                               {busy ? "Syncing…" : "Sync now"}
                             </button>
                           </td>

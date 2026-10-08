@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { Check, ChevronRight, Copy, Download, KeyRound, Monitor, Plug, RefreshCw, Trash2, X } from "lucide-react";
+import { Check, ChevronRight, Download, KeyRound, Monitor, Plug, RefreshCw, Trash2, X } from "lucide-react";
 import {
   auth,
   downloadExport,
@@ -13,6 +13,11 @@ import {
   type Session,
   type UpdateStatus,
 } from "@/lib/api";
+import CopyButton from "@/components/bits/CopyButton";
+import DecryptReveal from "@/components/bits/DecryptReveal";
+import HoldButton from "@/components/bits/HoldButton";
+import SyncMark from "@/components/bits/SyncMark";
+import { spark } from "@/components/bits/Spark";
 
 const ICON = { size: 14, strokeWidth: 1.75 } as const;
 
@@ -28,22 +33,14 @@ function ErrorLine({ children }: { children: React.ReactNode }) {
   );
 }
 
-function CopyField({ value }: { value: string }) {
-  const [copied, setCopied] = useState(false);
-  async function copy() {
-    await navigator.clipboard.writeText(value).catch(() => {});
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
-  }
+/* reveal: a freshly minted secret decrypts in once (the token, never a command). */
+function CopyField({ value, reveal = false }: { value: string; reveal?: boolean }) {
   return (
     <div className="field flex items-center gap-2 h-8 pl-3 pr-1">
       <code className="flex-1 min-w-0 truncate text-[12px] font-mono" style={{ color: "var(--ink)" }}>
-        {value}
+        {reveal ? <DecryptReveal key={value} text={value} /> : value}
       </code>
-      <button onClick={copy} aria-label="Copy" className="btn btn-ghost btn-sm shrink-0">
-        {copied ? <Check {...ICON} style={{ color: "var(--good)" }} /> : <Copy {...ICON} />}
-        {copied ? "Copied" : "Copy"}
-      </button>
+      <CopyButton value={value} size="sm" className="btn-ghost shrink-0" />
     </div>
   );
 }
@@ -77,28 +74,39 @@ function PanelHead({ title, children, action }: { title: string; children?: Reac
   );
 }
 
-/* Inline revoke: one click arms it, the second confirms. */
+/* Inline revoke: one click arms it, the second confirms. Holding the icon for 650ms is the accelerator. */
 function RevokeButton({ label, onRevoke }: { label: string; onRevoke: () => Promise<void> }) {
   const [armed, setArmed] = useState(false);
   const [busy, setBusy] = useState(false);
+  async function confirm() {
+    setBusy(true);
+    try {
+      await onRevoke();
+    } finally {
+      setBusy(false);
+      setArmed(false);
+    }
+  }
   if (!armed)
     return (
-      <button onClick={() => setArmed(true)} aria-label="Revoke" title={`Revoke ${label}`} className="btn btn-ghost btn-sm btn-icon">
+      <HoldButton
+        holdMs={650}
+        onClick={() => setArmed(true)}
+        onConfirm={confirm}
+        disabled={busy}
+        aria-label="Revoke"
+        title={`Revoke ${label} (hold to revoke at once)`}
+        className="btn-sm btn-icon"
+        // Quiet at rest like the ghost icon it replaces; the critical fill shows while held.
+        style={{ borderColor: "transparent", color: "var(--ink-dim)" }}
+      >
         <Trash2 {...ICON} />
-      </button>
+      </HoldButton>
     );
   return (
     <span className="inline-flex items-center gap-1">
       <button
-        onClick={async () => {
-          setBusy(true);
-          try {
-            await onRevoke();
-          } finally {
-            setBusy(false);
-            setArmed(false);
-          }
-        }}
+        onClick={confirm}
         disabled={busy}
         className="btn btn-danger btn-sm"
       >
@@ -133,6 +141,9 @@ function TokensSection() {
   const [minted, setMinted] = useState<{ name: string; token: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const createBtn = useRef<HTMLButtonElement>(null);
+  // detail is 0 for Enter in the field or on the button: sparks only follow a pointer click.
+  const pointer = useRef(false);
 
   const load = () => auth.tokens.list().then(setTokens).catch(() => setTokens([]));
   useEffect(() => {
@@ -145,6 +156,7 @@ function TokensSection() {
     try {
       const res = await auth.tokens.create(name.trim() || "API token");
       setMinted({ name: res.name, token: res.token });
+      if (pointer.current) spark(createBtn.current);
       setName("");
       await load();
     } catch (e) {
@@ -189,7 +201,7 @@ function TokensSection() {
             value={name}
             onChange={(e) => setName(e.target.value)}
           />
-          <button type="submit" disabled={busy} className="btn btn-primary">
+          <button ref={createBtn} type="submit" disabled={busy} onClick={(e) => (pointer.current = e.detail > 0)} className="btn btn-primary">
             <KeyRound {...ICON} />
             {busy ? "Creating…" : "Create"}
           </button>
@@ -209,7 +221,7 @@ function TokensSection() {
               <X {...ICON} />
             </button>
           </div>
-          <CopyField value={minted.token} />
+          <CopyField value={minted.token} reveal />
         </div>
       )}
 
@@ -340,11 +352,23 @@ function UpdateSection() {
   const [phase, setPhase] = useState<Phase>("idle");
   const [target, setTarget] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
+  // How the last "Check now" ended, shown on the button for 1.2s.
+  const [checkResult, setCheckResult] = useState<"done" | "failed" | null>(null);
+  const [wasChecking, setWasChecking] = useState(false);
   const [stale, setStale] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const requestedAt = useRef(0);
 
   const busy = phase !== "idle";
+  if (checking !== wasChecking) {
+    setWasChecking(checking);
+    if (wasChecking && !checking && !checkResult) setCheckResult("done");
+  }
+  useEffect(() => {
+    if (!checkResult) return;
+    const t = setTimeout(() => setCheckResult(null), 1200);
+    return () => clearTimeout(t);
+  }, [checkResult]);
 
   const load = useCallback(
     () =>
@@ -394,7 +418,11 @@ function UpdateSection() {
 
   async function checkNow() {
     setChecking(true);
-    await updateApi.check().catch(() => setChecking(false));
+    setCheckResult(null);
+    await updateApi.check().catch(() => {
+      setChecking(false);
+      setCheckResult("failed");
+    });
   }
 
   if (!status) {
@@ -450,7 +478,7 @@ function UpdateSection() {
         title="Updates"
         action={
           <button onClick={checkNow} disabled={checking || busy} className="btn btn-sm shrink-0" aria-label="Check for updates">
-            <RefreshCw {...ICON} className={checking ? "animate-spin" : ""} />
+            {checking || checkResult ? <SyncMark status={checking ? "running" : checkResult!} /> : <RefreshCw {...ICON} />}
             {checking ? "Checking…" : "Check now"}
           </button>
         }

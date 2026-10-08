@@ -2,8 +2,10 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { Check, Copy } from "lucide-react";
 import Markdown from "@/components/Markdown";
+import CopyButton from "@/components/bits/CopyButton";
+import SyncMark from "@/components/bits/SyncMark";
+import Tooltip from "@/components/bits/Tooltip";
 import { settings as settingsApi } from "@/lib/api";
 
 const FRONTMATTER = /^---\n([\s\S]*?)\n---\n/;
@@ -16,24 +18,6 @@ const ROUTES = [
   { who: "Claude Code hooks", how: "SessionStart injects this skill. UserPromptSubmit recalls memories for each prompt." },
 ];
 
-function useCopy() {
-  const [copied, setCopied] = useState<string | null>(null);
-  const copy = (key: string, text: string) =>
-    navigator.clipboard?.writeText(text).then(() => {
-      setCopied(key);
-      setTimeout(() => setCopied((k) => (k === key ? null : k)), 1400);
-    });
-  return { copied, copy };
-}
-
-function CopyIcon({ done }: { done: boolean }) {
-  return (
-    <span key={String(done)} className="pop-in inline-flex">
-      {done ? <Check size={14} strokeWidth={1.75} /> : <Copy size={14} strokeWidth={1.75} />}
-    </span>
-  );
-}
-
 // The skill that tells connected agents when to recall and what to remember.
 // Sent to every MCP client as connection instructions, injected into Claude
 // Code each session by its hook, and written as SKILL.md by connect-agents.sh.
@@ -45,7 +29,6 @@ export default function SkillPage() {
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const { copied, copy } = useCopy();
 
   useEffect(() => {
     settingsApi
@@ -137,29 +120,24 @@ export default function SkillPage() {
                   >
                     Edit
                   </button>
-                  <button onClick={() => copy("skill", skill)} className="btn btn-sm btn-primary" aria-live="polite">
-                    <CopyIcon done={copied === "skill"} />
-                    {copied === "skill" ? "Copied" : "Copy SKILL.md"}
-                  </button>
+                  <CopyButton value={skill} label="Copy SKILL.md" size="sm" className="btn-primary [&_svg]:text-current" />
                 </>
               ))}
             </div>
           </div>
 
-          {(saved || error) && (
-            <div className="px-4 pt-3">
-              {saved && (
-                <p className="text-[12.5px] fade-in" style={{ color: "var(--good)" }} role="status">
-                  Saved. New agent sessions pick it up.
-                </p>
-              )}
-              {error && (
-                <p className="text-[12.5px] rounded-[7px] px-3 py-2" style={{ color: "var(--critical)", background: "var(--critical-soft)" }}>
-                  {error}
-                </p>
-              )}
-            </div>
-          )}
+          {/* Always mounted (hidden when idle) so the check draws each time Saved appears. */}
+          <div className={saved || error ? "px-4 pt-3" : "hidden"}>
+            <p className={`${saved ? "flex" : "hidden"} items-center gap-1.5 text-[12.5px] fade-in`} style={{ color: "var(--good)" }} role="status">
+              <SyncMark status={saved ? "done" : "idle"} />
+              Saved. New agent sessions pick it up.
+            </p>
+            {error && (
+              <p className="text-[12.5px] rounded-[7px] px-3 py-2" style={{ color: "var(--critical)", background: "var(--critical-soft)" }}>
+                {error}
+              </p>
+            )}
+          </div>
 
           {skill === null ? (
             !error && (
@@ -250,14 +228,9 @@ export default function SkillPage() {
               <code className="font-mono text-[12px] flex-1 min-w-0 truncate" title={REFRESH}>
                 {REFRESH}
               </code>
-              <button
-                onClick={() => copy("cmd", REFRESH)}
-                className="btn btn-sm btn-icon btn-ghost"
-                aria-label={copied === "cmd" ? "Copied" : "Copy command"}
-                title="Copy command"
-              >
-                <CopyIcon done={copied === "cmd"} />
-              </button>
+              <Tooltip label="Copy command">
+                <CopyButton value={REFRESH} label="Copy command" />
+              </Tooltip>
             </div>
           </section>
         </aside>

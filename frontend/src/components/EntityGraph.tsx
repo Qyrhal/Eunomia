@@ -5,6 +5,9 @@ import { forceCenter, forceLink, forceManyBody, forceSimulation } from "d3-force
 import { ArrowLeft, ArrowRight, Pencil, Plus, Trash2, X } from "lucide-react";
 import Scene3D, { type SceneInsets } from "./Scene3D";
 import AuthorTag from "./AuthorTag";
+import SyncMark from "./bits/SyncMark";
+import Tooltip, { TooltipGroup } from "./bits/Tooltip";
+import { cssVar, prefersReducedMotion } from "./bits/motion";
 import { Blobatar } from "@blobatar/react";
 import {
   auth,
@@ -78,6 +81,15 @@ const ICON = { size: 14, strokeWidth: 1.75 } as const;
 
 const SPARSE = 3; // fewer nodes than this shows the `guide`
 
+// A memory row that just arrived from "Add memory" settles in from a slight blur, once.
+function blurIn(el: HTMLElement | null) {
+  if (!el || prefersReducedMotion()) return;
+  el.animate([{ opacity: 0, filter: "blur(4px)" }, { opacity: 1, filter: "blur(0)" }], {
+    duration: 200,
+    easing: cssVar("--ease-out") || "ease-out",
+  });
+}
+
 export default function EntityGraph({
   kinds,
   header,
@@ -107,6 +119,11 @@ export default function EntityGraph({
   const [relForm, setRelForm] = useState({ to: "", label: "" });
   const [actionError, setActionError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // "Add memory" progress: spinner while saving, a drawn check for 1.2s after
+  const [memoryStatus, setMemoryStatus] = useState<"idle" | "running" | "done">("idle");
+  const [freshMemory, setFreshMemory] = useState<string | null>(null);
+  const memoryTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(() => () => clearTimeout(memoryTimer.current), []);
 
   // px of canvas covered by the floating header/toolbar (top) and, on desktop,
   // the inspector column (right), so the camera fits nodes into what is left.
@@ -169,6 +186,20 @@ export default function EntityGraph({
   }, [selected, showCreate, editing]);
 
   const positions = useMemo(() => (graph ? layout(graph) : new Map()), [graph]);
+  // Stable across selection, so selecting a node never rebuilds the scene (and its pick ring, reticle, edge fade).
+  const points = useMemo(
+    () =>
+      (graph?.nodes ?? [])
+        .filter((n) => visibleKinds.has(n.kind))
+        .map((n) => ({
+          id: n.id,
+          ...(positions.get(n.id) ?? { x: 0, y: 0, z: 0 }),
+          color: KIND_COLOR[n.kind],
+          size: KIND_SIZE[n.kind],
+          label: n.name,
+        })),
+    [graph, positions, visibleKinds],
+  );
 
   async function selectNode(id: string) {
     setEditing(false);
@@ -176,7 +207,9 @@ export default function EntityGraph({
     setRelForm({ to: "", label: "" });
     setActionError(null);
     try {
-      setSelected(await entities.get(id));
+      const detail = await entities.get(id);
+      setSelected(detail);
+      return detail;
     } catch {
       setSelected(null);
     }
@@ -263,11 +296,18 @@ export default function EntityGraph({
     if (!selected || !memoryText.trim()) return;
     setBusy(true);
     setActionError(null);
+    clearTimeout(memoryTimer.current);
+    setMemoryStatus("running");
+    const before = new Set(selected.memory.map((m) => m.id));
     try {
       await entities.addMemory(selected.id, { text: memoryText.trim() });
       setMemoryText("");
-      await selectNode(selected.id);
+      const detail = await selectNode(selected.id);
+      setFreshMemory(detail?.memory.find((m) => !before.has(m.id))?.id ?? null);
+      setMemoryStatus("done");
+      memoryTimer.current = setTimeout(() => setMemoryStatus("idle"), 1200);
     } catch (err) {
+      setMemoryStatus("idle");
       setActionError(err instanceof Error ? err.message : "Could not add that memory.");
     } finally {
       setBusy(false);
@@ -550,16 +590,6 @@ export default function EntityGraph({
     );
   }
 
-  const points = graph.nodes
-    .filter((n) => visibleKinds.has(n.kind))
-    .map((n) => ({
-      id: n.id,
-      ...(positions.get(n.id) ?? { x: 0, y: 0, z: 0 }),
-      color: KIND_COLOR[n.kind],
-      size: KIND_SIZE[n.kind],
-      label: n.name,
-    }));
-
   const lastTouched = selected
     ? selected.memory.reduce<string | undefined>((a, m) => (m.created_at && (!a || m.created_at > a) ? m.created_at : a), undefined)
     : undefined;
@@ -581,17 +611,25 @@ export default function EntityGraph({
             </span>
           </div>
         </div>
-        <div className="flex items-center gap-0.5 shrink-0 -mr-1">
-          <button className="btn btn-ghost btn-sm btn-icon w-[26px]" onClick={startEditing} aria-label="Edit" title="Edit">
-            <Pencil {...ICON} />
-          </button>
-          <button className="btn btn-ghost btn-sm btn-icon w-[26px]" onClick={deleteSelected} aria-label="Delete" title="Delete" disabled={busy}>
-            <Trash2 {...ICON} />
-          </button>
-          <button className="btn btn-ghost btn-sm btn-icon w-[26px]" onClick={() => setSelected(null)} aria-label="Close" title="Close (Esc)">
-            <X {...ICON} />
-          </button>
-        </div>
+        <TooltipGroup>
+          <div className="flex items-center gap-0.5 shrink-0 -mr-1">
+            <Tooltip label="Edit">
+              <button className="btn btn-ghost btn-sm btn-icon w-[26px]" onClick={startEditing} aria-label="Edit">
+                <Pencil {...ICON} />
+              </button>
+            </Tooltip>
+            <Tooltip label="Delete">
+              <button className="btn btn-ghost btn-sm btn-icon w-[26px]" onClick={deleteSelected} aria-label="Delete" disabled={busy}>
+                <Trash2 {...ICON} />
+              </button>
+            </Tooltip>
+            <Tooltip label="Close" shortcut="Esc">
+              <button className="btn btn-ghost btn-sm btn-icon w-[26px]" onClick={() => setSelected(null)} aria-label="Close">
+                <X {...ICON} />
+              </button>
+            </Tooltip>
+          </div>
+        </TooltipGroup>
       </div>
 
       <div className="overflow-y-auto px-4 pb-4 flex flex-col gap-6">
@@ -670,7 +708,7 @@ export default function EntityGraph({
           ) : (
             <ul className="hairline-rows">
               {selected.memory.map((m) => (
-                <li key={m.id} className="group py-2.5 flex items-start justify-between gap-2">
+                <li key={m.id} ref={m.id === freshMemory ? blurIn : undefined} className="group py-2.5 flex items-start justify-between gap-2">
                   <div className="min-w-0 flex flex-col gap-1.5">
                     <span className="text-[13px] leading-snug">{m.text}</span>
                     {(m.owner_email || m.created_at) && (
@@ -684,15 +722,16 @@ export default function EntityGraph({
                       </div>
                     )}
                   </div>
-                  <button
-                    onClick={() => deleteMemory(m.id)}
-                    aria-label="Delete memory"
-                    title="Delete memory"
-                    disabled={busy}
-                    className="btn btn-ghost btn-sm btn-icon w-[24px] h-[24px] shrink-0 -mr-1"
-                  >
-                    <X size={13} strokeWidth={1.75} />
-                  </button>
+                  <Tooltip label="Delete memory">
+                    <button
+                      onClick={() => deleteMemory(m.id)}
+                      aria-label="Delete memory"
+                      disabled={busy}
+                      className="btn btn-ghost btn-sm btn-icon w-[24px] h-[24px] shrink-0 -mr-1"
+                    >
+                      <X size={13} strokeWidth={1.75} />
+                    </button>
+                  </Tooltip>
                 </li>
               ))}
             </ul>
@@ -705,9 +744,16 @@ export default function EntityGraph({
               value={memoryText}
               onChange={(e) => setMemoryText(e.target.value)}
             />
-            <button type="submit" disabled={busy || !memoryText.trim()} className="btn btn-sm self-start">
-              Add memory
-            </button>
+            <div className="flex items-center gap-2">
+              <button type="submit" disabled={busy || !memoryText.trim()} className="btn btn-sm">
+                Add memory
+              </button>
+              {memoryStatus !== "idle" && (
+                <span style={{ color: "var(--ink-faint)" }}>
+                  <SyncMark status={memoryStatus} />
+                </span>
+              )}
+            </div>
           </form>
         </section>
 

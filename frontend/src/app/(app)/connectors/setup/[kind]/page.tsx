@@ -2,9 +2,12 @@
 
 import { use, useEffect, useState } from "react";
 import Link from "next/link";
-import { ArrowRight, Check, ChevronRight, Copy, Eye, EyeOff } from "lucide-react";
+import { ArrowRight, ChevronRight, Eye, EyeOff } from "lucide-react";
 import { apiOrigin, auth as authApi, connectors as connectorsApi, settings as settingsApi, type AppSettings, type Connector, type ConnectorKind } from "@/lib/api";
 import { CONNECTOR_META, CONNECTOR_ORDER, ConnectorTile, connectorStatus, type FieldDef } from "@/lib/connectorMeta";
+import CopyButton from "@/components/bits/CopyButton";
+import SyncMark from "@/components/bits/SyncMark";
+import Tooltip from "@/components/bits/Tooltip";
 
 // Presets for the sync-interval select, in seconds.
 const SYNC_INTERVAL_PRESETS = [
@@ -78,16 +81,13 @@ export default function ConnectorSetupPage({ params }: { params: Promise<{ kind:
 }
 
 function SecretToggle({ shown, onToggle, label }: { shown: boolean; onToggle: () => void; label: string }) {
+  const name = shown ? `Hide ${label}` : `Show ${label}`;
   return (
-    <button
-      type="button"
-      onClick={onToggle}
-      aria-label={shown ? `Hide ${label}` : `Show ${label}`}
-      aria-pressed={shown}
-      className="btn btn-ghost btn-sm w-6 px-0 -mr-1.5"
-    >
-      {shown ? <EyeOff size={14} strokeWidth={1.75} /> : <Eye size={14} strokeWidth={1.75} />}
-    </button>
+    <Tooltip label={name}>
+      <button type="button" onClick={onToggle} aria-label={name} aria-pressed={shown} className="btn btn-ghost btn-sm w-6 px-0 -mr-1.5">
+        {shown ? <EyeOff size={14} strokeWidth={1.75} aria-hidden /> : <Eye size={14} strokeWidth={1.75} aria-hidden />}
+      </button>
+    </Tooltip>
   );
 }
 
@@ -106,7 +106,6 @@ function ConnectorSetup({ kind }: { kind: ConnectorKind }) {
   const [appSettings, setAppSettings] = useState<AppSettings | undefined>(undefined);
   const [intervalState, setIntervalState] = useState<"idle" | "saved" | "error">("idle");
   const [webhookUrl, setWebhookUrl] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
   const [confirmDisconnect, setConfirmDisconnect] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
 
@@ -203,18 +202,6 @@ function ConnectorSetup({ kind }: { kind: ConnectorKind }) {
       setTimeout(() => setIntervalState("idle"), 1400);
     } catch {
       setIntervalState("error");
-    }
-  }
-
-  async function copyWebhook() {
-    if (!webhookUrl) return;
-    try {
-      await navigator.clipboard.writeText(webhookUrl);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1400);
-    } catch {
-      document.getElementById("field-webhook-url")?.focus();
-      (document.getElementById("field-webhook-url") as HTMLInputElement | null)?.select();
     }
   }
 
@@ -335,10 +322,7 @@ function ConnectorSetup({ kind }: { kind: ConnectorKind }) {
                   onChange={(e) => setWebhookUrl(e.target.value)}
                   aria-describedby="webhook-help"
                 />
-                <button type="button" className="btn btn-sm h-8 w-[84px]" onClick={copyWebhook} aria-live="polite">
-                  {copied ? <Check size={13} strokeWidth={1.75} aria-hidden /> : <Copy size={13} strokeWidth={1.75} aria-hidden />}
-                  {copied ? "Copied" : "Copy"}
-                </button>
+                <CopyButton value={() => webhookUrl} size="sm" className="h-8 w-[84px]" />
               </div>
               <p id="webhook-help" className="text-[12px]" style={{ color: "var(--ink-faint)" }}>
                 Register this with {meta.label} so updates arrive instantly instead of on the next poll. If {meta.label} needs a public address, replace{" "}
@@ -359,15 +343,11 @@ function ConnectorSetup({ kind }: { kind: ConnectorKind }) {
             {savedFlash ? "Saved" : saving ? "Saving…" : "Save"}
           </button>
           <button type="button" onClick={test} disabled={testing || !(connected || isDemo)} className="btn" title={connected || isDemo ? undefined : "Save credentials first"}>
+            <SyncMark status={testing ? "running" : testResult ? (testResult.ok ? "done" : "failed") : "idle"} />
             {testing ? "Testing…" : "Test connection"}
           </button>
           <span className="text-[12.5px] flex items-center gap-1.5 min-w-0" aria-live="polite">
-            {testResult?.ok && (
-              <>
-                <span className="dot" style={{ background: "var(--good)" }} aria-hidden />
-                Connection works
-              </>
-            )}
+            {testResult?.ok && "Connection works"}
           </span>
         </div>
 

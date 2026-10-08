@@ -2,9 +2,12 @@
 
 import { Fragment, use, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { ChevronRight, ExternalLink, RefreshCw, Search, Settings2, X } from "lucide-react";
+import { ChevronRight, ExternalLink, Search, Settings2, X } from "lucide-react";
 import { sources, tools, type SourceRow, type ToolHit, type ToolRecord } from "@/lib/api";
 import AuthorTag from "@/components/AuthorTag";
+import DigitRoll from "@/components/bits/DigitRoll";
+import SyncMark, { type SyncStatus } from "@/components/bits/SyncMark";
+import Tooltip from "@/components/bits/Tooltip";
 import { ConnectorTile, kindForSource, relativeTime } from "@/lib/connectorMeta";
 
 const DATE_KEY = /(_at|date|time)$/i;
@@ -193,6 +196,8 @@ export default function ConnectorWorkspacePage({ params }: { params: Promise<{ k
   const [results, setResults] = useState<ToolHit[] | null>(null);
   const [searching, setSearching] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  // Result mark after a sync: holds 1.2s, then the button goes back to idle.
+  const [syncResult, setSyncResult] = useState<"done" | "failed" | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
 
   const loadRow = useCallback(
@@ -239,16 +244,21 @@ export default function ConnectorWorkspacePage({ params }: { params: Promise<{ k
 
   async function sync() {
     setSyncing(true);
+    setSyncResult(null);
     setSyncError(null);
+    let result: "done" | "failed" = "done";
     try {
       await sources.sync(kind);
       await loadRow();
       if (!activeQuery) loadRecords();
     } catch (e) {
+      result = "failed";
       setSyncError((e as Error).message);
     } finally {
       setSyncing(false);
     }
+    setSyncResult(result);
+    setTimeout(() => setSyncResult((r) => (r === result ? null : r)), 1200);
   }
 
   if (row === undefined) {
@@ -308,6 +318,7 @@ export default function ConnectorWorkspacePage({ params }: { params: Promise<{ k
   }
 
   const h = health(row);
+  const syncStatus: SyncStatus = syncing ? "running" : syncResult ?? "idle";
 
   return (
     <div className="max-w-5xl flex flex-col gap-8">
@@ -328,8 +339,9 @@ export default function ConnectorWorkspacePage({ params }: { params: Promise<{ k
                 <Settings2 size={14} strokeWidth={1.75} aria-hidden /> Settings
               </Link>
             )}
-            <button type="button" onClick={sync} disabled={syncing} className="btn btn-primary" aria-live="polite">
-              <RefreshCw size={14} strokeWidth={1.75} className={syncing ? "animate-spin" : undefined} aria-hidden />
+            {/* The mark's green check would vanish on the green primary fill, so it takes the button's ink. */}
+            <button type="button" onClick={sync} disabled={syncing} className="btn btn-primary [&_path]:stroke-current" aria-live="polite">
+              <SyncMark status={syncStatus} />
               {syncing ? "Syncing…" : "Sync now"}
             </button>
           </div>
@@ -339,7 +351,7 @@ export default function ConnectorWorkspacePage({ params }: { params: Promise<{ k
       <dl className="ledger grid grid-cols-2 md:grid-cols-4">
         {[
           { label: "Health", value: <span style={{ color: h.tone === "var(--good)" ? "var(--ink)" : h.tone }}>{h.text}</span> },
-          { label: "Records", value: <span className="font-mono">{row.record_count.toLocaleString()}</span> },
+          { label: "Records", value: <span className="font-mono"><DigitRoll value={row.record_count} /></span> },
           {
             label: "Last sync",
             value: (
@@ -393,9 +405,11 @@ export default function ConnectorWorkspacePage({ params }: { params: Promise<{ k
               <span className="label">Searching…</span>
             ) : (
               query && (
-                <button type="button" aria-label="Clear search" className="btn btn-ghost btn-sm -mr-1.5 w-6 px-0" onClick={clearSearch}>
-                  <X size={13} strokeWidth={1.75} />
-                </button>
+                <Tooltip label="Clear search">
+                  <button type="button" aria-label="Clear search" className="btn btn-ghost btn-sm -mr-1.5 w-6 px-0" onClick={clearSearch}>
+                    <X size={13} strokeWidth={1.75} aria-hidden />
+                  </button>
+                </Tooltip>
               )
             )}
           </form>

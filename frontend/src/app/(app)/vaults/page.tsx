@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import {
   Check,
   ChevronRight,
@@ -24,6 +24,10 @@ import {
   type VaultMember,
   type VaultRole,
 } from "@/lib/api";
+import HoldButton from "@/components/bits/HoldButton";
+import SyncMark from "@/components/bits/SyncMark";
+import { spark } from "@/components/bits/Spark";
+import { cssVar, prefersReducedMotion } from "@/components/bits/motion";
 
 const ICON = { size: 14, strokeWidth: 1.75 } as const;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -66,6 +70,24 @@ function ErrorLine({ children }: { children: React.ReactNode }) {
       {children}
     </p>
   );
+}
+
+/* A check that draws itself once on mount (the shared .bits-draw grammar, loaded by the bits imports above; reduced motion is handled there). */
+function DrawnCheck() {
+  return (
+    <svg width={14} height={14} viewBox="0 0 16 16" fill="none" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round" aria-hidden style={{ flexShrink: 0 }}>
+      <path d="M3.5 8.4 6.6 11.3 12.5 4.9" stroke="var(--good)" pathLength={1} className="bits-draw" data-animate="" />
+    </svg>
+  );
+}
+
+/* New rows (since the previous load, never the first) settle in. A stable function, so React calls it once per mount. */
+function arrive(el: HTMLElement | null) {
+  if (!el || prefersReducedMotion()) return;
+  el.animate([{ opacity: 0.001, transform: "translateY(-4px)" }, { opacity: 1, transform: "none" }], {
+    duration: 200,
+    easing: cssVar("--ease-out") || "ease-out",
+  });
 }
 
 /* Overlapping identity tags, Figma-cursor style. Real member emails only. */
@@ -114,6 +136,7 @@ function VaultInspector({
   const [cloneName, setCloneName] = useState(`${vault.name} (copy)`);
   const [cloneBusy, setCloneBusy] = useState(false);
   const [sent, setSent] = useState<string | null>(null);
+  const [cloned, setCloned] = useState(false);
 
   useEffect(() => {
     vaultsApi
@@ -121,6 +144,12 @@ function VaultInspector({
       .then((r) => setMembers(r.results))
       .catch(() => setMembers([]));
   }, [vault.id, rev]);
+
+  useEffect(() => {
+    if (!cloned) return;
+    const t = setTimeout(() => setCloned(false), 1200);
+    return () => clearTimeout(t);
+  }, [cloned]);
 
   const isOwner = vault.role === "owner";
   const isOrg = vault.kind !== "personal";
@@ -174,6 +203,7 @@ function VaultInspector({
     try {
       await vaultsApi.clone(vault.id, cloneName.trim() || undefined);
       setCloning(false);
+      setCloned(true);
       onVaultsChanged();
     } catch (e) {
       setError(errText(e, "Could not clone this vault. Try a different name."));
@@ -344,7 +374,7 @@ function VaultInspector({
                 disabled={busy || !trimmed}
                 className="btn btn-sm shrink-0"
               >
-                <UserPlus {...ICON} />
+                {busy || sent ? <SyncMark status={busy ? "running" : "done"} /> : <UserPlus {...ICON} />}
                 {busy ? "Inviting…" : "Invite"}
               </button>
             </div>
@@ -440,7 +470,7 @@ function VaultInspector({
               className="btn btn-sm"
               title="Clone into a new vault"
             >
-              <Copy {...ICON} />
+              {cloned ? <DrawnCheck /> : <Copy {...ICON} />}
               Clone vault
             </button>
             <span className="flex-1" />
@@ -454,14 +484,24 @@ function VaultInspector({
               </button>
             )}
             {isOrg && isOwner && (
-              <button
+              // Click still opens the confirm step; holding 900ms is the accelerator.
+              <HoldButton
+                holdMs={900}
                 onClick={() => setConfirm("delete")}
-                className="btn btn-danger btn-sm"
+                onConfirm={() =>
+                  run(
+                    () => vaultsApi.delete(vault.id),
+                    "Could not delete this vault. Reload and try again.",
+                    onVaultsChanged,
+                  )
+                }
+                className="btn-sm"
                 aria-label="Delete vault"
+                title="Click to confirm, or hold to delete"
               >
                 <Trash2 {...ICON} />
                 Delete
-              </button>
+              </HoldButton>
             )}
           </div>
         )}
@@ -476,6 +516,7 @@ function InvitationsPanel({ onChanged }: { onChanged: () => void }) {
     null,
   );
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [joined, setJoined] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const load = () =>
@@ -488,13 +529,17 @@ function InvitationsPanel({ onChanged }: { onChanged: () => void }) {
     load();
   }, []);
 
-  async function accept(vaultId: string) {
+  async function accept(vaultId: string, button: HTMLElement, pointer: boolean) {
     setBusyId(vaultId);
     setError(null);
     try {
       await vaultsApi.acceptInvitation(vaultId);
-      await load();
+      if (pointer) spark(button);
+      // The dashed invite turns solid with a soft flash, then the vault row arrives in the list.
+      setJoined(vaultId);
+      if (!prefersReducedMotion()) await new Promise((r) => setTimeout(r, 180));
       onChanged();
+      await load();
     } catch (e) {
       setError(
         errText(
@@ -504,6 +549,7 @@ function InvitationsPanel({ onChanged }: { onChanged: () => void }) {
       );
     } finally {
       setBusyId(null);
+      setJoined(null);
     }
   }
 
@@ -534,9 +580,10 @@ function InvitationsPanel({ onChanged }: { onChanged: () => void }) {
       {invitations.map((inv) => (
         <div
           key={inv.vault_id}
-          className="ledger flex flex-wrap items-center gap-3 px-4 py-3"
-          style={{ borderStyle: "dashed", borderColor: "var(--border-strong)" }}
+          className="ledger relative flex flex-wrap items-center gap-3 px-4 py-3"
+          style={{ borderStyle: joined === inv.vault_id ? "solid" : "dashed", borderColor: "var(--border-strong)" }}
         >
+          {joined === inv.vault_id && <JoinFlash />}
           <div className="flex-1 min-w-[160px]">
             <div className="text-[13.5px] font-medium truncate">
               {inv.vault_name}
@@ -558,7 +605,7 @@ function InvitationsPanel({ onChanged }: { onChanged: () => void }) {
               Decline
             </button>
             <button
-              onClick={() => accept(inv.vault_id)}
+              onClick={(e) => accept(inv.vault_id, e.currentTarget, e.detail > 0)}
               disabled={busyId === inv.vault_id}
               className="btn btn-primary btn-sm"
             >
@@ -570,6 +617,22 @@ function InvitationsPanel({ onChanged }: { onChanged: () => void }) {
       ))}
       {error && <ErrorLine>{error}</ErrorLine>}
     </section>
+  );
+}
+
+function JoinFlash() {
+  const ref = useRef<HTMLSpanElement>(null);
+  useLayoutEffect(() => {
+    if (prefersReducedMotion()) return;
+    ref.current?.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 180, easing: cssVar("--ease-out") || "ease-out" });
+  }, []);
+  return (
+    <span
+      ref={ref}
+      aria-hidden
+      className="absolute inset-0 pointer-events-none"
+      style={{ background: "var(--accent-soft)", borderRadius: "inherit" }}
+    />
   );
 }
 
@@ -710,15 +773,20 @@ function MergeVaultsCard({
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<string | null>(null);
+  const [chips, setChips] = useState<{ from: [string, string]; to: string; id: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   async function merge() {
     setBusy(true);
     setError(null);
     setResult(null);
+    setChips(null);
+    const label = (id: string) => vaults.find((v) => v.id === id);
+    const from: [string, string] = [vaultLabel(label(a)!), vaultLabel(label(b)!)];
     try {
       const merged = await vaultsApi.merge(a, b, name.trim());
       setResult(`Created “${merged.name}” with ${merged.entities} entities.`);
+      setChips({ from, to: merged.name, id: Date.now() });
       setName("");
       onMerged();
     } catch (e) {
@@ -800,22 +868,85 @@ function MergeVaultsCard({
           <p className="label">Pick two different vaults to merge.</p>
         )}
         {result && (
-          <p
-            role="status"
-            className="text-[12.5px] flex items-center gap-2"
-            style={{ color: "var(--ink)" }}
-          >
-            <span
-              className="dot"
-              style={{ background: "var(--good)" }}
-              aria-hidden
-            />
-            {result}
-          </p>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+            <p
+              role="status"
+              className="text-[12.5px] flex items-center gap-2"
+              style={{ color: "var(--ink)" }}
+            >
+              <span
+                className="dot"
+                style={{ background: "var(--good)" }}
+                aria-hidden
+              />
+              {result}
+            </p>
+            {chips && <MergeChips key={chips.id} from={chips.from} to={chips.to} />}
+          </div>
         )}
         {error && <ErrorLine>{error}</ErrorLine>}
       </div>
     </section>
+  );
+}
+
+const CHIP =
+  "inline-flex items-center h-5 px-1.5 rounded-[4px] text-[11.5px] font-medium whitespace-nowrap max-w-[140px] min-w-0";
+
+/* After a merge: the two source chips glide together (260ms) and resolve into the new vault's name (180ms blur crossfade).
+   Decorative and aria-hidden; the status line above already says it. The final state is the inline style, so reduced motion just shows it. */
+function MergeChips({ from, to }: { from: [string, string]; to: string }) {
+  const a = useRef<HTMLSpanElement>(null);
+  const b = useRef<HTMLSpanElement>(null);
+  const c = useRef<HTMLSpanElement>(null);
+  useLayoutEffect(() => {
+    const [A, B, C] = [a.current, b.current, c.current];
+    if (!A || !B || !C || prefersReducedMotion()) return;
+    const move = cssVar("--ease-in-out") || "ease-in-out";
+    const out = cssVar("--ease-out") || "ease-out";
+    const box = C.parentElement!.getBoundingClientRect();
+    const mid = box.left + box.width / 2;
+    const toMid = (el: HTMLElement) => {
+      const r = el.getBoundingClientRect();
+      return mid - (r.left + r.width / 2);
+    };
+    const glide = 260 / 440; // the glide's share of the 440ms timeline
+    for (const el of [A, B]) {
+      const d = `translateX(${toMid(el)}px)`;
+      el.animate(
+        [
+          { transform: "none", opacity: 1, filter: "blur(0)", easing: move },
+          { transform: d, opacity: 1, filter: "blur(0)", offset: glide, easing: out },
+          { transform: d, opacity: 0, filter: "blur(2px)" },
+        ],
+        { duration: 440 },
+      );
+    }
+    C.animate(
+      [
+        { opacity: 0, filter: "blur(2px)" },
+        { opacity: 0, filter: "blur(2px)", offset: glide, easing: out },
+        { opacity: 1, filter: "blur(0)" },
+      ],
+      { duration: 440 },
+    );
+  }, []);
+  const quiet = { border: "var(--hair) solid var(--border-strong)", color: "var(--ink-dim)" };
+  return (
+    // Both sources stay in flow (invisible at rest) so the line never changes width.
+    <span className="relative inline-flex items-center gap-1" aria-hidden>
+      <span ref={a} className={CHIP} style={{ ...quiet, opacity: 0 }}>
+        <span className="truncate">{from[0]}</span>
+      </span>
+      <span ref={b} className={CHIP} style={{ ...quiet, opacity: 0 }}>
+        <span className="truncate">{from[1]}</span>
+      </span>
+      <span className="absolute inset-0 flex items-center justify-center">
+        <span ref={c} className={CHIP} style={{ border: "var(--hair) solid var(--border-strong)", color: "var(--ink)" }}>
+          <span className="truncate">{to}</span>
+        </span>
+      </span>
+    </span>
   );
 }
 
@@ -855,11 +986,19 @@ export default function VaultsPage() {
   const [creating, setCreating] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [rev, setRev] = useState(0);
+  // Ids from the previous load, so rows that appear later (join, create, clone, merge) can settle in.
+  const known = useRef<Set<string> | null>(null);
+  const [fresh, setFresh] = useState<Set<string>>(new Set());
 
   const load = () =>
     vaultsApi
       .list()
-      .then((r) => setVaults(r.results))
+      .then((r) => {
+        const prev = known.current;
+        if (prev) setFresh(new Set(r.results.filter((v) => !prev.has(v.id)).map((v) => v.id)));
+        known.current = new Set(r.results.map((v) => v.id));
+        setVaults(r.results);
+      })
       .catch(() => setVaults([]));
 
   useEffect(() => {
@@ -896,7 +1035,7 @@ export default function VaultsPage() {
   const list = (items: Vault[]) => (
     <div className="ledger hairline-rows">
       {items.map((v) => (
-        <div key={v.id}>
+        <div key={v.id} ref={fresh.has(v.id) ? arrive : undefined}>
           <VaultRow
             vault={v}
             rev={rev}

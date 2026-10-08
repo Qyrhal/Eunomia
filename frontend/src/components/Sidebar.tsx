@@ -6,6 +6,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { BookOpen, Brain, FolderGit2, LayoutDashboard, LogOut, Menu, MessageSquare, Plug, Search, Settings, Share2, Vault, X } from "lucide-react";
 import EunomiaMark from "./EunomiaMark";
 import ThemeToggle from "./ThemeToggle";
+import Tooltip, { TooltipGroup } from "./bits/Tooltip";
 import { authorColor } from "./AuthorTag";
 import { openCommandPalette } from "./CommandPalette";
 import { auth, sources, update, type Me, type SourceRow } from "@/lib/api";
@@ -161,10 +162,17 @@ export default function Sidebar() {
         <span className="flex-1 min-w-0 text-[12px] truncate" style={{ color: "var(--ink-dim)" }}>
           {me?.email ?? ""}
         </span>
-        <ThemeToggle />
-        <button onClick={logout} aria-label="Log out" title="Log out" className="btn btn-ghost btn-icon btn-sm" style={{ width: 26 }}>
-          <LogOut size={14} />
-        </button>
+        {/* One group: after the first tooltip shows, its neighbour opens at once. */}
+        <TooltipGroup>
+          <Tooltip label="Switch theme">
+            <ThemeToggle />
+          </Tooltip>
+          <Tooltip label="Log out">
+            <button onClick={logout} aria-label="Log out" className="btn btn-ghost btn-icon btn-sm" style={{ width: 26 }}>
+              <LogOut size={14} />
+            </button>
+          </Tooltip>
+        </TooltipGroup>
       </div>
     </>
   );
