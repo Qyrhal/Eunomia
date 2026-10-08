@@ -13,10 +13,16 @@ The `backup` service takes an encrypted SurrealDB export every night at 03:00
 (container time, set `TZ` in `.env` for local time) into the `eunomia-backups`
 volume. It keeps the last 14 nightly and 8 weekly files and exposes no ports.
 
-1. Set the key in `.env`, then `docker compose up -d`:
+1. Set the key in `.env` (recommended), then `docker compose up -d`:
    `BACKUP_ENCRYPTION_KEY=$(openssl rand -base64 32)`. Keep a copy somewhere
-   off this machine. Without the key the backups cannot be read. With no key
-   the service refuses to start and logs why.
+   off this machine. Without the key the backups cannot be read. If you leave
+   it empty, the backup service makes a key on first start, saves it in its
+   volume (`/backups/.backup-key`) and logs a one-time "COPY IT SOMEWHERE SAFE"
+   notice; read it later with `docker compose exec backup cat /backups/.backup-key`
+   and copy it off this machine. That key sits next to the backups, so anyone
+   who gets a copy of the volume gets both: moving it into `.env` avoids that.
+   Backup files are encrypted and authenticated, so a modified file is refused
+   on restore; backups made before this change still restore.
 2. Back up now: `backend/scripts/backup.sh` (add a directory to also copy the
    file to the host). List files: `backend/scripts/backup.sh list`. Also copy
    the volume off the machine regularly, a backup on the same disk is not enough.

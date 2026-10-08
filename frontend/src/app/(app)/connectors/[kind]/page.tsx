@@ -6,6 +6,7 @@ import { ChevronRight, ExternalLink, Search, Settings2, X } from "lucide-react";
 import type { SourceRow, ToolHit } from "@/lib/types";
 import { useSources, useSyncSource } from "@/lib/queries/sources";
 import { useRecord, useSourceRecords, useSourceSearch } from "@/lib/queries/tools";
+import ErrorLine, { failure } from "@/components/ErrorLine";
 import AuthorTag from "@/components/AuthorTag";
 import DigitRoll from "@/components/bits/DigitRoll";
 import SyncMark, { type SyncStatus } from "@/components/bits/SyncMark";
@@ -134,7 +135,7 @@ function RecordRow({ hit }: { hit: ToolHit }) {
                 </div>
               )}
               {detail === "error" && (
-                <p style={{ color: "var(--critical)" }}>Could not load this record. Collapse and expand the row to retry.</p>
+                <ErrorLine error={failure(record.error, "Could not load this record.", " Collapse and expand the row to retry.")} />
               )}
               {detail && detail !== "error" && (
                 <>
@@ -189,7 +190,7 @@ export default function ConnectorWorkspacePage({ params }: { params: Promise<{ k
   const { kind } = use(params);
   const connectorKind = kindForSource(kind);
   const rowsQuery = useSources();
-  const row: SourceRow | null | undefined = rowsQuery.data ? (rowsQuery.data.find((r) => r.key === kind) ?? null) : rowsQuery.isError ? null : undefined;
+  const row: SourceRow | null | undefined = rowsQuery.data ? (rowsQuery.data.find((r) => r.key === kind) ?? null) : undefined;
   const [query, setQuery] = useState("");
   // The submitted search; "" shows the latest records.
   const [activeQuery, setActiveQuery] = useState("");
@@ -241,6 +242,15 @@ export default function ConnectorWorkspacePage({ params }: { params: Promise<{ k
     }
     setSyncResult(result);
     setTimeout(() => setSyncResult((r) => (r === result ? null : r)), 1200);
+  }
+
+  if (rowsQuery.isError) {
+    return (
+      <div className="max-w-5xl flex flex-col gap-6">
+        <Breadcrumb label={kind} />
+        <ErrorLine error={failure(rowsQuery.error, "Could not load this source.", " Check that the backend is running, then reload.")} />
+      </div>
+    );
   }
 
   if (row === undefined) {
@@ -365,6 +375,9 @@ export default function ConnectorWorkspacePage({ params }: { params: Promise<{ k
       )}
 
       <section className="flex flex-col gap-3" aria-labelledby="records-heading">
+        {(activeQuery ? searchQuery.isError : listQuery.isError) && (
+          <ErrorLine error={failure(activeQuery ? searchQuery.error : listQuery.error, activeQuery ? "Could not search records." : "Could not load records.")} />
+        )}
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <h2 id="records-heading" className="section-title">
             Records{" "}

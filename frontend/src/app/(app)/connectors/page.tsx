@@ -8,6 +8,7 @@ import { useConnectors } from "@/lib/queries/connectors";
 import { useSources } from "@/lib/queries/sources";
 import { CONNECTOR_META, CONNECTOR_ORDER, ConnectorTile, connectorStatus, kindForSource, relativeTime } from "@/lib/connectorMeta";
 import { isLiveSource, sourceHealth } from "@/lib/sourceState";
+import ErrorLine, { failure } from "@/components/ErrorLine";
 import Tooltip from "@/components/bits/Tooltip";
 
 type StatusFilter = "all" | "connected" | "disconnected";
@@ -37,7 +38,7 @@ export default function ConnectorsPage() {
   const connectors = connectorsQuery.data ?? null;
   // Sources only add sync health; the page still works if that call fails.
   const sourceRows: SourceRow[] = sourcesQuery.data ?? [];
-  const error = connectorsQuery.isError ? connectorsQuery.error.message : null;
+  const error = connectorsQuery.isError ? failure(connectorsQuery.error, "Could not load connectors.", " Check the backend is running, then retry.") : null;
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
 
@@ -128,8 +129,10 @@ export default function ConnectorsPage() {
       </div>
 
       {error && (
-        <div className="flex items-center justify-between gap-3 rounded-[10px] px-4 py-3 text-[13px]" style={{ background: "var(--critical-soft)", color: "var(--critical)" }} role="alert">
-          <span>Could not load connectors ({error}). Check the backend is running, then retry.</span>
+        <div className="flex items-start gap-3">
+          <div className="flex-1 min-w-0">
+            <ErrorLine error={error} />
+          </div>
           <button type="button" className="btn btn-sm" onClick={load}>
             Retry
           </button>

@@ -6,6 +6,7 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { ArrowLeft, ArrowRight, Link2 } from "lucide-react";
 import { useDoc, useDocs } from "@/lib/queries/tools";
+import ErrorLine, { failure } from "@/components/ErrorLine";
 import CopyButton from "@/components/bits/CopyButton";
 import Tooltip from "@/components/bits/Tooltip";
 
@@ -68,7 +69,11 @@ export default function DocsPage() {
   const [topic, setTopic] = useState("quickstart");
   const docQuery = useDoc(topic);
   const body = docQuery.data?.markdown ?? null;
-  const error = docQuery.isError ? "Could not load that doc." : topicsQuery.isError ? "Could not load the docs." : null;
+  const error = docQuery.isError
+    ? failure(docQuery.error, "Could not load that doc.", " Check that the backend is running, then reload the page.")
+    : topicsQuery.isError
+      ? failure(topicsQuery.error, "Could not load the docs.", " Check that the backend is running, then reload the page.")
+      : null;
   const [outline, setOutline] = useState<{ id: string; text: string }[]>([]);
   const [active, setActive] = useState<string | null>(null);
   const articleRef = useRef<HTMLElement>(null);
@@ -163,9 +168,7 @@ export default function DocsPage() {
       <div className="min-w-0 flex flex-col gap-4">
         <article ref={articleRef} className="ledger px-5 py-6 md:px-10 md:py-9 text-[14px] leading-[1.7] docs">
           {error ? (
-            <p className="text-[13px] rounded-[7px] px-3 py-2" style={{ color: "var(--critical)", background: "var(--critical-soft)" }}>
-              {error} Check that the backend is running, then reload the page.
-            </p>
+            <ErrorLine error={error} />
           ) : body === null ? (
             <div className="flex flex-col gap-3" aria-busy="true" aria-label="Loading doc">
               <span className="skeleton h-7 w-48 mb-3" />
