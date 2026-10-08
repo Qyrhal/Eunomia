@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-10-08T09:50:35.768Z",
+  "generatedAt": "2026-10-08T11:38:28.000Z",
   "title": "Design System: Eunomia",
   "extensions": {
     "colorMeta": {
@@ -890,6 +890,13 @@
           "oklch(83.6% 0 89.9)",
           "oklch(95% 0 89.9)"
         ]
+      },
+      "grid-dot-light": {
+        "role": "neutral",
+        "displayName": "grid-dot (light theme)",
+        "theme": "light",
+        "cssVar": "--grid-dot",
+        "canonical": "rgba(17, 18, 20, 0.1)"
       }
     },
     "typographyMeta": {
@@ -953,7 +960,7 @@
       {
         "name": "ease-in-out",
         "value": "cubic-bezier(0.77, 0, 0.175, 1)",
-        "purpose": "Things moving or breathing on screen (login canvas glide, chat thinking line)."
+        "purpose": "Things moving or breathing on screen (login canvas drift and glide, chat thinking line, vault graph moves)."
       },
       {
         "name": "ease-drawer",
@@ -994,6 +1001,11 @@
         "name": "bits",
         "value": "SyncMark draw 200ms, spin 800ms linear; CopyButton check 180ms; DigitRoll 240ms + 30ms stagger; DecryptReveal 480ms max; HoldButton 900ms linear after 150ms delay, release 200ms; Spark 280ms; BlurWords 420ms + 45ms stagger; Tooltip 400ms delay, 300ms warm, 140ms pop",
         "purpose": "Original implementations inspired by React Bits; reduced motion renders final states."
+      },
+      {
+        "name": "pop-in",
+        "value": "180ms opacity and scale from 0.96 via @starting-style; keyboard-opened surfaces skip it",
+        "purpose": "Select list opened by pointer, minted token panel, any popover. Set transform-origin to the trigger side."
       }
     ],
     "breakpoints": [
@@ -1017,7 +1029,12 @@
       "gridPitch": "20px",
       "inspector": "320px",
       "palette": "560px",
-      "hair": "1px (0.5px at 2dppx)"
+      "hair": "1px (0.5px at 2dppx)",
+      "selectList": "min 160px wide, max 288px tall, z-index 60",
+      "settingsRail": "180px",
+      "settingsPanel": "max-w-3xl",
+      "pageMax": "dashboard 1240px, vaults 72rem, settings and connectors 64rem",
+      "skeletonRadius": "5px"
     }
   },
   "components": [
@@ -1100,6 +1117,38 @@
       "description": "Dense hairline table with tabular numerals and quiet headers.",
       "html": "<table class=\"ds-table\"><thead><tr><th>Source</th><th>Records</th></tr></thead><tbody><tr><td>Demo data</td><td class=\"ds-mono\">77</td></tr><tr><td>GitHub</td><td class=\"ds-mono\">1,204</td></tr></tbody></table>",
       "css": ".ds-table{width:100%;border-collapse:collapse;font:13px var(--font-sans),system-ui,sans-serif;color:var(--ink);background:var(--surface);} .ds-table th{height:32px;padding:0 12px;text-align:left;font-weight:500;font-size:12px;color:var(--ink-faint);border-bottom:var(--hair) solid var(--border);} .ds-table td{height:40px;padding:0 12px;border-bottom:var(--hair) solid var(--border);font-variant-numeric:tabular-nums;} .ds-table tr:last-child td{border-bottom:0;} .ds-table tbody tr:hover td{background:var(--surface-raised);} .ds-mono{font-family:var(--font-mono),ui-monospace,monospace;}"
+    },
+    {
+      "name": "Select",
+      "kind": "custom",
+      "refersTo": "select-option",
+      "description": "The only select. A .field trigger with a chevron and a portalled .panel list; 32px options, accent check on the selected one.",
+      "html": "<div class=\"ds-select\"><button class=\"ds-field\">Member <span>v</span></button><ul class=\"ds-list\"><li class=\"ds-opt\" data-active>Member</li><li class=\"ds-opt\">Viewer</li></ul></div>",
+      "css": ".ds-field{display:inline-flex;align-items:center;gap:8px;height:32px;padding:0 8px 0 10px;background:var(--surface-raised);border:var(--hair) solid var(--border);border-radius:var(--radius-field);color:var(--ink);font:13px var(--font-sans),system-ui,sans-serif;} .ds-list{list-style:none;margin:4px 0 0;padding:4px;background:var(--surface);border-radius:var(--radius-card);box-shadow:var(--shadow-pop);width:180px;} .ds-opt{display:flex;align-items:center;min-height:32px;padding:0 8px;border-radius:6px;font-size:13px;color:var(--ink-dim);} .ds-opt[data-active]{background:var(--surface-raised);color:var(--ink);}"
+    },
+    {
+      "name": "Error Line",
+      "kind": "custom",
+      "refersTo": "error-line",
+      "description": "Inline error under the control that failed: critical text on a critical wash, role=alert, says what to do next.",
+      "html": "<p class=\"ds-err\" role=\"alert\">Could not revoke that token. Reload and try again.</p>",
+      "css": ".ds-err{margin:0;padding:8px 12px;border-radius:var(--radius-field);background:var(--critical-soft);color:var(--critical);font:12.5px var(--font-sans),system-ui,sans-serif;}"
+    },
+    {
+      "name": "Skeleton",
+      "kind": "custom",
+      "refersTo": "table-cell",
+      "description": "Loading block shaped like the content, 5px radius, 1.2s linear shimmer between raised and hover surfaces.",
+      "html": "<div class=\"ds-skel\" style=\"width:160px;height:16px\"></div>",
+      "css": ".ds-skel{border-radius:5px;background:linear-gradient(90deg,var(--surface-raised) 0%,var(--surface-hover) 50%,var(--surface-raised) 100%);background-size:200% 100%;animation:ds-skel 1.2s linear infinite;} @keyframes ds-skel{to{background-position:-200% 0}}"
+    },
+    {
+      "name": "Kbd",
+      "kind": "custom",
+      "refersTo": "kbd",
+      "description": "Shortcut glyph: 18px square minimum, strong hairline, mono 11px in faint ink.",
+      "html": "<span class=\"ds-kbd\">⌘K</span>",
+      "css": ".ds-kbd{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;padding:0 4px;border-radius:4px;border:var(--hair) solid var(--border-strong);background:var(--surface);color:var(--ink-faint);font:500 11px var(--font-mono),ui-monospace,monospace;font-feature-settings:normal;line-height:1;}"
     }
   ],
   "narrative": {
@@ -1168,7 +1217,9 @@
       "**Do** give every pressable thing the 0.97 press over 140ms `--ease-out`, and every floating thing the pop-in from scale 0.96.",
       "**Do** check every screen in both themes; dark is the default.",
       "**Do** keep real text in the DOM at its final value from the first frame, and render final states under reduced motion.",
-      "**Do** use lucide-react icons at 14 to 16px with stroke 1.75."
+      "**Do** use lucide-react icons at 14 to 16px with stroke 1.75.",
+      "**Do** reuse `Select`, `CopyButton`, `Tooltip`, `AuthorTag` and the `bits` components before writing a new control; add a prop, not a sibling.",
+      "**Do** show errors as a role=alert line that says what failed and what to do next, with a copyable mono id when one exists; render loading as shaped skeletons and keep empty messages out of the loading state."
     ],
     "donts": [
       "**Don't** put felt green on headings, decoration or idle icons; it means \"press me\" or \"selected\".",
@@ -1178,7 +1229,8 @@
       "**Don't** animate keyboard-driven or high-frequency actions (palette, nav, tabs, typing), use `transition: all`, `ease-in`, or scale from 0.",
       "**Don't** add hover styles outside `(hover: hover) and (pointer: fine)`.",
       "**Don't** use mono for prose or labels, gradient text, or emoji and unicode glyphs as icons.",
-      "**Don't** copy React Bits source into `bits/`."
+      "**Don't** copy React Bits source into `bits/`.",
+      "**Don't** use a native `<select>`, `title` as the only tooltip, or a new radius, colour, font or easing; the tokens are the whole vocabulary."
     ]
   }
 }

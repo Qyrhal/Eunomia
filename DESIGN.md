@@ -43,6 +43,7 @@ colors:
   ink-faint-light: "#676c75"
   border-light: "rgba(17, 18, 20, 0.1)"
   border-strong-light: "rgba(17, 18, 20, 0.18)"
+  grid-dot-light: "rgba(17, 18, 20, 0.1)"
   felt-green-light: "#2b7d53"
   felt-green-text-light: "#23744b"
   felt-green-soft-light: "rgba(43, 125, 83, 0.1)"
@@ -107,7 +108,9 @@ typography:
     fontWeight: 500
     lineHeight: 1
 rounded:
+  skeleton: "5px"
   tag: "4px"
+  option: "6px"
   pill: "6px"
   control: "7px"
   field: "7px"
@@ -191,6 +194,19 @@ components:
     rounded: "{rounded.tag}"
     padding: "0 4px"
     height: "18px"
+  select-option:
+    textColor: "{colors.ink-dim}"
+    rounded: "{rounded.option}"
+    padding: "0 8px"
+    height: "32px"
+  select-option-active:
+    backgroundColor: "{colors.surface-raised}"
+    textColor: "{colors.ink}"
+  error-line:
+    backgroundColor: "{colors.critical-soft}"
+    textColor: "{colors.critical}"
+    rounded: "{rounded.field}"
+    padding: "8px 12px"
   nav-link:
     textColor: "{colors.ink-dim}"
     rounded: "{rounded.control}"
@@ -257,6 +273,7 @@ A near-neutral graphite (or paper) ground with a single felt-green accent and a 
 ### Tertiary: categorical hues
 - **Entity kinds** (`kind-person`, `kind-organisation`, `kind-location`, `kind-repository`, `kind-file`, `kind-symbol`): muted, desaturated hues for the kind dot beside an entity and the nodes of the entity graph.
 - **Connector and series hues** (`--connector-*`, `--series-1..4` in globals.css): per-source identity dots and chart series. Same muted register as the kinds; never as fills behind text.
+- Kind, connector and series hues are defined once on `:root` and are **not** redefined for the light theme; they are mid-tone on purpose so they hold on both grounds.
 
 ### Status
 - **Good** (`good`): healthy status dots and the drawn "done" check. Shares the felt-green value but carries status meaning, not action.
@@ -269,7 +286,7 @@ A near-neutral graphite (or paper) ground with a single felt-green accent and a 
 - **Surface Hover** (`surface-hover`): button hover, pressed filter pills, the skeleton shimmer peak.
 - **Ink / Ink Dim / Ink Faint** (`ink`, `ink-dim`, `ink-faint`): primary text; secondary text and descriptions; labels, placeholders, table headers, kbd glyphs, idle nav icons.
 - **Border / Border Strong** (`border`, `border-strong`): hairline rules and container edges; button and kbd edges and the scrollbar thumb.
-- **Grid Dot** (`grid-dot`): the 1px dots of the canvas grid.
+- **Grid Dot** (`grid-dot`): the 1px dots of the canvas grid. Light theme is a touch stronger (0.10 versus 0.07) so the grid still reads on white.
 - **Scrim** (`scrim`): behind the command palette and the mobile drawer.
 
 ### Named Rules
@@ -285,7 +302,7 @@ A near-neutral graphite (or paper) ground with a single felt-green accent and a 
 
 **Display Font:** Geist (with system-ui, sans-serif)
 **Body Font:** Geist (with system-ui, sans-serif), stylistic sets `ss01` and `cv11` on
-**Label/Mono Font:** Geist Mono (with ui-monospace, monospace), tabular numerals, ligature features reset
+**Label/Mono Font:** Geist Mono (with ui-monospace, monospace), tabular numerals, `font-feature-settings: normal` (the body-level `ss01`/`cv11` sets are switched off on mono)
 
 **Character:** One neo-grotesque family at small, dense sizes, tightened at headline weights; its mono sibling carries every number, id, path and timestamp so columns align.
 
@@ -296,7 +313,10 @@ A near-neutral graphite (or paper) ground with a single felt-green accent and a 
 - **Body** (400, 13px; root is 14px): table cells, nav rows, descriptions. Helper paragraphs hold to 62ch; long-form docs hold to 70ch at line-height 1.6.
 - **Label** (400, 12px, 1.3, `ink-faint`): field labels, column headers, stat labels, palette group names. Sentence case, no tracking.
 - **Stat** (Geist Mono, 26px, line-height 1, -0.02em): numeric stat values on the dashboard strip; non-numeric stat values use Geist 500 at the same size.
-- **Mono** (Geist Mono, 10.5 to 13px): ids, tokens, URLs, commands, record counts, timestamps, the version tag.
+- **Mono** (Geist Mono, 10.5 to 13px): ids, tokens, URLs, commands, record counts, timestamps, the version tag. Always via `.font-mono` (or the `font-mono` Tailwind utility, which maps to `--font-mono`); that class sets `font-feature-settings: normal` and `font-variant-numeric: tabular-nums`. Do not set Geist Mono by hand without the reset, or the `ss01` alternates leak into code and ids.
+- **Sizes in use** (px): 10.5 version tag, 11 kbd and record counts, 11.5 tags and error detail, 12 labels and helper text, 12.5 error lines and notices, 13 body, 13.5 palette rows and card titles, 14 root, 15 brand and palette input, 17 headline, 22 page title, 26 stat. Do not add steps between these.
+- **Weights:** 400 body, 500 buttons, active nav, table headers and tags, 600 headings. Nothing heavier.
+- **Helpers:** `.page-title`, `.section-title`, `.label` (alias `.eyebrow`), `.font-display`, `.font-mono`, `.tabular` (tabular numerals only, keep Geist).
 - **Tag** (500, 11.5px): author tags; kbd glyphs are mono 500 at 11px.
 
 ### Named Rules
@@ -308,7 +328,7 @@ A near-neutral graphite (or paper) ground with a single felt-green accent and a 
 
 The app shell is a flex row: a sticky full-height sidebar (232px, `surface`, right hairline) and a `main` canvas with the dot grid (20px pitch) padded 24px by 16px on mobile and 32px by 40px from `md` (768px) up. Below `md` the sidebar becomes a 48px sticky top bar (menu, brand, search) and a 264px slide-in drawer over the scrim.
 
-Pages stack vertically with 24 to 36px between sections (`gap-6` to `gap-9`) and cap their width (dashboard 1240px, vaults 72rem, settings 64rem). Two-column pages put the main ledger on the left and a fixed side column on the right from `lg` (1024px): 320px for the dashboard inspector (sticky at 32px), 380px for vault detail. Settings uses a 180px tab rail beside its panel from `md`, with rows laid out as a 180px label column beside the control. The entities page breaks out of the canvas padding to fill the viewport with its graph.
+Pages stack vertically with 24 to 36px between sections (`gap-6` to `gap-9`) and cap their width (dashboard 1240px, vaults 72rem, settings and connectors `max-w-5xl` = 64rem). Settings content inside its panel caps at `max-w-3xl`. Two-column pages put the main ledger on the left and a fixed side column on the right from `lg` (1024px): 320px for the dashboard inspector (sticky at 32px), 380px for vault detail. Settings uses a 180px tab rail beside its panel from `md`, with rows laid out as a 180px label column beside the control. The entities page breaks out of the canvas padding to fill the viewport with its graph.
 
 Spacing is a 4px-based rhythm with a heavy middle: 6 to 8px inside tight groups (icon and label, tag and text), 12px for table cell and button padding, 16 to 20px inside ledgers and panels, 24 to 40px between sections. More space sits above a heading than below it. The command palette opens 14vh from the top, 560px wide.
 
@@ -317,16 +337,24 @@ Spacing is a 4px-based rhythm with a heavy middle: 6 to 8px inside tight groups 
 Hybrid and restrained. In-flow containers (ledgers, surfaces) are flat: a hairline border on `surface` against the dot-grid canvas. Only floating things get a shadow, and every shadow starts with a 1px ring so the edge reads as a hairline first. Depth otherwise comes from tonal steps (`canvas` to `surface` to `surface-raised` to `surface-hover`).
 
 ### Shadow Vocabulary
-- **Panel** (`--shadow-panel`, dark: `0 0 0 1px var(--border), 0 1px 1px rgba(0,0,0,0.25), 0 12px 32px -12px rgba(0,0,0,0.6)`): floating panels: the dashboard inspector, the command palette, onboarding and auth cards.
+- **Panel** (`--shadow-panel`, dark: `0 0 0 1px var(--border), 0 1px 1px rgba(0,0,0,0.25), 0 12px 32px -12px rgba(0,0,0,0.6)`): floating panels: the dashboard inspector, onboarding and auth cards. The command palette is a `.panel` that overrides the shadow with Pop, because it sits over the scrim.
 - **Pop** (`--shadow-pop`, dark: `0 0 0 1px var(--border-strong), 0 4px 12px -2px rgba(0,0,0,0.4), 0 24px 64px -16px rgba(0,0,0,0.7)`): tooltips, menus and popovers that sit above panels.
 - Light theme swaps both to ink-tinted shadows at a quarter of the opacity (see the sidecar).
 
 ### Named Rules
 **The Float Only Rule.** In-flow blocks never cast a shadow; a shadow means the thing floats over the canvas. Never nest a card inside a card.
 
+## Surfaces
+
+- **Canvas** (`.canvas-grid` on `<main>`): `--canvas` plus a `radial-gradient` dot at 1px, `--grid-dot`, on a 20px by 20px pitch. The sidebar and mobile bar are `--surface`, so the grid only shows in the work area. Put new screens inside the app layout and they inherit it; never repaint the ground.
+- **Ledger / `.surface`** (`.ledger`): `--surface`, hairline `--border`, 10px radius, flat. The default container for tables, form groups and lists. Combine with `.hairline-rows` (a hairline between direct children) for stacked rows and settings forms.
+- **Panel** (`.panel`): `--surface`, 10px radius, `--shadow-panel`. Only for things that float or are modal: inspector, palette, select list, freshly minted token card, auth and onboarding cards.
+- **Frame selected** (`.frame-selected`): see Selection Frame. Works on any `position: relative` block, and on `tr` as outline only.
+- **Raised footer strip:** the last row of a form ledger (save bar) uses `--surface-raised` with the card's bottom radii, see the settings form.
+
 ## Shapes
 
-Small, consistent radii and one-device-pixel lines. Tags and kbd keys 4px (the author tag is 4px with a 1px bottom-left corner, so it points at its cursor like a Figma name tag); pills and tooltips 6px; buttons, fields and nav rows 7px; code blocks 8px; ledgers, panels and the inspector 10px; status dots and avatars fully round. Every border and rule is `--hair` (1px, 0.5px on 2x displays). The selection frame is the one recurring silhouette: a 1px accent outline inset by 1px with four 6px square handles at the corners, 3px outside the box. The brand mark is a 6px-radius green tile where three scattered points resolve into one off-centre node.
+Small, consistent radii and one-device-pixel lines. Tags and kbd keys 4px (the author tag is 4px with a 1px bottom-left corner, so it points at its cursor like a Figma name tag); pills, tooltips and select options 6px; skeleton blocks 5px; buttons, fields and nav rows 7px; code blocks 8px; ledgers, panels and the inspector 10px; status dots and avatars fully round. Every border and rule is `--hair` (1px, 0.5px on 2x displays). The selection frame is the one recurring silhouette: a 1px accent outline inset by 1px with four 6px square handles at the corners, 3px outside the box. The brand mark is a 6px-radius green tile where three scattered points resolve into one off-centre node.
 
 ## Components
 
@@ -334,14 +362,16 @@ Small, consistent radii and one-device-pixel lines. Tags and kbd keys 4px (the a
 Compact and tactile, with a press you can feel.
 - **Shape:** gently squared (7px radius), 30px tall, 12px side padding, 13px weight 500, 6px icon gap, hairline `border-strong` edge.
 - **Default:** `surface-raised` fill, `ink` text. Hover (fine pointers only) moves to `surface-hover`.
-- **Primary:** felt-green fill, no border, `on-accent` text; hover mixes 12% ink into the green. One per view, the main action.
+- **Primary:** felt-green fill, no border, `on-accent` text; hover mixes 12% ink into the green (`color-mix(in oklab, var(--accent) 88%, var(--ink))`). One per view, the main action. It also sets `--bits-done: currentColor` so draw-in checks inside it use the button ink.
 - **Ghost:** transparent, `ink-dim` text, hover to `ink`. Used for icon buttons in the sidebar footer, mobile bar and toolbars.
 - **Danger:** transparent with `critical` text and a strong hairline; hover fills `critical-soft`. Destructive vault and token actions use the HoldButton variant (below).
 - **Sizes:** small 26px tall, 9px padding, 12px text; icon-only is a 30px (or 26px small) square.
+- **Classes:** `.btn` plus one of `.btn-primary`, `.btn-ghost`, `.btn-danger`, optionally `.btn-sm` and `.btn-icon`. Auth and onboarding submit buttons add `h-9 w-full` or `h-9 px-4` for a taller 36px hit target.
 - **States:** press scales to 0.97 over 140ms `--ease-out`; disabled is 50% opacity with a not-allowed cursor; focus is the global 2px accent ring at 2px offset.
 
 ### Chips (pills)
 - **Style:** 24px tall, 6px radius, 9px padding, 12px `ink-dim` text on `surface-raised` with a hairline border. Pressable pills share the 0.97 press.
+- **Elements:** `.pill` on a `<span>` is a static chip; on a `<button>` it also gets the press (`button.pill:active`).
 - **State:** filter off (`aria-pressed="false"`) drops to 70% opacity; filter on goes neutral (strong border, `surface-hover`, `ink`); single-choice selected (`aria-selected="true"`) takes the accent border and `felt-green-soft` fill.
 
 ### Author Tag (signature)
@@ -372,24 +402,56 @@ The multiplayer presence grammar.
 - **Mobile:** 48px top bar; the drawer slides from the left over 260ms `--ease-drawer` with the scrim fading in 180ms, and closes on navigation.
 
 ### Command Palette
-A 560px floating panel 14vh from the top over the scrim: a 48px search row (15px input, esc kbd), grouped results (label headings, 36px rows at 13.5px, 7px radius), and a 36px hint footer of kbd keys. It never animates: it is keyboard-first and opened all day.
+A 560px `.panel` (with `--shadow-pop`) 14vh from the top over the scrim: a 48px search row (15px input, esc kbd), grouped results (label headings, 36px rows at 13.5px, 7px radius), and a 36px hint footer of kbd keys. It never animates: it is keyboard-first and opened all day.
 
 ### Data Tables
 Full width, 13px, tabular numerals. Headers 32px tall in 12px weight-500 `ink-faint`; cells 40px tall with 12px side padding; hairline row rules, none after the last row; row hover (fine pointers) fills `surface-raised`. Secondary columns hide below `sm` or `md` rather than wrapping.
 
 ### Tooltip
-`surface-raised`, 6px radius, 4px by 8px padding, 12px text, `--shadow-pop`, optional compact kbd. Opens after 400ms of pointer hover, immediately on keyboard focus, and instantly with no animation for 300ms after a neighbour in the same group closed. Enters over 140ms from scale 0.96 toward its trigger. Visual only: the trigger keeps its own accessible name.
+`surface-raised`, 6px radius, 4px by 8px padding, 12px text, `--shadow-pop`, optional compact 16px kbd (`shortcut` prop). Opens after 400ms of pointer hover, immediately on keyboard focus, and instantly with no animation for 300ms after a neighbour in the same group closed. Enters over 140ms from scale 0.96 toward its trigger. Visual only: the trigger keeps its own accessible name.
 
-### Status, Loading, Empty
+### Status, Loading, Empty, Error
 - **Dot:** 6px circle in `good`, `warning` or `critical` (or a kind or connector hue for identity).
-- **Skeleton:** 5px radius blocks shaped like the content, a `surface-raised` to `surface-hover` shimmer over 1.2s linear.
-- **Empty:** one sentence naming what is missing plus the one action that fixes it, in `ink-faint` with a felt-green link.
+- **Skeleton:** `.skeleton`, 5px radius blocks shaped like the content (set height and width with utilities such as `h-4 w-24`), a `surface-raised` to `surface-hover` shimmer over 1.2s linear, looping. Match the real row height (table rows 40px) so nothing jumps when data lands. The loading region gets `aria-busy="true"` and an `aria-label` ("Loading memories"), or the skeleton is `aria-hidden` when a heading above already names it. In tables, render two skeleton `<tr aria-hidden>` rows with one block per cell (`TableSkeleton`). A `null` state means loading, an empty array means empty; never show the empty message while loading.
+- **Empty:** one sentence naming what is missing plus the one action that fixes it. Inside a table, a single `<td colSpan>` 56px tall in `ink-dim`. Outside, a `.ledger` row with the sentence in `ink-dim` 13px and a `btn btn-sm` action at the right, or in the sidebar a 12.5px `ink-faint` sentence ending in an `accent-text` link ("Connect one"). Name the recovery, not just the absence.
+- **Inline error (`ErrorLine`):** `<p role="alert">` at 12.5px, `px-3 py-2`, 7px radius, `critical` text on a `critical-soft` wash, shown directly under the control group that failed. Copy states what failed and what to do next ("Could not revoke that token. Reload and try again."), with the server message used when present (`e instanceof Error && e.message ? e.message : fallback`). Clear it (`setError(null)`) when the user retries. Currently copied per page (settings, vaults); a shared component is a good first extraction.
+- **Field error:** `aria-invalid`, border set to `critical` inline, and a 12px `critical` sentence under the field naming the fix. Submit stays disabled while invalid.
+- **Page load error:** the same `ErrorLine`, in place of the skeleton, with a reload instruction.
+- **Banner (`FailureBanner`):** for a persistent system problem: `role="alert"`, 10px radius, `critical-soft` fill with a 1px `critical` border, a 15px alert-triangle in `critical`, a 13px weight-500 headline, a one-line mono 11.5px `ink-dim` detail that truncates, then `btn btn-sm` "Review" and ghost "Dismiss".
+- **Success confirmation:** a `role="status"` 12.5px `good` line with `.fade-in`, or a button label flip (`Save settings` to `Saved`) with a drawn check.
+- **Busy buttons:** `disabled` plus `aria-busy`, label swapped to the present participle ("Saving…"); long actions use a SyncMark inside the button.
 
 ### Kbd
-18px square minimum, 4px radius, strong hairline on `surface`, mono 11px weight 500 in `ink-faint`.
+`.kbd`: 18px square minimum, 4px radius, strong hairline on `surface`, mono 11px weight 500 in `ink-faint`. Inside a tooltip it shrinks to 16px with 11.5px text. Use for shortcut glyphs only (`⌘K`, `esc`, arrows); a copyable id is plain mono text, not a kbd.
+
+### Select
+The only select in the app (nine native selects were replaced). `components/Select.tsx`, default export.
+- **Props:** `value: string`, `onChange(value)`, `options: { value, label, hint? }[]`, `id?` (pair with a `<label htmlFor>`), `aria-label?` (when there is no visible label), `placeholder?` (default "Select…"), `disabled?`, `mono?` (Geist Mono for label text, for model names, ids and URLs), `className?` (size and width of the trigger; default `h-8 text-[13px]`, add `w-full` in forms). `hint` renders at the right of an option in 12px `ink-faint`.
+- **Trigger:** a `button` with `role="combobox"`, styled as `.field` plus `.select-trigger` (default cursor, accent border while `data-open`), a 14px chevron in `ink-faint`, selected label in `ink` or the placeholder in `ink-faint`.
+- **List:** portalled to `body` as `ul.select-list.panel` (fixed, `z-index: 60`, 4px padding, `--shadow-pop`, max height 288px, at least the trigger width and 160px, flips above when there is under 160px below). Options are `.select-option` (32px, 6px radius, 13px `ink-dim`; the active row gets `surface-raised` and `ink`; the selected row gets `ink` and an accent-text check, 14px stroke 2).
+- **Behaviour:** focus never leaves the trigger (`aria-activedescendant`). Arrows, Home, End, PageUp and PageDown move; Enter or Space choose; Escape closes and refocuses; Tab chooses and moves on; typing jumps by prefix (500ms window, repeated letter cycles); typing on a closed select changes the value. Outside pointerdown closes.
+- **Motion:** a pointer open uses `.pop-in` from the trigger side (`transform-origin` top or bottom center); a keyboard open appears instantly. No animation on close.
+
+### Pop-in, fade-in and drawer-in
+- `.pop-in`: opacity and `scale(0.96)` to rest over 180ms `--ease-out`, via `@starting-style`. Set `transformOrigin` inline to the trigger side. For any popover, menu or freshly appearing floating card (the minted token panel uses it).
+- `.fade-in`: 180ms opacity from 0. For scrims and small inline confirmations (`Saved.` line, drawer scrim).
+- `.drawer-in`: `translateX(-100%)` to 0 over 260ms `--ease-drawer`. Mobile drawer only.
+- Never add these to a keyboard-opened surface that opens many times (palette, selects opened by key).
+
+### Dot, hairline rows
+- `.dot`: 6px round status or identity dot; set `background` inline from a token (`var(--good)`, `var(--warning)`, `var(--critical)`, `var(--accent)`, or a kind or connector hue). Add a visually hidden text equivalent when it is the only status signal (`<span className="sr-only">`).
+- `.hairline-rows`: 1px `--border` rule between direct children. Use inside a ledger instead of per-row borders.
+
+### Markdown and docs
+`.md` styles rendered markdown (chat bubbles, docs): 1.6 line height, headings 600 with -0.015em, inline code on `surface-raised` with a hairline and 4px radius, `pre` 8px radius, links in `accent-text`, tables scroll horizontally. Wrap long-form pages in `.docs` for a 70ch measure and larger headings. `.scene3d-label` is the mono 10.5px label drawn over the 3D scenes (text-shadowed with `canvas`).
+
+### Brand mark and theme toggle
+- **EunomiaMark** (`size`, default 20): the 6px-radius accent tile with three scattered nodes resolving to one; drawn in `--accent` and `--on-accent`, so it follows the theme. Used in the sidebar, mobile bar, auth shell and onboarding.
+- **ThemeToggle:** a `btn btn-ghost btn-icon btn-sm` 26px wide; wrapped in a Tooltip in the sidebar footer. Persists to `localStorage["eunomia-theme"]`; the inline script in `layout.tsx` applies a saved light theme before paint. Dark removes the attribute.
+- **Fonts:** `layout.tsx` loads Geist and Geist Mono from `next/font/google` as `--font-geist` and `--font-geist-mono`, and adds both variables to `<html>`. `--font-display` and `--font-sans` alias Geist; `--font-mono` aliases Geist Mono.
 
 ### Motion system and the bits library
-Tokens: `--ease-out` cubic-bezier(0.23, 1, 0.32, 1) for entrances and presses; `--ease-in-out` cubic-bezier(0.77, 0, 0.175, 1) for things moving or breathing on screen; `--ease-drawer` cubic-bezier(0.32, 0.72, 0, 1) for the drawer. Durations: hover 120ms, press 140ms, pop 180ms, drawer 260ms. Popovers enter with `@starting-style` from scale 0.96 and opacity 0, never from nothing.
+Tokens: `--ease-out` cubic-bezier(0.23, 1, 0.32, 1) for entrances and presses; `--ease-in-out` cubic-bezier(0.77, 0, 0.175, 1) for things moving or breathing on screen; `--ease-drawer` cubic-bezier(0.32, 0.72, 0, 1) for the drawer. Durations: `--dur-hover` 120ms, `--dur-press` 140ms, `--dur-pop` 180ms, `--dur-drawer` 260ms. `--ease-in-out` is used for the chat "thinking" breath, the login canvas drift and glide, and the vault graph moves. In JS, read tokens with `cssVar("--ease-out")` at fire time so a theme swap is honoured. Hover colour and border fades use plain `ease` at `--dur-hover`; colour fades are the one place `ease` is allowed. Popovers enter with `@starting-style` from scale 0.96 and opacity 0, never from nothing.
 
 Gating, enforced in code:
 - **Frequency:** nothing animates on the palette, sidebar navigation, tab switches, typing or list keyboard navigation.
@@ -413,6 +475,132 @@ The bits components (`frontend/src/components/bits/`, styles in `bits.css`):
 
 **The One Moment Rule.** At most one authored motion moment per surface; everything else is press feedback and pop-in entrances under 300ms.
 
+## Accessibility rules in use
+
+- **Focus:** `:focus-visible` draws a 2px accent outline at 2px offset on everything. Fields are the exception: they drop the outline and turn the border accent on focus or `:focus-within`. Never remove focus styling elsewhere.
+- **Names:** every icon-only button has `aria-label`; tooltips are visual only and never replace it. Fields have a `<label htmlFor>` or an `aria-label`. The Select takes `aria-label` when unlabelled.
+- **Live regions:** errors use `role="alert"`; saved and copied states use `role="status"` or `aria-live="polite"`. CopyButton with text announces "Copied".
+- **Tabs:** settings uses `role="tablist"`/`tab`/`tabpanel` with roving `tabIndex`, arrow-key movement and `aria-controls`. Nav links set `aria-current="page"`.
+- **Toggle state:** filters use `aria-pressed`; single-choice tabs use `aria-selected`. Style hooks follow the ARIA state, not a class.
+- **Tables:** real `<table>` markup; an actions column header carries `<span className="sr-only">Actions</span>`; status dots have `sr-only` text.
+- **Contrast:** `ink-faint` is tuned to stay legible on both grounds (`#80858e` dark, `#676c75` light) but is still a secondary tone; do not use it for text that must be read to act. Light-theme accent text is the deeper `#23744b`.
+- **Touch and pointer:** hover styles only on fine pointers; the press scale works for touch. Controls are at least 26px tall, primary targets 30 to 36px.
+- **Motion:** see the motion rules. Reduced motion keeps opacity and colour transitions only, drops keyframes, and renders final states. Keyboard-driven actions never animate.
+- **Honest text:** the real value is always in the DOM; scrambles and rolls are `aria-hidden` overlays.
+- **Language and scheme:** `<html lang="en">`, `color-scheme` set per theme so native scrollbars and form controls follow it. The native datalist arrow is hidden because it clashes with themed fields.
+- **Browser chrome:** selection is accent on `on-accent`, the caret is accent, scrollbars are thin and `border-strong`, links use a 3px underline offset at 1px thickness.
+
+## Recipes
+
+Copy these as starting points. They use only existing classes and components. Colour always comes from tokens.
+
+### Error state with a copyable trace id
+Shows what failed, what to do, and a trace id the user can paste to support. The id is mono text (data that must be copied exactly) beside the existing CopyButton.
+
+```tsx
+import CopyButton from "@/components/bits/CopyButton";
+
+function ErrorWithTrace({ message, traceId, onRetry }: { message: string; traceId?: string; onRetry?: () => void }) {
+  return (
+    <div role="alert" className="flex flex-wrap items-center gap-x-3 gap-y-2 px-3 py-2 rounded-[7px]" style={{ background: "var(--critical-soft)" }}>
+      <p className="flex-1 min-w-[200px] text-[12.5px]" style={{ color: "var(--critical)" }}>
+        {message}
+      </p>
+      {traceId && (
+        <span className="flex items-center gap-1">
+          <span className="label">Trace</span>
+          <code className="font-mono text-[12px]" style={{ color: "var(--ink-dim)" }}>{traceId}</code>
+          <CopyButton value={traceId} label="Copy trace id" />
+        </span>
+      )}
+      {onRetry && (
+        <button onClick={onRetry} className="btn btn-sm">
+          Try again
+        </button>
+      )}
+    </div>
+  );
+}
+```
+
+For a toast, keep the same anatomy inside a `.panel pop-in` (bottom right, `--shadow-pop`) and do not auto-dismiss while the trace id is showing.
+
+### Settings form row with Select
+A ledger of rows: a 180px label column beside the control from `md`, a raised save bar at the foot.
+
+```tsx
+import Select from "@/components/Select";
+
+const row = "grid gap-1.5 md:grid-cols-[180px_minmax(0,1fr)] md:gap-6 px-5 py-4 items-start";
+
+<form className="flex flex-col gap-3" onSubmit={(e) => { e.preventDefault(); save(); }}>
+  <div className="ledger hairline-rows">
+    <div className={row}>
+      <label htmlFor="role" className="text-[13px] font-medium md:pt-1.5">Default role</label>
+      <div className="flex flex-col gap-1">
+        <Select
+          id="role"
+          className="h-8 text-[13px] w-full"
+          value={role}
+          onChange={setRole}
+          options={[
+            { value: "member", label: "Member", hint: "Read and write" },
+            { value: "viewer", label: "Viewer", hint: "Read only" },
+          ]}
+        />
+        <span className="label">Applied to people you invite.</span>
+      </div>
+    </div>
+    <div className="px-5 py-3 flex items-center justify-end gap-3" style={{ background: "var(--surface-raised)", borderRadius: "0 0 var(--radius-card) var(--radius-card)" }}>
+      <span className="label mr-auto" aria-live="polite">{dirty ? "Unsaved changes" : ""}</span>
+      <button type="submit" disabled={saving} className="btn btn-primary">{saving ? "Saving…" : "Save settings"}</button>
+    </div>
+  </div>
+  {error && <ErrorLine>{error}</ErrorLine>}
+</form>
+```
+
+### Data table with skeleton loading
+`rows === null` is loading, `[]` is empty. Skeleton cells match the 40px row height.
+
+```tsx
+<div className="ledger overflow-x-auto">
+  <table className="data-table">
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th className="hidden sm:table-cell">Created</th>
+        <th className="w-[110px]"><span className="sr-only">Actions</span></th>
+      </tr>
+    </thead>
+    <tbody aria-busy={rows === null}>
+      {rows === null &&
+        [0, 1].map((i) => (
+          <tr key={i} aria-hidden>
+            <td><span className="skeleton block h-4" style={{ width: "60%" }} /></td>
+            <td className="hidden sm:table-cell"><span className="skeleton block h-4" style={{ width: "50%" }} /></td>
+            <td />
+          </tr>
+        ))}
+      {rows?.length === 0 && (
+        <tr>
+          <td colSpan={3} style={{ color: "var(--ink-dim)", height: 56 }}>
+            Nothing here yet. Create one above to get started.
+          </td>
+        </tr>
+      )}
+      {rows?.map((r) => (
+        <tr key={r.id}>
+          <td className="font-medium">{r.name}</td>
+          <td className="hidden sm:table-cell font-mono text-[12px]" style={{ color: "var(--ink-dim)" }}>{relativeTime(r.created_at)}</td>
+          <td className="text-right"><button className="btn btn-ghost btn-sm">Edit</button></td>
+        </tr>
+      ))}
+    </tbody>
+  </table>
+</div>
+```
+
 ## Do's and Don'ts
 
 ### Do:
@@ -423,6 +611,7 @@ The bits components (`frontend/src/components/bits/`, styles in `bits.css`):
 - **Do** give every pressable thing the 0.97 press over 140ms `--ease-out`, and every floating thing the pop-in from scale 0.96.
 - **Do** check every screen in both themes; dark is the default.
 - **Do** keep real text in the DOM at its final value from the first frame, and render final states under reduced motion.
+- **Do** reuse `Select`, `CopyButton`, `Tooltip`, `AuthorTag` and the `bits` components before writing a new control; add a prop, not a sibling.
 - **Do** use lucide-react icons at 14 to 16px with stroke 1.75.
 
 ### Don't:
@@ -433,4 +622,5 @@ The bits components (`frontend/src/components/bits/`, styles in `bits.css`):
 - **Don't** animate keyboard-driven or high-frequency actions (palette, nav, tabs, typing), use `transition: all`, `ease-in`, or scale from 0.
 - **Don't** add hover styles outside `(hover: hover) and (pointer: fine)`.
 - **Don't** use mono for prose or labels, gradient text, or emoji and unicode glyphs as icons.
+- **Don't** use a native `<select>`, `title` as the only tooltip, or a new radius, colour, font or easing; the tokens above are the whole vocabulary.
 - **Don't** copy React Bits source into `bits/`.
