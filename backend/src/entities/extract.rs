@@ -153,7 +153,8 @@ async fn call_llm(db: &OrgDb, settings: &Settings, owner: &RecordId, text: &str)
         "messages": [{"role": "user", "content": build_prompt(text)}],
     });
 
-    let resp = reqwest::Client::new()
+    let resp = crate::llm_net::client(&base_url)
+        .await?
         .post(format!("{}/chat/completions", base_url.trim_end_matches('/')))
         .bearer_auth(key)
         .json(&body)

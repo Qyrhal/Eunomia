@@ -118,7 +118,7 @@ async fn synthesize(query: &str, items: &[RecallItem], base_url: &str, api_key: 
     let auth_key = if api_key.is_empty() { "not-needed" } else { api_key };
     let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
 
-    let client = reqwest::Client::new();
+    let client = crate::llm_net::client(base_url).await?;
     let resp = client
         .post(&url)
         .bearer_auth(auth_key)

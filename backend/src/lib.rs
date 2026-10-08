@@ -15,6 +15,7 @@ pub mod gate;
 #[cfg(feature = "test-support")]
 pub mod isolation;
 pub mod jobs;
+pub mod llm_net;
 pub mod migrate;
 pub mod models_user;
 pub mod oauth;

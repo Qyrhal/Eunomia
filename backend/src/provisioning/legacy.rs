@@ -110,7 +110,8 @@ async fn run(p: &Provisioner, control: &ControlDb, settings: &Settings, org: Org
     for table in CONTROL_COPY {
         copy_table(&legacy, &ctrl, table, false).await?;
     }
-    add_memberships(&ctrl, &org).await?;
+    store::control::USER_EMAIL_LC_BACKFILL.on(control).await?.check()?;
+    add_memberships(control, &ctrl, &org).await?;
     for table in TENANT_COPY {
         copy_table(&legacy, &dst, table, false).await?;
     }
@@ -142,31 +143,28 @@ async fn run(p: &Provisioner, control: &ControlDb, settings: &Settings, org: Org
 }
 
 /// Every copied user becomes a member of the org; the oldest is the owner. Re-runs skip existing rows.
+/// Memberships go through `MEMBERSHIP_ADD`, the statement signup uses, so they get the same `slot`.
 /// Copied jobs and capsules are stamped with the org too.
-async fn add_memberships(ctrl: &crate::db::Db, org: &OrgId) -> AppResult<()> {
-    // a concurrent boot doing the same move may create a membership between the check and the create;
-    // the retry re-checks
-    crate::tx::with_retry_dup(|| async {
-    root(
-        ctrl,
-        "legacy.memberships",
-        "LET $users = (SELECT VALUE id FROM user ORDER BY created_at, id);
-         FOR $u IN $users {
-             IF array::len((SELECT id FROM membership WHERE user = $u AND org = $org)) = 0 {
-                 CREATE membership SET user = $u, org = $org,
-                     role = IF $u = $users[0] THEN 'owner' ELSE 'member' END;
-             };
-         };
-         UPDATE job SET org = $key WHERE org = NONE;
-         UPDATE failure_capsule SET org = $key WHERE org = NONE;",
-    )
-    .bind(("org", org.record()))
-    .bind(("key", org.key()))
-    .await?
-    .check()
-    .map(|_| ())
-    })
-    .await?;
+async fn add_memberships(control: &ControlDb, ctrl: &crate::db::Db, org: &OrgId) -> AppResult<()> {
+    let users: Vec<RecordId> = store::control::USER_IDS_OLDEST_FIRST.on(control).await?.take(0)?;
+    for u in users {
+        let have: Vec<RecordId> = root(ctrl, "legacy.membership_exists", "SELECT VALUE id FROM membership WHERE user = $u AND org = $org")
+            .bind(("u", u.clone()))
+            .bind(("org", org.record()))
+            .await?
+            .take(0)?;
+        if have.is_empty() {
+            // a concurrent boot doing the same move may create it between the check and the add; the retry re-checks
+            crate::tx::with_retry_dup(|| async {
+                store::control::MEMBERSHIP_ADD.on(control).bind(("user", u.clone())).bind(("org", org.record())).await?.check()
+            })
+            .await?;
+        }
+    }
+    root(ctrl, "legacy.stamp_org", "UPDATE job SET org = $key WHERE org = NONE; UPDATE failure_capsule SET org = $key WHERE org = NONE;")
+        .bind(("key", org.key()))
+        .await?
+        .check()?;
     Ok(())
 }
 

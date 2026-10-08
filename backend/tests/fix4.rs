@@ -60,9 +60,12 @@ async fn a_successful_login_clears_the_failure_count() {
 #[tokio::test]
 async fn failed_token_exchanges_are_throttled_per_client() {
     let app = TestApp::new().await;
-    let post = |client: &'static str| {
+    let post_from = |client: &'static str, xff: &'static str| {
         let body = serde_urlencoded::to_string([("grant_type", "refresh_token"), ("refresh_token", "nope"), ("client_id", client)]).unwrap();
         let req = Request::builder().method("POST").uri("/oauth/token").header(header::CONTENT_TYPE, "application/x-www-form-urlencoded").body(Body::from(body)).unwrap();
+        let mut req = req;
+        // no socket under `oneshot`: say which peer sent it
+        req.extensions_mut().insert(axum::extract::ConnectInfo(std::net::SocketAddr::new(xff.parse().unwrap(), 5000)));
         let router = app.router.clone();
         async move {
             let resp = router.oneshot(req).await.unwrap();
@@ -72,6 +75,7 @@ async fn failed_token_exchanges_are_throttled_per_client() {
             (status, retry, body)
         }
     };
+    let post = |client: &'static str| post_from(client, "203.0.113.7");
     for i in 0..30 {
         assert_eq!(post("victim-client").await.0, StatusCode::BAD_REQUEST, "attempt {i}");
     }
@@ -80,6 +84,8 @@ async fn failed_token_exchanges_are_throttled_per_client() {
     assert!(retry);
     assert_eq!(body["code"], "rate.limited");
     assert_eq!(post("another-client").await.0, StatusCode::BAD_REQUEST);
+    // keyed on the address too: knowing a client id does not let a stranger lock its real users out
+    assert_eq!(post_from("victim-client", "203.0.113.8").await.0, StatusCode::BAD_REQUEST);
     // a CIMD client id is a public URL shared by every user of that app: a stranger's failures
     // must not lock it for everyone (the per-address bucket covers abuse instead)
     for i in 0..31 {

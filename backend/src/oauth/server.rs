@@ -346,15 +346,15 @@ fn token_response(t: super::IssuedTokens, scope: &[String]) -> Response {
     res
 }
 
-pub async fn token(State(state): State<AppState>, Form(f): Form<TokenForm>) -> Result<Response, OAuthError> {
-    // failed grants per registered client, whatever the address they come from; a success clears
-    // the count. CIMD client ids are public URLs shared by every user of that app (one stranger's
-    // 30 failures would lock everyone out), so those rely on the per-address bucket instead.
+pub async fn token(State(state): State<AppState>, ip: Option<axum::Extension<crate::gate::ClientIp>>, Form(f): Form<TokenForm>) -> Result<Response, OAuthError> {
+    // failed grants per registered client and address; a success clears the count. Keyed on the address too,
+    // because anyone who knows a client id could otherwise lock that client's users out. CIMD client ids
+    // are public URLs shared by every user of that app, so those rely on the per-address bucket alone.
     let fail_key = f
         .client_id
         .as_deref()
         .filter(|c| !c.is_empty() && !c.starts_with("https://"))
-        .map(|c| format!("oauth-fail:{c}"));
+        .map(|c| format!("oauth-fail:{c}:{}", ip.as_ref().map_or("", |i| i.0 .0.as_str())));
     if let Some(k) = &fail_key
         && let Err(wait) = state.fail_throttle.check(k, crate::ratelimit::OAUTH_CLIENT_FAILS)
     {

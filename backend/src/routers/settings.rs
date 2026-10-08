@@ -131,76 +131,11 @@ async fn get_app_settings(db: &OrgDb, owner: &RecordId) -> AppResult<AppSettings
         .ok_or_else(|| AppError::internal("app_settings upsert returned no row"))
 }
 
-/// Hosts that name Eunomia's own stack or a cloud metadata service: never a model server.
-const BLOCKED_LLM_HOSTS: &[&str] = &["surrealdb", "backup", "metadata", "metadata.google.internal"];
-
-/// `ALLOW_PRIVATE_LLM_URL`: a model server on this machine or its network (Ollama on localhost) is the
-/// normal self-host setup, so private and loopback targets are allowed unless this is `0` or `false`.
-/// Link-local addresses (169.254.0.0/16, the cloud metadata address) and the compose service names are
-/// refused either way.
-fn allow_private_llm_url() -> bool {
-    !std::env::var("ALLOW_PRIVATE_LLM_URL").is_ok_and(|v| matches!(v.trim(), "0" | "false"))
-}
-
-fn llm_ip_verdict(ip: std::net::IpAddr, allow_private: bool) -> Result<(), &'static str> {
-    let ip = match ip {
-        std::net::IpAddr::V6(v6) => v6.to_ipv4_mapped().map_or(ip, std::net::IpAddr::V4),
-        v4 => v4,
-    };
-    let link_local = match ip {
-        std::net::IpAddr::V4(v4) => v4.is_link_local() || v4.is_unspecified(),
-        std::net::IpAddr::V6(v6) => (v6.segments()[0] & 0xffc0) == 0xfe80 || v6.is_unspecified() || v6.segments()[..6] == [0xfd00, 0x0ec2, 0, 0, 0, 0],
-    };
-    if link_local {
-        Err("That address is reserved (link-local or cloud metadata).")
-    } else if !allow_private && crate::oauth::cimd::ip_blocked(ip) {
-        Err("That address is on a private network, which this server does not allow.")
-    } else {
-        Ok(())
-    }
-}
-
-/// Rejects an `openai_base_url` that would point the backend at something other than a model server.
-/// Hostnames are resolved now and every address is checked (a name that later resolves elsewhere is
-/// not caught).
-async fn check_llm_base_url(raw: &str, allow_private: bool) -> AppResult<()> {
-    if raw.trim().is_empty() {
-        return Ok(());
-    }
-    let bad = |m: &str| AppError::bad_request(format!("Invalid base URL: {m}"));
-    let url = reqwest::Url::parse(raw.trim()).map_err(|_| bad("not a valid URL."))?;
-    if !matches!(url.scheme(), "http" | "https") || !url.username().is_empty() || url.password().is_some() {
-        return Err(bad("use http or https, without credentials."));
-    }
-    let host = url.host_str().ok_or_else(|| bad("no host."))?.trim_end_matches('.').to_ascii_lowercase();
-    if BLOCKED_LLM_HOSTS.contains(&host.as_str()) {
-        return Err(bad("that host is part of this stack, not a model server."));
-    }
-    let port = url.port_or_known_default().unwrap_or(443);
-    let ips: Vec<std::net::IpAddr> = match url.host() {
-        Some(url::Host::Ipv4(ip)) => vec![ip.into()],
-        Some(url::Host::Ipv6(ip)) => vec![ip.into()],
-        _ => tokio::time::timeout(std::time::Duration::from_secs(5), tokio::net::lookup_host((host.as_str(), port)))
-            .await
-            .map_err(|_| bad("the host lookup timed out."))?
-            .map_err(|_| bad("the host did not resolve."))?
-            .map(|a| a.ip())
-            .collect(),
-    };
-    for ip in &ips {
-        llm_ip_verdict(*ip, allow_private).map_err(bad)?;
-    }
-    if allow_private && ips.iter().any(|ip| crate::oauth::cimd::ip_blocked(*ip)) {
-        tracing::warn!(%host, "openai_base_url points at a private or loopback address (ALLOW_PRIVATE_LLM_URL=0 forbids it)");
-    }
-    Ok(())
-}
-
 /// Partial update: each provided field replaces its current value outright
 /// (no deep merge).
 async fn update_app_settings(db: &OrgDb, owner: &RecordId, body: &SettingsUpdate, encryption_key: &str) -> AppResult<AppSettingsRow> {
     if let Some(u) = &body.openai_base_url {
-        check_llm_base_url(u, allow_private_llm_url()).await?;
+        crate::llm_net::check_base_url(u, crate::llm_net::allow_private_llm_url()).await?;
     }
     get_app_settings(db, owner).await?; // ensure the row exists
 
