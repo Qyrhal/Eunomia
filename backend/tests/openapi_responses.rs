@@ -101,7 +101,7 @@ async fn entity_responses_match_their_schemas() {
 async fn settings_audit_update_and_tool_responses_match_their_schemas() {
     let mut c = Checker::new().await;
     c.call("getSettings", "/api/settings", None).await;
-    c.call("updateSettings", "/api/settings", Some(json!({"embedding_model": "text-embedding-3-large", "theme": {"mode": "dark"}}))).await;
+    c.call("updateSettings", "/api/settings", Some(json!({"embedding_model": "text-embedding-ada-002", "theme": {"mode": "dark"}}))).await;
     c.call("listAudit", "/api/audit?limit=5", None).await;
     c.call("getUpdateStatus", "/api/update/status", None).await;
     c.call("requestUpdate", "/api/update/request", Some(json!({}))).await;
