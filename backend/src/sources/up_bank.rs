@@ -1,19 +1,19 @@
-//! Up Bank source. Wraps
-//! `crate::connectors::clients::UpBankClient`.
+//! Up Bank source (https://developer.up.com.au). Personal access token,
+//! bearer auth.
 //!
 //! Sync: `filter[since]` delta walk over `/transactions` (following JSON:API
-//! `links.next` pagination, capped at 20 pages) plus
-//! a full `/accounts` and `/categories` pull.
+//! `links.next` pagination) plus a full `/accounts` and `/categories` pull.
+//! Transactions link to their account and category records.
 //!
 //! Webhook: verify `X-Up-Authenticity-Signature` (HMAC-SHA256 of the raw body
 //! keyed by the webhook secret), then re-fetch the referenced transaction.
 //!
 //! The tool helpers (`finance_summary`, `list_transactions`, `list_accounts`)
-//! query `cache_record` (populated by the periodic sync) directly.
+//! read `cache_record` directly.
 
 use surrealdb::types::SurrealValue;
 use async_trait::async_trait;
-use chrono::{DateTime, Duration, Utc};
+use chrono::{Duration, Utc};
 use hmac::{Hmac, Mac};
 use reqwest::header::HeaderMap;
 use serde::Deserialize;
@@ -23,25 +23,15 @@ use sha2::Sha256;
 use crate::connectors::clients::UpBankClient;
 use crate::error::AppResult;
 use crate::store;
-use crate::sources::base::{datetime_to_chrono, Source, SourceCtx, SyncResult};
-use crate::sources::registry::credentials_for;
+use crate::sources::base::{datetime_to_chrono, envelope, items, rfc3339, s, Conn, Source, SourceCtx, SyncResult, MAX_PAGES};
 
 type HmacSha256 = Hmac<Sha256>;
-
-fn parse_dt(value: Option<&str>) -> Option<String> {
-    let raw = value?;
-    DateTime::parse_from_rfc3339(raw).ok().map(|dt| dt.with_timezone(&Utc).to_rfc3339())
-}
 
 pub struct UpBankSource;
 
 #[async_trait]
 impl Source for UpBankSource {
     fn key(&self) -> &'static str {
-        "up_bank"
-    }
-
-    fn provider(&self) -> &'static str {
         "up_bank"
     }
 
@@ -53,26 +43,31 @@ impl Source for UpBankSource {
         &["up.transaction", "up.account", "up.category"]
     }
 
-    async fn sync(&self, ctx: &SourceCtx<'_>, _mode: &str, cursor: Option<String>) -> AppResult<SyncResult> {
-        let creds = credentials_for(ctx.db, ctx.encryption_key, ctx.owner, self).await?;
-        let client = UpBankClient::new(&creds);
-        let since = cursor.clone().unwrap_or_else(|| (Utc::now() - Duration::days(30)).to_rfc3339());
+    async fn check(&self, conn: &Conn) -> AppResult<()> {
+        UpBankClient::new(&conn.credentials, &conn.config)?.ping().await
+    }
+
+    async fn fetch(&self, conn: &Conn, cursor: Option<String>) -> AppResult<SyncResult> {
+        let client = UpBankClient::new(&conn.credentials, &conn.config)?;
+        // `filter[since]` keys on createdAt, so a HELD -> SETTLED change can
+        // land behind the high-water mark: re-read a week of overlap (the
+        // ingest skips unchanged rows).
+        let since = cursor
+            .as_deref()
+            .and_then(|c| chrono::DateTime::parse_from_rfc3339(c).ok())
+            .map(|c| (c.with_timezone(&Utc) - Duration::days(7)).to_rfc3339())
+            .unwrap_or_else(|| (Utc::now() - Duration::days(30)).to_rfc3339());
         let mut records: Vec<Value> = Vec::new();
 
         let mut page = client.transactions(&[("filter[since]", since.clone()), ("page[size]", "100".to_string())]).await?;
-        records.extend(page.get("data").and_then(|d| d.as_array()).cloned().unwrap_or_default());
-        for _ in 0..20 {
+        records.extend(items(&page, "/data"));
+        for _ in 1..MAX_PAGES {
             let Some(next) = page.pointer("/links/next").and_then(|v| v.as_str()).map(String::from) else { break };
-            page = client.get_absolute(&next).await?;
-            records.extend(page.get("data").and_then(|d| d.as_array()).cloned().unwrap_or_default());
+            page = client.api.get(&next, &[]).await?;
+            records.extend(items(&page, "/data"));
         }
-
-        if let Ok(accounts) = client.accounts().await {
-            records.extend(accounts.get("data").and_then(|d| d.as_array()).cloned().unwrap_or_default());
-        }
-        if let Ok(categories) = client.categories().await {
-            records.extend(categories.get("data").and_then(|d| d.as_array()).cloned().unwrap_or_default());
-        }
+        records.extend(items(&client.accounts().await?, "/data"));
+        records.extend(items(&client.categories().await?, "/data"));
 
         let newest = records
             .iter()
@@ -80,7 +75,8 @@ impl Source for UpBankSource {
             .filter_map(|r| r.pointer("/attributes/createdAt").and_then(|v| v.as_str()))
             .max()
             .map(String::from)
-            .unwrap_or_else(|| cursor.unwrap_or(since));
+            .or(cursor)
+            .unwrap_or(since);
 
         Ok(SyncResult { records, cursor: Some(newest) })
     }
@@ -94,9 +90,8 @@ impl Source for UpBankSource {
         }
     }
 
-    async fn webhook(&self, ctx: &SourceCtx<'_>, headers: &HeaderMap, body: &[u8]) -> AppResult<Option<Vec<Value>>> {
-        let creds = credentials_for(ctx.db, ctx.encryption_key, ctx.owner, self).await?;
-        let secret = creds.get("webhook_secret_key").and_then(|v| v.as_str()).unwrap_or("");
+    async fn webhook(&self, conn: &Conn, headers: &HeaderMap, body: &[u8]) -> AppResult<Option<Vec<Value>>> {
+        let secret = conn.credentials.get("webhook_secret_key").and_then(|v| v.as_str()).unwrap_or("");
         let sig = headers
             .get("X-Up-Authenticity-Signature")
             .and_then(|v| v.to_str().ok())
@@ -131,8 +126,8 @@ impl Source for UpBankSource {
         }
 
         let Some(rel) = txn.pointer("/links/related").and_then(|v| v.as_str()) else { return Ok(None) };
-        let client = UpBankClient::new(&creds);
-        let resp = client.get_absolute(rel).await?;
+        let client = UpBankClient::new(&conn.credentials, &conn.config)?;
+        let resp = client.api.get(rel, &[]).await?;
         match resp.get("data").cloned() {
             Some(data) if !data.is_null() => Ok(Some(vec![data])),
             _ => Ok(None),
@@ -150,76 +145,70 @@ fn verify_signature(secret: &str, body: &[u8], sig_hex: &str) -> bool {
 
 fn map_txn(raw: &Value) -> Value {
     let a = &raw["attributes"];
+    let id = s(raw, "/id");
     let cat = raw.pointer("/relationships/category/data/id").and_then(|v| v.as_str());
+    let account = raw.pointer("/relationships/account/data/id").and_then(|v| v.as_str());
     let parts: Vec<&str> = [a.get("description"), a.get("rawText"), a.get("message")]
         .into_iter()
         .filter_map(|v| v.and_then(|v| v.as_str()))
         .filter(|s| !s.is_empty())
         .collect();
     let value_base_units = a.pointer("/amount/valueInBaseUnits").and_then(|v| v.as_i64()).unwrap_or(0);
-    json!({
-        "id": format!("up_bank:up.transaction:{}", raw["id"].as_str().unwrap_or("")),
-        "source": "up_bank",
-        "type": "up.transaction",
-        "external_id": raw["id"].as_str().unwrap_or(""),
-        "title": a.get("description").and_then(|v| v.as_str()).unwrap_or(""),
-        "body_text": parts.join(" "),
-        "occurred_at": parse_dt(a.get("createdAt").and_then(|v| v.as_str())),
-        "url": "",
-        "payload": {
+    let mut env = envelope(
+        "up_bank",
+        "up.transaction",
+        id,
+        s(a, "/description"),
+        &parts.join(" "),
+        rfc3339(s(a, "/createdAt")),
+        "",
+        json!({
             "amount": a.pointer("/amount/value"),
             "amount_cents": value_base_units,
             "currency": a.pointer("/amount/currencyCode"),
             "status": a.get("status"),
             "settled_at": a.get("settledAt"),
             "category": cat,
+            "account": account,
             "is_income": value_base_units > 0,
-        },
-        "links": [],
-        "deleted": raw.get("_deleted").and_then(|v| v.as_bool()).unwrap_or(false),
-    })
+        }),
+    );
+    let mut links = Vec::new();
+    if let Some(account) = account {
+        links.push(json!({"target": format!("up_bank:up.account:{account}"), "rel": "account"}));
+    }
+    if let Some(cat) = cat {
+        links.push(json!({"target": format!("up_bank:up.category:{cat}"), "rel": "category"}));
+    }
+    env["links"] = json!(links);
+    env["deleted"] = json!(raw.get("_deleted").and_then(|v| v.as_bool()).unwrap_or(false));
+    env
 }
 
 fn map_account(raw: &Value) -> Value {
     let a = &raw["attributes"];
-    let display_name = a.get("displayName").and_then(|v| v.as_str()).unwrap_or("");
-    let account_type = a.get("accountType").and_then(|v| v.as_str()).unwrap_or("");
-    json!({
-        "id": format!("up_bank:up.account:{}", raw["id"].as_str().unwrap_or("")),
-        "source": "up_bank",
-        "type": "up.account",
-        "external_id": raw["id"].as_str().unwrap_or(""),
-        "title": display_name,
-        "body_text": format!("{display_name} — {account_type}"),
-        "occurred_at": parse_dt(a.get("createdAt").and_then(|v| v.as_str())),
-        "url": "",
-        "payload": {
+    let display_name = s(a, "/displayName");
+    envelope(
+        "up_bank",
+        "up.account",
+        s(raw, "/id"),
+        display_name,
+        &format!("{display_name} — {}", s(a, "/accountType")),
+        rfc3339(s(a, "/createdAt")),
+        "",
+        json!({
             "balance": a.pointer("/balance/value"),
             "balance_cents": a.pointer("/balance/valueInBaseUnits"),
             "account_type": a.get("accountType"),
             "ownership_type": a.get("ownershipType"),
-        },
-        "links": [],
-        "deleted": false,
-    })
+        }),
+    )
 }
 
 fn map_category(raw: &Value) -> Value {
-    let a = &raw["attributes"];
+    let name = s(raw, "/attributes/name");
     let parent = raw.pointer("/relationships/parent/data/id").and_then(|v| v.as_str());
-    json!({
-        "id": format!("up_bank:up.category:{}", raw["id"].as_str().unwrap_or("")),
-        "source": "up_bank",
-        "type": "up.category",
-        "external_id": raw["id"].as_str().unwrap_or(""),
-        "title": a.get("name").and_then(|v| v.as_str()).unwrap_or(""),
-        "body_text": a.get("name").and_then(|v| v.as_str()).unwrap_or(""),
-        "occurred_at": Value::Null,
-        "url": "",
-        "payload": {"parent": parent},
-        "links": [],
-        "deleted": false,
-    })
+    envelope("up_bank", "up.category", s(raw, "/id"), name, name, None, "", json!({"parent": parent}))
 }
 
 // ---------------------------------------------------------------------------
@@ -431,7 +420,7 @@ mod tests {
         CachedRecord {
             title: title.to_string(),
             external_id: String::new(),
-            occurred_at: Some(DateTime::parse_from_rfc3339(occurred_at).unwrap().with_timezone(&Utc).into()),
+            occurred_at: Some(chrono::DateTime::parse_from_rfc3339(occurred_at).unwrap().with_timezone(&Utc).into()),
             payload,
         }
     }
@@ -467,5 +456,67 @@ mod tests {
         let txns = vec![cached("Salary", "2024-01-03T00:00:00Z", json!({"amount_cents": 300000, "status": "SETTLED"}))];
         let summary = compute_finance_summary("2024-01-01T00:00:00Z", &[], &txns, &std::collections::HashMap::new());
         assert_eq!(summary["spend_by_category"].as_array().unwrap().len(), 0);
+    }
+
+    use crate::sources::mock::{assert_fetch_fails, envelopes, route, serve};
+
+    fn txn(id: &str, created: &str, description: &str, cents: i64) -> Value {
+        json!({
+            "type": "transactions", "id": id,
+            "attributes": {
+                "status": "SETTLED", "rawText": null, "description": description, "message": "pizza night",
+                "amount": {"currencyCode": "AUD", "value": format!("{:.2}", cents as f64 / 100.0), "valueInBaseUnits": cents},
+                "settledAt": created, "createdAt": created,
+            },
+            "relationships": {
+                "account": {"data": {"type": "accounts", "id": "acc-1"}},
+                "category": {"data": if id == "t1" { json!({"type": "categories", "id": "takeaway"}) } else { Value::Null }},
+            },
+        })
+    }
+
+    #[tokio::test]
+    async fn fetch_follows_links_next_and_pulls_accounts_and_categories() {
+        let mock = serve(vec![
+            route("GET", "/transactions", json!({"data": [txn("t2", "2024-03-02T09:00:00+11:00", "Coles", -1250)], "links": {"prev": null, "next": null}}))
+                .query("page[after]=t1"),
+            route(
+                "GET",
+                "/transactions",
+                json!({"data": [txn("t1", "2024-03-01T05:08:57+11:00", "Pizza Hut", -5998)], "links": {"prev": null, "next": "{base}/transactions?page[after]=t1&page[size]=100"}}),
+            )
+            .query("filter[since]=2024-02-01T00:00:00"),
+            route("GET", "/accounts", json!({"data": [{"type": "accounts", "id": "acc-1", "attributes": {
+                "displayName": "Spending", "accountType": "TRANSACTIONAL", "ownershipType": "INDIVIDUAL",
+                "balance": {"currencyCode": "AUD", "value": "1.00", "valueInBaseUnits": 100}, "createdAt": "2020-01-01T00:00:00+11:00"}}],
+                "links": {"prev": null, "next": null}})),
+            route("GET", "/categories", json!({"data": [{"type": "categories", "id": "takeaway", "attributes": {"name": "Takeaway"},
+                "relationships": {"parent": {"data": {"type": "categories", "id": "good-life"}}}}]})),
+        ])
+        .await;
+
+        let conn = mock.conn(json!({"personal_access_token": "up:yeah:test"}));
+        let res = UpBankSource.fetch(&conn, Some("2024-02-08T00:00:00Z".into())).await.unwrap();
+        assert_eq!(res.records.len(), 4, "2 transaction pages + accounts + categories");
+        assert_eq!(res.cursor.as_deref(), Some("2024-03-02T09:00:00+11:00"));
+        assert!(mock.requests().iter().all(|r| r.header("authorization") == "Bearer up:yeah:test"));
+
+        let envs = envelopes(&UpBankSource, &res.records);
+        let pizza = envs.iter().find(|e| e.external_id == "t1").unwrap();
+        assert_eq!(pizza.title, "Pizza Hut");
+        assert_eq!(pizza.body_text, "Pizza Hut pizza night");
+        assert!(pizza.occurred_at.is_some());
+        assert_eq!(pizza.links.len(), 2);
+        assert_eq!(pizza.links[1].target, "up_bank:up.category:takeaway");
+        assert!(envs.iter().any(|e| e.type_ == "up.account" && e.title == "Spending"));
+    }
+
+    #[tokio::test]
+    async fn fetch_errors_are_visible() {
+        let creds = json!({"personal_access_token": "bad"});
+        assert_fetch_fails(&UpBankSource, 401, "/transactions", creds.clone(), "HTTP 401").await;
+        assert_fetch_fails(&UpBankSource, 429, "/transactions", creds.clone(), "HTTP 429").await;
+        assert_fetch_fails(&UpBankSource, 500, "/transactions", creds, "HTTP 500").await;
+        assert_fetch_fails(&UpBankSource, 200, "/x", json!({}), "missing personal_access_token").await;
     }
 }

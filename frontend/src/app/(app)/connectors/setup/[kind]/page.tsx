@@ -9,6 +9,7 @@ import type { ConnectorKind, ConnectorUpdate } from "@/lib/types";
 import { useMe } from "@/lib/queries/auth";
 import { useConnectors, useTestConnector, useUpdateConnector } from "@/lib/queries/connectors";
 import { useSettings, useUpdateSettings } from "@/lib/queries/settings";
+import { useSyncSource } from "@/lib/queries/sources";
 import { CONNECTOR_META, CONNECTOR_ORDER, ConnectorTile, connectorStatus, type FieldDef } from "@/lib/connectorMeta";
 import ErrorLine, { failure } from "@/components/ErrorLine";
 import CopyButton from "@/components/bits/CopyButton";
@@ -106,6 +107,9 @@ function ConnectorSetup({ kind }: { kind: ConnectorKind }) {
   const updateConnector = useUpdateConnector();
   const testConnector = useTestConnector();
   const updateSettings = useUpdateSettings();
+  const syncSource = useSyncSource();
+  const [syncing, setSyncing] = useState(false);
+  const [syncMessage, setSyncMessage] = useState<{ ok: boolean; text: string } | null>(null);
   const [values, setValues] = useState<Record<string, string>>({});
   const [shown, setShown] = useState<Record<string, boolean>>({});
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -189,6 +193,26 @@ function ConnectorSetup({ kind }: { kind: ConnectorKind }) {
     test();
   }
 
+  async function syncNow() {
+    if (!meta.sourceKey) return;
+    setSyncing(true);
+    setSyncMessage(null);
+    try {
+      const r = await syncSource.mutateAsync(meta.sourceKey);
+      setSyncMessage(
+        r.error
+          ? { ok: false, text: `Sync failed: ${r.error}` }
+          : r.status === "already_running"
+            ? { ok: true, text: "A sync is already running; try again in a moment" }
+            : { ok: true, text: `Synced: ${r.written ?? 0} new or changed, ${r.skipped ?? 0} unchanged` },
+      );
+    } catch (e) {
+      setSyncMessage({ ok: false, text: `Sync failed: ${(e as Error).message}` });
+    } finally {
+      setSyncing(false);
+    }
+  }
+
   async function saveInterval(seconds: number) {
     if (!meta.sourceKey) return;
     try {
@@ -259,9 +283,9 @@ function ConnectorSetup({ kind }: { kind: ConnectorKind }) {
           <div className="flex flex-col gap-1">
             <h2 className="section-title">Credentials</h2>
             {meta.help && (
-              <p className="text-[12.5px]" style={{ color: "var(--ink-dim)" }}>
+              <div className="text-[12.5px] break-words" style={{ color: "var(--ink-dim)" }}>
                 {meta.help}
-              </p>
+              </div>
             )}
           </div>
 
@@ -379,6 +403,19 @@ function ConnectorSetup({ kind }: { kind: ConnectorKind }) {
               />
             </div>
           </div>
+          {connected && (
+            <div className="flex items-center gap-3 flex-wrap">
+              <button type="button" onClick={syncNow} disabled={syncing} className="btn">
+                <SyncMark status={syncing ? "running" : syncMessage ? (syncMessage.ok ? "done" : "failed") : "idle"} />
+                {syncing ? "Syncing…" : "Sync now"}
+              </button>
+              {syncMessage && (
+                <span role="status" className="text-[12.5px] font-mono break-all" style={{ color: syncMessage.ok ? "var(--good)" : "var(--critical)" }}>
+                  {syncMessage.text}
+                </span>
+              )}
+            </div>
+          )}
         </section>
       )}
 

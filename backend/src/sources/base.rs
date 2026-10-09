@@ -1,20 +1,23 @@
-//! The source plug-in contract. There is no runtime package discovery, so
-//! `sources::registry` lists the known implementations explicitly (a registry of
-//! `Source` trait objects).
+//! The source plug-in contract, plus the small helpers every source's mapper
+//! shares.
 //!
-//! Per-source tool registration is not part of the trait. The logic behind each
-//! source's tools (finance summaries, recording lookups) lives as plain functions
-//! in each source's module.
+//! A source is one provider's fetch + map pair: [`Source::fetch`] pulls raw
+//! provider JSON (through `connectors::clients::Api`) using the connector's
+//! decrypted credentials and config ([`Conn`]); [`Source::map`] turns one raw
+//! value into a cache envelope. `sources::registry` lists the sources and runs
+//! them through the ingest pipeline; neither half touches the database, so
+//! both are tested against a local mock of the provider's API
+//! (`sources::mock`).
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use reqwest::header::HeaderMap;
-use serde_json::Value;
+use serde_json::{json, Value};
 use surrealdb::types::RecordId;
-use crate::rid::RecordIdExt;
 
-use crate::pool::OrgDb;
 use crate::error::AppResult;
+use crate::pool::OrgDb;
+use crate::rid::RecordIdExt;
 
 /// Raw records fetched from an origin, plus the opaque cursor to feed back
 /// into the next sync.
@@ -24,9 +27,16 @@ pub struct SyncResult {
     pub cursor: Option<String>,
 }
 
-/// Everything a `Source` method needs to reach the database and this owner's
-/// credentials, bundled so trait methods don't grow an ever-longer parameter
-/// list.
+/// One connector row's decrypted credentials and plain config -- everything
+/// a source needs to reach its provider.
+#[derive(Debug, Clone, Default)]
+pub struct Conn {
+    pub credentials: Value,
+    pub config: Value,
+}
+
+/// Database handle + owner for the cache-reading helpers some sources expose
+/// (`up_bank::finance_summary`, `heypocket::summary`, ...).
 pub struct SourceCtx<'a> {
     pub db: &'a OrgDb,
     pub encryption_key: &'a str,
@@ -38,23 +48,17 @@ pub trait Source: Send + Sync {
     /// Stable identifier, e.g. "up_bank" or "heypocket".
     fn key(&self) -> &'static str;
 
-    /// The credential holder this source reads. Several sources can share one
-    /// connector kind. Empty string means "defer to `key()`" -- see
-    /// `provider_key()`. Matches a `connector` row's `kind`.
+    /// The connector kind holding this source's credentials, when it differs
+    /// from `key()` (heypocket's is "pocketai").
     fn provider(&self) -> &'static str {
         ""
     }
 
-    /// Human label for the admin UI.
+    /// Human label for the UI.
     fn label(&self) -> &'static str;
 
     /// Envelope `type` values this source emits, e.g. `["up.transaction"]`.
     fn record_types(&self) -> &'static [&'static str];
-
-    /// "oauth" | "api_key" | "token".
-    fn auth_kind(&self) -> &'static str {
-        "token"
-    }
 
     fn provider_key(&self) -> &'static str {
         let p = self.provider();
@@ -65,24 +69,81 @@ pub trait Source: Send + Sync {
         }
     }
 
-    /// Fetch raw records for `ctx.owner`. `mode` is one of "poll", "webhook",
-    /// "backfill".
-    async fn sync(&self, ctx: &SourceCtx<'_>, mode: &str, cursor: Option<String>) -> AppResult<SyncResult>;
+    /// One cheap authenticated call proving the credentials work -- what the
+    /// Connectors page's "Test connection" runs.
+    async fn check(&self, conn: &Conn) -> AppResult<()>;
+
+    /// Raw records changed since `cursor` (`None` on the first sync), plus
+    /// the cursor for the next sync. Any provider error fails the whole
+    /// sync, so it surfaces in `sync_status.last_error` instead of silently
+    /// syncing nothing.
+    async fn fetch(&self, conn: &Conn, cursor: Option<String>) -> AppResult<SyncResult>;
 
     /// One raw origin value -> a cache envelope, or `None` to skip.
     fn map(&self, raw: &Value) -> Option<Value>;
 
-    /// Verify + translate a provider push into raw dicts (or `None`). Default:
-    /// no webhook support.
-    async fn webhook(&self, _ctx: &SourceCtx<'_>, _headers: &HeaderMap, _body: &[u8]) -> AppResult<Option<Vec<Value>>> {
+    /// Verify + translate a provider push into raw records (or `None`).
+    /// Default: no webhook support.
+    async fn webhook(&self, _conn: &Conn, _headers: &HeaderMap, _body: &[u8]) -> AppResult<Option<Vec<Value>>> {
         Ok(None)
     }
 }
 
+/// Upper bound on pages followed in one sync, so a runaway cursor can't
+/// loop forever; the next sync resumes from the saved cursor.
+pub const MAX_PAGES: usize = 50;
+
+/// The cache envelope every mapper builds. `id` is the cache literal
+/// `"{source}:{type}:{external_id}"`; callers set `links`/`deleted` on the
+/// result when they have them.
+#[allow(clippy::too_many_arguments)]
+pub fn envelope(
+    source: &str,
+    type_: &str,
+    external_id: &str,
+    title: &str,
+    body_text: &str,
+    occurred_at: Option<String>,
+    url: &str,
+    payload: Value,
+) -> Value {
+    json!({
+        "id": format!("{source}:{type_}:{external_id}"),
+        "source": source,
+        "type": type_,
+        "external_id": external_id,
+        "title": title,
+        "body_text": body_text,
+        "occurred_at": occurred_at,
+        "url": url,
+        "payload": payload,
+        "links": [],
+        "deleted": false,
+    })
+}
+
+/// The string at JSON `pointer` (e.g. `"/subject/title"`), or "".
+pub fn s<'a>(v: &'a Value, pointer: &str) -> &'a str {
+    v.pointer(pointer).and_then(|v| v.as_str()).unwrap_or("")
+}
+
+/// The array at `pointer`, or empty.
+pub fn items(v: &Value, pointer: &str) -> Vec<Value> {
+    v.pointer(pointer).and_then(|v| v.as_array()).cloned().unwrap_or_default()
+}
+
+/// Any RFC 3339 timestamp normalized to UTC (`cache_record.occurred_at` is a
+/// datetime field; anything unparseable becomes `None`, not a failed write).
+pub fn rfc3339(value: &str) -> Option<String> {
+    DateTime::parse_from_rfc3339(value).ok().map(|dt| dt.with_timezone(&Utc).to_rfc3339())
+}
+
+pub fn from_unix(secs: i64) -> Option<String> {
+    DateTime::<Utc>::from_timestamp(secs, 0).map(|d| d.to_rfc3339())
+}
+
 /// The caller-facing half of a user record id, e.g. `"abc123"` out of
-/// `user:abc123`. The
-/// owner-id prefix baked into cache/sync-status record ids is internal, never
-/// shown to or passed by a caller.
+/// `user:abc123`.
 pub fn owner_key_str(owner: &RecordId) -> String {
     let s = owner.to_string();
     match s.split_once(':') {
@@ -91,11 +152,8 @@ pub fn owner_key_str(owner: &RecordId) -> String {
     }
 }
 
-/// Converts a `surrealdb::types::Datetime` to a `chrono::DateTime<Utc>`. The public
-/// `surrealdb` crate's `Datetime` wrapper only offers `From<DateTime<Utc>>`
-/// (writing), not the reverse (reading) -- so this round-trips through its
-/// `Serialize` impl (a newtype-struct around `chrono::DateTime<Utc>`, which
-/// `serde_json` serializes as a plain RFC3339 string) instead.
+/// Converts a `surrealdb::types::Datetime` to a `chrono::DateTime<Utc>` by
+/// round-tripping through its `Serialize` impl (an RFC3339 string).
 pub fn datetime_to_chrono(d: &surrealdb::types::Datetime) -> Option<DateTime<Utc>> {
     let value = serde_json::to_value(d).ok()?;
     let s = value.as_str()?;
@@ -115,9 +173,22 @@ mod tests {
     #[test]
     fn datetime_to_chrono_round_trips() {
         let now = Utc::now();
-        // Truncate to milliseconds like a real RFC3339 round-trip would.
         let now = DateTime::parse_from_rfc3339(&now.to_rfc3339()).unwrap().with_timezone(&Utc);
         let sd: surrealdb::types::Datetime = now.into();
         assert_eq!(datetime_to_chrono(&sd), Some(now));
+    }
+
+    #[test]
+    fn rfc3339_normalizes_offsets_and_rejects_garbage() {
+        assert_eq!(rfc3339("2024-01-02T10:00:00+10:00").unwrap(), "2024-01-02T00:00:00+00:00");
+        assert!(rfc3339("Mon, 1 Jan 2024").is_none());
+        assert_eq!(from_unix(0).unwrap(), "1970-01-01T00:00:00+00:00");
+    }
+
+    #[test]
+    fn envelope_builds_the_cache_literal_id() {
+        let env = envelope("github", "github.issue", "7", "T", "B", None, "", json!({}));
+        assert_eq!(env["id"], "github:github.issue:7");
+        assert_eq!(env["deleted"], false);
     }
 }

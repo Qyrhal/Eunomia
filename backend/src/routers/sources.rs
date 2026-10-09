@@ -24,7 +24,7 @@ use crate::rid::RecordIdExt;
 use crate::error::{AppError, AppResult, ErrorCode};
 use crate::models_user::User;
 use crate::sources::registry;
-use crate::sources::scheduler::sync_source;
+use crate::sources::scheduler;
 use crate::state::{AppState, OrgState};
 use crate::store;
 
@@ -116,12 +116,14 @@ struct SourceOut {
     record_count: i64,
 }
 
-/// Outcome of a sync or webhook ingest: an ingest report, or `source` + `error`
-/// when the sync failed. Schema only: the handlers pass the report through.
+/// Outcome of a sync or webhook ingest: an ingest report, `source` + `error` when the sync failed, or
+/// `status: "already_running"` when a sync of that source is already queued or running. Schema only:
+/// the handlers pass the report through.
 #[derive(Serialize, utoipa::ToSchema)]
 #[allow(dead_code)]
 struct SyncReport {
     source: String,
+    status: Option<String>,
     written: Option<i64>,
     skipped: Option<i64>,
     failed: Option<i64>,
@@ -219,12 +221,13 @@ async fn sync_now(State(state): State<AppState>, user: User, Path(key): Path<Str
     if registry::get(&key).is_none() {
         return Err(AppError::coded(ErrorCode::SourceNotFound, format!("no source {key:?}")));
     }
-    let report = sync_source(&state, &user.id, &key, "poll").await;
-    Ok(Json(report))
+    Ok(Json(scheduler::sync_now(&state, &user.id, &key).await?))
 }
 
-/// Largest webhook delivery read into memory.
+/// Largest webhook delivery read into memory. Provider deliveries are a few KiB.
 const MAX_WEBHOOK_BYTES: usize = 1 << 20;
+/// A slow or stalled upload is cut off rather than holding a connection.
+const WEBHOOK_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 #[utoipa::path(
     operation_id = "receiveSourceWebhook",
@@ -250,19 +253,25 @@ async fn source_webhook(
     // signing secret lives in the owner's own database, so that database has to be opened to check it;
     // the per-address limit in the gate bounds how often that can be provoked.
     let (parts, body) = request.into_parts();
-    let body_bytes = axum::body::to_bytes(body, MAX_WEBHOOK_BYTES).await.map_err(|e| {
-        let mut err = AppError::bad_request(format!("webhook body not readable or over {MAX_WEBHOOK_BYTES} bytes: {e}"));
-        err.status = axum::http::StatusCode::PAYLOAD_TOO_LARGE;
-        err
-    })?;
+    let body_bytes = match tokio::time::timeout(WEBHOOK_READ_TIMEOUT, axum::body::to_bytes(body, MAX_WEBHOOK_BYTES)).await {
+        Err(_) => {
+            return Err(AppError::new(axum::http::StatusCode::REQUEST_TIMEOUT, "webhook body not received in time"));
+        }
+        Ok(Err(e)) => {
+            let mut err = AppError::bad_request(format!("webhook body not readable or over {MAX_WEBHOOK_BYTES} bytes: {e}"));
+            err.status = axum::http::StatusCode::PAYLOAD_TOO_LARGE;
+            return Err(err);
+        }
+        Ok(Ok(bytes)) => bytes,
+    };
 
     let ignored = || Ok(Json(json!({"status": "ignored"})));
     let Ok(owner) = crate::rid::parse(&owner_id) else { return ignored() };
     let Ok(org) = crate::models_user::org_of(&state.control, &owner).await else { return ignored() };
     let state = state.org(&org).await?;
 
-    let ctx = registry::ctx(&state.db, &state.settings.encryption_key, &owner);
-    let raw_records = src.webhook(&ctx, &parts.headers, &body_bytes).await?;
+    let conn = registry::conn_for(&state.db, &state.settings.encryption_key, &owner, src.as_ref()).await?;
+    let raw_records = src.webhook(&conn, &parts.headers, &body_bytes).await?;
 
     let Some(raw_records) = raw_records.filter(|r| !r.is_empty()) else {
         // Covers both "signature didn't verify" and "nothing worth
@@ -273,10 +282,14 @@ async fn source_webhook(
         return Ok(Json(json!({"status": "ignored"})));
     };
 
-    let report = registry::ingest(&state, &owner, &key, &raw_records, src.as_ref()).await;
-    tracing::info!(source = %key, owner = %owner.to_string(), report = ?report.as_value(), "webhook: processed");
+    let report = registry::ingest(&state, &owner, &raw_records, src.as_ref()).await?;
+    tracing::info!(source = %key, owner = %owner.to_string(), report = ?report.as_dict(), "webhook: processed");
+    if report.failed > 0 {
+        // Not stored: a 5xx makes the provider redeliver.
+        return Err(AppError::new(axum::http::StatusCode::SERVICE_UNAVAILABLE, format!("{} records failed to save; retry", report.failed)));
+    }
 
-    let mut out = report.as_value();
+    let mut out = report.as_dict();
     out.as_object_mut().unwrap().insert("status".to_string(), json!("ok"));
     Ok(Json(out))
 }

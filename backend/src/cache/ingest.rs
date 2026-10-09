@@ -1,18 +1,18 @@
-//! The ingest pipeline: raw source record -> cache row.
+//! The ingest pipeline: raw source record -> cache row -> enrichment.
 //!
-//! One entrypoint, [`ingest`], called by the scheduler, webhook endpoints, and
-//! on-demand refresh. Stages, per record: map -> upsert (idempotent) ->
+//! One entrypoint, [`ingest`], shared by scheduled syncs, manual syncs and webhooks (via
+//! `sources::registry::ingest`). Per record: map -> upsert (idempotent; reconciles `links`) ->
 //! embed -> queue entity extraction.
 //!
-//! Partial failure is isolated: a bad record is recorded and skipped, the
-//! batch continues. Embedding failure is non-fatal (backfill retries).
-//! Entity extraction and observation consolidation failures are likewise
-//! non-fatal -- they're enrichment steps, not core pipeline.
-//!
-//! Entity extraction and consolidation run as background jobs (`jobs::handlers`): this
-//! pipeline only enqueues an `extract` job per changed record, and the extract handler
-//! enqueues consolidation for the entities it touched. A lost enqueue only delays enrichment.
-//!
+//! Partial failure is isolated: a record that can't be mapped or stored is counted in `failed`
+//! (the caller then keeps its sync cursor so the record is retried) and the batch continues.
+//! Enrichment is best-effort and never counts as a failed record:
+//! - Embedding runs when an embedding backend is available. A record left without an embedding
+//!   (provider outage) is re-embedded the next time the same unchanged record is replayed, and the
+//!   `embed` job reconciler finds it too.
+//! - Entity extraction and consolidation run as background jobs (`jobs::handlers`): this pipeline
+//!   only enqueues an `extract` job per new or changed record; the handler does nothing when the
+//!   owner has no chat model, so with no model raw records are stored and nothing calls out.
 
 use serde::Serialize;
 use serde_json::Value;
@@ -22,6 +22,7 @@ use crate::cache::search::{self, Envelope};
 use crate::config::Settings;
 use crate::pool::OrgDb;
 use crate::error::AppResult;
+use crate::store;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct IngestReport {
@@ -63,6 +64,11 @@ async fn embed_record(db: &OrgDb, settings: &Settings, owner: &RecordId, rec: &s
     search::set_embedding(db, owner, &rec.id, vec).await
 }
 
+async fn has_embedding(db: &OrgDb, owner: &RecordId, record_id: &str) -> AppResult<bool> {
+    let mut res = store::cache::HAS_EMBEDDING.on(db).bind(("id", search::rid(owner, record_id))).await?;
+    Ok(res.take::<Option<bool>>(0)?.unwrap_or(false))
+}
+
 /// `raw_records` are untyped JSON values; `map_fn` maps one raw record to `Some(Envelope)`, `None` to
 /// skip it, or `Err(message)` on a mapping failure.
 pub async fn ingest(
@@ -74,6 +80,7 @@ pub async fn ingest(
 ) -> AppResult<IngestReport> {
     let (db, settings) = (&state.db, &state.settings);
     let mut report = IngestReport::new(source_key);
+    let can_embed = crate::embeddings::service::available(db, settings, owner).await;
 
     for raw in raw_records {
         let env = match map_fn(raw) {
@@ -94,27 +101,32 @@ pub async fn ingest(
             }
         };
 
-        match search::upsert(db, owner, &env).await {
-            Ok((rec, changed)) => {
-                if !changed {
-                    report.skipped += 1;
-                    continue;
-                }
-                report.written += 1;
-
-                if !rec.deleted {
-                    // No OpenAI key: skip embedding, keyword/graph retrieval still work.
-                    if crate::embeddings::service::available(db, settings, owner).await
-                        && let Err(e) = embed_record(db, settings, owner, &rec).await {
-                            report.errors.push(format!("embed {}: {}", rec.id, e.message));
-                        }
-                    crate::jobs::handlers::enqueue_extract(state, owner, &rec.id, &rec.content_hash).await;
-                }
-            }
+        let (rec, changed) = match search::upsert(db, owner, &env).await {
+            Ok(r) => r,
             Err(e) => {
                 report.failed += 1;
                 report.errors.push(format!("{}: {}", env.id, e.message));
+                continue;
             }
+        };
+        if changed {
+            report.written += 1;
+        } else {
+            report.skipped += 1;
+        }
+        if rec.deleted {
+            continue;
+        }
+
+        // An unchanged record is re-embedded only if a previous attempt failed.
+        if can_embed
+            && (changed || !has_embedding(db, owner, &rec.id).await.unwrap_or(true))
+            && let Err(e) = embed_record(db, settings, owner, &rec).await
+        {
+            report.errors.push(format!("embed {}: {}", rec.id, e.message));
+        }
+        if changed {
+            crate::jobs::handlers::enqueue_extract(state, owner, &rec.id, &rec.content_hash).await;
         }
     }
 

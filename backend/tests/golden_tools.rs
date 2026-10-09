@@ -72,7 +72,7 @@ async fn every_registered_tool_has_a_golden() {
         json!({"_kind":"txn","id":id,"account":"Spending","description":d,"category":c,"amount_cents":amt,"created_at":at})
     })
     .collect();
-    let report = sources::ingest(&g.app.state.org(&g.app.user.org).await.unwrap(), &g.app.user.id, "demo", &raws, demo.as_ref()).await;
+    let report = sources::ingest(&g.app.state.org(&g.app.user.org).await.unwrap(), &g.app.user.id, &raws, demo.as_ref()).await.unwrap();
     assert_eq!(report.written, 3, "{:?}", report.errors);
 
     // -- docs, generic cache tools --

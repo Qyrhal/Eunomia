@@ -60,6 +60,8 @@ pub const UPSERT_RECORD: Stmt = Stmt::new(
      payload = $payload, content_hash = $content_hash, ingested_at = $ingested_at, \
      updated_at = $updated_at, deleted = $deleted RETURN AFTER",
 );
+/// Whether a stored record already has its embedding (an unchanged replayed record is re-embedded only if not).
+pub const HAS_EMBEDDING: Stmt = Stmt::new("cache.has_embedding", "SELECT VALUE embedding != NONE FROM ONLY $id");
 pub const SET_EMBEDDING: Stmt = Stmt::new("cache.set_embedding", "UPDATE $id SET embedding = $embedding");
 pub const KEYWORD_IDS: Stmt = Stmt::new(
     "cache.keyword_ids",
@@ -112,6 +114,7 @@ pub const ALL: &[&Stmt] = &[
     &RELATE_SYNC_LINK,
     &TOUCH_INGESTED,
     &UPSERT_RECORD,
+    &HAS_EMBEDDING,
     &SET_EMBEDDING,
     &KEYWORD_IDS,
     &SEMANTIC_EXACT,

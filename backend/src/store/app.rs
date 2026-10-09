@@ -27,8 +27,6 @@ pub const ALL: &[&Stmt] = &[
     &SOURCES_RECORD_COUNTS,
     &SOURCES_HEYPOCKET_RECENT,
     &SOURCES_HEYPOCKET_SEARCH,
-    &SOURCES_RECORD_TOUCH,
-    &SOURCES_RECORD_UPSERT,
     &SOURCES_SYNC_STATUS_UPSERT,
     &SOURCES_SYNC_OK,
     &SOURCES_SYNC_FAILED,
@@ -126,16 +124,6 @@ pub const SOURCES_HEYPOCKET_SEARCH: Stmt = Stmt::new(
      WHERE owner = $owner AND type = 'heypocket.recording' AND deleted = false \
      AND (string::contains(string::lowercase(title), $q) OR string::contains(string::lowercase(body_text), $q)) \
      LIMIT 20",
-);
-
-pub const SOURCES_RECORD_TOUCH: Stmt = Stmt::new("app.sources_record_touch", "UPDATE $id SET ingested_at = $now");
-
-pub const SOURCES_RECORD_UPSERT: Stmt = Stmt::new(
-    "app.sources_record_upsert",
-    "UPSERT $id SET owner = $owner, source = $source, type = $type, external_id = $external_id, \
-     title = $title, body_text = $body_text, occurred_at = $occurred_at, url = $url, \
-     payload = $payload, content_hash = $content_hash, ingested_at = $now, \
-     updated_at = $now, deleted = $deleted",
 );
 
 pub const SOURCES_SYNC_STATUS_UPSERT: Stmt = Stmt::new(

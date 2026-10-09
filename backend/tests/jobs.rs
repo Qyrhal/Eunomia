@@ -380,9 +380,9 @@ async fn embed_reconciler_fills_missing_embeddings() {
 async fn ingest_queues_extraction_and_the_handler_noops_without_a_key() {
     let state = state_with("stub").await; // stub: no LLM
     let user = common::register(&state, "ing@example.com").await;
-    let raw = vec![json!({"id": "1", "title": "t", "text": "Alice met Bob in Paris and they talked about the project at length."})];
-    let src = eunomia_backend::sources::registry::get("example").unwrap();
-    let report = eunomia_backend::sources::registry::ingest(&state.org(&user.org).await.unwrap(), &user.id, "example", &raw, src.as_ref()).await;
+    let raw = vec![json!({"_kind": "txn", "id": "1", "account": "Spending", "description": "Alice met Bob in Paris and they talked about the project at length.", "category": "Social", "amount_cents": -500, "created_at": "2026-01-05T09:00:00Z"})];
+    let src = eunomia_backend::sources::registry::get("demo").unwrap();
+    let report = eunomia_backend::sources::registry::ingest(&state.org(&user.org).await.unwrap(), &user.id, &raw, src.as_ref()).await.unwrap();
     assert_eq!(report.written, 1);
     assert_eq!(rows(&state, kind::EXTRACT).await.len(), 1);
     let (_w, _stop) = spawn_worker(&state, handlers::registry(), cfg("w"));

@@ -13,6 +13,7 @@ pub const DOCS: &[Doc] = &[
     Doc { slug: "installation", title: "Installation", body: include_str!("../../docs/installation.md") },
     Doc { slug: "agents", title: "AI agents & MCP", body: include_str!("../../docs/agents.md") },
     Doc { slug: "concepts", title: "Concepts", body: include_str!("../../docs/concepts.md") },
+    Doc { slug: "connectors", title: "Connectors", body: include_str!("../../docs/connectors.md") },
     Doc { slug: "deployment", title: "Deployment", body: include_str!("../../docs/deployment.md") },
 ];
 

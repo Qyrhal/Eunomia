@@ -14,6 +14,9 @@ pub const CONTROL_ALL: &[&ControlStmt] = &[
     &PRUNE_DONE,
     &LEADER_ACQUIRE,
     &LEADER_RELEASE,
+    &JOB_STATUS,
+    &SYNC_ACTIVE,
+    &SYNC_RUNNING_OTHER,
 ];
 
 /// Reconciler probes run in the org's database.
@@ -105,6 +108,25 @@ pub const LEADER_ACQUIRE: ControlStmt = ControlStmt::new(
 pub const LEADER_RELEASE: ControlStmt = ControlStmt::new(
     "jobs.leader_release",
     "UPDATE job_leader:scheduler SET holder = NONE, until = d\"1970-01-01T00:00:00Z\" WHERE holder = $worker RETURN VALUE holder",
+);
+
+/// One job's status (a manual sync waits on it).
+pub const JOB_STATUS: ControlStmt = ControlStmt::new("jobs.status", "SELECT VALUE status FROM ONLY $id");
+
+/// A `sync` job for this owner and source that is waiting or running: the Connectors page's
+/// "already running".
+pub const SYNC_ACTIVE: ControlStmt = ControlStmt::new(
+    "jobs.sync_active",
+    "SELECT VALUE id FROM job WHERE kind = 'sync' AND owner = $owner AND payload.source = $source \
+     AND (status = 'ready' OR (status = 'running' AND locked_until >= time::now())) LIMIT 1",
+);
+
+/// A `sync` job other than `$me` holding a live lease for this owner and source: another replica is
+/// syncing it right now.
+pub const SYNC_RUNNING_OTHER: ControlStmt = ControlStmt::new(
+    "jobs.sync_running_other",
+    "SELECT VALUE id FROM job WHERE kind = 'sync' AND owner = $owner AND payload.source = $source \
+     AND status = 'running' AND locked_until >= time::now() AND id != $me LIMIT 1",
 );
 
 // --- reconcilers: cheap "is there work" probes ---

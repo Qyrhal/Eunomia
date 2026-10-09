@@ -40,14 +40,16 @@ fn payload_str<'a>(job: &'a Job, field: &str) -> Result<&'a str, JobError> {
 }
 
 /// One source for one user. `sync_source` records health and backoff in `sync_status` and never
-/// fails, so a failing source ends this job normally and the next window tries again.
+/// fails, so a failing source ends this job normally and the next window tries again. A run that finds
+/// another sync of the same source in progress stands down.
 async fn sync(state: AppState, job: Job) -> Result<(), JobError> {
     let source = payload_str(&job, "source")?;
     let state = org_state(&state, &job).await?;
-    let report = crate::sources::scheduler::sync_source(&state, &job.owner, source, "poll").await;
-    match report.get("error") {
-        Some(e) => tracing::warn!(source, error = %e, "source sync failed"),
-        None => tracing::info!(source, report = %report, "source synced"),
+    let report = crate::sources::scheduler::sync_source(&state, &job.owner, source, Some(&job.id)).await;
+    match (report.get("error"), report.get("status")) {
+        (Some(e), _) => tracing::warn!(source, error = %e, "source sync failed"),
+        (None, Some(_)) => tracing::info!(source, "source sync skipped: already running"),
+        (None, None) => tracing::info!(source, report = %report, "source synced"),
     }
     Ok(())
 }
