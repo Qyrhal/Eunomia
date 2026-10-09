@@ -21,15 +21,16 @@ use crate::cache::recall::{self, MemoryType};
 use crate::cache::reflect;
 use crate::config::Settings;
 use crate::db::Db;
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
 
 /// Mirrors `cache/tools.py::recall`'s `time_range = tuple(time_range) if
 /// time_range else None` coercion -- a 2-element `[since, until]` JSON array
-/// in, an `(since, until)` tuple out.
-fn time_range_tuple(time_range: Option<&[String]>) -> Option<(&str, &str)> {
+/// in, an `(since, until)` tuple out; any other length is a 400.
+fn time_range_tuple(time_range: Option<&[String]>) -> AppResult<Option<(&str, &str)>> {
     match time_range {
-        Some([since, until]) => Some((since.as_str(), until.as_str())),
-        _ => None,
+        None => Ok(None),
+        Some([since, until]) => Ok(Some((since.as_str(), until.as_str()))),
+        Some(_) => Err(AppError::bad_request("time_range must be [since, until]")),
     }
 }
 
@@ -45,7 +46,7 @@ pub async fn recall_tool(
     types: Option<&[MemoryType]>,
     vault_id: Option<&RecordId>,
 ) -> AppResult<Value> {
-    let results = recall::recall(db, settings, owner, query, time_range_tuple(time_range), limit, max_tokens, types, vault_id).await?;
+    let results = recall::recall(db, settings, owner, query, time_range_tuple(time_range)?, limit, max_tokens, types, vault_id).await?;
     Ok(json!({ "results": results }))
 }
 
@@ -67,13 +68,13 @@ mod tests {
     #[test]
     fn time_range_tuple_converts_two_element_array() {
         let v = vec!["2024-01-01".to_string(), "2024-02-01".to_string()];
-        assert_eq!(time_range_tuple(Some(&v)), Some(("2024-01-01", "2024-02-01")));
+        assert_eq!(time_range_tuple(Some(&v)).unwrap(), Some(("2024-01-01", "2024-02-01")));
     }
 
     #[test]
-    fn time_range_tuple_is_none_when_absent_or_wrong_length() {
-        assert_eq!(time_range_tuple(None), None);
+    fn time_range_tuple_is_none_when_absent_and_an_error_when_the_wrong_length() {
+        assert_eq!(time_range_tuple(None).unwrap(), None);
         let one = vec!["2024-01-01".to_string()];
-        assert_eq!(time_range_tuple(Some(&one)), None);
+        assert!(time_range_tuple(Some(&one)).is_err());
     }
 }

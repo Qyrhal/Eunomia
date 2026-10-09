@@ -1,11 +1,11 @@
-//! Recall pipeline: 5 arms in parallel (semantic, keyword, graph, temporal, memory text),
+//! Recall pipeline: 5 arms (semantic, keyword, graph, temporal, memory text),
 //! fused via Reciprocal Rank Fusion, then boosted by recency + "proof" (how
 //! many arms agreed on an item), then truncated to a token budget.
 //!
 //! Pipeline, matching the reference diagram:
 //!
 //! ```text
-//!     [semantic | keyword | graph | temporal | memory text]  (5 arms, run concurrently)
+//!     [semantic | keyword, graph, temporal, memory text]  (provider arm alongside the DB arms)
 //!                      |
 //!                 RRF fusion (k=60, reusing cache::search's rrf_scores)
 //!                      |
@@ -38,20 +38,38 @@
 //!
 //! Ported from `cache/recall.py`.
 
+use std::collections::{HashMap, HashSet};
+use std::time::Duration;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use surrealdb::RecordId;
+use surrealdb::{Datetime, RecordId};
 
 use crate::cache::search as cs;
 use crate::config::Settings;
 use crate::db::Db;
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
 use crate::vaults::service as vaults_service;
 
 /// Entity tables the graph arm searches -- mirrors `entities/service.py`'s
 /// `KINDS` tuple (see module docstring on why this isn't delegated to a
 /// Rust `entities::service` yet).
 const ENTITY_KINDS: &[&str] = &["person", "organisation", "location", "repository", "file", "symbol"];
+
+/// Input bounds -- anything outside them is a 400 (see `validate`).
+const MAX_LIMIT: usize = 100;
+const MAX_TOKENS: usize = 100_000;
+const MAX_QUERY_CHARS: usize = 2_000;
+/// Each arm's deadline: past it the arm contributes nothing and the others'
+/// results are returned (see `arm`).
+const ARM_DEADLINE: Duration = Duration::from_secs(4);
+/// Graph arm bounds: index hits kept per (kind, name/alias), how many
+/// matched entities it follows, and the query phrases it looks names up by
+/// (runs of up to `NAME_WORDS` of the first `MAX_NAME_WORDS` words).
+const GRAPH_CANDIDATES: usize = 20;
+const GRAPH_ENTITIES: usize = 10;
+const NAME_WORDS: usize = 6;
+const MAX_NAME_WORDS: usize = 64;
 
 // recency boost floor/ceiling; see `boost` below.
 const RECENCY_FLOOR: f64 = 0.7;
@@ -64,7 +82,7 @@ const PROOF_STEP: f64 = 0.05;
 /// (`Datetime::from`); the reverse direction isn't exposed on the wrapper
 /// type directly, only on the inner core type it wraps, so go through
 /// `into_inner()`.
-fn to_chrono(dt: surrealdb::Datetime) -> DateTime<Utc> {
+fn to_chrono(dt: Datetime) -> DateTime<Utc> {
     dt.into_inner().into()
 }
 
@@ -106,18 +124,50 @@ struct EntityRow {
     aliases: Vec<String>,
 }
 
+/// Phrases of `query` that an entity name or alias could be: every run of up
+/// to [`NAME_WORDS`] consecutive words, lowercased, each word with its
+/// surrounding punctuation and a possessive "'s" trimmed ("Ada's" -> "ada",
+/// "main.rs?" -> "main.rs"). Looked up exactly, these replace a scan of every
+/// entity for names that occur in the question.
+fn name_phrases(query: &str) -> Vec<String> {
+    let words: Vec<String> = query
+        .to_lowercase()
+        .split_whitespace()
+        .map(|w| {
+            let w = w.trim_matches(|c: char| !c.is_alphanumeric());
+            w.strip_suffix("'s").or_else(|| w.strip_suffix("\u{2019}s")).unwrap_or(w).to_string()
+        })
+        .filter(|w| !w.is_empty())
+        .take(MAX_NAME_WORDS)
+        .collect();
+    let mut out: Vec<String> = Vec::new();
+    for start in 0..words.len() {
+        for end in start + 1..=(start + NAME_WORDS).min(words.len()) {
+            let phrase = words[start..end].join(" ");
+            if !out.contains(&phrase) {
+                out.push(phrase);
+            }
+        }
+    }
+    out
+}
+
 /// Candidate entities: the vault's person/organisation/location/.../symbol
-/// names/aliases that appear as a case-insensitive substring of `query` (no
-/// NER/LLM for v1), ranked by match specificity (longer matched name
-/// first). For each matched entity, pulls its memories, each memory's
-/// source `cache_record`, and any `cache_record`s `linked_to` that source --
-/// that's the "follow the entity graph" hop the diagram's Graph arm
-/// describes. Mirrors `cache/recall.py`'s `_graph_arm`.
+/// whose name or an alias appears in `query` (no NER/LLM for v1), ranked by
+/// match specificity (longer matched name first). Found by exact lookup of
+/// the query's [`name_phrases`] on the `(vault, name_key)` and `alias_keys`
+/// indexes -- one query, a bounded number of rows, however large the vault.
+///
+/// For each matched entity, pulls its newest memories, each memory's source
+/// `cache_record`, and the records linked to that source -- the "follow the
+/// entity graph" hop the diagram's Graph arm describes. A tombstoned source
+/// is not followed (the memory itself stays recallable). Three queries in
+/// total.
 ///
 /// Records are the caller's own synced data, not the vault's, so they're
-/// followed only in the caller's personal vault (`include_cache_record`) --
-/// in a shared vault a memory's source would otherwise surface the caller's
-/// own same-id record as if it belonged there.
+/// followed only in the caller's personal vault (`include_cache_record`), and
+/// only the caller's own -- in a shared vault a memory's source would
+/// otherwise surface the caller's own same-id record as if it belonged there.
 async fn graph_arm(
     db: &Db,
     owner: &RecordId,
@@ -126,24 +176,49 @@ async fn graph_arm(
     limit: usize,
     include_cache_record: bool,
 ) -> AppResult<Vec<String>> {
-    let q_lower = query.to_lowercase();
+    let phrases = name_phrases(query);
+    if phrases.is_empty() {
+        return Ok(Vec::new());
+    }
+    let lookups: Vec<String> = ENTITY_KINDS
+        .iter()
+        .flat_map(|kind| {
+            [
+                format!("(SELECT id, name, aliases FROM {kind} WHERE vault = $vault AND name_key IN $phrases LIMIT {GRAPH_CANDIDATES})"),
+                format!(
+                    "(SELECT id, name, aliases FROM {kind} WITH INDEX {kind}_alias_keys_idx \
+                     WHERE alias_keys CONTAINSANY $phrases AND vault = $vault LIMIT {GRAPH_CANDIDATES})"
+                ),
+            ]
+        })
+        .collect();
+    let mut res = db
+        .query(format!("RETURN array::flatten([{}]);", lookups.join(", ")))
+        .bind(("vault", vault.clone()))
+        .bind(("phrases", phrases))
+        .await?;
+    let rows: Vec<EntityRow> = res.take(0)?;
 
+    let q_lower = query.to_lowercase();
+    let mut seen = HashSet::new();
     let mut matches: Vec<(usize, RecordId)> = Vec::new();
-    for kind in ENTITY_KINDS {
-        let mut res = db.query(format!("SELECT id, name, aliases FROM {kind} WHERE vault = $vault")).bind(("vault", vault.clone())).await?;
-        let rows: Vec<EntityRow> = res.take(0)?;
-        for row in rows {
-            let best = std::iter::once(row.name.as_str())
-                .chain(row.aliases.iter().map(String::as_str))
-                .filter(|n| !n.is_empty() && q_lower.contains(&n.to_lowercase()))
-                .map(str::len)
-                .max();
-            if let Some(best) = best {
+    for row in rows {
+        let best = std::iter::once(row.name.as_str())
+            .chain(row.aliases.iter().map(String::as_str))
+            .filter(|n| !n.is_empty() && q_lower.contains(&n.to_lowercase()))
+            .map(str::len)
+            .max();
+        if let Some(best) = best {
+            if seen.insert(row.id.clone()) {
                 matches.push((best, row.id));
             }
         }
     }
-    matches.sort_by(|a, b| b.0.cmp(&a.0));
+    matches.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.to_string().cmp(&b.1.to_string())));
+    matches.truncate(GRAPH_ENTITIES);
+    if matches.is_empty() {
+        return Ok(Vec::new());
+    }
 
     #[derive(Deserialize)]
     struct MemRow {
@@ -151,38 +226,49 @@ async fn graph_arm(
         #[serde(default)]
         source: Option<RecordId>,
     }
+    // WITH INDEX: left to itself the planner walks the whole vault's memories
+    // (memory_vault_idx) for each entity
+    let mut sql = String::new();
+    for i in 0..matches.len() {
+        sql.push_str(&format!(
+            "SELECT id, source, created_at FROM memory WITH INDEX memory_subject_idx \
+             WHERE subject = $e{i} AND vault = $vault ORDER BY created_at DESC LIMIT $limit;"
+        ));
+    }
+    let mut q = db.query(sql).bind(("vault", vault.clone())).bind(("limit", limit as i64));
+    for (i, (_, id)) in matches.iter().enumerate() {
+        q = q.bind((format!("e{i}"), id.clone()));
+    }
+    let mut res = q.await?;
+    let mut memories: Vec<MemRow> = Vec::new();
+    for i in 0..matches.len() {
+        memories.extend(res.take::<Vec<MemRow>>(i)?);
+    }
+
+    // only the caller's own records: their key embeds the caller's owner key
+    let own_sources: Vec<RecordId> = memories
+        .iter()
+        .filter_map(|m| m.source.clone())
+        .filter(|s| include_cache_record && cs::rid(owner, &cs::literal(s)) == *s)
+        .collect();
+    let neighbours = cs::live_neighbours(db, &own_sources).await?;
 
     let mut keys: Vec<String> = Vec::new();
-    for (_, entity_id) in &matches {
-        let mut res = db
-            .query("SELECT * FROM memory WHERE subject = $id ORDER BY created_at DESC")
-            .bind(("id", entity_id.clone()))
-            .await?;
-        let mem_rows: Vec<MemRow> = res.take(0)?;
-        for mem in mem_rows {
-            keys.push(format!("memory:{}", mem.id));
-            if let Some(source) = mem.source.filter(|_| include_cache_record) {
-                let src_literal = cs::literal(&source);
-                keys.push(format!("cache_record:{src_literal}"));
-                for link in cs::links(db, owner, &src_literal, None).await? {
-                    keys.push(format!("cache_record:{}", link.target_id));
-                }
-            }
+    for mem in memories {
+        keys.push(format!("memory:{}", mem.id));
+        if let Some(links) = mem.source.as_ref().and_then(|s| neighbours.get(s).map(|l| (s, l))) {
+            keys.push(format!("cache_record:{}", cs::literal(links.0)));
+            keys.extend(links.1.iter().map(|t| format!("cache_record:{}", cs::literal(t))));
         }
         if keys.len() >= limit {
             break;
         }
     }
 
-    let mut seen = std::collections::HashSet::new();
-    let mut out = Vec::new();
-    for k in keys {
-        if seen.insert(k.clone()) {
-            out.push(k);
-        }
-    }
-    out.truncate(limit);
-    Ok(out)
+    let mut seen = HashSet::new();
+    keys.retain(|k| seen.insert(k.clone()));
+    keys.truncate(limit);
+    Ok(keys)
 }
 
 /// Full-text arm over remembered facts (`memory.text`), BM25-ranked. This is
@@ -196,34 +282,44 @@ async fn memory_text_arm(db: &Db, vault: &RecordId, query: &str, limit: usize) -
         #[serde(default)]
         score: f64,
     }
-    // one BM25 match per term: `@@` with a whole question needs every word to match
-    let mut per_term = Vec::new();
-    for term in cs::search_terms(query) {
-        let mut res = db
-            .query(
+    // one BM25 match per term (`@@` with a whole question needs every word to
+    // match), all in one round trip
+    let terms = cs::search_terms(query);
+    if terms.is_empty() {
+        return Ok(Vec::new());
+    }
+    let sql: String = (0..terms.len())
+        .map(|i| {
+            format!(
                 "SELECT id, search::score(1) AS score FROM memory \
-                 WHERE vault = $vault AND text @1@ $t ORDER BY score DESC LIMIT $limit",
+                 WHERE vault = $vault AND text @1@ $t{i} ORDER BY score DESC LIMIT $limit;"
             )
-            .bind(("vault", vault.clone()))
-            .bind(("t", term))
-            .bind(("limit", limit as i64))
-            .await?;
-        let rows: Vec<ScoredRow> = res.take(0)?;
+        })
+        .collect();
+    let mut q = db.query(sql).bind(("vault", vault.clone())).bind(("limit", limit as i64));
+    for (i, t) in terms.iter().enumerate() {
+        q = q.bind((format!("t{i}"), t.clone()));
+    }
+    let mut res = q.await?;
+    let mut per_term = Vec::new();
+    for i in 0..terms.len() {
+        let rows: Vec<ScoredRow> = res.take(i)?;
         per_term.push(rows.into_iter().map(|r| (format!("memory:{}", r.id), r.score)).collect());
     }
     Ok(cs::rank_term_hits(per_term, limit))
 }
 
-/// Explicit date-range filter only -- no NL date parsing in v1. Merges
-/// `cache_record` (`occurred_at`, caller's own data only -- see `recall`'s
-/// `include_cache_record`) and `memory` (`created_at`, vault-scoped) hits
-/// into one list, ranked by recency. Mirrors `cache/recall.py`'s
-/// `_temporal_ids`.
+/// Explicit date-range filter only -- no NL date parsing in v1. Merges the
+/// newest `limit` `cache_record`s (`occurred_at`, caller's own data only --
+/// see `recall`'s `include_cache_record`) and `memory` rows (`created_at`,
+/// vault-scoped) in the range, ranked by recency. Each side is ordered and
+/// limited in the database, so a broad range never loads the whole range.
+/// Mirrors `cache/recall.py`'s `_temporal_ids`.
 async fn temporal_ids(
     db: &Db,
     owner: &RecordId,
     vault: &RecordId,
-    time_range: Option<(&str, &str)>,
+    time_range: Option<(Datetime, Datetime)>,
     limit: usize,
     include_cache_record: bool,
 ) -> AppResult<Vec<String>> {
@@ -234,41 +330,37 @@ async fn temporal_ids(
     #[derive(Deserialize)]
     struct CacheRow {
         id: RecordId,
-        occurred_at: surrealdb::Datetime,
+        occurred_at: Datetime,
     }
     #[derive(Deserialize)]
     struct MemRow {
         id: RecordId,
-        created_at: surrealdb::Datetime,
+        created_at: Datetime,
     }
 
-    let mut dated: Vec<(surrealdb::Datetime, String)> = Vec::new();
-
+    let mut sql = String::from(
+        "SELECT id, created_at FROM memory WHERE vault = $vault \
+         AND created_at >= $since AND created_at <= $until ORDER BY created_at DESC LIMIT $limit;",
+    );
     if include_cache_record {
-        let mut res = db
-            .query(
-                "SELECT id, occurred_at FROM cache_record WHERE owner = $owner AND deleted = false \
-                 AND occurred_at >= <datetime>$since AND occurred_at <= <datetime>$until",
-            )
-            .bind(("owner", owner.clone()))
-            .bind(("since", since.to_string()))
-            .bind(("until", until.to_string()))
-            .await?;
-        let rows: Vec<CacheRow> = res.take(0)?;
-        dated.extend(rows.into_iter().map(|r| (r.occurred_at, format!("cache_record:{}", cs::literal(&r.id)))));
+        sql.push_str(
+            "SELECT id, occurred_at FROM cache_record WHERE owner = $owner AND deleted = false \
+             AND occurred_at >= $since AND occurred_at <= $until ORDER BY occurred_at DESC LIMIT $limit;",
+        );
     }
-
     let mut res = db
-        .query(
-            "SELECT id, created_at FROM memory WHERE vault = $vault \
-             AND created_at >= <datetime>$since AND created_at <= <datetime>$until",
-        )
+        .query(sql)
+        .bind(("owner", owner.clone()))
         .bind(("vault", vault.clone()))
-        .bind(("since", since.to_string()))
-        .bind(("until", until.to_string()))
+        .bind(("since", since))
+        .bind(("until", until))
+        .bind(("limit", limit as i64))
         .await?;
-    let rows: Vec<MemRow> = res.take(0)?;
-    dated.extend(rows.into_iter().map(|r| (r.created_at, format!("memory:{}", r.id))));
+    let memories: Vec<MemRow> = res.take(0)?;
+    let records: Vec<CacheRow> = if include_cache_record { res.take(1)? } else { Vec::new() };
+    let mut dated: Vec<(Datetime, String)> = Vec::new();
+    dated.extend(records.into_iter().map(|r| (r.occurred_at, format!("cache_record:{}", cs::literal(&r.id)))));
+    dated.extend(memories.into_iter().map(|r| (r.created_at, format!("memory:{}", r.id))));
 
     dated.sort_by(|a, b| b.0.cmp(&a.0));
     Ok(dated.into_iter().take(limit).map(|(_, k)| k).collect())
@@ -283,64 +375,72 @@ struct Hydrated {
     mem_type: String,
 }
 
-async fn hydrate(db: &Db, owner: &RecordId, vault: &RecordId, key: &str) -> AppResult<Option<Hydrated>> {
-    let Some((kind, rest)) = key.split_once(':') else {
-        return Ok(None);
-    };
-
-    if kind == "cache_record" {
-        let Some(rec) = cs::get(db, owner, rest).await? else {
-            return Ok(None);
-        };
+/// Every candidate key's content, in two queries (records, memories)
+/// whatever the candidate count. Authorization is re-checked here: records
+/// must be the caller's own and live, memories must be in `vault`. A stale
+/// observation (its facts changed since it was consolidated) is left out --
+/// it is not a current fact; the raw facts it summarised are still recalled.
+async fn hydrate(db: &Db, owner: &RecordId, vault: &RecordId, keys: &[&String]) -> AppResult<HashMap<String, Hydrated>> {
+    let mut out = HashMap::new();
+    let record_ids: Vec<String> =
+        keys.iter().filter_map(|k| k.strip_prefix("cache_record:")).map(str::to_string).collect();
+    for rec in cs::get_many(db, owner, &record_ids).await? {
         let text = format!("{}\n{}", rec.title, rec.body_text).trim().to_string();
-        return Ok(Some(Hydrated {
-            id: rec.id,
-            kind: "cache_record",
-            text,
-            source: if rec.source.is_empty() { None } else { Some(rec.source) },
-            occurred_at: rec.occurred_at.map(to_chrono),
-            mem_type: String::new(),
-        }));
+        out.insert(
+            format!("cache_record:{}", rec.id),
+            Hydrated {
+                id: rec.id,
+                kind: "cache_record",
+                text,
+                source: if rec.source.is_empty() { None } else { Some(rec.source) },
+                occurred_at: rec.occurred_at.map(to_chrono),
+                mem_type: String::new(),
+            },
+        );
     }
 
-    if kind == "memory" {
-        let Ok(rid) = rest.parse::<RecordId>() else {
-            return Ok(None);
-        };
-
-        #[derive(Deserialize)]
-        struct MemRow {
-            vault: RecordId,
-            #[serde(default)]
-            text: String,
-            #[serde(default)]
-            source: Option<RecordId>,
-            created_at: surrealdb::Datetime,
-            #[serde(rename = "type", default = "default_memory_type")]
-            mem_type: String,
-        }
-        fn default_memory_type() -> String {
-            "world".to_string()
-        }
-
-        let row: Option<MemRow> = db.select(rid.clone()).await?;
-        let Some(row) = row else {
-            return Ok(None);
-        };
-        if &row.vault != vault {
-            return Ok(None);
-        }
-        return Ok(Some(Hydrated {
-            id: rid.to_string(),
-            kind: "memory",
-            text: row.text,
-            source: row.source.map(|s| cs::literal(&s)),
-            occurred_at: Some(to_chrono(row.created_at)),
-            mem_type: row.mem_type,
-        }));
+    let memory_ids: Vec<RecordId> =
+        keys.iter().filter_map(|k| k.strip_prefix("memory:")).filter_map(|r| r.parse().ok()).collect();
+    if memory_ids.is_empty() {
+        return Ok(out);
     }
-
-    Ok(None)
+    #[derive(Deserialize)]
+    struct MemRow {
+        id: RecordId,
+        #[serde(default)]
+        text: String,
+        #[serde(default)]
+        source: Option<RecordId>,
+        created_at: Datetime,
+        #[serde(rename = "type", default = "default_memory_type")]
+        mem_type: String,
+    }
+    fn default_memory_type() -> String {
+        "world".to_string()
+    }
+    let mut res = db
+        .query(
+            "SELECT id, text, source, created_at, type FROM $ids WHERE vault = $vault \
+             AND !(type = \"observation\" AND status = \"stale\")",
+        )
+        .bind(("ids", memory_ids))
+        .bind(("vault", vault.clone()))
+        .await?;
+    let rows: Vec<MemRow> = res.take(0)?;
+    for row in rows {
+        out.insert(
+            format!("memory:{}", row.id),
+            Hydrated {
+                id: row.id.to_string(),
+                kind: "memory",
+                text: row.text,
+                source: row.source.map(|s| cs::literal(&s)),
+                occurred_at: Some(to_chrono(row.created_at)),
+                mem_type: row.mem_type,
+            },
+        );
+    }
+    Ok(out)
 }
 
 /// Monotonic in both arm-count ("proof") and recency, matching the diagram's
@@ -366,6 +466,56 @@ fn boost(arms_hit: usize, occurred_at: Option<DateTime<Utc>>, now: DateTime<Utc>
     proof * recency
 }
 
+/// Checks recall's inputs up front -- every bound is a clear 400, not a slow
+/// query or an arithmetic overflow -- and parses the time range.
+fn validate(
+    query: &str,
+    time_range: Option<(&str, &str)>,
+    limit: usize,
+    max_tokens: Option<usize>,
+) -> AppResult<Option<(Datetime, Datetime)>> {
+    if query.chars().count() > MAX_QUERY_CHARS {
+        return Err(AppError::bad_request(format!("query is longer than {MAX_QUERY_CHARS} characters")));
+    }
+    if !(1..=MAX_LIMIT).contains(&limit) {
+        return Err(AppError::bad_request(format!("limit must be between 1 and {MAX_LIMIT}")));
+    }
+    if max_tokens.is_some_and(|t| !(1..=MAX_TOKENS).contains(&t)) {
+        return Err(AppError::bad_request(format!("max_tokens must be between 1 and {MAX_TOKENS}")));
+    }
+    let Some((since, until)) = time_range else { return Ok(None) };
+    match cs::parse_range(Some(since), Some(until))? {
+        (Some(since), Some(until)) => Ok(Some((since.into(), until.into()))),
+        _ => Ok(None),
+    }
+}
+
+/// Runs one arm under [`ARM_DEADLINE`]. A timeout -- or, for an `optional`
+/// arm (semantic: an external provider), an error -- drops just that arm's
+/// candidates, so one slow or broken arm never blocks the others' results.
+async fn arm(
+    name: &str,
+    optional: bool,
+    fut: impl std::future::Future<Output = AppResult<Vec<String>>>,
+) -> AppResult<Vec<String>> {
+    let started = std::time::Instant::now();
+    match tokio::time::timeout(ARM_DEADLINE, fut).await {
+        Ok(Ok(keys)) => {
+            tracing::debug!(arm = name, candidates = keys.len(), elapsed_ms = started.elapsed().as_millis() as u64, "recall: arm done");
+            Ok(keys)
+        }
+        Ok(Err(e)) if optional => {
+            tracing::warn!("recall: {name} arm skipped: {}", e.message);
+            Ok(Vec::new())
+        }
+        Ok(Err(e)) => Err(e),
+        Err(_) => {
+            tracing::warn!("recall: {name} arm timed out after {ARM_DEADLINE:?}");
+            Ok(Vec::new())
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn recall(
     db: &Db,
@@ -378,7 +528,9 @@ pub async fn recall(
     types: Option<&[MemoryType]>,
     vault_id: Option<&RecordId>,
 ) -> AppResult<Vec<RecallItem>> {
-    let pool = (limit * 4).max(40);
+    let time_range = validate(query, time_range, limit, max_tokens)?;
+    let pool = limit.saturating_mul(4).max(40);
+    let started = std::time::Instant::now();
 
     let default_vault = vaults_service::default_vault_id(db, owner).await?;
     let vault = match vault_id {
@@ -389,36 +541,60 @@ pub async fn recall(
         None => default_vault.clone(),
     };
     let personal = vault == default_vault;
+    let no_filter = cs::RecordFilter::default();
+    let record_keys = |ids: Vec<String>| ids.into_iter().map(|i| format!("cache_record:{i}")).collect::<Vec<_>>();
 
-    let keyword_ids = if personal { cs::keyword_ids(db, owner, query, pool).await? } else { Vec::new() };
-    // No embeddings (no OpenAI key -- the MCP agent is the model) or a failing
-    // provider must not take down the other three arms.
-    let semantic_ids = if personal && crate::embeddings::service::available(db, settings, owner).await {
-        cs::semantic_ids(db, settings, owner, query, pool).await.unwrap_or_else(|e| {
-            tracing::warn!("recall: semantic arm skipped: {}", e.message);
-            Vec::new()
+    // The semantic arm waits on an external embedding provider: it runs
+    // concurrently with the rest, so a slow or hanging provider costs at most
+    // its deadline and never holds up the other four. Those four only query
+    // SurrealDB and run one after another -- measured on a 5000-entity vault,
+    // running them concurrently made each several times slower (they contend
+    // inside the database) and the whole recall slower. Every arm has its own
+    // deadline (see `arm`).
+    let semantic = arm("semantic", true, async {
+        if personal && crate::embeddings::service::available(db, settings, owner).await {
+            Ok(record_keys(cs::semantic_ids(db, settings, owner, query, &no_filter, pool).await?))
+        } else {
+            Ok(Vec::new())
+        }
+    });
+    let local = async {
+        let keyword = arm("keyword", false, async {
+            if personal {
+                Ok(record_keys(cs::keyword_ids(db, owner, query, &no_filter, pool).await?))
+            } else {
+                Ok(Vec::new())
+            }
         })
-    } else {
-        Vec::new()
+        .await;
+        let graph = arm("graph", false, graph_arm(db, owner, &vault, query, pool, personal)).await;
+        let temporal = arm("temporal", false, temporal_ids(db, owner, &vault, time_range, pool, personal)).await;
+        let memory = arm("memory_text", false, memory_text_arm(db, &vault, query, pool)).await;
+        (keyword, graph, temporal, memory)
     };
-    let graph_keys = graph_arm(db, owner, &vault, query, pool, personal).await?;
-    let temporal_keys = temporal_ids(db, owner, &vault, time_range, pool, personal).await?;
+    let (semantic_keys, (keyword_keys, graph_keys, temporal_keys, memory_keys)) = tokio::join!(semantic, local);
+    let arms = [semantic_keys?, keyword_keys?, graph_keys?, temporal_keys?, memory_keys?];
+    tracing::debug!(
+        semantic = arms[0].len(),
+        keyword = arms[1].len(),
+        graph = arms[2].len(),
+        temporal = arms[3].len(),
+        memory_text = arms[4].len(),
+        elapsed_ms = started.elapsed().as_millis() as u64,
+        "recall: arm candidates"
+    );
 
-    let keyword_keys: Vec<String> = keyword_ids.iter().map(|i| format!("cache_record:{i}")).collect();
-    let semantic_keys: Vec<String> = semantic_ids.iter().map(|i| format!("cache_record:{i}")).collect();
-
-    let memory_keys = memory_text_arm(db, &vault, query, pool).await?;
-
-    let arms = [semantic_keys, keyword_keys, graph_keys, temporal_keys, memory_keys];
     let rrf = cs::rrf_scores(&arms);
     if rrf.is_empty() {
         return Ok(Vec::new());
     }
+    let keys: Vec<&String> = rrf.keys().collect();
+    let mut hydrated = hydrate(db, owner, &vault, &keys).await?;
 
     let now = Utc::now();
     let mut scored: Vec<RecallItem> = Vec::new();
     for (key, base_score) in &rrf {
-        let Some(item) = hydrate(db, owner, &vault, key).await? else {
+        let Some(item) = hydrated.remove(key) else {
             continue;
         };
         if let Some(types) = types {
@@ -442,7 +618,7 @@ pub async fn recall(
         });
     }
 
-    scored.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    scored.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal).then_with(|| a.id.cmp(&b.id)));
     scored.truncate(limit);
 
     Ok(match max_tokens {
@@ -465,7 +641,7 @@ fn fit_budget(items: Vec<RecallItem>, budget: usize) -> Vec<RecallItem> {
             item.text = item.text.chars().take(cap_chars - 1).collect::<String>() + "\u{2026}";
         }
         let tokens = item.text.chars().count().div_ceil(4);
-        if used + tokens > budget {
+        if used.saturating_add(tokens) > budget {
             continue;
         }
         used += tokens;
@@ -537,6 +713,51 @@ mod tests {
         assert_eq!(out.len(), 4);
         assert_eq!(out.last().unwrap().text, "tiny");
         assert!(fit_budget(vec![], 100).is_empty());
+    }
+
+    #[test]
+    fn name_phrases_are_trimmed_word_runs() {
+        let p = name_phrases("What does Ada Lovelace's team think of main.rs?");
+        for want in ["ada lovelace", "ada", "lovelace", "main.rs", "team think of main.rs"] {
+            assert!(p.contains(&want.to_string()), "{want} in {p:?}");
+        }
+        assert!(!p.iter().any(|x| x.contains('?') || x.contains("'s")));
+        assert!(name_phrases("  ?! ").is_empty());
+        // bounded: at most NAME_WORDS words per phrase, MAX_NAME_WORDS words read
+        let long = name_phrases(&"w ".repeat(1000));
+        assert_eq!(long, (1..=NAME_WORDS).map(|n| vec!["w"; n].join(" ")).collect::<Vec<_>>());
+        let distinct: String = (0..1000).map(|i| format!("w{i} ")).collect();
+        assert!(name_phrases(&distinct).len() <= MAX_NAME_WORDS * NAME_WORDS);
+    }
+
+    #[test]
+    fn validate_bounds_every_input() {
+        assert!(validate("q", None, 20, None).unwrap().is_none());
+        assert!(validate("q", Some(("2024-01-01", "2024-02-01T00:00:00Z")), 1, Some(500)).unwrap().is_some());
+        assert!(validate("q", None, 0, None).is_err());
+        assert!(validate("q", None, MAX_LIMIT + 1, None).is_err());
+        assert!(validate("q", None, usize::MAX, None).is_err());
+        assert!(validate("q", None, 20, Some(0)).is_err());
+        assert!(validate("q", None, 20, Some(MAX_TOKENS + 1)).is_err());
+        assert!(validate(&"x".repeat(MAX_QUERY_CHARS + 1), None, 20, None).is_err());
+        assert!(validate("q", Some(("2024-03-01", "2024-02-01")), 20, None).is_err());
+        assert!(validate("q", Some(("last week", "2024-02-01")), 20, None).is_err());
+    }
+
+    #[tokio::test]
+    async fn a_hanging_arm_is_dropped_at_its_deadline() {
+        let started = std::time::Instant::now();
+        let hung = arm("semantic", true, std::future::pending::<AppResult<Vec<String>>>()).await.unwrap();
+        assert!(hung.is_empty());
+        assert!(started.elapsed() < ARM_DEADLINE + std::time::Duration::from_secs(1));
+    }
+
+    #[tokio::test]
+    async fn only_an_optional_arm_swallows_errors() {
+        let failing = || async { Err::<Vec<String>, _>(AppError::internal("provider down")) };
+        assert!(arm("semantic", true, failing()).await.unwrap().is_empty());
+        assert!(arm("keyword", false, failing()).await.is_err());
+        assert_eq!(arm("keyword", false, async { Ok(vec!["k".to_string()]) }).await.unwrap(), vec!["k"]);
     }
 
     #[test]

@@ -102,9 +102,8 @@ async fn scheduled_sync_lands_searchable_records_then_surfaces_a_401() {
     assert_eq!(st["cursor"], "2024-02-01T00:00:00Z");
     assert_eq!(mock.requests()[0].header("authorization"), "Bearer ghp_test");
 
-    let mut params = search::SearchParams::new();
-    params.mode = "keyword".into();
-    let hits = search::search(&db, &settings, &owner, "importer quarterly", &params).await.unwrap();
+    let params = search::SearchParams { mode: "keyword".into(), limit: 10, ..Default::default() };
+    let (hits, _more) = search::search(&db, &settings, &owner, "importer quarterly", &params).await.unwrap();
     assert_eq!(hits.iter().map(|h| h.id.as_str()).collect::<Vec<_>>(), vec![ISSUE_7]);
     assert!(poll_all(&db, &settings).await.unwrap().is_empty(), "a healthy source is not polled again within its interval");
 

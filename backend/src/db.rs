@@ -94,6 +94,9 @@ pub const SCHEMA_STATEMENTS: &[&str] = &[
     "DEFINE INDEX IF NOT EXISTS cache_record_embedding_idx ON cache_record FIELDS embedding MTREE DIMENSION 1536 DIST COSINE TYPE F32;",
     "DEFINE ANALYZER IF NOT EXISTS cache_text_analyzer TOKENIZERS blank,class FILTERS lowercase, snowball(english);",
     "DEFINE INDEX IF NOT EXISTS cache_record_fts_idx ON cache_record FIELDS title, body_text SEARCH ANALYZER cache_text_analyzer BM25 HIGHLIGHTS;",
+    // `@N@` only resolves against a composite search index's FIRST field
+    // (title above), so body_text gets its own index.
+    "DEFINE INDEX IF NOT EXISTS cache_record_body_fts_idx ON cache_record FIELDS body_text SEARCH ANALYZER cache_text_analyzer BM25;",
     "DEFINE TABLE IF NOT EXISTS linked_to SCHEMAFULL TYPE RELATION FROM cache_record TO cache_record;",
     "DEFINE FIELD IF NOT EXISTS rel ON linked_to TYPE string;",
     "DEFINE FIELD IF NOT EXISTS origin ON linked_to TYPE string ASSERT $value IN [\"sync\",\"agent\"];",
@@ -108,6 +111,9 @@ pub const SCHEMA_STATEMENTS: &[&str] = &[
     "DEFINE FIELD IF NOT EXISTS created_at ON person TYPE datetime DEFAULT time::now();",
     "DEFINE FIELD IF NOT EXISTS updated_at ON person TYPE datetime DEFAULT time::now();",
     "DEFINE INDEX IF NOT EXISTS person_vault_name_idx ON person FIELDS vault, name;",
+    "DEFINE FIELD IF NOT EXISTS name_key ON person VALUE string::lowercase(name);",
+    "DEFINE FIELD IF NOT EXISTS alias_keys ON person VALUE (aliases ?? []).map(|$a| string::lowercase($a));",
+    "DEFINE INDEX IF NOT EXISTS person_alias_keys_idx ON person FIELDS alias_keys;",
     "DEFINE TABLE IF NOT EXISTS organisation SCHEMAFULL;",
     "DEFINE FIELD IF NOT EXISTS owner ON organisation TYPE record<user>;",
     "DEFINE FIELD IF NOT EXISTS vault ON organisation TYPE record<vault>;",
@@ -117,6 +123,9 @@ pub const SCHEMA_STATEMENTS: &[&str] = &[
     "DEFINE FIELD IF NOT EXISTS created_at ON organisation TYPE datetime DEFAULT time::now();",
     "DEFINE FIELD IF NOT EXISTS updated_at ON organisation TYPE datetime DEFAULT time::now();",
     "DEFINE INDEX IF NOT EXISTS organisation_vault_name_idx ON organisation FIELDS vault, name;",
+    "DEFINE FIELD IF NOT EXISTS name_key ON organisation VALUE string::lowercase(name);",
+    "DEFINE FIELD IF NOT EXISTS alias_keys ON organisation VALUE (aliases ?? []).map(|$a| string::lowercase($a));",
+    "DEFINE INDEX IF NOT EXISTS organisation_alias_keys_idx ON organisation FIELDS alias_keys;",
     "DEFINE TABLE IF NOT EXISTS location SCHEMAFULL;",
     "DEFINE FIELD IF NOT EXISTS owner ON location TYPE record<user>;",
     "DEFINE FIELD IF NOT EXISTS vault ON location TYPE record<vault>;",
@@ -126,6 +135,9 @@ pub const SCHEMA_STATEMENTS: &[&str] = &[
     "DEFINE FIELD IF NOT EXISTS created_at ON location TYPE datetime DEFAULT time::now();",
     "DEFINE FIELD IF NOT EXISTS updated_at ON location TYPE datetime DEFAULT time::now();",
     "DEFINE INDEX IF NOT EXISTS location_vault_name_idx ON location FIELDS vault, name;",
+    "DEFINE FIELD IF NOT EXISTS name_key ON location VALUE string::lowercase(name);",
+    "DEFINE FIELD IF NOT EXISTS alias_keys ON location VALUE (aliases ?? []).map(|$a| string::lowercase($a));",
+    "DEFINE INDEX IF NOT EXISTS location_alias_keys_idx ON location FIELDS alias_keys;",
     "DEFINE TABLE IF NOT EXISTS repository SCHEMAFULL;",
     "DEFINE FIELD IF NOT EXISTS owner ON repository TYPE record<user>;",
     "DEFINE FIELD IF NOT EXISTS vault ON repository TYPE record<vault>;",
@@ -135,6 +147,9 @@ pub const SCHEMA_STATEMENTS: &[&str] = &[
     "DEFINE FIELD IF NOT EXISTS created_at ON repository TYPE datetime DEFAULT time::now();",
     "DEFINE FIELD IF NOT EXISTS updated_at ON repository TYPE datetime DEFAULT time::now();",
     "DEFINE INDEX IF NOT EXISTS repository_vault_name_idx ON repository FIELDS vault, name;",
+    "DEFINE FIELD IF NOT EXISTS name_key ON repository VALUE string::lowercase(name);",
+    "DEFINE FIELD IF NOT EXISTS alias_keys ON repository VALUE (aliases ?? []).map(|$a| string::lowercase($a));",
+    "DEFINE INDEX IF NOT EXISTS repository_alias_keys_idx ON repository FIELDS alias_keys;",
     "DEFINE TABLE IF NOT EXISTS file SCHEMAFULL;",
     "DEFINE FIELD IF NOT EXISTS owner ON file TYPE record<user>;",
     "DEFINE FIELD IF NOT EXISTS vault ON file TYPE record<vault>;",
@@ -144,6 +159,9 @@ pub const SCHEMA_STATEMENTS: &[&str] = &[
     "DEFINE FIELD IF NOT EXISTS created_at ON file TYPE datetime DEFAULT time::now();",
     "DEFINE FIELD IF NOT EXISTS updated_at ON file TYPE datetime DEFAULT time::now();",
     "DEFINE INDEX IF NOT EXISTS file_vault_name_idx ON file FIELDS vault, name;",
+    "DEFINE FIELD IF NOT EXISTS name_key ON file VALUE string::lowercase(name);",
+    "DEFINE FIELD IF NOT EXISTS alias_keys ON file VALUE (aliases ?? []).map(|$a| string::lowercase($a));",
+    "DEFINE INDEX IF NOT EXISTS file_alias_keys_idx ON file FIELDS alias_keys;",
     "DEFINE TABLE IF NOT EXISTS symbol SCHEMAFULL;",
     "DEFINE FIELD IF NOT EXISTS owner ON symbol TYPE record<user>;",
     "DEFINE FIELD IF NOT EXISTS vault ON symbol TYPE record<vault>;",
@@ -153,6 +171,9 @@ pub const SCHEMA_STATEMENTS: &[&str] = &[
     "DEFINE FIELD IF NOT EXISTS created_at ON symbol TYPE datetime DEFAULT time::now();",
     "DEFINE FIELD IF NOT EXISTS updated_at ON symbol TYPE datetime DEFAULT time::now();",
     "DEFINE INDEX IF NOT EXISTS symbol_vault_name_idx ON symbol FIELDS vault, name;",
+    "DEFINE FIELD IF NOT EXISTS name_key ON symbol VALUE string::lowercase(name);",
+    "DEFINE FIELD IF NOT EXISTS alias_keys ON symbol VALUE (aliases ?? []).map(|$a| string::lowercase($a));",
+    "DEFINE INDEX IF NOT EXISTS symbol_alias_keys_idx ON symbol FIELDS alias_keys;",
     "DEFINE TABLE IF NOT EXISTS memory SCHEMAFULL;",
     "DEFINE FIELD IF NOT EXISTS owner ON memory TYPE record<user>;",
     "DEFINE FIELD IF NOT EXISTS vault ON memory TYPE record<vault>;",
@@ -166,6 +187,9 @@ pub const SCHEMA_STATEMENTS: &[&str] = &[
     "DEFINE FIELD IF NOT EXISTS source_memories ON memory TYPE option<array<record<memory>>>;",
     "DEFINE FIELD IF NOT EXISTS updated_at ON memory TYPE datetime DEFAULT time::now();",
     "DEFINE FIELD IF NOT EXISTS version ON memory TYPE int DEFAULT 1;",
+    // set only on observations, so the UNIQUE index (NONE values are not
+    // indexed) allows exactly one observation per subject
+    "DEFINE FIELD IF NOT EXISTS obs_subject ON memory VALUE IF type = \"observation\" THEN subject ELSE NONE END;",
     "DEFINE INDEX IF NOT EXISTS memory_subject_idx ON memory FIELDS subject;",
     "DEFINE INDEX IF NOT EXISTS memory_vault_idx ON memory FIELDS vault;",
     "DEFINE INDEX IF NOT EXISTS memory_text_fts_idx ON memory FIELDS text SEARCH ANALYZER cache_text_analyzer BM25;",
@@ -219,9 +243,34 @@ pub async fn connect(settings: &Settings) -> surrealdb::Result<Db> {
     Ok(db)
 }
 
+/// UNIQUE indexes that existing data may violate: [`ensure_schema`] folds
+/// duplicates together first (`entities::service::dedupe`), since `DEFINE
+/// INDEX ... UNIQUE` fails while any remain. One entity per (vault,
+/// case-insensitive name) per kind; one observation per subject.
+pub const UNIQUE_STATEMENTS: &[(&str, &str)] = &[
+    ("person", "DEFINE INDEX IF NOT EXISTS person_vault_name_key_unique ON person FIELDS vault, name_key UNIQUE;"),
+    ("organisation", "DEFINE INDEX IF NOT EXISTS organisation_vault_name_key_unique ON organisation FIELDS vault, name_key UNIQUE;"),
+    ("location", "DEFINE INDEX IF NOT EXISTS location_vault_name_key_unique ON location FIELDS vault, name_key UNIQUE;"),
+    ("repository", "DEFINE INDEX IF NOT EXISTS repository_vault_name_key_unique ON repository FIELDS vault, name_key UNIQUE;"),
+    ("file", "DEFINE INDEX IF NOT EXISTS file_vault_name_key_unique ON file FIELDS vault, name_key UNIQUE;"),
+    ("symbol", "DEFINE INDEX IF NOT EXISTS symbol_vault_name_key_unique ON symbol FIELDS vault, name_key UNIQUE;"),
+    ("memory", "DEFINE INDEX IF NOT EXISTS memory_observation_unique ON memory FIELDS obs_subject UNIQUE;"),
+];
+
 pub async fn ensure_schema(db: &Db, settings: &Settings) -> surrealdb::Result<()> {
     for statement in SCHEMA_STATEMENTS {
         db.query(*statement).await?;
+    }
+    for (table, statement) in UNIQUE_STATEMENTS {
+        // a failed DEFINE leaves no index behind, so a later start retries it
+        if let Err(e) = crate::entities::service::dedupe(db, table).await {
+            tracing::warn!("schema: could not fold duplicate {table} rows: {}", e.message);
+        }
+        // still duplicates (e.g. written mid-fold): stay up without the
+        // index, retried on the next start
+        if let Err(e) = db.query(*statement).await?.check() {
+            tracing::warn!("schema: {table} unique index not defined yet: {e}");
+        }
     }
     // Re-defining a field is idempotent in SurrealDB, so this just swaps the
     // DEFAULT baked into SCHEMA_STATEMENTS for the configured OPENAI_BASE_URL

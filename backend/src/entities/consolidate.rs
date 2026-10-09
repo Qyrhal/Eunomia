@@ -9,10 +9,14 @@
 //! `version` counter, and the mission text is a single configurable string
 //! rather than a full strategy-matching system.
 //!
-//! Staleness: handled eagerly, not at read time -- `service::add_memory`
-//! sets `status="stale"` on a subject's existing observation the moment a
-//! new raw fact is written for it. This module only ever sets `status="fresh"`
-//! again, once consolidation has caught up.
+//! Staleness: handled eagerly, not at read time -- `service::add_memory`,
+//! `update_memory` and `delete_memory` set `status="stale"` on a subject's
+//! observation the moment one of its raw facts is written, edited or deleted
+//! (a deletion also drops the fact from the observation's lineage). A fresh
+//! observation is extended with just the facts not yet in its lineage; a
+//! stale one is rebuilt from scratch out of the subject's surviving facts --
+//! the old belief is not carried forward, since it may rest on a fact that
+//! has since been corrected or deleted. Recall leaves stale observations out.
 //!
 //! Best-effort throughout, same safety pattern as `extract.rs`: never fails
 //! the caller, no-ops in stub-backend mode.
@@ -50,11 +54,12 @@ struct RawMemoryRow {
 
 #[derive(Debug, Deserialize)]
 struct ObservationRow {
-    id: RecordId,
     #[serde(default)]
     text: String,
     #[serde(default)]
     source_memories: Option<Vec<RecordId>>,
+    #[serde(default)]
+    status: Option<String>,
 }
 
 /// The result of a successful consolidation -- just enough to let callers
@@ -81,11 +86,25 @@ New raw facts:\n{facts_block}\n",
     )
 }
 
-/// Which of `raw_rows` haven't already been folded into `existing`'s
-/// `source_memories` lineage -- split out as a pure function so the "what's
-/// new" decision is unit-testable without a database.
-fn new_facts<'a>(raw_ids: &'a [(String, String)], already_consolidated: &HashSet<String>) -> Vec<&'a (String, String)> {
-    raw_ids.iter().filter(|(id, _)| !already_consolidated.contains(id)).collect()
+/// What to consolidate given the subject's current raw facts `raw` (id,
+/// text) and its observation (`None` if there isn't one): `(facts to send,
+/// current belief to extend, lineage to store)`, or `None` when nothing
+/// changed. A stale observation is rebuilt from every surviving fact, without
+/// its old belief; a fresh one is extended with just the facts not yet in
+/// its lineage. Lineage only ever names facts that still exist.
+fn plan<'a>(
+    raw: &'a [(String, String)],
+    existing: Option<(&'a str, &HashSet<String>, bool)>,
+) -> Option<(Vec<&'a (String, String)>, Option<&'a str>, Vec<String>)> {
+    let all_ids: Vec<String> = raw.iter().map(|(id, _)| id.clone()).collect();
+    match existing {
+        Some((belief, seen, false)) => {
+            let fresh: Vec<_> = raw.iter().filter(|(id, _)| !seen.contains(id)).collect();
+            (!fresh.is_empty()).then_some((fresh, Some(belief), all_ids))
+        }
+        _ if raw.is_empty() => None,
+        _ => Some((raw.iter().collect(), None, all_ids)),
+    }
 }
 
 async fn call_llm(
@@ -160,40 +179,33 @@ pub async fn consolidate_subject(
         return Ok(None);
     }
 
-    let mut raw_res = db
-        .query(r#"SELECT * FROM memory WHERE subject = $id AND type IN ["world","experience"] ORDER BY created_at"#)
+    let mut res = db
+        .query(
+            r#"SELECT id, text, created_at FROM memory WHERE subject = $id AND type IN ["world","experience"] ORDER BY created_at, id;
+               SELECT text, source_memories, status FROM memory WHERE subject = $id AND type = "observation" LIMIT 1"#,
+        )
         .bind(("id", subject_id.clone()))
         .await?;
-    let raw_rows: Vec<RawMemoryRow> = raw_res.take(0)?;
+    let raw_rows: Vec<RawMemoryRow> = res.take(0)?;
+    let existing: Option<ObservationRow> = res.take::<Vec<ObservationRow>>(1)?.into_iter().next();
 
-    let mut existing_res = db
-        .query(r#"SELECT * FROM memory WHERE subject = $id AND type = "observation" LIMIT 1"#)
-        .bind(("id", subject_id.clone()))
-        .await?;
-    let existing_rows: Vec<ObservationRow> = existing_res.take(0)?;
-    let existing = existing_rows.into_iter().next();
-
-    let already_consolidated: HashSet<String> = existing
+    let seen: HashSet<String> = existing
         .as_ref()
         .and_then(|e| e.source_memories.as_ref())
         .map(|ids| ids.iter().map(|r| r.to_string()).collect())
         .unwrap_or_default();
-
-    let raw_ids: Vec<(String, String)> = raw_rows.iter().map(|r| (r.id.to_string(), r.text.clone())).collect();
-    let fresh = new_facts(&raw_ids, &already_consolidated);
-    if fresh.is_empty() {
-        return Ok(None);
-    }
+    let raw: Vec<(String, String)> = raw_rows.iter().map(|r| (r.id.to_string(), r.text.clone())).collect();
+    let existing_plan = existing.as_ref().map(|e| (e.text.as_str(), &seen, e.status.as_deref() == Some("stale")));
+    let Some((facts, current_belief, lineage)) = plan(&raw, existing_plan) else { return Ok(None) };
 
     if settings.embeddings_backend == "stub" {
         return Ok(None);
     }
 
     let mission = mission.map(str::to_string).unwrap_or(DEFAULT_MISSION.to_string());
-    let current_belief = existing.as_ref().map(|e| e.text.clone());
-    let fact_texts: Vec<String> = fresh.iter().map(|(_, text)| text.clone()).collect();
+    let fact_texts: Vec<String> = facts.iter().map(|(_, text)| text.clone()).collect();
 
-    let belief = match call_llm(db, settings, owner, &mission, current_belief.as_deref(), &fact_texts).await {
+    let belief = match call_llm(db, settings, owner, &mission, current_belief, &fact_texts).await {
         Ok(b) => b,
         Err(e) => {
             tracing::warn!("consolidation LLM call failed for {}: {}", subject_id, e.message);
@@ -201,78 +213,59 @@ pub async fn consolidate_subject(
         }
     };
 
-    let mut all_source_ids: Vec<String> = already_consolidated.into_iter().collect();
-    all_source_ids.extend(fresh.iter().map(|(id, _)| id.clone()));
-    let source_memories: Vec<RecordId> =
-        all_source_ids.iter().map(|s| s.parse()).collect::<Result<Vec<_>, _>>().map_err(|_| AppError::internal("source memory id did not round-trip"))?;
+    let lineage: Vec<RecordId> = lineage
+        .iter()
+        .map(|s| s.parse())
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| AppError::internal("source memory id did not round-trip"))?;
+    let row = super::service::save_observation(db, owner, &subject_row.vault, subject_id, &belief, Some(lineage)).await?;
 
-    let row = match &existing {
-        None => {
-            let mut res = db
-                .query(
-                    "CREATE memory SET owner = $owner, vault = $vault, subject = $subject, text = $text, \
-                     type = \"observation\", version = 1, proof_count = $proof_count, status = \"fresh\", \
-                     source_memories = $source_memories, updated_at = time::now() RETURN AFTER",
-                )
-                .bind(("owner", owner.clone()))
-                .bind(("vault", subject_row.vault.clone()))
-                .bind(("subject", subject_id.clone()))
-                .bind(("text", belief))
-                .bind(("proof_count", fresh.len() as i64))
-                .bind(("source_memories", source_memories))
-                .await?;
-            let rows: Vec<ObservationRow> = res.take(0)?;
-            rows.into_iter().next().ok_or_else(|| AppError::internal("observation insert returned no row"))?
-        }
-        Some(existing) => {
-            let mut res = db
-                .query(
-                    "UPDATE $id SET text = $text, version = version + 1, proof_count = $proof_count, \
-                     status = \"fresh\", source_memories = $source_memories, updated_at = time::now() RETURN AFTER",
-                )
-                .bind(("id", existing.id.clone()))
-                .bind(("text", belief))
-                .bind(("proof_count", all_source_ids.len() as i64))
-                .bind(("source_memories", source_memories))
-                .await?;
-            let rows: Vec<ObservationRow> = res.take(0)?;
-            rows.into_iter().next().ok_or_else(|| AppError::internal("observation update returned no row"))?
-        }
-    };
-
-    Ok(Some(ConsolidatedObservation { id: row.id.to_string(), text: row.text }))
+    Ok(Some(ConsolidatedObservation { id: row.id, text: row.text }))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn new_facts_filters_out_already_consolidated_ids() {
-        let raw = vec![
-            ("memory:a".to_string(), "fact a".to_string()),
-            ("memory:b".to_string(), "fact b".to_string()),
-        ];
-        let mut already = HashSet::new();
-        already.insert("memory:a".to_string());
-        let fresh = new_facts(&raw, &already);
-        assert_eq!(fresh.len(), 1);
-        assert_eq!(fresh[0].0, "memory:b");
+    fn raw(ids: &[&str]) -> Vec<(String, String)> {
+        ids.iter().map(|i| (format!("memory:{i}"), format!("fact {i}"))).collect()
+    }
+
+    fn set(ids: &[&str]) -> HashSet<String> {
+        ids.iter().map(|i| format!("memory:{i}")).collect()
     }
 
     #[test]
-    fn new_facts_empty_when_everything_already_consolidated() {
-        let raw = vec![("memory:a".to_string(), "fact a".to_string())];
-        let mut already = HashSet::new();
-        already.insert("memory:a".to_string());
-        assert!(new_facts(&raw, &already).is_empty());
+    fn plan_without_an_observation_builds_from_every_fact() {
+        let r = raw(&["a", "b"]);
+        let (facts, belief, lineage) = plan(&r, None).unwrap();
+        assert_eq!(facts.len(), 2);
+        assert_eq!(belief, None);
+        assert_eq!(lineage, vec!["memory:a", "memory:b"]);
+        assert!(plan(&[], None).is_none());
     }
 
     #[test]
-    fn new_facts_all_new_when_nothing_consolidated_yet() {
-        let raw = vec![("memory:a".to_string(), "fact a".to_string())];
-        let fresh = new_facts(&raw, &HashSet::new());
-        assert_eq!(fresh.len(), 1);
+    fn plan_extends_a_fresh_observation_with_only_new_facts() {
+        let seen = set(&["a"]);
+        let r = raw(&["a", "b"]);
+        let (facts, belief, lineage) = plan(&r, Some(("old", &seen, false))).unwrap();
+        assert_eq!(facts.iter().map(|f| f.0.as_str()).collect::<Vec<_>>(), vec!["memory:b"]);
+        assert_eq!(belief, Some("old"));
+        assert_eq!(lineage, vec!["memory:a", "memory:b"]);
+        assert!(plan(&raw(&["a"]), Some(("old", &seen, false))).is_none());
+    }
+
+    #[test]
+    fn plan_rebuilds_a_stale_observation_from_surviving_facts_without_the_old_belief() {
+        // "a" was edited (same id, so nothing looks new) and "x" was deleted
+        let seen = set(&["a", "x"]);
+        let r = raw(&["a"]);
+        let (facts, belief, lineage) = plan(&r, Some(("lives in Paris", &seen, true))).unwrap();
+        assert_eq!(facts.len(), 1);
+        assert_eq!(belief, None);
+        assert_eq!(lineage, vec!["memory:a"]);
+        assert!(plan(&[], Some(("old", &seen, true))).is_none());
     }
 
     #[test]
