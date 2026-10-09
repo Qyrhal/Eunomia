@@ -1,0 +1,7 @@
+# CI only (the e2e job): publishes SurrealDB's HTTP port on loopback so the Playwright
+# memory-correctness tests can set up SQL fixtures. Never use it on a real install, the base
+# compose file deliberately has no host port for the database.
+services:
+  surrealdb:
+    ports:
+      - "127.0.0.1:8000:8000"
