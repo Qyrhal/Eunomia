@@ -96,7 +96,7 @@ mod tests {
                 }],
                 "next": null, "cursors": {"after": "1717230600123", "before": "1717230600123"}, "limit": 50,
             }))
-            .query("after=1717000000000"),
+            .query_has("after=1717000000000"),
         ])
         .await;
 

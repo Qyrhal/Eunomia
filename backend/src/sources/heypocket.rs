@@ -269,7 +269,7 @@ mod tests {
                 {"id": "rec_1", "title": "Weekly standup", "duration": 900, "recording_at": "2024-05-02T09:00:00Z",
                  "tags": [{"id": "t1", "name": "work"}]},
             ]}))
-            .query("start_date=2024-05-01"),
+            .query_has("start_date=2024-05-01"),
             route("GET", "/public/recordings/rec_1", json!({"data": {
                 "id": "rec_1", "summary": "Agreed to ship the importer on Friday.",
                 "transcript": {"segments": [{"speaker": "A", "text": "Morning all."}, {"speaker": "B", "text": "Importer is ready."}]},

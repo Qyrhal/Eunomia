@@ -145,7 +145,9 @@ impl Api {
         let mut retried = false;
         loop {
             let http = guarded(&url).await?;
-            let mut req = http.request(method.clone(), &url).headers(self.headers.clone()).query(query).timeout(TIMEOUT);
+            let full = if query.is_empty() { reqwest::Url::parse(&url) } else { reqwest::Url::parse_with_params(&url, query) }
+                .map_err(|e| AppError::internal(format!("invalid connector url: {e}")))?;
+            let mut req = http.request(method.clone(), full).headers(self.headers.clone()).timeout(TIMEOUT);
             if let Some(body) = body {
                 req = req.json(body);
             }

@@ -104,9 +104,9 @@ mod tests {
     async fn fetch_pages_with_starting_after_since_the_cursor() {
         let mock = serve(vec![
             route("GET", "/charges", json!({"object": "list", "data": [charge("ch_2", 1700000200)], "has_more": false, "url": "/v1/charges"}))
-                .query("starting_after=ch_1"),
+                .query_has("starting_after=ch_1"),
             route("GET", "/charges", json!({"object": "list", "data": [charge("ch_1", 1700000100)], "has_more": true, "url": "/v1/charges"}))
-                .query("created[gt]=1700000000"),
+                .query_has("created[gt]=1700000000"),
         ])
         .await;
 

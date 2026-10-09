@@ -113,7 +113,7 @@ mod tests {
         };
         let mock = serve(vec![
             route("GET", "/projects", json!({"results": [{"id": "p1", "name": "Home"}], "next_cursor": null})),
-            route("GET", "/tasks", json!({"results": [task("t2", "Book dentist")], "next_cursor": null})).query("cursor=abc"),
+            route("GET", "/tasks", json!({"results": [task("t2", "Book dentist")], "next_cursor": null})).query_has("cursor=abc"),
             route("GET", "/tasks", json!({"results": [task("t1", "File taxes")], "next_cursor": "abc"})),
         ])
         .await;

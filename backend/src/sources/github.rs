@@ -134,10 +134,10 @@ mod tests {
     #[tokio::test]
     async fn fetch_follows_the_link_header_and_sends_auth() {
         let mock = serve(vec![
-            route("GET", "/issues", json!([issue(2, "2024-02-02T00:00:00Z", true)])).query("page=2"),
+            route("GET", "/issues", json!([issue(2, "2024-02-02T00:00:00Z", true)])).query_has("page=2"),
             route("GET", "/issues", json!([issue(1, "2024-02-01T00:00:00Z", false)]))
-                .query("since=2024-01-15T00:00:00Z")
-                .query("filter=all")
+                .query_has("since=2024-01-15T00:00:00Z")
+                .query_has("filter=all")
                 .header("link", "<{base}/issues?page=2>; rel=\"next\", <{base}/issues?page=2>; rel=\"last\""),
         ])
         .await;
@@ -166,9 +166,9 @@ mod tests {
             json!(r.map(|n| issue(n, &format!("2024-03-01T00:{:02}:{:02}Z", n / 60, n % 60), false)).collect::<Vec<_>>())
         };
         let mock = serve(vec![
-            route("GET", "/issues", json!([])).query("since=2024-03-01T00:01:59Z"),
-            route("GET", "/issues", page(80..120)).query("page=3"),
-            route("GET", "/issues", page(40..80)).query("page=2").header("link", "<{base}/issues?page=3>; rel=\"next\""),
+            route("GET", "/issues", json!([])).query_has("since=2024-03-01T00:01:59Z"),
+            route("GET", "/issues", page(80..120)).query_has("page=3"),
+            route("GET", "/issues", page(40..80)).query_has("page=2").header("link", "<{base}/issues?page=3>; rel=\"next\""),
             route("GET", "/issues", page(0..40)).header("link", "<{base}/issues?page=2>; rel=\"next\""),
         ])
         .await;

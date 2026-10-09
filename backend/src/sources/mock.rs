@@ -38,7 +38,7 @@ pub fn route(method: &str, path: &str, body: Value) -> Route {
 
 impl Route {
     /// Only match requests whose raw query string contains `fragment`.
-    pub fn query(mut self, fragment: &'static str) -> Self {
+    pub fn query_has(mut self, fragment: &'static str) -> Self {
         self.query.push(fragment);
         self
     }
@@ -105,7 +105,7 @@ impl Mock {
 }
 
 async fn handle(State(st): State<MockState>, method: Method, uri: Uri, headers: HeaderMap, body: Bytes) -> Response {
-    let query = uri.query().unwrap_or("").to_string();
+    let query = uri.to_string().split_once('?').map_or(String::new(), |(_, q)| q.to_string());
     let body = String::from_utf8_lossy(&body).to_string();
     st.requests.lock().unwrap().push(Req {
         method: method.to_string(),

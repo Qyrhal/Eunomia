@@ -146,7 +146,7 @@ mod tests {
             route("GET", "/conversations.list", json!({"ok": true, "channels": [
                 {"id": "C2", "name": "random", "is_member": false},
             ], "response_metadata": {"next_cursor": ""}}))
-            .query("cursor=dGVhbTpDMQ=="),
+            .query_has("cursor=dGVhbTpDMQ=="),
             route("GET", "/conversations.list", json!({"ok": true, "channels": [
                 {"id": "C1", "name": "general", "is_member": true},
             ], "response_metadata": {"next_cursor": "dGVhbTpDMQ=="}})),
@@ -154,8 +154,8 @@ mod tests {
                 {"type": "message", "user": "U1", "text": "Deploy is green, shipping v2 today", "ts": "1714000000.000200"},
                 {"type": "message", "subtype": "channel_join", "user": "U2", "text": "<@U2> has joined the channel", "ts": "1714000001.000100"},
             ], "has_more": false, "response_metadata": {"next_cursor": ""}}))
-            .query("channel=C1")
-            .query("oldest=1713999940"),
+            .query_has("channel=C1")
+            .query_has("oldest=1713999940"),
         ])
         .await;
 

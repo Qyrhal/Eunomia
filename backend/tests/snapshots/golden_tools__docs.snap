@@ -21,6 +21,10 @@ expression: stable
       "title": "Concepts"
     },
     {
+      "topic": "connectors",
+      "title": "Connectors"
+    },
+    {
       "topic": "deployment",
       "title": "Deployment"
     }

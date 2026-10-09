@@ -483,13 +483,13 @@ mod tests {
     async fn fetch_follows_links_next_and_pulls_accounts_and_categories() {
         let mock = serve(vec![
             route("GET", "/transactions", json!({"data": [txn("t2", "2024-03-02T09:00:00+11:00", "Coles", -1250)], "links": {"prev": null, "next": null}}))
-                .query("page[after]=t1"),
+                .query_has("page[after]=t1"),
             route(
                 "GET",
                 "/transactions",
                 json!({"data": [txn("t1", "2024-03-01T05:08:57+11:00", "Pizza Hut", -5998)], "links": {"prev": null, "next": "{base}/transactions?page[after]=t1&page[size]=100"}}),
             )
-            .query("filter[since]=2024-02-01T00:00:00"),
+            .query_has("filter[since]=2024-02-01T00:00:00"),
             route("GET", "/accounts", json!({"data": [{"type": "accounts", "id": "acc-1", "attributes": {
                 "displayName": "Spending", "accountType": "TRANSACTIONAL", "ownershipType": "INDIVIDUAL",
                 "balance": {"currencyCode": "AUD", "value": "1.00", "valueInBaseUnits": 100}, "createdAt": "2020-01-01T00:00:00+11:00"}}],

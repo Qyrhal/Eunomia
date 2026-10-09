@@ -413,7 +413,10 @@ async fn a_memory_or_membership_id_is_not_an_entity_id() {
 async fn synced_records_stay_with_their_owner_never_with_a_vault() {
     let w = world().await;
     for p in [&w.alice, &w.bob] {
-        assert_eq!(w.send(p, "POST", "/api/sources/demo/sync", json!(null)).await, 200);
+        // the route queues a job and waits for a worker; this harness runs none, so sync in place
+        let org = w.app.state.org(&p.user.org).await.unwrap();
+        let out = eunomia_backend::sources::scheduler::sync_source(&org, &p.user.id, "demo", None).await;
+        assert!(out.get("error").is_none() && out["errors"] == json!([]), "{out}");
     }
     let rec = w.ok(&w.bob, "list", json!({"limit": 200})).await["results"][0].clone();
     assert!(rec.is_object());
