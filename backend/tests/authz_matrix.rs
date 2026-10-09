@@ -45,7 +45,7 @@ impl World {
 
     /// A fresh org vault owned by `owner`, with `member` active and `pending` invited.
     async fn vault(&self) -> RecordId {
-        let v = common::sys(vaults::create_vault(&self.db, &self.owner.id, "Team", "org")).await.unwrap();
+        let v = common::sys(vaults::create_vault(&self.db, &self.owner.id, &format!("Team {}", uuid::Uuid::new_v4().simple()), "org")).await.unwrap();
         let v: RecordId = rid::parse(&v.id).unwrap();
         for (u, accept) in [(&self.member, true), (&self.pending, false)] {
             common::sys(vaults::invite_member(&self.db, &self.control, &self.owner.id, &v, &u.email, "member")).await.unwrap();
