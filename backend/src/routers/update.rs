@@ -104,12 +104,13 @@ fn drop_marker(state: &AppState, name: &str) -> AppResult<Json<Value>> {
     Ok(Json(json!({ "configured": true, "requested": true })))
 }
 
-/// The updater restarts the stack and moves data: instance admins only.
-async fn require_admin(state: &AppState, user: &User) -> AppResult<()> {
+/// The updater restarts the stack and moves data: instance admins only. `what` completes
+/// "Only an instance admin can ...". Shared with the HTTPS routes, which ask the same updater.
+pub(super) async fn require_admin(state: &AppState, user: &User, what: &str) -> AppResult<()> {
     if crate::authz::is_admin(&state.control, user).await? {
         Ok(())
     } else {
-        Err(AppError::coded(ErrorCode::AuthForbidden, "Only an instance admin can update this server."))
+        Err(AppError::coded(ErrorCode::AuthForbidden, format!("Only an instance admin can {what}.")))
     }
 }
 
@@ -124,7 +125,7 @@ async fn require_admin(state: &AppState, user: &User) -> AppResult<()> {
     security(("cookie" = []), ("bearer" = [])),
 )]
 async fn request_update(State(state): State<AppState>, user: User) -> AppResult<Json<Value>> {
-    require_admin(&state, &user).await?;
+    require_admin(&state, &user, "update this server").await?;
     drop_marker(&state, "requested")
 }
 
@@ -140,7 +141,7 @@ async fn request_update(State(state): State<AppState>, user: User) -> AppResult<
     security(("cookie" = []), ("bearer" = [])),
 )]
 async fn check_now(State(state): State<AppState>, user: User) -> AppResult<Json<Value>> {
-    require_admin(&state, &user).await?;
+    require_admin(&state, &user, "update this server").await?;
     drop_marker(&state, "check")
 }
 

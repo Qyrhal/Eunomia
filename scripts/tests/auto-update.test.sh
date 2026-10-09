@@ -17,13 +17,16 @@ cp "$REAL_SCRIPT" "$TMP/src/scripts/auto-update.sh"
   && echo two > compose.yml && git_ commit -qam v1.1 && git tag v1.1.0)
 git clone -q --branch v1.0.0 "file://$TMP/src" "$TMP/repo" 2>/dev/null
 printf 'JWT_SECRET=x\nEUNOMIA_IMAGE_TAG=v1.0.0\n' > "$TMP/repo/.env"
-# Besides logging, the shim answers the three queries the SurrealDB 3 hook makes:
-# the compose file's images ($TMP/images) and the running surrealdb image ($TMP/running).
+# Besides logging, the shim answers the queries the SurrealDB 3 hook makes (the compose file's
+# images in $TMP/images, the running surrealdb image in $TMP/running) and the service list
+# ($TMP/services; default: no caddy).
+printf 'surrealdb\nbackend\nfrontend\nupdater\n' > "$TMP/services"
 cat > "$TMP/bin/docker" <<SHIM
 #!/bin/sh
 echo "\$@" >> "$TMP/docker.log"
 case "\$*" in
   "compose config --images") cat "$TMP/images" 2>/dev/null ;;
+  "compose config --services") cat "$TMP/services" ;;
   "compose ps -q surrealdb") [ -f "$TMP/running" ] && echo fakecid ;;
   inspect*) cat "$TMP/running" 2>/dev/null ;;
 esac
@@ -77,6 +80,17 @@ check "history recorded" grep -q 'updated v1.0.0 -> v1.1.0' "$S/history.log"
 check "nothing newer: no docker run" test ! -s "$TMP/docker.log"
 check "nothing newer: marker consumed" test ! -e "$S/requested"
 
+# 3b. without HTTPS no caddy reload; with HTTPS on, the update restarts and
+#     reloads caddy (a changed Caddyfile isn't noticed by compose)
+check "no HTTPS: no caddy reload" bash -c "! grep -q 'caddy reload' '$TMP/docker.log'"
+(cd "$TMP/src" && echo https > compose.yml && git_ commit -qam v1.1.1 && git tag v1.1.1)
+printf 'surrealdb\nbackend\nfrontend\ncaddy\nupdater\n' > "$TMP/services"
+: > "$TMP/docker.log"; touch "$S/requested"; update
+check "HTTPS on: caddy restarted with the stack" grep -q 'up -d --remove-orphans .*caddy' "$TMP/docker.log"
+check "HTTPS on: Caddyfile reloaded" grep -q 'exec -T caddy caddy reload --config /etc/caddy/Caddyfile' "$TMP/docker.log"
+check "HTTPS on: updater still not restarted by itself" bash -c "! grep -q 'up -d --remove-orphans.*updater' '$TMP/docker.log'"
+printf 'surrealdb\nbackend\nfrontend\nupdater\n' > "$TMP/services"
+
 # 4. local edits to tracked files are reported, not clobbered
 (cd "$TMP/src" && echo three > compose.yml && git_ commit -qam v1.2 && git tag v1.2.0)
 echo mine > "$TMP/repo/compose.yml"
@@ -96,8 +110,8 @@ sed -i.bak -e '/^ENCRYPTION_KEY/d' -e '/^JWT_SECRET=/d' "$TMP/repo/.env" && rm -
 echo 1 > "$TMP/upgrade_rc"; : > "$TMP/docker.log"; touch "$S/requested"; update
 check "failed upgrade: ran before anything else" grep -qx UPGRADE "$TMP/docker.log"
 check "failed upgrade: nothing pulled" bash -c "! grep -q 'compose pull' '$TMP/docker.log'"
-check "failed upgrade: checkout put back" test "$(cat "$TMP/repo/compose.yml")" = two
-check "failed upgrade: .env back on the old release" grep -q '^EUNOMIA_IMAGE_TAG=v1.1.0$' "$TMP/repo/.env"
+check "failed upgrade: checkout put back" test "$(cat "$TMP/repo/compose.yml")" = https
+check "failed upgrade: .env back on the old release" grep -q '^EUNOMIA_IMAGE_TAG=v1.1.1$' "$TMP/repo/.env"
 check "failed upgrade: no encryption key injected (the old release must still decrypt)" bash -c "! grep -q '^ENCRYPTION_KEY' '$TMP/repo/.env'"
 check "failed upgrade: no JWT secret injected" bash -c "! grep -q '^JWT_SECRET=' '$TMP/repo/.env'"
 check "failed upgrade: status says why" grep -q 'upgrade failed' "$S/status.json"

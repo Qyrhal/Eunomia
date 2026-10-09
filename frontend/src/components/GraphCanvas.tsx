@@ -5,7 +5,7 @@
 // background to pan, scroll or use the buttons to zoom, click (or Enter) a node
 // to select it. The vector cloud stays 3D (Scene3D).
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { forceCenter, forceCollide, forceLink, forceManyBody, forceSimulation, type Simulation, type SimulationNodeDatum } from "d3-force";
 import { Maximize2, Minus, Plus, RotateCcw } from "lucide-react";
 import { Blobatar } from "@blobatar/react";
@@ -83,7 +83,6 @@ export default function GraphCanvas({
   });
 
   const zoomBy = (f: number) => setView((v) => ({ ...v, zoom: Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, v.zoom * f)) }));
-  const fit = useCallback((list: { x?: number; y?: number }[]) => setView(computeFit(list, dimsRef.current.w, dimsRef.current.h, insetsRef.current)), []);
 
   // Track the canvas size so the viewBox and the centre force follow a resize.
   useEffect(() => {
@@ -113,13 +112,13 @@ export default function GraphCanvas({
       .force("collide", forceCollide(26))
       .on("tick", () => setNodes([...s.nodes()]))
       // fit once the layout settles, so a reload or vault switch never leaves nodes off screen
-      .on("end", () => fit(s.nodes()));
+      .on("end", () => setView(computeFit(s.nodes(), dimsRef.current.w, dimsRef.current.h, insetsRef.current)));
     simRef.current = s;
     return () => {
       s.stop();
       simRef.current = null;
     };
-  }, [inNodes, edges, fit]);
+  }, [inNodes, edges]);
 
   useEffect(() => {
     simRef.current?.force("center", forceCenter(dims.w / 2, dims.h / 2)).alpha(0.3).restart();
@@ -286,7 +285,7 @@ export default function GraphCanvas({
           {[
             { label: "Zoom in", icon: <Plus size={13} strokeWidth={1.75} />, run: () => zoomBy(1 + ZOOM_STEP) },
             { label: "Zoom out", icon: <Minus size={13} strokeWidth={1.75} />, run: () => zoomBy(1 - ZOOM_STEP) },
-            { label: "Fit to view", icon: <Maximize2 size={13} strokeWidth={1.75} />, run: () => fit(visible) },
+            { label: "Fit to view", icon: <Maximize2 size={13} strokeWidth={1.75} />, run: () => setView(computeFit(visible, dims.w, dims.h, insets)) },
             { label: "Reset view", icon: <RotateCcw size={13} strokeWidth={1.75} />, run: () => setView({ zoom: 1, x: 0, y: 0 }) },
           ].map((b) => (
             <Tooltip key={b.label} label={b.label}>

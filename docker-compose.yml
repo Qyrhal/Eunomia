@@ -124,6 +124,30 @@ services:
       - .:/eunomia
       - /var/run/docker.sock:/var/run/docker.sock
 
+  # HTTPS with a free Let's Encrypt certificate (see ./Caddyfile). Off unless
+  # .env has COMPOSE_PROFILES=https plus EUNOMIA_DOMAIN and EUNOMIA_ACME_EMAIL,
+  # which the installer's --domain flag or Settings, HTTPS set. It proxies to the
+  # frontend only, so the backend still trusts just the frontend (TRUSTED_PROXIES);
+  # turning HTTPS on also sets FRONTEND_TRUST_FORWARDED=1 and FRONTEND_BIND=127.0.0.1
+  # (see docs/deployment.md).
+  caddy:
+    image: caddy:2.11.7
+    profiles: [https]
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      - EUNOMIA_DOMAIN=${EUNOMIA_DOMAIN:-}
+      - EUNOMIA_ACME_EMAIL=${EUNOMIA_ACME_EMAIL:-}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - eunomia-caddy-data:/data # certificates: keep them across restarts
+      - eunomia-caddy-config:/config
+    depends_on:
+      - frontend
+
   # Nightly encrypted SurrealDB export at 03:00 into the eunomia-backups
   # volume (see backend/scripts/backup/). No ports. If BACKUP_ENCRYPTION_KEY is
   # empty it generates a key into the volume on first start (see docs/deployment.md).
@@ -149,3 +173,5 @@ volumes:
   eunomia-surreal-data:
   eunomia-surreal-data-v3:
   eunomia-backups:
+  eunomia-caddy-data:
+  eunomia-caddy-config:

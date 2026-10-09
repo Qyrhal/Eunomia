@@ -92,7 +92,12 @@ impl TestApp {
     /// Fresh DB plus one registered user (with their personal vault, exactly
     /// as signup creates it) and an API token for Bearer auth.
     pub async fn new() -> Self {
-        let state = bare_state().await;
+        Self::with_settings(test_settings()).await
+    }
+
+    /// Like [`TestApp::new`] with other settings (for example a real `update_status_dir`).
+    pub async fn with_settings(settings: Settings) -> Self {
+        let state = AppState::build(&settings, engine_config()).await.expect("state");
         let user = register(&state, "tester@example.com").await;
         let token = models_user::create_api_token(&state.control, &user.id, "test").await.expect("token").token;
         let router = eunomia_backend::app(state.clone());

@@ -16,6 +16,8 @@
 #
 # Everything runs inside main() so bash has parsed the whole script before
 # `git checkout` replaces this file with the new release's copy.
+#
+# Every run also applies Settings, HTTPS (see https_apply below).
 set -uo pipefail
 # cron/launchd start with a bare PATH; appended so an existing PATH still wins
 export PATH="$PATH:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin"
@@ -34,6 +36,8 @@ main() {
   find "$status_dir/.lock" -maxdepth 0 -mmin +30 -exec rmdir {} \; 2>/dev/null
   mkdir "$status_dir/.lock" 2>/dev/null || exit 0
   trap "rmdir '$status_dir/.lock' 2>/dev/null" EXIT
+
+  https_apply "$status_dir"
 
   # Nothing requested and checked recently: skip the network round-trip.
   if [ ! -f "$status_dir/requested" ] && [ ! -f "$status_dir/check" ] \
@@ -131,6 +135,12 @@ main() {
     exit 1
   fi
 
+  # HTTPS on: the new release may ship a changed Caddyfile, which compose
+  # doesn't notice (it's a mounted file), so reload it. No downtime.
+  if printf '%s\n' $services | grep -qx caddy; then
+    docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile >/dev/null 2>&1 || true
+  fi
+
   rm -f "$status_dir/.last-error"
   write_status "$status_dir" "$latest" "$latest" false ""
   echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) updated $current -> $latest" >> "$status_dir/history.log"
@@ -142,6 +152,118 @@ main() {
     docker run -d --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$PWD:$PWD" -w "$PWD" docker:27-cli \
       sh -c "sleep 5 && docker compose up -d updater" >/dev/null 2>&1
   fi
+}
+
+# set_env <KEY> <value>: replace or append KEY=value in .env. Callers pass
+# validated values only (no '#', '&' or newlines).
+set_env() {
+  if grep -q "^$1=" .env 2>/dev/null; then
+    sed -i.bak "s#^$1=.*#$1=$2#" .env && rm -f .env.bak
+  else
+    echo "$1=$2" >> .env
+  fi
+}
+
+# unset_env <KEY>...: remove the keys from .env.
+unset_env() {
+  local k
+  for k in "$@"; do sed -i.bak "/^$k=/d" .env && rm -f .env.bak; done
+}
+
+# --- HTTPS (Settings, HTTPS) ----------------------------------------------
+# POST /api/https writes update-status/https.json ({"enabled", "domain",
+# "email"}). This validates it again (untrusted input), points .env at the
+# domain, starts or removes the `caddy` service, and reports progress in
+# update-status/https-status.json: off, pending (until the certificate
+# answers), active, or error.
+# Trust model: Caddy proxies to the frontend (never to the backend), so the
+# backend keeps trusting only the frontend (TRUSTED_PROXIES=frontend). Turning
+# HTTPS on makes the frontend believe the X-Forwarded-* headers Caddy sets
+# (FRONTEND_TRUST_FORWARDED=1) and, so nobody can forge them, stops publishing
+# its port on the network (FRONTEND_BIND=127.0.0.1; Caddy reaches it over the
+# compose network). It also points PUBLIC_URL at the domain for OAuth.
+https_apply() {
+  local dir="$1" req="$1/https.json" enabled domain email
+  if [ -f "$req" ]; then
+    enabled="$(json_field enabled "$req")"
+    domain="$(json_field domain "$req")"
+    email="$(json_field email "$req")"
+    rm -f "$req"
+    if [ "$enabled" != true ]; then
+      domain="$(sed -n 's/^EUNOMIA_DOMAIN=//p' .env | tail -1)"
+      [ "$(sed -n 's/^PUBLIC_URL=//p' .env | tail -1)" = "https://$domain" ] && unset_env PUBLIC_URL
+      unset_env COMPOSE_PROFILES FRONTEND_TRUST_FORWARDED FRONTEND_BIND
+      if docker compose rm -sf caddy >/dev/null 2>"$dir/.https-error" && docker compose up -d backend frontend >/dev/null 2>>"$dir/.https-error"; then
+        write_https_status "$dir" off "" ""
+      else
+        write_https_status "$dir" error "" "could not stop caddy: $(tail -3 "$dir/.https-error")"
+      fi
+      return
+    fi
+    if ! valid_domain "$domain" || ! valid_email "$email"; then
+      write_https_status "$dir" error "" "refused: invalid domain or email"
+      return
+    fi
+    set_env EUNOMIA_DOMAIN "$domain"
+    set_env EUNOMIA_ACME_EMAIL "$email"
+    set_env COMPOSE_PROFILES https
+    set_env FRONTEND_TRUST_FORWARDED 1
+    set_env FRONTEND_BIND 127.0.0.1
+    set_env PUBLIC_URL "https://$domain"
+    if ! docker compose up -d backend frontend caddy >/dev/null 2>"$dir/.https-error"; then
+      write_https_status "$dir" error "$domain" "could not start caddy: $(tail -3 "$dir/.https-error")"
+      return
+    fi
+    write_https_status "$dir" pending "$domain" ""
+  fi
+
+  # Waiting for the certificate (after the request above, or an install with
+  # --domain): probe until it answers. Through the caddy container itself, so
+  # a router without NAT loopback doesn't make a working setup look broken.
+  grep -qx 'COMPOSE_PROFILES=https' .env 2>/dev/null || return 0
+  case "$(json_field state "$dir/https-status.json" 2>/dev/null)" in ""|pending) ;; *) return 0 ;; esac
+  domain="$(sed -n 's/^EUNOMIA_DOMAIN=//p' .env | tail -1)"
+  local target=127.0.0.1
+  [ -f /.dockerenv ] && target=caddy
+  command -v curl >/dev/null || apk add --no-cache -q curl >/dev/null 2>&1 # updater containers started before curl was added
+  if curl -sS -o /dev/null --max-time 10 --connect-to "$domain:443:$target:443" "https://$domain/" 2>"$dir/.https-error"; then
+    write_https_status "$dir" active "$domain" ""
+  else
+    write_https_status "$dir" pending "$domain" "no certificate yet. Check that $domain points at this machine and ports 80 and 443 are open; Caddy keeps retrying. ($(tail -1 "$dir/.https-error"))"
+  fi
+}
+
+# json_field <key> <file>: a string/bool value from one-key-per-line JSON.
+json_field() {
+  sed -n "s/^ *\"$1\": *\"\{0,1\}\([^\",]*\)\"\{0,1\},\{0,1\} *$/\1/p" "$2" | head -1
+}
+
+# A public DNS name Let's Encrypt can issue for: dot-separated labels of
+# letters/digits/hyphens ending in an alphabetic TLD (so no IPs).
+valid_domain() {
+  local label='[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?'
+  [ "${#1}" -le 253 ] && [[ "$1" =~ ^($label\.)+[A-Za-z]{2,63}$ ]]
+}
+
+valid_email() {
+  [ "${#1}" -le 254 ] && [[ "$1" =~ ^[A-Za-z0-9._%+-]{1,64}@(.+)$ ]] && valid_domain "${BASH_REMATCH[1]}"
+}
+
+# write_https_status <dir> <state> <domain> <message>
+write_https_status() {
+  local message=null
+  if [ -n "$4" ]; then
+    message="\"$(printf '%s' "$4" | tr '\n\r\t' '   ' | sed 's/\\/\\\\/g; s/"/\\"/g')\""
+  fi
+  cat > "$1/https-status.json.tmp" <<EOF
+{
+  "state": "$2",
+  "domain": "$3",
+  "message": $message,
+  "checked_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+}
+EOF
+  mv "$1/https-status.json.tmp" "$1/https-status.json"
 }
 
 # write_status <dir> <current> <latest> <applying> <error>

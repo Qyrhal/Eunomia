@@ -3,9 +3,10 @@
 # 20s, so Settings → Updates works on any install with no host cron/launchd.
 #
 # It holds the docker socket but publishes no ports and takes no input except
-# the marker files the backend drops in update-status/ ("check", "requested").
-# The worst a compromised backend can do is ask it to install the newest
-# release tag from GitHub.
+# the marker files the backend drops in update-status/ ("check", "requested",
+# "https.json"). The worst a compromised backend can do is ask it to install
+# the newest release tag from GitHub, or to serve HTTPS for a (validated)
+# domain name.
 #
 # Compose resolves bind mounts like ./update-status against the project
 # directory and hands that path to the daemon, so the repo must sit at its
@@ -13,7 +14,7 @@
 # host path read from this container's own mount table.
 set -u
 
-apk add --no-cache -q bash git coreutils findutils >/dev/null 2>&1 || { echo "updater: apk add failed, retrying on restart"; exit 1; }
+apk add --no-cache -q bash git coreutils findutils curl >/dev/null 2>&1 || { echo "updater: apk add failed, retrying on restart"; exit 1; }
 git config --global --add safe.directory '*'
 
 host="$(docker inspect "$HOSTNAME" --format '{{range .Mounts}}{{if eq .Destination "/eunomia"}}{{.Source}}{{end}}{{end}}' 2>/dev/null)"

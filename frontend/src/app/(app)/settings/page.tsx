@@ -9,12 +9,14 @@ import { TokensSection } from "./TokensSection";
 import { ConnectedAppsSection } from "./ConnectedAppsSection";
 import { SessionsSection } from "./SessionsSection";
 import { UpdateSection } from "./UpdateSection";
+import { HttpsSection } from "./HttpsSection";
 import { GeneralSection } from "./GeneralSection";
 import { DataSection } from "./DataSection";
 
 const TABS = [
   { id: "general", label: "General" },
   { id: "updates", label: "Updates" },
+  { id: "https", label: "HTTPS" },
   { id: "tokens", label: "API tokens" },
   { id: "apps", label: "Connected apps" },
   { id: "sessions", label: "Sessions" },
@@ -110,6 +112,7 @@ function Settings() {
           <div role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`} className="min-w-0 max-w-3xl">
             {tab === "general" && <GeneralSection settings={settings} />}
             {tab === "updates" && <UpdateSection />}
+            {tab === "https" && <HttpsSection />}
             {tab === "tokens" && <TokensSection />}
             {tab === "apps" && <ConnectedAppsSection />}
             {tab === "sessions" && <SessionsSection />}

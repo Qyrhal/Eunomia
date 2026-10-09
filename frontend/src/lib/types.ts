@@ -52,6 +52,16 @@ export type UpdateStatus =
       error: string | null;
     };
 
+export type HttpsStatus =
+  | { configured: false }
+  | {
+      configured: true;
+      state: "off" | "pending" | "active" | "error";
+      domain?: string;
+      message?: string | null;
+      checked_at?: string;
+    };
+
 export type ConnectorKind =
   | "up_bank"
   | "pocketai"

@@ -1983,6 +1983,94 @@
         ]
       }
     },
+    "/api/https": {
+      "post": {
+        "tags": [
+          "https"
+        ],
+        "summary": "Ask the updater to enable or disable HTTPS",
+        "operationId": "requestHttps",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HttpsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HttpsAck"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/https/status": {
+      "get": {
+        "tags": [
+          "https"
+        ],
+        "summary": "HTTPS status",
+        "operationId": "getHttpsStatus",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HttpsStatus"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/api/oauth/consent": {
       "get": {
         "tags": [
@@ -4315,6 +4403,82 @@
             "items": {
               "$ref": "#/components/schemas/GraphNode"
             }
+          }
+        }
+      },
+      "HttpsAck": {
+        "type": "object",
+        "description": "Body of the `POST /https` response.",
+        "required": [
+          "configured"
+        ],
+        "properties": {
+          "configured": {
+            "type": "boolean"
+          },
+          "requested": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Present only when the updater is configured."
+          }
+        }
+      },
+      "HttpsRequest": {
+        "type": "object",
+        "description": "Body of `POST /https`: turn HTTPS on for a domain, or off.",
+        "required": [
+          "enabled"
+        ],
+        "properties": {
+          "domain": {
+            "type": "string",
+            "description": "A public DNS name (eunomia.example.com). Required when enabling."
+          },
+          "email": {
+            "type": "string",
+            "description": "Contact address for Let's Encrypt. Required when enabling."
+          },
+          "enabled": {
+            "type": "boolean"
+          }
+        }
+      },
+      "HttpsStatus": {
+        "type": "object",
+        "description": "Documents `GET /https/status`. The handler merges the updater's\n`https-status.json`, so everything except `configured` is absent when the\nupdater is not configured.",
+        "required": [
+          "configured"
+        ],
+        "properties": {
+          "checked_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "configured": {
+            "type": "boolean"
+          },
+          "domain": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "message": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`off`, `pending` (waiting for the certificate), `active` or `error`."
           }
         }
       },

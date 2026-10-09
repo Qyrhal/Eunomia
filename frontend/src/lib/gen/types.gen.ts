@@ -254,6 +254,48 @@ export type GraphOut = {
     nodes: Array<GraphNode>;
 };
 
+/**
+ * Body of the `POST /https` response.
+ */
+export type HttpsAck = {
+    configured: boolean;
+    /**
+     * Present only when the updater is configured.
+     */
+    requested?: boolean | null;
+};
+
+/**
+ * Body of `POST /https`: turn HTTPS on for a domain, or off.
+ */
+export type HttpsRequest = {
+    /**
+     * A public DNS name (eunomia.example.com). Required when enabling.
+     */
+    domain?: string;
+    /**
+     * Contact address for Let's Encrypt. Required when enabling.
+     */
+    email?: string;
+    enabled: boolean;
+};
+
+/**
+ * Documents `GET /https/status`. The handler merges the updater's
+ * `https-status.json`, so everything except `configured` is absent when the
+ * updater is not configured.
+ */
+export type HttpsStatus = {
+    checked_at?: string | null;
+    configured: boolean;
+    domain?: string | null;
+    message?: string | null;
+    /**
+     * `off`, `pending` (waiting for the certificate), `active` or `error`.
+     */
+    state?: string | null;
+};
+
 export type InvitationList = {
     results: Array<InvitationOut>;
 };
@@ -1630,6 +1672,50 @@ export type ExportDataResponses = {
 };
 
 export type ExportDataResponse = ExportDataResponses[keyof ExportDataResponses];
+
+export type RequestHttpsData = {
+    body: HttpsRequest;
+    path?: never;
+    query?: never;
+    url: '/api/https';
+};
+
+export type RequestHttpsErrors = {
+    /**
+     * Error
+     */
+    default: Problem;
+};
+
+export type RequestHttpsError = RequestHttpsErrors[keyof RequestHttpsErrors];
+
+export type RequestHttpsResponses = {
+    200: HttpsAck;
+};
+
+export type RequestHttpsResponse = RequestHttpsResponses[keyof RequestHttpsResponses];
+
+export type GetHttpsStatusData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/https/status';
+};
+
+export type GetHttpsStatusErrors = {
+    /**
+     * Error
+     */
+    default: Problem;
+};
+
+export type GetHttpsStatusError = GetHttpsStatusErrors[keyof GetHttpsStatusErrors];
+
+export type GetHttpsStatusResponses = {
+    200: HttpsStatus;
+};
+
+export type GetHttpsStatusResponse = GetHttpsStatusResponses[keyof GetHttpsStatusResponses];
 
 export type GetOauthConsentData = {
     body?: never;

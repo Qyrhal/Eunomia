@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { checkForUpdate, completeOnboarding, getSettings, getUpdateStatus, listOpenaiModels, requestUpdate, updateSettings } from "@/lib/gen";
+import { checkForUpdate, completeOnboarding, getHttpsStatus, getSettings, getUpdateStatus, listOpenaiModels, requestHttps, requestUpdate, updateSettings } from "@/lib/gen";
 import type { SettingsUpdate } from "@/lib/gen";
-import type { AppSettings, OpenAiModels, UpdateStatus } from "@/lib/types";
+import type { AppSettings, HttpsStatus, OpenAiModels, UpdateStatus } from "@/lib/types";
 import { call } from "./client";
 import { authKeys } from "./auth";
 
@@ -11,6 +11,7 @@ export const settingsKeys = {
   update: () => [...settingsKeys.all, "update"] as const,
   models: (baseUrl: string, keySet: boolean) => [...settingsKeys.all, "openai-models", baseUrl, keySet] as const,
   updateStatus: () => [...settingsKeys.all, "update-status"] as const,
+  httpsStatus: () => [...settingsKeys.all, "https-status"] as const,
 };
 
 export const useSettings = (enabled = true) =>
@@ -50,3 +51,20 @@ export const useUpdateStatus = () => useQuery(updateStatusQuery());
 // Both just drop a marker for the updater; the Updates tab polls status for the outcome.
 export const useRequestUpdate = () => useMutation({ mutationFn: () => call(requestUpdate()) });
 export const useCheckForUpdate = () => useMutation({ mutationFn: () => call(checkForUpdate()) });
+
+/** `refetchInterval` follows the state: quick while a certificate is being fetched, lazy otherwise. */
+export const useHttpsStatus = () =>
+  useQuery({
+    queryKey: settingsKeys.httpsStatus(),
+    queryFn: () => call(getHttpsStatus()) as Promise<HttpsStatus>,
+    refetchInterval: (q) => (q.state.data?.configured && q.state.data.state === "pending" ? 3000 : 15000),
+  });
+
+/** Only drops a request file for the updater; the status query shows the outcome. */
+export function useRequestHttps() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { enabled: boolean; domain?: string; email?: string }) => call(requestHttps({ body })),
+    onSuccess: () => qc.invalidateQueries({ queryKey: settingsKeys.httpsStatus() }),
+  });
+}

@@ -6,7 +6,72 @@ in front of real users needs three more things: TLS, env vars that aren't
 `localhost`/default secrets, and knowing that the frontend's `NEXT_PUBLIC_*`
 vars are baked in at *build* time, not read at runtime.
 
-## 1. Reverse proxy + TLS
+## 1. HTTPS
+
+### Built in: Let's Encrypt via Caddy
+
+The stack ships an optional `caddy` service (compose profile `https`) that serves
+Eunomia at your own domain with a free Let's Encrypt certificate and renews it on its own.
+
+You need:
+
+- a domain (or subdomain) whose DNS A/AAAA record points at this machine;
+- ports 80 and 443 reachable from the internet and not used by anything else
+  on the machine (Let's Encrypt checks port 80 when issuing).
+
+Turn it on in any of three ways:
+
+- **Settings, HTTPS** (instance admins): enter the domain and an email for Let's
+  Encrypt, click **Enable HTTPS**. The status reads *Pending* until the certificate is
+  issued (usually under a minute), then *Active*. Problems (a port already in
+  use, DNS not pointing here yet) show up there. **Disable** stops it.
+- **The installer**: `--domain eunomia.example.com --acme-email you@example.com`
+  (or answer yes to the HTTPS question). Agents are then connected to
+  `https://eunomia.example.com/mcp`.
+- **By hand**: add to `.env`, then `docker compose up -d`:
+
+  ```bash
+  COMPOSE_PROFILES=https
+  EUNOMIA_DOMAIN=eunomia.example.com
+  EUNOMIA_ACME_EMAIL=you@example.com
+  FRONTEND_TRUST_FORWARDED=1
+  FRONTEND_BIND=127.0.0.1
+  PUBLIC_URL=https://eunomia.example.com
+  ```
+
+`./Caddyfile` proxies everything to the **frontend**, which forwards `/api`, `/mcp`,
+`/oauth`, `/.well-known`, `/healthz` and `/readyz` to the backend, so the web app, the
+API and MCP all live at `https://<domain>`. Certificates are kept in the
+`eunomia-caddy-data` volume. Plain HTTP on port 80 redirects to HTTPS.
+
+**How the client address stays correct.** Caddy is not in front of the backend, it is in
+front of the frontend, which is the one peer the backend trusts (`TRUSTED_PROXIES=frontend`,
+unchanged: Caddy does not go in that list). Caddy sets `X-Forwarded-For` to the connecting
+client and `X-Forwarded-Proto: https`, replacing anything a client sent. For the frontend to
+pass those on it needs `FRONTEND_TRUST_FORWARDED=1`, and that is only safe if nobody can
+reach the frontend except through Caddy. So turning HTTPS on also sets
+`FRONTEND_BIND=127.0.0.1`: port 3000 stops listening on the network (Caddy reaches the
+frontend over the compose network, which that setting does not affect; agents on this
+machine can still use `http://localhost:3000` and `http://localhost:8001`). It also sets
+`PUBLIC_URL=https://<domain>`, which OAuth discovery needs. The backend's own port is
+already loopback only. Turning HTTPS off removes `FRONTEND_TRUST_FORWARDED`,
+`FRONTEND_BIND` and (if it is still the domain) `PUBLIC_URL`, so those three `.env` keys
+belong to this feature while it is on. On Docker Desktop (macOS, Windows) Caddy may see the
+Docker gateway instead of the real client address, so per-client rate limits then share
+one bucket; native Linux Docker keeps the real address.
+
+How Settings applies it: like updates (below), the backend never touches
+docker or `.env`. It validates the domain and email and writes
+`update-status/https.json`. Within 20 seconds the `updater` service validates
+them again, sets the `.env` values, recreates `backend`, `frontend` and starts `caddy`,
+and reports in `update-status/https-status.json`, probing the certificate until
+it answers. Watch it with `docker compose logs caddy`. After each update the
+updater reloads Caddy so a changed `Caddyfile` takes effect.
+
+### Your own reverse proxy
+
+Do not enable the built-in HTTPS if you run your own proxy (nginx, Traefik, an existing
+Caddy): the two would fight over ports 80 and 443.
 
 Put something in front of the `frontend` container (`:3000`) only. The
 frontend already proxies `/api`, `/mcp`, `/oauth`, `/.well-known`, `/healthz`
@@ -62,11 +127,9 @@ reachable from the LAN. Agents on the same machine keep using
 To expose the backend port anyway, set `BACKEND_BIND=0.0.0.0` in `.env` (requests
 then bypass the proxy chain, so the client address is the peer address).
 
-Run it alongside the compose stack (`caddy run` on the host, or as one more
-service in `docker-compose.yml` with ports 80/443 published). An nginx
-equivalent needs its own `server { listen 443 ssl; ... }` block plus a
-certbot container/cron to issue and renew the cert — more moving parts for
-the same result.
+An nginx equivalent needs its own `server { listen 443 ssl; ... }` block plus a
+certbot container/cron to issue and renew the cert: more moving parts for
+the same result as the built-in HTTPS above.
 
 ## 2. Env vars that need real values
 
