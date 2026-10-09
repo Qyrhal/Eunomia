@@ -8,8 +8,6 @@ export const FAILURE_ALERT_THRESHOLD = 3;
 /** A source is live when it is enabled or already holds records (seeded demo data has no connector but is real data). */
 export const isLiveSource = (s: SourceRow) => s.connected || s.record_count > 0;
 
-/** Backend reference stubs that exist for developers, not users. */
-export const isStubSource = (s: SourceRow) => s.key === "example";
 
 /** The name users know a source by: the connector label when one exists ("heypocket" reads "PocketAI"). */
 export function sourceLabel(s: SourceRow): string {

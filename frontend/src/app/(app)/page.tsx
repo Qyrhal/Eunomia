@@ -19,7 +19,7 @@ import DigitRoll from "@/components/bits/DigitRoll";
 import SyncMark, { type SyncStatus } from "@/components/bits/SyncMark";
 import { prefersReducedMotion } from "@/components/bits/motion";
 import { kindForSource } from "@/lib/connectorMeta";
-import { FAILURE_ALERT_THRESHOLD, isLiveSource, isStubSource, sourceHealth, sourceLabel } from "@/lib/sourceState";
+import { FAILURE_ALERT_THRESHOLD, isLiveSource, sourceHealth, sourceLabel } from "@/lib/sourceState";
 
 // Same origin as the app: the frontend proxies /mcp to the backend.
 const noSubscribe = () => () => {};
@@ -596,7 +596,7 @@ export default function DashboardPage() {
   }
 
   const connected = rows?.filter(isLiveSource) ?? [];
-  const disconnected = rows?.filter((r) => !isLiveSource(r) && !isStubSource(r)) ?? [];
+  const disconnected = rows?.filter((r) => !isLiveSource(r)) ?? [];
   const healthy = connected.filter((r) => sourceHealth(r).label === "Healthy").length;
   const totalRecords = rows?.reduce((sum, r) => sum + r.record_count, 0) ?? 0;
   const lastSyncs = connected.map((r) => r.sync_status.last_ok).filter((d): d is string => Boolean(d));
