@@ -1,0 +1,48 @@
+{
+  "about": "Fixed labeled corpus for recall-eval.spec.ts. Change it only deliberately: metrics are comparable across retrieval changes only on the same corpus. 'owner' writes the personal and shared memories; 'outsider' is another user whose decoys share keywords and must never be returned.",
+  "memories": [
+    { "key": "p-ada-async", "vault": "personal", "subject": "Ada Lovelace", "kind": "person", "text": "Ada prefers async written updates over meetings." },
+    { "key": "p-ada-peanuts", "vault": "personal", "subject": "Ada Lovelace", "kind": "person", "text": "Ada is allergic to peanuts." },
+    { "key": "p-grace-deploy", "vault": "personal", "subject": "Grace Hopper", "kind": "person", "text": "Grace runs the platform team and owns the deploy pipeline." },
+    { "key": "p-grace-birthday", "vault": "personal", "subject": "Grace Hopper", "kind": "person", "text": "Grace's birthday is on December 9." },
+    { "key": "p-lisbon-offsite", "vault": "personal", "subject": "Lisbon", "kind": "location", "text": "We hold the annual offsite in Lisbon every October." },
+    { "key": "p-homelab-backup", "vault": "personal", "subject": "Homelab", "kind": "location", "text": "The homelab NAS backs up nightly to an encrypted remote bucket." },
+    { "key": "p-acme-contract", "vault": "personal", "subject": "Acme Corp", "kind": "organisation", "text": "Acme Corp renewed their contract for three more years." },
+    { "key": "p-acme-billing", "vault": "personal", "subject": "Acme Corp", "kind": "organisation", "text": "Acme's billing contact is the finance department in Berlin." },
+    { "key": "p-dentist", "vault": "personal", "subject": "Patel Dental Clinic", "kind": "organisation", "text": "The next dental cleaning appointment is booked for March 3." },
+    { "key": "p-marathon", "vault": "personal", "subject": "Running Club", "kind": "organisation", "text": "Training for the Berlin marathon, running five times a week." },
+    { "key": "p-sourdough", "vault": "personal", "subject": "Kitchen", "kind": "location", "text": "The sourdough starter needs feeding every twelve hours." },
+    { "key": "p-tyres", "vault": "personal", "subject": "Elm Street Garage", "kind": "organisation", "text": "The car's winter tyres are stored at the garage on Elm Street." },
+
+    { "key": "s-atlas-launch", "vault": "shared", "subject": "Project Atlas", "kind": "organisation", "text": "Project Atlas launches the new search service in Q3." },
+    { "key": "s-atlas-storage", "vault": "shared", "subject": "Project Atlas", "kind": "organisation", "text": "Atlas stores metadata in Postgres and blobs in S3." },
+    { "key": "s-quinn-oncall", "vault": "shared", "subject": "Quinn Teammate", "kind": "person", "text": "Quinn is on call for the search service this week." },
+    { "key": "s-quinn-reviews", "vault": "shared", "subject": "Quinn Teammate", "kind": "person", "text": "Quinn prefers code reviews in the morning." },
+    { "key": "s-release-train", "vault": "shared", "subject": "Release Train", "kind": "organisation", "text": "Releases are cut every second Tuesday after the standup." },
+    { "key": "s-outage", "vault": "shared", "subject": "Incident Review", "kind": "organisation", "text": "The March outage was caused by an expired TLS certificate." },
+    { "key": "s-budget", "vault": "shared", "subject": "Finance", "kind": "organisation", "text": "The team's cloud budget is capped at 4000 dollars per month." },
+    { "key": "s-hiring", "vault": "shared", "subject": "Hiring", "kind": "organisation", "text": "We are hiring two backend engineers with Rust experience." },
+
+    { "key": "o-ada", "vault": "outsider", "subject": "Ada Lovelace", "kind": "person", "text": "OUTSIDER Ada loves meetings and peanuts." },
+    { "key": "o-atlas", "vault": "outsider", "subject": "Project Atlas", "kind": "organisation", "text": "OUTSIDER Project Atlas search service launch is cancelled." },
+    { "key": "o-deploy", "vault": "outsider", "subject": "Grace Hopper", "kind": "person", "text": "OUTSIDER the deploy pipeline and TLS certificate belong to Mallory." },
+    { "key": "o-misc", "vault": "outsider", "subject": "Notes", "kind": "organisation", "text": "OUTSIDER dental appointment, marathon training and cloud budget notes." }
+  ],
+  "queries": [
+    { "kind": "lexical", "vault": "personal", "query": "peanuts", "expected": ["p-ada-peanuts"] },
+    { "kind": "lexical", "vault": "shared", "query": "TLS certificate", "expected": ["s-outage"] },
+    { "kind": "inflection", "vault": "personal", "query": "backing up the NAS", "expected": ["p-homelab-backup"] },
+    { "kind": "full-sentence", "vault": "personal", "query": "When is my next dental cleaning appointment?", "expected": ["p-dentist"] },
+    { "kind": "full-sentence", "vault": "shared", "query": "Who is on call for the search service?", "expected": ["s-quinn-oncall"] },
+    { "kind": "entity", "vault": "personal", "query": "What do I know about Ada Lovelace?", "expected": ["p-ada-async", "p-ada-peanuts"] },
+    { "kind": "entity", "vault": "shared", "query": "Tell me about Project Atlas", "expected": ["s-atlas-launch", "s-atlas-storage"] },
+    { "kind": "paraphrase", "vault": "personal", "query": "How does Ada like to be kept informed?", "expected": ["p-ada-async"] },
+    { "kind": "paraphrase", "vault": "personal", "query": "Which customer extended their agreement?", "expected": ["p-acme-contract"] },
+    { "kind": "paraphrase", "vault": "shared", "query": "How much can we spend on cloud each month?", "expected": ["s-budget"] },
+    { "kind": "paraphrase", "vault": "shared", "query": "Are we recruiting Rust developers?", "expected": ["s-hiring"] },
+    { "kind": "temporal", "vault": "personal", "query": "What happens in October?", "expected": ["p-lisbon-offsite"] },
+    { "kind": "cross-vault", "vault": "personal", "query": "Project Atlas search service launch", "expected": [] },
+    { "kind": "cross-vault", "vault": "shared", "query": "Ada peanuts allergy", "expected": [] },
+    { "kind": "no-answer", "vault": "personal", "query": "quantum chromodynamics lecture notes", "expected": [] }
+  ]
+}

@@ -153,8 +153,18 @@ cd frontend && bun run test           # Playwright, starts `bun run dev`; needs 
 E2E_BASE_URL=http://localhost:3000 bun run test   # or against an already-running stack
 ```
 
-Backend tests, the script tests and a frontend typecheck+build run on every push/PR to `main`
-via `.github/workflows/ci.yml`.
+Backend tests, the script tests, a frontend typecheck+build and the whole Playwright suite (against the
+compose stack built from the repo: release backend, production frontend, SurrealDB 3.3) run on every
+push/PR to `main` via `.github/workflows/ci.yml`. The e2e job registers an admin first and sets
+`E2E_UPDATE_STATUS_DIR`, `E2E_ADMIN_EMAIL` / `E2E_ADMIN_PASSWORD` (the Settings, HTTPS tests) and
+`E2E_SURREAL_HTTP` / `E2E_SURREAL_NS` / `E2E_SURREAL_DB` (the SQL-fixture memory-correctness tests); see
+[`docs/testing.md`](docs/testing.md). Playwright keeps a trace of every failure and CI uploads it.
+
+`tests/recall-eval.spec.ts` is a small retrieval evaluation: it seeds the labeled corpus in
+`tests/fixtures/recall-eval.json` (a personal and a shared vault, plus another user's decoys), prints
+Recall@5 and MRR, writes them to `test-results/**/recall-eval.json` (a CI artifact), fails on any
+cross-vault or other-user result, and fails if the metrics drop below the floors in the spec. Compare
+retrieval changes on this same corpus.
 
 ## Backups
 
