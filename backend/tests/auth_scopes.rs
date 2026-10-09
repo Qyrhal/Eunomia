@@ -681,6 +681,17 @@ async fn oversized_bodies_are_refused_before_any_handler_reads_them() {
     }
 }
 
+/// A delivery whose body never finishes is cut off after the 10 s read timeout with 408 (takes that long).
+#[tokio::test]
+async fn a_stalled_webhook_body_times_out_with_408() {
+    let app = TestApp::new().await;
+    let body = Body::from_stream(futures::stream::pending::<Result<axum::body::Bytes, std::io::Error>>());
+    let mut req = Request::builder().method("POST").uri("/api/sources/github/webhook/user:nobody").header(header::CONTENT_TYPE, "application/json").body(body).unwrap();
+    req.extensions_mut().insert(axum::extract::ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 4000))));
+    let status = app.router.clone().oneshot(req).await.unwrap().status();
+    assert_eq!(status, StatusCode::REQUEST_TIMEOUT);
+}
+
 #[tokio::test]
 async fn forwarded_for_from_a_lan_peer_is_not_believed_by_default() {
     let app = TestApp::new().await;
