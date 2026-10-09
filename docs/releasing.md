@@ -13,6 +13,8 @@ Version rule: the tag immediately before any 3.x-pinning tag (by `sort -V`) must
 
 ## Cutting the bridge release
 
+Versions: this `foundation` line is `2.0.0` (SurrealDB 3 and a database per org, a breaking self-host upgrade). The bridge is cut from `v1.3.1` and is versioned `1.3.2`: bump `backend/Cargo.toml`, `backend/Cargo.lock` and `frontend/package.json` on the bridge branch, so the updater sees 1.3.1 < 1.3.2 < 2.0.0.
+
 `foundation` cannot be the bridge: its backend uses SurrealDB SDK 3.x (`backend/Cargo.toml`), which refuses any 2.x server, so a tag from `foundation` with the compose pin flipped back to 2.x crash-loops every install. The bridge is the latest v1.x tag plus only the files below, taken from `foundation`:
 
 | File | Why |

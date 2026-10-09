@@ -25,9 +25,9 @@ Turn it on in any of three ways:
   Encrypt, click **Enable HTTPS**. The status reads *Pending* until the certificate is
   issued (usually under a minute), then *Active*. Problems (a port already in
   use, DNS not pointing here yet) show up there. **Disable** stops it.
-- **The installer**: `--domain eunomia.example.com --acme-email you@example.com`
-  (or answer yes to the HTTPS question). Agents are then connected to
-  `https://eunomia.example.com/mcp`.
+- **The installer**: `--domain eunomia.example.com --acme-email you@example.com`.
+  These flags are documented but not implemented yet: the installer is hosted off-repo
+  and needs its update first. Until then use Settings or the by-hand route below.
 - **By hand**: add to `.env`, then `docker compose up -d`:
 
   ```bash
@@ -219,6 +219,12 @@ data.
 Each org's data lives in its own database, `org_<uuid>`, in the `SURREAL_NS` namespace; accounts, credentials and the job queue live in the `control` database. See [architecture/tenancy.md](architecture/tenancy.md). The first boot of a release with tenancy on an existing install moves the old single database (`SURREAL_DB`, default `eunomia`) into that layout automatically, copying every table in batches and refusing to finish unless the row counts match. Nothing in the old database is changed or deleted; the backend logs the `REMOVE DATABASE` command to use once you have checked the app. If the boot stops with "the data move did not verify", nothing is served from the half-moved org; fix the cause and restart (the move resumes). Take an export first, as the upgrade scripts do.
 
 `ENCRYPTION_KEY` now also protects the per-org database passwords: keep it.
+
+Saved credentials are stored as `enc:v1:...` ciphertext; older rows without the prefix still
+decrypt. A value that cannot be decrypted (a changed `ENCRYPTION_KEY`, corrupted data, or a
+deployment that used to run without a key) is never sent anywhere: the feature reports an error and
+the credential has to be entered again in Settings or Connectors. Keep `ENCRYPTION_KEY` with your
+backups.
 
 ### Rotating ENCRYPTION_KEY
 
