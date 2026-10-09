@@ -159,8 +159,18 @@ pub async fn consolidate_subject(
     subject_id: &RecordId,
     mission: Option<&str>,
 ) -> AppResult<Option<ConsolidatedObservation>> {
+    if super::service::require_entity_id(subject_id).is_err() {
+        return Ok(None);
+    }
     let subject_row: Option<SubjectRow> = store::get(db, subject_id).await?;
     let Some(subject_row) = subject_row else { return Ok(None) };
+    // Not a member: same as not found. The facts must never reach the caller's model, nor the
+    // observation land in someone else's vault.
+    match crate::authz::authorize(db, owner, crate::authz::Action::WriteMemories, &subject_row.vault).await {
+        Ok(_) => {}
+        Err(e) if e.code == crate::error::ErrorCode::VaultForbidden => return Ok(None),
+        Err(e) => return Err(e),
+    }
 
     let mut raw_res = q::RAW_MEMORIES
         .on(db)

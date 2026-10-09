@@ -95,27 +95,9 @@ struct ChatMessageRow {
 }
 
 #[derive(Debug, Deserialize, SurrealValue)]
-struct VaultRow {
-    vault: RecordId,
-}
-
-#[derive(Debug, Deserialize, SurrealValue)]
 struct UserEmailRow {
     id: RecordId,
     email: String,
-}
-
-/// `owner`'s personal vault -- the implicit scope for an export.
-pub(crate) async fn resolve_personal_vault(db: &OrgDb, owner: &RecordId) -> AppResult<RecordId> {
-    let mut res = store::app::EXPORT_PERSONAL_VAULT
-        .on(db)
-        .bind(("user", owner.clone()))
-        .await?;
-    let rows: Vec<VaultRow> = res.take(0)?;
-    rows.into_iter()
-        .next()
-        .map(|r| r.vault)
-        .ok_or_else(|| AppError::internal("user has no personal vault"))
 }
 
 async fn fetch_emails(db: &ControlDb, ids: &[RecordId]) -> AppResult<HashMap<String, String>> {
@@ -168,7 +150,7 @@ async fn export_data(State(state): State<AppState>, user: User) -> AppResult<Res
 
 /// The export document for `user`'s personal vault. Shared with `eunomia replay`.
 pub async fn build_export(db: &OrgDb, control: &ControlDb, user: &User) -> AppResult<Value> {
-    let vault = resolve_personal_vault(db, &user.id).await?;
+    let vault = crate::vaults::service::personal_vault_id(db, &user.id).await?;
 
     // One query per table, not per entity: the entities of every kind, then the memories and the
     // relations (both directions) of all of them at once, grouped back onto their entity.

@@ -87,6 +87,11 @@ pub const REASSIGN_MEMORIES: Stmt =
 
 pub const EDGES_OUT: Stmt = Stmt::new("entities.edges_out", "SELECT * FROM relates_to WHERE in = $id");
 pub const EDGES_IN: Stmt = Stmt::new("entities.edges_in", "SELECT * FROM relates_to WHERE out = $id");
+// the other endpoint must be in the entity's own vault: an edge left over from before relations were confined to one vault stays hidden
+pub const EDGES_OUT_IN_VAULT: Stmt =
+    Stmt::new("entities.edges_out_in_vault", "SELECT * FROM relates_to WHERE in = $id AND out.vault = $vault");
+pub const EDGES_IN_IN_VAULT: Stmt =
+    Stmt::new("entities.edges_in_in_vault", "SELECT * FROM relates_to WHERE out = $id AND in.vault = $vault");
 pub const DELETE_EDGES: Stmt = Stmt::new("entities.delete_edges", "DELETE relates_to WHERE in = $id OR out = $id");
 
 pub const SET_ALIASES: Stmt = Stmt::new(
@@ -95,7 +100,7 @@ pub const SET_ALIASES: Stmt = Stmt::new(
 );
 
 pub const MEMORIES_OF: Stmt =
-    Stmt::new("entities.memories_of", "SELECT * FROM memory WHERE subject = $id ORDER BY created_at DESC");
+    Stmt::new("entities.memories_of", "SELECT * FROM memory WHERE subject = $id AND vault = $vault ORDER BY created_at DESC");
 
 pub const EDGES_AMONG: Stmt = Stmt::new(
     "entities.edges_among",
@@ -156,6 +161,8 @@ pub const ALL: &[&Stmt] = &[
     &REASSIGN_MEMORIES,
     &EDGES_OUT,
     &EDGES_IN,
+    &EDGES_OUT_IN_VAULT,
+    &EDGES_IN_IN_VAULT,
     &DELETE_EDGES,
     &SET_ALIASES,
     &MEMORIES_OF,

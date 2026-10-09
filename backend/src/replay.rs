@@ -102,7 +102,7 @@ fn rid(v: &Value) -> AppResult<RecordId> {
 
 /// Loads an export document into `user`'s personal vault, keeping record ids.
 async fn import(db: &OrgDb, user: &User, doc: &Value) -> AppResult<()> {
-    let vault = crate::routers::export::resolve_personal_vault(db, &user.id).await?;
+    let vault = crate::vaults::service::personal_vault_id(db, &user.id).await?;
     let mut seen_relations = std::collections::HashSet::new();
     for e in doc["entities"].as_array().into_iter().flatten() {
         crate::entities::service::kind_table(e["kind"].as_str().unwrap_or_default())?;

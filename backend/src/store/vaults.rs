@@ -33,7 +33,7 @@ pub const ACCESSIBLE_IDS: Stmt =
 
 pub const DEFAULT_ID: Stmt = Stmt::new(
     "vaults.default_id",
-    r#"SELECT vault FROM vault_member WHERE user = $user AND status = "active" AND vault.kind = "personal" LIMIT 1"#,
+    r#"SELECT vault, created_at FROM vault_member WHERE user = $user AND status = "active" AND vault.kind = "personal" ORDER BY created_at ASC LIMIT 1"#,
 );
 
 pub const LIST_MINE: Stmt = Stmt::new(
@@ -77,7 +77,7 @@ pub const DELETE_RECORD: Stmt = Stmt::new("vaults.delete_record", "DELETE $id");
 pub const REMOVE_MEMBER: Stmt = Stmt::new(
     "vaults.remove_member",
     r#"BEGIN TRANSACTION;
-            LET $owners = (SELECT VALUE id FROM vault_member WHERE vault = $vault AND role = "owner");
+            LET $owners = (SELECT VALUE id FROM vault_member WHERE vault = $vault AND role = "owner" AND status = "active");
             IF $is_owner AND array::len($owners) <= 1 { THROW "last_owner" };
             DELETE $id;
             COMMIT TRANSACTION;"#,
@@ -86,7 +86,7 @@ pub const REMOVE_MEMBER: Stmt = Stmt::new(
 pub const LEAVE: Stmt = Stmt::new(
     "vaults.leave",
     r#"BEGIN TRANSACTION;
-            LET $owners = (SELECT VALUE id FROM vault_member WHERE vault = $vault AND role = "owner");
+            LET $owners = (SELECT VALUE id FROM vault_member WHERE vault = $vault AND role = "owner" AND status = "active");
             LET $others = (SELECT VALUE id FROM vault_member WHERE vault = $vault AND user != $user);
             IF $is_owner AND array::len($owners) <= 1 AND array::len($others) > 0 { THROW "last_owner" };
             DELETE $id;
@@ -113,7 +113,7 @@ pub const MERGE_ENTITY_INTO: Stmt = Stmt::new(
     "UPDATE $id SET aliases = $aliases, summary = $summary, updated_at = time::now()",
 );
 
-pub const MEMORIES_OF: Stmt = Stmt::new("vaults.memories_of", "SELECT * FROM memory WHERE subject = $id");
+pub const MEMORIES_OF: Stmt = Stmt::new("vaults.memories_of", "SELECT * FROM memory WHERE subject = $id AND vault = $vault");
 
 pub const COPY_MEMORY: Stmt = Stmt::new(
     "vaults.copy_memory",

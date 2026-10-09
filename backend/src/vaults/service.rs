@@ -589,6 +589,7 @@ async fn copy_into(db: &OrgDb, user_id: &RecordId, src: &RecordId, dest: &Record
     for (old_id, new_id) in id_map.clone() {
         let mut res = store::vaults::MEMORIES_OF.on(db)
             .bind(("id", old_id))
+            .bind(("vault", src.clone()))
             .await?;
         let memories: Vec<MemoryRow> = res.take(0)?;
         for mem in memories {

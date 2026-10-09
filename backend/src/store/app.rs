@@ -19,7 +19,6 @@ pub const ALL: &[&Stmt] = &[
     &CONNECTOR_ENABLED,
     &AUDIT_LIST,
     &AUDIT_COUNT,
-    &EXPORT_PERSONAL_VAULT,
     &EXPORT_MEMORIES,
     &EXPORT_RELATIONS_OUT,
     &EXPORT_RELATIONS_IN,
@@ -90,11 +89,6 @@ pub const AUDIT_LIST: Stmt = Stmt::new(
 
 pub const AUDIT_COUNT: Stmt =
     Stmt::new("app.audit_count", "SELECT count() FROM audit_log WHERE owner = $owner GROUP ALL");
-
-pub const EXPORT_PERSONAL_VAULT: Stmt = Stmt::new(
-    "app.export_personal_vault",
-    "SELECT vault FROM vault_member WHERE user = $user AND vault.kind = \"personal\" LIMIT 1",
-);
 
 pub const EXPORT_MEMORIES: Stmt =
     Stmt::new("app.export_memories", "SELECT * FROM memory WHERE subject IN $ids ORDER BY created_at DESC");

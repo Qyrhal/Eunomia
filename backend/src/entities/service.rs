@@ -345,6 +345,15 @@ pub fn require_memory_id(rid: &RecordId) -> AppResult<()> {
     Err(AppError::bad_request(format!("{} is not a memory id", rid.to_string())))
 }
 
+/// Relations and merges stay inside one vault: an edge from a shared vault's entity into someone's
+/// personal one would show its label and endpoint to every member, and merging would rewrite the other.
+fn same_vault(a: &EntityRow, b: &EntityRow) -> AppResult<()> {
+    if a.vault != b.vault {
+        return Err(AppError::bad_request("both entities must be in the same vault"));
+    }
+    Ok(())
+}
+
 async fn select_entity(db: &OrgDb, rid: &RecordId) -> AppResult<Option<EntityRow>> {
     require_entity_id(rid)?;
     let row: Option<EntityRow> = store::get(db, rid).await?;
@@ -511,8 +520,7 @@ pub async fn write_memory(
 
 /// RELATE two entities, idempotent on the (in, out, label) unique index -- a
 /// duplicate relation is a no-op that returns the existing edge. Both
-/// endpoints must be in vaults `owner` belongs to (they may be different
-/// vaults, as long as `owner` is a member of both).
+/// endpoints must be in the same vault, one `owner` belongs to.
 pub async fn add_relation(
     db: &OrgDb,
     owner: &RecordId,
@@ -531,9 +539,13 @@ pub async fn add_relation(
         Some(r) => accessible(db, owner, &r.vault, Action::WriteMemories).await?,
         None => false,
     };
+    let (Some(in_row), Some(out_row)) = (in_row, out_row) else {
+        return Err(AppError::coded(crate::error::ErrorCode::VaultForbidden, "not a member of both entities' vaults"));
+    };
     if !in_ok || !out_ok {
         return Err(AppError::coded(crate::error::ErrorCode::VaultForbidden, "not a member of both entities' vaults"));
     }
+    same_vault(&in_row, &out_row)?;
 
     if let Some(existing) = find_relation(db, from_id, to_id, label).await? {
         return Ok(relation_out(&existing, None, None));
@@ -731,7 +743,7 @@ pub async fn delete_entity(db: &OrgDb, owner: &RecordId, entity_id: &RecordId) -
 /// as an alias of the winner (if not already present), then deletes the
 /// loser. Returns the winner's row after the merge.
 ///
-/// Errors (400) if the two ids are the same, of different kinds, or not
+/// Errors (400) if the two ids are the same, of different kinds or vaults, or not
 /// found / `owner` isn't a member of either one's vault.
 pub async fn merge_entities(
     db: &OrgDb,
@@ -763,6 +775,7 @@ pub async fn merge_entities(
     if !accessible(db, owner, &loser.vault, Action::WriteMemories).await? {
         return Err(AppError::bad_request(format!("loser entity not found: {}", loser_id.to_string())));
     }
+    same_vault(&winner, &loser)?;
 
     q::REASSIGN_MEMORIES
         .on(db)
@@ -837,15 +850,18 @@ pub async fn get_entity(db: &OrgDb, control: &ControlDb, owner: &RecordId, entit
         return Ok(None);
     }
 
+    // only rows in the entity's own vault: a cross-vault edge or memory left over from before
+    // relations and merges were confined to one vault stays hidden
     let mut mem_res = q::MEMORIES_OF
         .on(db)
         .bind(("id", entity_id.clone()))
+        .bind(("vault", row.vault.clone()))
         .await?;
     let memories: Vec<MemoryRow> = mem_res.take(0)?;
 
-    let mut out_res = q::EDGES_OUT.on(db).bind(("id", entity_id.clone())).await?;
+    let mut out_res = q::EDGES_OUT_IN_VAULT.on(db).bind(("id", entity_id.clone())).bind(("vault", row.vault.clone())).await?;
     let outgoing: Vec<RelationRow> = out_res.take(0)?;
-    let mut in_res = q::EDGES_IN.on(db).bind(("id", entity_id.clone())).await?;
+    let mut in_res = q::EDGES_IN_IN_VAULT.on(db).bind(("id", entity_id.clone())).bind(("vault", row.vault.clone())).await?;
     let incoming: Vec<RelationRow> = in_res.take(0)?;
 
     let mut owner_ids: Vec<Option<RecordId>> = vec![row.owner.clone()];
