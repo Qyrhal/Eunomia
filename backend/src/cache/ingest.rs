@@ -143,7 +143,12 @@ pub async fn ingest(
                 }
             }
             if changed && can_extract {
-                let record = extract::ExtractRecord { id: rec.id.clone(), title: rec.title.clone(), body_text: rec.body_text.clone() };
+                let record = extract::ExtractRecord {
+                    id: rec.id.clone(),
+                    title: rec.title.clone(),
+                    body_text: rec.body_text.clone(),
+                    occurred_at: rec.occurred_at.as_ref().and_then(crate::sources::base::datetime_to_chrono).map(|d| d.to_rfc3339()),
+                };
                 touched_subjects.extend(extract::extract_entities(db, settings, owner, &record).await);
             }
         }

@@ -40,13 +40,18 @@ answer yourself from the numbered memories and cite them like [1].
 
 ## Scope: separate vaults for separate areas
 
-Everything defaults to the user's personal vault. If the user keeps
-separate vaults (`vault_list` shows them), for example for different
-projects, services, clients, teams or their homelab, keep each area's memory in its vault:
+Writes go to the user's personal vault by default; `recall`, `reflect` and
+`entities_search` search the personal vault plus every org vault unless
+given `vault_id`, and each hit names its vault. If the user keeps separate vaults (`vault_list` shows them),
+for example for different projects, services, clients, teams or their homelab,
+keep each area's memory in its vault:
 
 - When the work clearly belongs to one of those areas, pass `vault_id` with
-  the vault's **name** (e.g. `vault_id: "Acme"`) to `recall`, `memory_write`,
-  `entities_search`, etc.
+  the vault's **name** (e.g. `vault_id: "Acme"`) to `memory_write`, and to
+  `recall`/`entities_search` to narrow them to it.
+- Check a hit's date (`occurred_at`) before trusting a time-sensitive fact.
+- If `memory_write` returns `possible_duplicates`, merge the real duplicate
+  with `entity_merge`.
 - Don't create vaults on your own. Use `vault_create` when the user asks for
   a new area or agrees to one.
 - Don't mix one vault's facts into another or into the personal vault.

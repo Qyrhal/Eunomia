@@ -84,6 +84,7 @@ pub struct EntityOut {
     pub name: String,
     pub aliases: Vec<String>,
     pub summary: String,
+    pub vault: String,
 }
 
 fn entity_out(kind: &str, row: &EntityRow) -> EntityOut {
@@ -93,6 +94,7 @@ fn entity_out(kind: &str, row: &EntityRow) -> EntityOut {
         name: row.name.clone(),
         aliases: row.aliases.clone(),
         summary: row.summary.clone(),
+        vault: row.vault.to_string(),
     }
 }
 
@@ -255,6 +257,14 @@ pub struct GraphOut {
 pub struct WriteMemoryOut {
     pub entity: EntityOut,
     pub memory: MemoryOut,
+    /// Earlier facts about the subject this one made no longer true (now
+    /// left out of recall). Filled in by the `memory_write` tool.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub superseded: Vec<String>,
+    /// When the write created a new entity: existing ones of the same kind
+    /// whose name shares a word with it -- candidates for `entity_merge`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub possible_duplicates: Vec<EntityOut>,
 }
 
 // ---------------------------------------------------------------------------
@@ -387,9 +397,32 @@ pub async fn upsert_entity(
     aliases: Option<Vec<String>>,
     vault_id: Option<&RecordId>,
 ) -> AppResult<EntityOut> {
+    Ok(upsert_entity_created(db, owner, kind, name, aliases, vault_id).await?.0)
+}
+
+/// `"Jane Doe (Acme/JD)"` -> `("Jane Doe", ["Acme", "JD"])`: a name with a
+/// parenthesised suffix of aliases/affiliations.
+fn split_decorated(name: &str) -> Option<(&str, Vec<String>)> {
+    let (base, extra) = name.strip_suffix(')')?.rsplit_once('(')?;
+    let base = base.trim();
+    let extra: Vec<String> = extra.split(['/', ',', ';']).map(str::trim).filter(|a| !a.is_empty()).map(String::from).collect();
+    (!base.is_empty() && !extra.is_empty()).then_some((base, extra))
+}
+
+/// [`upsert_entity`], plus whether the entity was created just now. A
+/// decorated name (see [`split_decorated`]) whose base name already exists
+/// resolves to that entity, the suffix parts becoming aliases.
+pub async fn upsert_entity_created(
+    db: &Db,
+    owner: &RecordId,
+    kind: &str,
+    name: &str,
+    aliases: Option<Vec<String>>,
+    vault_id: Option<&RecordId>,
+) -> AppResult<(EntityOut, bool)> {
     let table = kind_table(kind)?;
     let vault = resolve_vault(db, owner, vault_id).await?;
-    let aliases = aliases.unwrap_or_default();
+    let mut aliases = aliases.unwrap_or_default();
     let name = name.trim();
     if name.is_empty() {
         return Err(AppError::bad_request("entity name can't be empty"));
@@ -398,6 +431,14 @@ pub async fn upsert_entity(
 
     let guard = ENTITY_WRITE.lock().await;
     let mut found = find_entity(db, table, &vault, &needle).await?;
+    if found.is_none() {
+        if let Some((base, extra)) = split_decorated(name) {
+            found = find_entity(db, table, &vault, &base.to_lowercase()).await?;
+            if found.is_some() {
+                aliases.extend(extra);
+            }
+        }
+    }
     if found.is_none() {
         let mut created = db
             .query(format!(
@@ -411,7 +452,7 @@ pub async fn upsert_entity(
         match created.take::<Vec<EntityRow>>(0) {
             Ok(rows) => {
                 let row = rows.into_iter().next().ok_or_else(|| AppError::internal("entity insert returned no row"))?;
-                return Ok(entity_out(table, &row));
+                return Ok((entity_out(table, &row), true));
             }
             Err(e) if is_write_conflict(&e) => found = find_entity(db, table, &vault, &needle).await?,
             Err(e) => return Err(e.into()),
@@ -422,7 +463,7 @@ pub async fn upsert_entity(
 
     let existing: HashSet<String> = row.aliases.iter().cloned().collect();
     if aliases.iter().all(|a| existing.contains(a)) {
-        return Ok(entity_out(table, &row));
+        return Ok((entity_out(table, &row), false));
     }
     let mut updated = db
         .query("UPDATE $id SET aliases = array::sort(array::union(aliases, $aliases)), updated_at = time::now() RETURN AFTER")
@@ -431,7 +472,49 @@ pub async fn upsert_entity(
         .await?;
     let updated_rows: Vec<EntityRow> = updated.take(0)?;
     let updated_row = updated_rows.into_iter().next().ok_or_else(|| AppError::internal("entity update returned no row"))?;
-    Ok(entity_out(table, &updated_row))
+    Ok((entity_out(table, &updated_row), false))
+}
+
+/// Other `kind` entities in the entity's vault whose name or an alias shares
+/// a word (3+ letters) with its name -- likely the same thing under another
+/// name ("Dave" / "David Smith" share nothing; "David" / "David Smith" do).
+pub async fn possible_duplicates(db: &Db, entity: &EntityOut) -> AppResult<Vec<EntityOut>> {
+    let table = kind_table(&entity.kind)?;
+    let words: Vec<String> = entity
+        .name
+        .to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| w.chars().count() >= 3)
+        .map(String::from)
+        .collect();
+    if words.is_empty() {
+        return Ok(Vec::new());
+    }
+    let id: RecordId = entity.id.parse().map_err(|_| AppError::internal("entity id did not round-trip"))?;
+    let vault: RecordId = entity.vault.parse().map_err(|_| AppError::internal("vault id did not round-trip"))?;
+    let mut res = db
+        .query(format!(
+            "SELECT * FROM {table} WHERE vault = $vault AND id != $id \
+             AND (string::words(name_key) CONTAINSANY $words OR alias_keys CONTAINSANY $words) LIMIT 5"
+        ))
+        .bind(("vault", vault))
+        .bind(("id", id))
+        .bind(("words", words))
+        .await?;
+    let rows: Vec<EntityRow> = res.take(0)?;
+    Ok(rows.iter().map(|r| entity_out(table, r)).collect())
+}
+
+/// Ids of the entities in `vault` with a fact whose text matches `query`
+/// (full-text, so a handle or username only ever written in a fact is found).
+pub async fn subjects_mentioning(db: &Db, vault: &RecordId, query: &str) -> AppResult<HashSet<String>> {
+    let mut res = db
+        .query("SELECT VALUE subject FROM memory WHERE vault = $vault AND text @@ $q LIMIT 200")
+        .bind(("vault", vault.clone()))
+        .bind(("q", query.to_string()))
+        .await?;
+    let ids: Vec<RecordId> = res.take(0)?;
+    Ok(ids.iter().map(|r| r.to_string()).collect())
 }
 
 /// `source_record_id` is optional -- an automatic extraction path always ties
@@ -562,11 +645,12 @@ pub async fn write_memory(
     mem_type: &str,
     vault_id: Option<&RecordId>,
 ) -> AppResult<WriteMemoryOut> {
-    let entity = upsert_entity(db, owner, subject_kind, subject_name, None, vault_id).await?;
+    let (entity, created) = upsert_entity_created(db, owner, subject_kind, subject_name, None, vault_id).await?;
     let entity_rid: RecordId =
         entity.id.parse().map_err(|_| AppError::internal("entity id did not round-trip"))?;
     let memory = add_memory(db, owner, &entity_rid, text, source_record_id, mem_type).await?;
-    Ok(WriteMemoryOut { entity, memory })
+    let possible_duplicates = if created { possible_duplicates(db, &entity).await? } else { Vec::new() };
+    Ok(WriteMemoryOut { entity, memory, superseded: Vec::new(), possible_duplicates })
 }
 
 /// RELATE two entities, idempotent on the (in, out, label) unique index -- a
@@ -708,6 +792,9 @@ pub async fn update_memory(
     let mut set = vec!["version = version + 1", "updated_at = time::now()"];
     if text.is_some() {
         set.push("text = $text");
+        if row.mem_type != "observation" {
+            set.push("status = NONE"); // an edited fact is current again
+        }
     }
     if new_type.is_some() {
         set.push("type = $type");
@@ -1223,6 +1310,15 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn decorated_names_split_into_base_and_aliases() {
+        assert_eq!(split_decorated("Jane Doe (Acme/JD)"), Some(("Jane Doe", vec!["Acme".into(), "JD".into()])));
+        assert_eq!(split_decorated("Jane Doe(Acme, JD; jd2)").unwrap().1, vec!["Acme", "JD", "jd2"]);
+        assert_eq!(split_decorated("Jane Doe"), None);
+        assert_eq!(split_decorated("(Acme)"), None);
+        assert_eq!(split_decorated("Jane Doe ()"), None);
+    }
 
     #[test]
     fn kinds_match_schema_union() {

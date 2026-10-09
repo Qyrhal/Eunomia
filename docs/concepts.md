@@ -3,7 +3,7 @@
 ## Vaults
 
 A vault is a separate scope for entities and memories. Everyone has a
-**personal vault** (the default for every tool). Make more for anything you
+**personal vault**, where writes go by default. Make more for anything you
 want kept apart, like a project or service, a client, a team or your homelab. Invite people to
 share a vault, and they accept from the Vaults page. Roles are `owner` and `member`.
 
@@ -23,10 +23,12 @@ vaults only when you ask.
 active member of the vault right now: a pending invitation gives no access,
 and removing someone or leaving takes effect on the next call. A vault name
 only matches vaults you belong to. Relations and entity merges stay inside one
-vault. Tools without a `vault_id` (and the export) always use your own
-personal vault, even if you've joined someone else's. Synced records belong
-to you, not to a vault: they show up only in your personal vault's recall and
-vector cloud, and other members never see them.
+vault. Without a `vault_id`, `recall`, `reflect` and `entities_search` read
+your personal vault plus every org vault you belong to (each hit names its
+vault), so facts kept in an org vault never look absent; someone else's
+personal vault you've joined is read only when named. Every other tool, and
+the export, uses your own personal vault. Synced records belong to you, not to a vault: they show up
+only in your own recall and vector cloud, and other members never see them.
 
 ## Entities and memories
 
@@ -47,6 +49,21 @@ built from nothing but that fact is deleted with it. The next consolidation
 rebuilds a stale observation from the entity's surviving facts alone; until
 then `recall` leaves it out (`entities_get` still shows it, with
 `status: "stale"`).
+
+**Outdated facts.** When new facts arrive (`memory_write`, or a sync), the
+chat model checks them against the entity's earlier facts. An earlier fact a
+newer one shows is no longer true ("no access to the repo", then "was granted
+access") is marked `status: "superseded"`: `recall` leaves it out,
+`entities_get` still shows it, and editing it makes it current again. Recall
+also favours recent memories, and every hit carries its date. Without a chat
+model nothing is marked, so check dates on time-sensitive facts.
+
+**Finding and de-duplicating entities.** `entities_search` matches names and
+aliases, then the text of each entity's facts, so a handle that only appears
+in a fact still finds its entity. `memory_write` with a decorated name
+("Jane Doe (Acme/JD)") resolves to an existing "Jane Doe" and adds the parts
+as aliases; when it does create an entity, it returns `possible_duplicates`
+(same kind, a shared name word) for you to `entity_merge`.
 
 Within a vault an entity's name is unique per kind, case-insensitively, so
 two concurrent writes about "Ada" land on one entity, and each entity has at

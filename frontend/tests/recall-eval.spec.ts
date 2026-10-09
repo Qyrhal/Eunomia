@@ -52,6 +52,8 @@ test("recall evaluation on the fixed corpus", async ({}, testInfo) => {
   const owner = await newUser(baseURL, "eval-owner");
   const outsider = await newUser(baseURL, "eval-outsider");
   const shared = (await owner("vault_create", { name: "Eval Team" })).id as string;
+  // Each query is scoped to its vault explicitly (no vault_id would search both).
+  const personal = (await owner("vault_list")).results.find((v: Json) => v.kind === "personal").id as string;
 
   for (const m of fixture.memories) {
     const call = m.vault === "outsider" ? outsider : owner;
@@ -68,7 +70,7 @@ test("recall evaluation on the fixed corpus", async ({}, testInfo) => {
   const perQuery = [];
   for (const q of fixture.queries) {
     const started = Date.now();
-    const { results } = await owner("recall", { query: q.query, limit: 10, ...(q.vault === "shared" ? { vault_id: shared } : {}) });
+    const { results } = await owner("recall", { query: q.query, limit: 10, vault_id: q.vault === "shared" ? shared : personal });
     const ms = Date.now() - started;
     const texts: string[] = results.map((r: Json) => r.text);
     const allowed = vaultTexts(q.vault);

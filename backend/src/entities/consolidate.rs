@@ -17,6 +17,8 @@
 //! stale one is rebuilt from scratch out of the subject's surviving facts --
 //! the old belief is not carried forward, since it may rest on a fact that
 //! has since been corrected or deleted. Recall leaves stale observations out.
+//! New facts are first checked against earlier ones (`supersede`); a fact
+//! they make untrue is marked superseded and left out of the rebuild.
 //!
 //! Best-effort throughout, same safety pattern as `extract.rs`: never fails
 //! the caller, no-ops in stub-backend mode.
@@ -181,7 +183,8 @@ pub async fn consolidate_subject(
 
     let mut res = db
         .query(
-            r#"SELECT id, text, created_at FROM memory WHERE subject = $id AND type IN ["world","experience"] ORDER BY created_at, id;
+            r#"SELECT id, text, created_at FROM memory WHERE subject = $id AND type IN ["world","experience"]
+                   AND status != "superseded" ORDER BY created_at, id;
                SELECT text, source_memories, status FROM memory WHERE subject = $id AND type = "observation" LIMIT 1"#,
         )
         .bind(("id", subject_id.clone()))
@@ -194,8 +197,18 @@ pub async fn consolidate_subject(
         .and_then(|e| e.source_memories.as_ref())
         .map(|ids| ids.iter().map(|r| r.to_string()).collect())
         .unwrap_or_default();
-    let raw: Vec<(String, String)> = raw_rows.iter().map(|r| (r.id.to_string(), r.text.clone())).collect();
-    let existing_plan = existing.as_ref().map(|e| (e.text.as_str(), &seen, e.status.as_deref() == Some("stale")));
+    // Facts new since the last consolidation may make earlier ones untrue:
+    // those drop out, and the belief is rebuilt without them.
+    let new_ids: Vec<RecordId> = raw_rows.iter().filter(|r| !seen.contains(&r.id.to_string())).map(|r| r.id.clone()).collect();
+    let superseded: HashSet<String> =
+        super::supersede::check(db, settings, owner, subject_id, &new_ids).await.iter().map(|r| r.to_string()).collect();
+    let raw: Vec<(String, String)> = raw_rows
+        .iter()
+        .filter(|r| !superseded.contains(&r.id.to_string()))
+        .map(|r| (r.id.to_string(), r.text.clone()))
+        .collect();
+    let existing_plan =
+        existing.as_ref().map(|e| (e.text.as_str(), &seen, e.status.as_deref() == Some("stale") || !superseded.is_empty()));
     let Some((facts, current_belief, lineage)) = plan(&raw, existing_plan) else { return Ok(None) };
 
     if settings.embeddings_backend == "stub" {

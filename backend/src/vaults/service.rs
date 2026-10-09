@@ -219,6 +219,24 @@ pub async fn default_vault_id(db: &Db, user_id: &RecordId) -> AppResult<RecordId
     })
 }
 
+/// What reads search when no `vault_id` is given: `user_id`'s personal vault
+/// (first) plus every org vault they're an active member of -- not other
+/// people's personal vaults they've joined, which stay opt-in.
+pub async fn default_read_vault_ids(db: &Db, user_id: &RecordId) -> AppResult<Vec<RecordId>> {
+    #[derive(Deserialize)]
+    struct Row {
+        vault: RecordId,
+    }
+    let mut res = db
+        .query("SELECT vault, created_at FROM vault_member WHERE user = $user AND status = \"active\" AND vault.kind = \"org\" ORDER BY created_at")
+        .bind(("user", user_id.clone()))
+        .await?;
+    let rows: Vec<Row> = res.take(0)?;
+    let mut out = vec![default_vault_id(db, user_id).await?];
+    out.extend(rows.into_iter().map(|r| r.vault));
+    Ok(out)
+}
+
 /// Raises (403) if `user_id` isn't a member of `vault_id`. Used by every
 /// entity/memory read or write that takes an explicit `vault_id`.
 pub async fn require_membership(db: &Db, user_id: &RecordId, vault_id: &RecordId) -> AppResult<()> {
