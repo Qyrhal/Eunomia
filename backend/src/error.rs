@@ -31,6 +31,7 @@ pub enum ErrorCode {
     TenantProvisioningDisabled,
     VaultNotFound,
     VaultForbidden,
+    VaultNameTaken,
     EntityNotFound,
     MemoryNotFound,
     ChatThreadNotFound,
@@ -64,6 +65,7 @@ impl ErrorCode {
         ErrorCode::TenantProvisioningDisabled,
         ErrorCode::VaultNotFound,
         ErrorCode::VaultForbidden,
+        ErrorCode::VaultNameTaken,
         ErrorCode::EntityNotFound,
         ErrorCode::MemoryNotFound,
         ErrorCode::ChatThreadNotFound,
@@ -97,6 +99,7 @@ impl ErrorCode {
             ErrorCode::TenantProvisioningDisabled => "tenant.provisioning_disabled",
             ErrorCode::VaultNotFound => "vault.not_found",
             ErrorCode::VaultForbidden => "vault.forbidden",
+            ErrorCode::VaultNameTaken => "vault.name_taken",
             ErrorCode::EntityNotFound => "entity.not_found",
             ErrorCode::MemoryNotFound => "memory.not_found",
             ErrorCode::ChatThreadNotFound => "chat.thread_not_found",
@@ -124,7 +127,7 @@ impl ErrorCode {
             ErrorCode::RateLimited => StatusCode::TOO_MANY_REQUESTS,
             ErrorCode::TenantSchemaBehind => StatusCode::SERVICE_UNAVAILABLE,
             ErrorCode::TenantProvisioningDisabled => StatusCode::NOT_IMPLEMENTED,
-            ErrorCode::AuthEmailTaken | ErrorCode::DbConflict | ErrorCode::DbDuplicate => StatusCode::CONFLICT,
+            ErrorCode::AuthEmailTaken | ErrorCode::VaultNameTaken | ErrorCode::DbConflict | ErrorCode::DbDuplicate => StatusCode::CONFLICT,
             ErrorCode::AuthNotFound
             | ErrorCode::VaultNotFound
             | ErrorCode::EntityNotFound
@@ -296,7 +299,7 @@ mod tests {
                 ErrorCode::AuthUnauthorized | ErrorCode::AuthForbidden | ErrorCode::AuthEmailTaken | ErrorCode::AuthNotFound
                 | ErrorCode::AuthScope | ErrorCode::AuthTokenExpired | ErrorCode::AuthSessionExpired | ErrorCode::RateLimited
                 | ErrorCode::TenantDenied | ErrorCode::TenantNotFound | ErrorCode::TenantSchemaBehind
-                | ErrorCode::TenantProvisioningDisabled | ErrorCode::VaultNotFound | ErrorCode::VaultForbidden | ErrorCode::EntityNotFound
+                | ErrorCode::TenantProvisioningDisabled | ErrorCode::VaultNotFound | ErrorCode::VaultForbidden | ErrorCode::VaultNameTaken | ErrorCode::EntityNotFound
                 | ErrorCode::MemoryNotFound | ErrorCode::ChatThreadNotFound | ErrorCode::ConnectorNotFound
                 | ErrorCode::ConnectorNotConnected | ErrorCode::SourceNotFound | ErrorCode::ToolNotFound
                 | ErrorCode::ResourceNotFound | ErrorCode::ValidationInvalid | ErrorCode::DbConflict

@@ -28,6 +28,7 @@ The `ErrorCode` enum is in `backend/src/error.rs`. A unit test fails if a code i
 | `tenant.provisioning_disabled` | 501 | Signup needs to create an org database, and this binary was built without the `provisioning` feature. | `models_user.rs` |
 | `vault.not_found` | 404 | Vault id is malformed or unknown. | `routers/vaults.rs` |
 | `vault.forbidden` | 403 | You are not a member, or not an owner, of the vault (or of both entities' vaults). Also the default for a bare 403. | `vaults/service.rs`, `entities/service.rs` |
+| `vault.name_taken` | 409 | Creating or renaming a vault to a name you already have on another vault (compared case-insensitively, among the vaults you belong to). | `vaults/service.rs` |
 | `entity.not_found` | 404 | Entity id unknown or not visible to you. | `routers/entities.rs`, `tools/registry.rs` |
 | `memory.not_found` | 404 | Memory id unknown or not visible to you. | `routers/entities.rs`, `tools/registry.rs` |
 | `chat.thread_not_found` | 404 | Chat thread id unknown or not yours. | `routers/chat.rs` |

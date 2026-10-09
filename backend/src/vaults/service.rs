@@ -20,7 +20,7 @@ use crate::rid::RecordIdExt;
 
 use crate::authz::{self, Action};
 use crate::pool::{ControlDb, OrgDb};
-use crate::error::{AppError, AppResult};
+use crate::error::{AppError, AppResult, ErrorCode};
 use crate::store;
 use crate::tx::{with_retry, with_retry_dup};
 
@@ -145,10 +145,50 @@ pub async fn create_personal_vault(db: &OrgDb, user_id: &RecordId) -> AppResult<
     Ok(vault_id)
 }
 
+const MAX_VAULT_NAME: usize = 80;
+
+/// A vault name must be non-empty once trimmed, at most 80 characters, and unique
+/// (case-insensitively) among the vaults the caller belongs to: that is the set a
+/// by-name lookup or a dropdown searches, so per membership set (not per owner)
+/// is what keeps them unambiguous. `except` is the vault being renamed.
+/// ponytail: check-then-write, two simultaneous creates of one name can both pass.
+async fn check_name(db: &OrgDb, user_id: &RecordId, name: &str, except: Option<&RecordId>) -> AppResult<String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(AppError::bad_request("vault name can't be empty"));
+    }
+    if name.chars().count() > MAX_VAULT_NAME {
+        return Err(AppError::bad_request(format!("vault name can't be longer than {MAX_VAULT_NAME} characters")));
+    }
+    if taken(db, user_id, name, except).await? {
+        return Err(AppError::coded(ErrorCode::VaultNameTaken, format!("you already have a vault named {name:?}: pick another name")));
+    }
+    Ok(name.to_string())
+}
+
+async fn taken(db: &OrgDb, user_id: &RecordId, name: &str, except: Option<&RecordId>) -> AppResult<bool> {
+    let want = name.to_lowercase();
+    let mine = list_my_vaults(db, user_id).await?;
+    Ok(mine.iter().any(|v| v.name.to_lowercase() == want && except.is_none_or(|e| e.to_string() != v.id)))
+}
+
+/// "base", or "base 2", "base 3", ... for a clone or merge named by default.
+async fn free_name(db: &OrgDb, user_id: &RecordId, base: String) -> AppResult<String> {
+    let mut name = base.clone();
+    for n in 2.. {
+        if !taken(db, user_id, &name, None).await? {
+            break;
+        }
+        name = format!("{base} {n}");
+    }
+    Ok(name)
+}
+
 /// Create a new vault (org, or an extra personal-style one -- a user can have
 /// several, per the product ask); creator becomes its owner.
 pub async fn create_vault(db: &OrgDb, user_id: &RecordId, name: &str, kind: &str) -> AppResult<VaultOut> {
     authz::require_unrestricted()?;
+    let name = &check_name(db, user_id, name, None).await?;
     let vault = with_retry(|| async {
         let mut res = store::vaults::CREATE_VAULT
             .on(db)
@@ -251,6 +291,7 @@ pub async fn list_my_vaults(db: &OrgDb, user_id: &RecordId) -> AppResult<Vec<Vau
 
 pub async fn rename_vault(db: &OrgDb, user_id: &RecordId, vault_id: &RecordId, name: &str) -> AppResult<VaultOut> {
     authz::authorize(db, user_id, Action::Rename, vault_id).await?;
+    let name = &check_name(db, user_id, name, Some(vault_id)).await?;
     let mut res = store::vaults::RENAME.on(db)
         .bind(("id", vault_id.clone()))
         .bind(("name", name.to_string()))
@@ -667,7 +708,10 @@ pub async fn clone_vault(
     let source: Option<VaultFullRow> = store::get(db, vault_id).await?;
     let source = source.ok_or_else(|| AppError::coded(crate::error::ErrorCode::VaultNotFound, format!("vault not found: {}", vault_id.to_string())))?;
 
-    let clone_name = name.map(str::to_string).unwrap_or_else(|| format!("{} (copy)", source.name));
+    let clone_name = match name {
+        Some(n) => n.to_string(),
+        None => free_name(db, user_id, format!("{} (copy)", source.name)).await?,
+    };
     let clone = create_vault(db, user_id, &clone_name, kind).await?;
     let clone_rid: RecordId = crate::rid::parse(&clone.id).map_err(|_| AppError::internal("clone vault id did not round-trip"))?;
 
@@ -717,7 +761,10 @@ pub async fn merge_vaults(
     let va = va.ok_or_else(|| AppError::coded(crate::error::ErrorCode::VaultNotFound, format!("vault not found: {}", a.to_string())))?;
     let vb = vb.ok_or_else(|| AppError::coded(crate::error::ErrorCode::VaultNotFound, format!("vault not found: {}", b.to_string())))?;
 
-    let merged_name = name.map(str::to_string).unwrap_or_else(|| format!("{} + {}", va.name, vb.name));
+    let merged_name = match name {
+        Some(n) => n.to_string(),
+        None => free_name(db, user_id, format!("{} + {}", va.name, vb.name)).await?,
+    };
     let merged = create_vault(db, user_id, &merged_name, kind).await?;
     let dest: RecordId = crate::rid::parse(&merged.id).map_err(|_| AppError::internal("merged vault id did not round-trip"))?;
 

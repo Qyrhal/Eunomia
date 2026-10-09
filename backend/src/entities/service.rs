@@ -699,6 +699,10 @@ pub async fn update_entity(
     aliases: Option<Vec<String>>,
     summary: Option<&str>,
 ) -> AppResult<Option<EntityOut>> {
+    let name = name.map(str::trim);
+    if name == Some("") {
+        return Err(AppError::bad_request("entity name can't be empty"));
+    }
     let Some(mut row) = select_entity(db, entity_id).await? else { return Ok(None) };
     if !accessible(db, owner, &row.vault, Action::WriteMemories).await? {
         return Ok(None);
