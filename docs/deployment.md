@@ -109,6 +109,8 @@ To restore, run `backend/scripts/restore.sh <backup name or file> [--wipe]` from
 
 Backup files are encrypted with AES-256-CBC and authenticated with an HMAC-SHA256 over the ciphertext, checked before anything is decrypted or imported, so a modified file is refused. Backups written by earlier versions (no authentication) still restore.
 
+Each database export is checked before it becomes a backup: the server is asked for every table's row count first, and the dump must contain an `INSERT` for each table that had rows (and the server must still answer afterwards). An export cut short by a dying server (for example an out-of-memory kill) keeps its schema but loses the rows, so it is refused: the run fails with a `missing the rows of: ...` log line, writes no file and rotates nothing out. A database with no rows is a valid backup.
+
 ## 3. The browser only ever talks to the frontend
 
 The frontend calls same-origin `/api/*`, and `frontend/next.config.ts`
