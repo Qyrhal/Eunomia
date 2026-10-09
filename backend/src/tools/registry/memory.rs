@@ -39,16 +39,16 @@ pub(super) fn register_all(registry: &mut HashMap<&'static str, ToolSpec>) {
         json!({
             "type": "object",
             "properties": {
-                "query": {"type": "string"},
+                "query": {"type": "string", "description": "at most 2000 characters"},
                 "time_range": {
                     "type": "array",
                     "items": {"type": "string"},
                     "minItems": 2,
                     "maxItems": 2,
-                    "description": "[since, until] ISO 8601",
+                    "description": "[since, until] ISO 8601, since <= until",
                 },
-                "limit": {"type": "integer"},
-                "max_tokens": {"type": "integer"},
+                "limit": {"type": "integer", "description": "1-100, default 20"},
+                "max_tokens": {"type": "integer", "description": "1-100000"},
                 "types": {
                     "type": "array",
                     "items": {"type": "string", "enum": ["world", "experience", "observation"]},

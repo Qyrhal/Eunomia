@@ -126,7 +126,7 @@ async fn a_due_sync_lands_searchable_records_then_a_401_is_visible_and_keeps_the
     assert_eq!(mock.requests()[0].header("authorization"), "Bearer ghp_test");
 
     let params = search::SearchParams { mode: "keyword".into(), limit: 10, ..Default::default() };
-    let hits = search::search(&org.db, &org.settings, &owner, "importer quarterly", &params).await.unwrap();
+    let (hits, _more) = search::search(&org.db, &org.settings, &owner, "importer quarterly", &params).await.unwrap();
     assert_eq!(hits.iter().map(|h| h.id.as_str()).collect::<Vec<_>>(), vec![ISSUE_7]);
     assert!(due_syncs(&org).await.unwrap().is_empty(), "a healthy source is not due again within its interval");
 

@@ -65,10 +65,10 @@ async fn payload_filters_use_a_nested_path_and_a_bind_each() {
     let one = app.tool("list", json!({"filters": {"payload__a": "x"}})).await;
     assert_eq!(ids(&one), ["1", "2"], "{one}");
     // a path segment that is not an identifier never reaches the query text
-    let bad = app.tool("list", json!({"filters": {"payload__a); DELETE cache_record; --": "x"}})).await;
-    assert!(bad["error"].is_string(), "{bad}");
-    let odd = app.tool("list", json!({"filters": {"title__x": "x"}})).await;
-    assert!(odd["error"].is_string(), "{odd}");
+    for filters in [json!({"payload__a); DELETE cache_record; --": "x"}), json!({"title__x": "x"})] {
+        let out = common::sys(eunomia_backend::tools::registry::call(&app.state, &app.user, "list", json!({"filters": filters}))).await;
+        assert_eq!(out.unwrap_err().code, eunomia_backend::error::ErrorCode::ValidationInvalid, "{filters}");
+    }
 }
 
 #[tokio::test]

@@ -6,10 +6,10 @@
 
 mod common;
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
 
 use common::TestApp;
-use eunomia_backend::cache::search::{self as cs, ListParams, SearchParams};
+use eunomia_backend::cache::search::{self as cs, RecordFilter, SearchParams};
 use eunomia_backend::capsules::{self, Failure};
 use eunomia_backend::error::ErrorCode;
 use eunomia_backend::replay;
@@ -58,38 +58,66 @@ async fn cache_searches(app: &TestApp) {
     for on in subsets(4) {
         let mut p = SearchParams::new();
         if on.contains(&0) {
-            p.sources = Some(vec!["alpha".into()]);
+            p.filter.sources = Some(vec!["alpha".into()]);
         }
         if on.contains(&1) {
-            p.types = Some(vec!["note".into(), "event".into()]);
+            p.filter.types = Some(vec!["note".into(), "event".into()]);
         }
         if on.contains(&2) {
-            p.since = Some(when(-30));
+            p.filter.since = Some(when(-30));
         }
         if on.contains(&3) {
-            p.until = Some(when(1));
+            p.filter.until = Some(when(1));
         }
         for mode in ["keyword", "semantic", "hybrid"] {
             p.mode = mode.into();
-            let hits = cs::search(&db, &app.state.settings, &app.user.id, "netflix", &p).await.unwrap_or_else(|e| panic!("search {on:?} {mode}: {e:?}"));
+            let (hits, _more) = cs::search(&db, &app.state.settings, &app.user.id, "netflix", &p).await.unwrap_or_else(|e| panic!("search {on:?} {mode}: {e:?}"));
             assert!(!hits.is_empty() || on.contains(&0) || on.contains(&1) || on.contains(&2) || on.contains(&3), "search found nothing for no filters");
         }
     }
-    // list_records / count_records: type, filters on a column, every sort direction
-    for ty in [None, Some("note".to_string())] {
-        for filters in [HashMap::new(), HashMap::from([("source".to_string(), json!("alpha"))]), HashMap::from([("source".to_string(), json!("alpha")), ("external_id__exact".to_string(), json!("x0"))])] {
-            for sort in ["-occurred_at", "title", "-source", "bad sort; drop"] {
-                let p = ListParams { type_: ty.clone(), filters: filters.clone(), sort: sort.into(), limit: 10, offset: 0 };
-                cs::list_records(&db, &app.user.id, &p).await.unwrap_or_else(|e| panic!("list_records {ty:?} {filters:?} {sort}: {e:?}"));
-            }
-            cs::count_records(&db, &app.user.id, ty.as_deref(), &filters).await.unwrap_or_else(|e| panic!("count_records: {e:?}"));
+    // list: type, every filter operator on a column / datetime column / payload path, every sort direction
+    let sample = json!({
+        "source": "alpha", "title": "netflix invoice", "external_id": "x0", "type": "note",
+        "occurred_at": "2000-01-01", "ingested_at": "2000-01-01T00:00:00Z", "updated_at": "2999-01-01",
+        "payload__n": 1, "payload__a__b": "v",
+    });
+    let mut filter_sets: Vec<serde_json::Map<String, Value>> = vec![serde_json::Map::new()];
+    for (field, value) in sample.as_object().unwrap() {
+        for op in ["", "__ne", "__gt", "__gte", "__lt", "__lte"] {
+            // equality on a payload path and on plain columns, every operator on all of them
+            filter_sets.push(serde_json::Map::from_iter([(format!("{field}{op}"), value.clone())]));
         }
     }
+    filter_sets.push(serde_json::Map::from_iter([
+        ("source".to_string(), json!("alpha")),
+        ("occurred_at__gte".to_string(), json!("2000-01-01")),
+        ("occurred_at__lte".to_string(), json!("2999-01-01T00:00:00Z")),
+        ("payload__n__lt".to_string(), json!(3)),
+    ]));
+    for ty in [None, Some("note")] {
+        for filters in &filter_sets {
+            let parsed = cs::parse_filters(filters).unwrap_or_else(|e| panic!("parse_filters {filters:?}: {e:?}"));
+            for sort in ["-occurred_at", "title", "-source"] {
+                cs::list(&db, &app.user.id, ty, &parsed, sort, 10, 0).await.unwrap_or_else(|e| panic!("list {ty:?} {filters:?} {sort}: {e:?}"));
+            }
+        }
+    }
+    assert!(cs::list(&db, &app.user.id, None, &[], "bad sort; drop", 10, 0).await.is_err(), "an unknown sort column is refused, not spliced into SQL");
     // nearest_ids: the KNN text is built per limit
     for limit in [1, 3, 10, 50] {
         let mut v = vec![0.0f32; 1536];
         v[0] = 1.0;
-        cs::nearest_ids(&db, &app.user.id, v, limit).await.unwrap_or_else(|e| panic!("nearest_ids {limit}: {e:?}"));
+        cs::nearest_ids(&db, &app.user.id, v.clone(), &RecordFilter::default(), limit).await.unwrap_or_else(|e| panic!("nearest_ids {limit}: {e:?}"));
+        // every optional filter, in the KNN text and in the exact-scan fallback
+        for on in subsets(4) {
+            let f = RecordFilter {
+                sources: on.contains(&0).then(|| vec!["alpha".to_string()]),
+                types: on.contains(&1).then(|| vec!["note".to_string()]),
+                since: on.contains(&2).then(|| Datetime::from(chrono::Utc::now() - chrono::Duration::days(30))),
+                until: on.contains(&3).then(|| Datetime::from(chrono::Utc::now() + chrono::Duration::days(1))),
+            };
+            cs::nearest_ids(&db, &app.user.id, v.clone(), &f, limit).await.unwrap_or_else(|e| panic!("nearest_ids {on:?} {limit}: {e:?}"));
+        }
     }
 }
 
@@ -138,6 +166,9 @@ async fn entities_and_vaults(app: &TestApp) -> Value {
         let out = app.tool("memory_write", json!({"subject_name": format!("Thing {kind}"), "subject_kind": kind, "text": format!("a {kind} fact")})).await;
         assert!(out.get("error").is_none(), "{kind}: {out}");
     }
+    // recall's graph arm (name and alias index lookups, per-entity memories) and memory text arm (one statement per term)
+    let recalled = app.tool("recall", json!({"query": "what is a Thing person fact?", "time_range": ["2000-01-01", "2999-01-01"]})).await;
+    assert!(recalled.get("error").is_none(), "{recalled}");
     let found = app.tool("entities_search", json!({"query": "Thing person"})).await;
     let person = found["results"][0]["id"].as_str().expect("entity id").to_string();
     let other = app.tool("entities_search", json!({"query": "Thing organisation"})).await["results"][0]["id"].as_str().unwrap().to_string();

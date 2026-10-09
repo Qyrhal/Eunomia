@@ -246,6 +246,6 @@ async fn nearest_ids_is_owner_scoped_and_falls_back_to_an_exact_scan() {
     }
     let a = eunomia_backend::rid::parse("user:a").unwrap();
     // Asking for more than owner a has: HNSW is short, the exact scan returns exactly a's live rows, best first.
-    let ids = nearest_ids(&orgdb, &a, unit(1), 10).await.unwrap();
+    let ids = nearest_ids(&orgdb, &a, unit(1), &Default::default(), 10).await.unwrap();
     assert_eq!(ids, ["a1", "a3"]);
 }

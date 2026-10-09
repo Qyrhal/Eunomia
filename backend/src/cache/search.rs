@@ -1,7 +1,6 @@
 //! Cache write + query API. The only module that knows SurrealDB's BM25/MTREE
 //! indexes exist -- this module's external signatures (`upsert`,
-//! `set_embedding`, `search`, `get`, `list_records`, `count_records`,
-//! `links`) are the swap point for any future backend.
+//! `set_embedding`, `search`, `get`, `list`, `links`) are the swap point for any future backend.
 //!
 
 use surrealdb::types::SurrealValue;
@@ -285,10 +284,98 @@ pub(crate) fn rank_term_hits(per_term: Vec<Vec<(String, f64)>>, limit: usize) ->
     ranked.into_iter().take(limit).map(|(id, _)| id).collect()
 }
 
+/// Most results one `search`/`list` call may page through (`offset + limit`);
+/// past that, narrow the query rather than page further.
+pub(crate) const MAX_WINDOW: usize = 1000;
+
+/// An ISO 8601 / RFC 3339 timestamp, or a bare `YYYY-MM-DD` date (midnight
+/// UTC). Anything else is a 400 naming `field`, not a silent string compare.
+pub(crate) fn parse_datetime(field: &str, s: &str) -> AppResult<chrono::DateTime<chrono::Utc>> {
+    let s = s.trim();
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
+        return Ok(dt.with_timezone(&chrono::Utc));
+    }
+    if let Some(dt) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").ok().and_then(|d| d.and_hms_opt(0, 0, 0)) {
+        return Ok(dt.and_utc());
+    }
+    Err(AppError::bad_request(format!("{field}: {s:?} is not an ISO 8601 date or datetime")))
+}
+
+type Utc = chrono::DateTime<chrono::Utc>;
+
+/// A `since`/`until` pair, each optional; a reversed range is an error.
+pub(crate) fn parse_range(
+    since: Option<&str>,
+    until: Option<&str>,
+) -> AppResult<(Option<Utc>, Option<Utc>)> {
+    let since = since.map(|s| parse_datetime("since", s)).transpose()?;
+    let until = until.map(|s| parse_datetime("until", s)).transpose()?;
+    if let (Some(a), Some(b)) = (since, until)
+        && a > b
+    {
+        return Err(AppError::bad_request("since must not be after until"));
+    }
+    Ok((since, until))
+}
+
+/// Source/type/date restrictions, applied inside candidate generation rather
+/// than to an already-truncated candidate list, so a match in a small source
+/// can't be crowded out by other sources' hits. [`RecordFilter::sql`] only
+/// references the set fields; [`RecordFilter::bind`] binds them.
+#[derive(Debug, Clone, Default)]
+pub struct RecordFilter {
+    pub sources: Option<Vec<String>>,
+    pub types: Option<Vec<String>>,
+    pub since: Option<Datetime>,
+    pub until: Option<Datetime>,
+}
+
+impl RecordFilter {
+    fn sql(&self) -> String {
+        let mut s = String::new();
+        if self.sources.is_some() {
+            s.push_str(" AND source IN $sources");
+        }
+        if self.types.is_some() {
+            s.push_str(" AND type IN $types");
+        }
+        if self.since.is_some() {
+            s.push_str(" AND occurred_at >= $since");
+        }
+        if self.until.is_some() {
+            s.push_str(" AND occurred_at <= $until");
+        }
+        s
+    }
+
+    fn bind<'a>(&self, mut q: store::Q<'a>) -> store::Q<'a> {
+        if let Some(v) = &self.sources {
+            q = q.bind(("sources", v.clone()));
+        }
+        if let Some(v) = &self.types {
+            q = q.bind(("types", v.clone()));
+        }
+        if let Some(v) = self.since {
+            q = q.bind(("since", v));
+        }
+        if let Some(v) = self.until {
+            q = q.bind(("until", v));
+        }
+        q
+    }
+}
+
 /// `title` and `body_text` each have their own FULLTEXT index (a two-field index only resolves
 /// the first field). Per search term: the title index (BM25-scored, +1 so a title hit beats a
-/// body-only one) plus the body index (flat score); fused by [`rank_term_hits`].
-pub(crate) async fn keyword_ids(db: &OrgDb, owner: &RecordId, q: &str, limit: usize) -> AppResult<Vec<String>> {
+/// body-only one) and the body index (its own BM25 score), both pre-filtered by `filter`, every
+/// term's two lookups in one round trip; fused by [`rank_term_hits`].
+pub(crate) async fn keyword_ids(
+    db: &OrgDb,
+    owner: &RecordId,
+    q: &str,
+    filter: &RecordFilter,
+    limit: usize,
+) -> AppResult<Vec<String>> {
     #[derive(Deserialize, SurrealValue)]
     struct ScoredRow {
         id: RecordId,
@@ -297,21 +384,35 @@ pub(crate) async fn keyword_ids(db: &OrgDb, owner: &RecordId, q: &str, limit: us
         score: f64,
     }
 
+    let terms = search_terms(q);
+    if terms.is_empty() {
+        return Ok(Vec::new());
+    }
+    let cond = filter.sql();
+    let mut sql = String::new();
+    for i in 0..terms.len() {
+        sql.push_str(&format!(
+            "SELECT id, search::score(1) AS score FROM cache_record \
+             WHERE owner = $owner AND title @1@ $t{i} AND deleted = false{cond} ORDER BY score DESC, id LIMIT $limit; \
+             SELECT id, search::score(2) AS score FROM cache_record \
+             WHERE owner = $owner AND body_text @2@ $t{i} AND deleted = false{cond} ORDER BY score DESC, id LIMIT $limit;"
+        ));
+    }
+    // dynamic: one pair of lookups per term, each with the filters that are set.
+    let mut query = filter.bind(store::dynamic(db, "cache.keyword_ids", sql)).bind(("owner", owner.clone())).bind(("limit", limit as i64));
+    for (i, t) in terms.into_iter().enumerate() {
+        query = query.bind((format!("t{i}"), t));
+    }
+    let mut res = query.await?;
     let mut per_term = Vec::new();
-    for term in search_terms(q) {
-        let mut res = store::cache::KEYWORD_IDS
-            .on(db)
-            .bind(("owner", owner.clone()))
-            .bind(("t", term))
-            .bind(("limit", limit as i64))
-            .await?;
-        let title: Vec<ScoredRow> = res.take(0)?;
-        let body: Vec<ScoredRow> = res.take(1)?;
+    for i in 0..res.num_statements() / 2 {
+        let title: Vec<ScoredRow> = res.take(2 * i)?;
+        let body: Vec<ScoredRow> = res.take(2 * i + 1)?;
         per_term.push(
             title
                 .into_iter()
                 .map(|r| (literal(&r.id), r.score + 1.0))
-                .chain(body.into_iter().map(|r| (literal(&r.id), 0.5)))
+                .chain(body.into_iter().map(|r| (literal(&r.id), r.score)))
                 .collect(),
         );
     }
@@ -324,6 +425,7 @@ pub(crate) async fn semantic_ids(
     settings: &crate::config::Settings,
     owner: &RecordId,
     q: &str,
+    filter: &RecordFilter,
     limit: usize,
 ) -> AppResult<Vec<String>> {
     let vec = crate::embeddings::service::embed(db, settings, &[q.to_string()], Some(owner))
@@ -331,25 +433,27 @@ pub(crate) async fn semantic_ids(
         .into_iter()
         .next()
         .unwrap_or_default();
-    nearest_ids(db, owner, vec, limit).await
+    nearest_ids(db, owner, vec, filter, limit).await
 }
 
-/// The `limit` live records of `owner` closest to `vec`, best first. HNSW KNN (`<|K,EF|>`, both
-/// literal integers: they cannot be bound parameters) answers first. The index is shared by every
-/// owner and the owner filter is not part of the ANN walk, so a small owner among big ones can get
-/// fewer than `limit` rows back; then an exact cosine scan over just this owner's records is the
-/// answer (it is ground truth, and cheap exactly when the owner is small).
-pub async fn nearest_ids(db: &OrgDb, owner: &RecordId, vec: Vec<f32>, limit: usize) -> AppResult<Vec<String>> {
+/// The `limit` live records of `owner` matching `filter` closest to `vec`, best first. HNSW KNN
+/// (`<|K,EF|>`, both literal integers: they cannot be bound parameters) answers first. The index is
+/// shared by every owner and the owner filter is not part of the ANN walk, so a small owner among big
+/// ones (or a narrow filter) can get fewer than `limit` rows back; then an exact cosine scan over just
+/// this owner's matching records is the answer (it is ground truth, and cheap exactly when the set is small).
+pub async fn nearest_ids(db: &OrgDb, owner: &RecordId, vec: Vec<f32>, filter: &RecordFilter, limit: usize) -> AppResult<Vec<String>> {
     #[derive(Deserialize, SurrealValue)]
     struct IdRow {
         id: RecordId,
     }
     let ef = (limit * 2).max(64);
     let query = format!(
-        "SELECT id FROM cache_record WHERE owner = $owner AND embedding <|{limit},{ef}|> $vec AND deleted = false"
+        "SELECT id FROM cache_record WHERE owner = $owner AND embedding <|{limit},{ef}|> $vec AND deleted = false{}",
+        filter.sql()
     );
     // dynamic: the KNN `<|K,EF|>` operator needs literal integers, one SQL text per (K, EF).
-    let mut res = store::dynamic(db, "cache.semantic_ids", query)
+    let mut res = filter
+        .bind(store::dynamic(db, "cache.semantic_ids", query))
         .bind(("owner", owner.clone()))
         .bind(("vec", vec.clone()))
         .await?;
@@ -357,8 +461,14 @@ pub async fn nearest_ids(db: &OrgDb, owner: &RecordId, vec: Vec<f32>, limit: usi
     if rows.len() >= limit {
         return Ok(rows.into_iter().map(|r| literal(&r.id)).collect());
     }
-    let mut res = store::cache::SEMANTIC_EXACT
-        .on(db)
+    let exact = format!(
+        "SELECT id, vector::similarity::cosine(embedding, $vec) AS sim FROM cache_record \
+         WHERE owner = $owner AND deleted = false AND embedding != NONE{} ORDER BY sim DESC LIMIT $limit",
+        filter.sql()
+    );
+    // dynamic: the exact fallback carries the same optional filters.
+    let mut res = filter
+        .bind(store::dynamic(db, "cache.semantic_exact", exact))
         .bind(("owner", owner.clone()))
         .bind(("vec", vec))
         .bind(("limit", limit as i64))
@@ -370,7 +480,7 @@ pub async fn nearest_ids(db: &OrgDb, owner: &RecordId, vec: Vec<f32>, limit: usi
 /// Reciprocal Rank Fusion, k=60: sum of `1/(60+rank+1)` per id across any
 /// number of ranked lists. Exposed (not just the fused order) so callers
 /// that need the raw fused score to apply further boosts on top -- e.g.
-/// `cache::recall`'s 4-arm pipeline -- don't reimplement this formula.
+/// `cache::recall`'s 5-arm pipeline -- don't reimplement this formula.
 pub(crate) fn rrf_scores(ranked_lists: &[Vec<String>]) -> HashMap<String, f64> {
     let mut scores: HashMap<String, f64> = HashMap::new();
     for list in ranked_lists {
@@ -381,22 +491,18 @@ pub(crate) fn rrf_scores(ranked_lists: &[Vec<String>]) -> HashMap<String, f64> {
     scores
 }
 
+/// [`rrf_scores`] as an order; ties by id so paging is stable.
 fn rrf(ranked_lists: &[Vec<String>]) -> Vec<String> {
     let scores = rrf_scores(ranked_lists);
     let mut ids: Vec<String> = scores.keys().cloned().collect();
-    ids.sort_by(|a, b| scores[b].partial_cmp(&scores[a]).unwrap_or(std::cmp::Ordering::Equal));
+    ids.sort_by(|a, b| scores[b].partial_cmp(&scores[a]).unwrap_or(std::cmp::Ordering::Equal).then(a.cmp(b)));
     ids
 }
 
-/// Options for [`search`]; the keyword
-/// arguments (`sources`, `types`, `since`, `until`, `mode`, `limit`,
-/// `offset`).
+/// Options for [`search`].
 #[derive(Debug, Clone, Default)]
 pub struct SearchParams {
-    pub sources: Option<Vec<String>>,
-    pub types: Option<Vec<String>>,
-    pub since: Option<Datetime>,
-    pub until: Option<Datetime>,
+    pub filter: RecordFilter,
     pub mode: String,
     pub limit: usize,
     pub offset: usize,
@@ -408,163 +514,175 @@ impl SearchParams {
     }
 }
 
+/// One page of records matching `q`, plus whether more exist. Filters are
+/// pushed into every candidate query and candidates are fetched up to
+/// `offset + limit + 1`, so later pages are reachable and `has_more` is
+/// exact for the fused candidate list.
 pub async fn search(
     db: &OrgDb,
     settings: &crate::config::Settings,
     owner: &RecordId,
     q: &str,
-    params: &SearchParams,
-) -> AppResult<Vec<CacheRecord>> {
-    let pool = (params.limit * 4).max(40);
+    p: &SearchParams,
+) -> AppResult<(Vec<CacheRecord>, bool)> {
+    let window = p
+        .offset
+        .checked_add(p.limit)
+        .filter(|w| *w <= MAX_WINDOW)
+        .ok_or_else(|| AppError::bad_request(format!("offset + limit must be at most {MAX_WINDOW}")))?;
+    let pool = window + 1;
+    let f = &p.filter;
     // Without embeddings (no OpenAI key) every mode degrades to keyword search.
     let semantic_ok = crate::embeddings::service::available(db, settings, owner).await;
-    let ids = match params.mode.as_str() {
-        "keyword" => keyword_ids(db, owner, q, pool).await?,
-        "semantic" if semantic_ok => semantic_ids(db, settings, owner, q, pool).await?,
-        "semantic" => keyword_ids(db, owner, q, pool).await?,
+    let ids = match p.mode.as_str() {
+        "semantic" if semantic_ok => semantic_ids(db, settings, owner, q, f, pool).await?,
+        "keyword" | "semantic" => keyword_ids(db, owner, q, f, pool).await?,
         _ if semantic_ok => {
-            rrf(&[keyword_ids(db, owner, q, pool).await?, semantic_ids(db, settings, owner, q, pool).await?])
+            let kw = keyword_ids(db, owner, q, f, pool).await?;
+            rrf(&[kw, semantic_ids(db, settings, owner, q, f, pool).await.unwrap_or_default()])
         }
-        _ => keyword_ids(db, owner, q, pool).await?,
+        _ => keyword_ids(db, owner, q, f, pool).await?,
     };
 
+    let has_more = ids.len() > window;
+    let page: Vec<String> = ids.into_iter().skip(p.offset).take(p.limit).collect();
+    Ok((get_many(db, owner, &page).await?, has_more))
+}
+
+/// `owner`'s live records for `ids`, in `ids` order: tombstoned
+/// (`deleted = true`) and missing ids are dropped. One query for any number
+/// of ids; the one read path behind `get`, `search` and recall hydration.
+pub(crate) async fn get_many(db: &OrgDb, owner: &RecordId, ids: &[String]) -> AppResult<Vec<CacheRecord>> {
     if ids.is_empty() {
         return Ok(Vec::new());
     }
-
-    let mut conditions = vec!["id IN $ids".to_string(), "owner = $owner".to_string(), "deleted = false".to_string()];
-    if params.sources.is_some() {
-        conditions.push("source IN $sources".to_string());
-    }
-    if params.types.is_some() {
-        conditions.push("type IN $types".to_string());
-    }
-    if params.since.is_some() {
-        conditions.push("occurred_at >= $since".to_string());
-    }
-    if params.until.is_some() {
-        conditions.push("occurred_at <= $until".to_string());
-    }
-
-    let sql = format!("SELECT * FROM cache_record WHERE {}", conditions.join(" AND "));
-    let scoped_ids: Vec<RecordId> = ids.iter().map(|i| rid(owner, i)).collect();
-    // dynamic: 16 combinations of the four optional filters.
-    let mut query = store::dynamic(db, "cache.search_filtered", sql).bind(("ids", scoped_ids)).bind(("owner", owner.clone()));
-    if let Some(sources) = &params.sources {
-        query = query.bind(("sources", sources.clone()));
-    }
-    if let Some(types) = &params.types {
-        query = query.bind(("types", types.clone()));
-    }
-    if let Some(since) = &params.since {
-        query = query.bind(("since", *since));
-    }
-    if let Some(until) = &params.until {
-        query = query.bind(("until", *until));
-    }
-
-    let rows: Vec<Row> = query.await?.take(0)?;
-    let order: HashMap<&str, usize> = ids.iter().enumerate().map(|(i, id)| (id.as_str(), i)).collect();
-    let mut recs: Vec<CacheRecord> = rows.into_iter().map(row_to_record).collect();
-    recs.sort_by_key(|r| order.get(r.id.as_str()).copied().unwrap_or(usize::MAX));
-
-    Ok(recs.into_iter().skip(params.offset).take(params.limit).collect())
+    let rids: Vec<RecordId> = ids.iter().map(|i| rid(owner, i)).collect();
+    let mut res = store::cache::RECORDS_BY_IDS.on(db).bind(("ids", rids)).bind(("owner", owner.clone())).await?;
+    let rows: Vec<Row> = res.take(0)?;
+    let mut by_id: HashMap<String, CacheRecord> = rows.into_iter().map(row_to_record).map(|r| (r.id.clone(), r)).collect();
+    Ok(ids.iter().filter_map(|i| by_id.remove(i)).collect())
 }
 
+/// One live record; a tombstoned record reads as not found.
 pub async fn get(db: &OrgDb, owner: &RecordId, record_id: &str) -> AppResult<Option<CacheRecord>> {
-    let row: Option<Row> = store::get(db, &rid(owner, record_id)).await?;
-    Ok(row.map(row_to_record))
+    Ok(get_many(db, owner, &[record_id.to_string()]).await?.pop())
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct ListParams {
-    pub type_: Option<String>,
-    pub filters: HashMap<String, Value>,
-    /// `-field` for DESC (the default, on `occurred_at`), `field` for ASC.
-    pub sort: String,
-    pub limit: usize,
-    pub offset: usize,
+/// Columns an agent may sort/filter `list` on -- anything else is a 400.
+pub const FIELDS: &[&str] = &["occurred_at", "ingested_at", "updated_at", "title", "type", "source", "id", "external_id"];
+const DATETIME_FIELDS: &[&str] = &["occurred_at", "ingested_at", "updated_at"];
+/// `field__op` suffixes `list` filters understand; no suffix means equality.
+const FILTER_OPS: &[(&str, &str)] = &[("ne", "!="), ("gt", ">"), ("gte", ">="), ("lt", "<"), ("lte", "<=")];
+
+/// One validated `list` filter: `path` is a known column or a `payload.a.b`
+/// path made only of `[A-Za-z0-9_]` segments, so it is safe to interpolate.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Filter {
+    path: String,
+    op: &'static str,
+    value: Value,
+    datetime: bool,
 }
 
-impl ListParams {
-    pub fn new() -> Self {
-        ListParams { sort: "-occurred_at".to_string(), limit: 50, offset: 0, ..Default::default() }
-    }
-}
-
-/// Field names are spliced into SQL text, so only plain identifiers pass.
-fn is_ident(name: &str) -> bool {
-    !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-}
-
-fn apply_filters(conditions: &mut Vec<String>, params: &HashMap<String, Value>, bound: &mut HashMap<String, Value>) {
-    for (key, val) in params {
-        // `__`-suffixed lookups (e.g. `occurred_at__gte`) aren't given
-        // special operator handling: only the suffix is stripped for the
-        // field name, and the comparison is always `=`.
-        let field_name = key.split("__").next().unwrap_or(key);
-        if !is_ident(field_name) {
-            continue;
+/// Parses `{"field": v, "field__gte": v, "payload__a__b__lt": v, ...}`.
+/// Datetime columns take ISO 8601 values and compare as datetimes;
+/// `payload__<path>` targets that nested payload field; an unknown field or
+/// operator is an error rather than a different query.
+pub fn parse_filters(filters: &serde_json::Map<String, Value>) -> AppResult<Vec<Filter>> {
+    let ops: Vec<&str> = FILTER_OPS.iter().map(|(name, _)| *name).collect();
+    let mut out = Vec::new();
+    for (key, value) in filters {
+        let mut parts: Vec<&str> = key.split("__").collect();
+        let op = match parts.last() {
+            Some(last) if parts.len() > 1 => FILTER_OPS.iter().find(|(name, _)| name == last).map(|(_, sql)| *sql),
+            _ => None,
+        };
+        if op.is_some() {
+            parts.pop();
         }
-        let param_name = format!("filter_{field_name}");
-        conditions.push(format!("{field_name} = ${param_name}"));
-        bound.insert(param_name, val.clone());
+        let (field, rest) = (parts[0], &parts[1..]);
+        let path = if field == "payload" {
+            let ok = |s: &&str| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+            if rest.is_empty() || !rest.iter().all(ok) {
+                return Err(AppError::bad_request(format!(
+                    "filter {key:?}: payload filters name a field, e.g. payload__category or payload__amount_cents__lt"
+                )));
+            }
+            format!("payload.{}", rest.join("."))
+        } else if !FIELDS.contains(&field) {
+            return Err(AppError::bad_request(format!(
+                "unknown filter field {field:?}; use one of {FIELDS:?} or payload__<field>"
+            )));
+        } else if !rest.is_empty() {
+            return Err(AppError::bad_request(format!(
+                "filter {key:?}: unsupported operator {:?}; use one of {ops:?} (or none for equality)",
+                rest.join("__")
+            )));
+        } else {
+            field.to_string()
+        };
+        let datetime = DATETIME_FIELDS.contains(&field);
+        let value = if datetime {
+            let s = value
+                .as_str()
+                .ok_or_else(|| AppError::bad_request(format!("filter {key:?}: expected an ISO 8601 string")))?;
+            Value::String(parse_datetime(key, s)?.to_rfc3339())
+        } else {
+            value.clone()
+        };
+        out.push(Filter { path, op: op.unwrap_or("="), value, datetime });
     }
+    Ok(out)
 }
 
-pub async fn list_records(db: &OrgDb, owner: &RecordId, params: &ListParams) -> AppResult<Vec<CacheRecord>> {
-    let mut conditions = vec!["owner = $owner".to_string(), "deleted = false".to_string()];
-    let mut bound: HashMap<String, Value> = HashMap::new();
-    if let Some(t) = &params.type_ {
-        conditions.push("type = $type".to_string());
-        bound.insert("type".to_string(), json!(t));
+/// One page of `owner`'s live records of `type_` matching `filters`, sorted
+/// by `sort` (`-field` for DESC), plus the total match count.
+pub async fn list(
+    db: &OrgDb,
+    owner: &RecordId,
+    type_: Option<&str>,
+    filters: &[Filter],
+    sort: &str,
+    limit: usize,
+    offset: usize,
+) -> AppResult<(Vec<CacheRecord>, i64)> {
+    let field = sort.strip_prefix('-').unwrap_or(sort);
+    if !FIELDS.contains(&field) {
+        return Err(AppError::bad_request(format!("unknown sort field {sort:?}; use one of {FIELDS:?}")));
     }
-    apply_filters(&mut conditions, &params.filters, &mut bound);
+    let direction = if sort.starts_with('-') { "DESC" } else { "ASC" };
 
-    let field_name = params.sort.trim_start_matches('-');
-    let field_name = if is_ident(field_name) { field_name } else { "occurred_at" };
-    let direction = if params.sort.starts_with('-') { "DESC" } else { "ASC" };
+    let mut conditions = vec!["owner = $owner".to_string(), "deleted = false".to_string()];
+    if type_.is_some() {
+        conditions.push("type = $type".to_string());
+    }
+    for (i, f) in filters.iter().enumerate() {
+        let param = if f.datetime { format!("<datetime>$f{i}") } else { format!("$f{i}") };
+        conditions.push(format!("{} {} {param}", f.path, f.op));
+    }
+    let where_ = conditions.join(" AND ");
     let sql = format!(
-        "SELECT * FROM cache_record WHERE {} ORDER BY {field_name} {direction} LIMIT $limit START $offset",
-        conditions.join(" AND ")
+        "SELECT * FROM cache_record WHERE {where_} ORDER BY {field} {direction} LIMIT $limit START $offset; \
+         SELECT count() FROM cache_record WHERE {where_} GROUP ALL"
     );
-
-    // dynamic: caller-chosen filter fields and sort column.
-    let mut query = store::dynamic(db, "cache.list_records", sql).bind(("owner", owner.clone())).bind(("limit", params.limit as i64)).bind((
-        "offset",
-        params.offset as i64,
-    ));
-    for (k, v) in bound {
-        query = query.bind((k, v));
+    // dynamic: caller-chosen filter fields, operators and sort column.
+    let mut q = store::dynamic(db, "cache.list_records", sql)
+        .bind(("owner", owner.clone()))
+        .bind(("type", type_.map(str::to_string)))
+        .bind(("limit", limit as i64))
+        .bind(("offset", offset as i64));
+    for (i, f) in filters.iter().enumerate() {
+        q = q.bind((format!("f{i}"), f.value.clone()));
     }
-    let rows: Vec<Row> = query.await?.take(0)?;
-    Ok(rows.into_iter().map(row_to_record).collect())
-}
-
-/// Total `cache_record` rows matching `list_records`'s same `type`/`filters`
-/// conditions, ignoring `limit`/`offset`.
-pub async fn count_records(db: &OrgDb, owner: &RecordId, type_: Option<&str>, filters: &HashMap<String, Value>) -> AppResult<i64> {
-    let mut conditions = vec!["owner = $owner".to_string(), "deleted = false".to_string()];
-    let mut bound: HashMap<String, Value> = HashMap::new();
-    if let Some(t) = type_ {
-        conditions.push("type = $type".to_string());
-        bound.insert("type".to_string(), json!(t));
-    }
-    apply_filters(&mut conditions, filters, &mut bound);
-
-    let sql = format!("SELECT count() FROM cache_record WHERE {} GROUP ALL", conditions.join(" AND "));
-    // dynamic: caller-chosen filter fields.
-    let mut query = store::dynamic(db, "cache.count_records", sql).bind(("owner", owner.clone()));
-    for (k, v) in bound {
-        query = query.bind((k, v));
-    }
+    let mut res = q.await?;
+    let rows: Vec<Row> = res.take(0)?;
 
     #[derive(Deserialize, SurrealValue)]
     struct CountRow {
         count: i64,
     }
-    let rows: Vec<CountRow> = query.await?.take(0)?;
-    Ok(rows.first().map(|r| r.count).unwrap_or(0))
+    let counts: Vec<CountRow> = res.take(1)?;
+    Ok((rows.into_iter().map(row_to_record).collect(), counts.first().map(|r| r.count).unwrap_or(0)))
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -574,6 +692,8 @@ pub struct LinkEntry {
     pub target_id: String,
 }
 
+/// count: a tombstoned (or never-synced) endpoint hides the link, and a
+/// tombstoned record has no links at all.
 pub async fn links(db: &OrgDb, owner: &RecordId, record_id: &str, rel: Option<&str>) -> AppResult<Vec<LinkEntry>> {
     let record_rid = rid(owner, record_id);
     let mut out = Vec::new();
@@ -612,6 +732,28 @@ pub async fn links(db: &OrgDb, owner: &RecordId, record_id: &str, rel: Option<&s
     }
 
     Ok(out)
+}
+
+/// For each live record among `sources`, its live linked records in either
+/// direction: one graph-traversal query for the whole batch (recall's graph arm).
+/// Tombstoned sources and targets are skipped.
+pub(crate) async fn live_neighbours(db: &OrgDb, sources: &[RecordId]) -> AppResult<HashMap<RecordId, Vec<RecordId>>> {
+    if sources.is_empty() {
+        return Ok(HashMap::new());
+    }
+    #[derive(Deserialize, SurrealValue)]
+    struct NRow {
+        id: RecordId,
+        #[serde(default)]
+        #[surreal(default)]
+        fwd: Vec<RecordId>,
+        #[serde(default)]
+        #[surreal(default)]
+        back: Vec<RecordId>,
+    }
+    let mut res = store::cache::LIVE_NEIGHBOURS.on(db).bind(("ids", sources.to_vec())).await?;
+    let rows: Vec<NRow> = res.take(0)?;
+    Ok(rows.into_iter().map(|r| (r.id, r.fwd.into_iter().chain(r.back).collect())).collect())
 }
 
 #[cfg(test)]
@@ -714,23 +856,61 @@ mod tests {
         assert_eq!(order[0], "x");
     }
 
-    #[test]
-    fn apply_filters_drops_non_identifier_fields() {
-        let mut conditions = Vec::new();
-        let mut bound = HashMap::new();
-        let filters = HashMap::from([("x = 1 OR true; DELETE user; --".to_string(), json!(1))]);
-        apply_filters(&mut conditions, &filters, &mut bound);
-        assert!(conditions.is_empty() && bound.is_empty());
+    fn filters(v: Value) -> AppResult<Vec<Filter>> {
+        parse_filters(v.as_object().unwrap())
     }
 
     #[test]
-    fn apply_filters_strips_dunder_suffix_for_field_name_but_keeps_equality() {
-        let mut conditions = Vec::new();
-        let mut bound = HashMap::new();
-        let mut filters = HashMap::new();
-        filters.insert("occurred_at__gte".to_string(), json!("2024-01-01"));
-        apply_filters(&mut conditions, &filters, &mut bound);
-        assert_eq!(conditions, vec!["occurred_at = $filter_occurred_at".to_string()]);
-        assert_eq!(bound["filter_occurred_at"], json!("2024-01-01"));
+    fn parse_filters_maps_operators_and_compares_dates_as_datetimes() {
+        let f = filters(json!({"occurred_at__gte": "2024-01-01"})).unwrap();
+        assert_eq!(f[0].path, "occurred_at");
+        assert_eq!(f[0].op, ">=");
+        assert!(f[0].datetime);
+        assert_eq!(f[0].value, json!("2024-01-01T00:00:00+00:00"));
+        assert_eq!(filters(json!({"title__ne": "x"})).unwrap()[0].op, "!=");
+        assert_eq!(filters(json!({"source": "demo"})).unwrap()[0].op, "=");
+        assert!(filters(json!({"occurred_at__lt": "last tuesday"})).is_err());
+        assert!(filters(json!({"occurred_at": 5})).is_err());
+    }
+
+    #[test]
+    fn parse_filters_targets_the_named_payload_field() {
+        let f = filters(json!({"payload__category": "Groceries", "payload__a__b__lt": 3})).unwrap();
+        let paths: Vec<(&str, &str)> = f.iter().map(|f| (f.path.as_str(), f.op)).collect();
+        assert!(paths.contains(&("payload.category", "=")));
+        assert!(paths.contains(&("payload.a.b", "<")));
+        assert!(filters(json!({"payload": {"x": 1}})).is_err());
+        assert!(filters(json!({"payload__a-b": 1})).is_err());
+        assert!(filters(json!({"payload__x;DELETE": 1})).is_err());
+    }
+
+    #[test]
+    fn parse_filters_rejects_unknown_fields_and_operators() {
+        assert!(filters(json!({"title__contains": "x"})).is_err());
+        assert!(filters(json!({"title__gte__lt": "x"})).is_err());
+        assert!(filters(json!({"bogus": "x"})).is_err());
+        assert!(filters(json!({})).unwrap().is_empty());
+    }
+
+    #[test]
+    fn parse_range_validates_dates_and_order() {
+        assert!(parse_range(Some("2024-01-01"), Some("2024-02-01T10:00:00Z")).is_ok());
+        assert!(parse_range(Some("2024-03-01"), Some("2024-02-01")).is_err());
+        assert!(parse_range(Some("yesterday"), None).is_err());
+        assert_eq!(parse_range(None, None).unwrap(), (None, None));
+    }
+
+    #[test]
+    fn record_filter_sql_only_mentions_set_fields() {
+        assert_eq!(RecordFilter::default().sql(), "");
+        let f = RecordFilter { sources: Some(vec!["demo".into()]), until: Some(Datetime::default()), ..Default::default() };
+        assert_eq!(f.sql(), " AND source IN $sources AND occurred_at <= $until");
+    }
+
+    #[test]
+    fn rrf_breaks_ties_by_id_for_stable_pages() {
+        let a = vec!["b".to_string(), "a".to_string()];
+        let b = vec!["a".to_string(), "b".to_string()];
+        assert_eq!(rrf(&[a, b]), vec!["a", "b"]);
     }
 }

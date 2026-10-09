@@ -651,7 +651,7 @@ async fn mutation_check_removing_one_filter_turns_the_suite_red() {
         ("sync status", &[("app.sources_sync_status_list", "WHERE owner = $owner")], |_| Call::Route("/api/sources/status".into())),
         ("entity list", &[("entities.list_by_vault", "WHERE vault = $vault")], |_| Call::Route("/api/entities".into())),
         ("entity graph", &[("entities.select_by_vault", "WHERE vault = $vault")], |_| Call::Tool("entities_graph", json!({}))),
-        ("cache list", &[("cache.generic_list", "owner = $owner"), ("cache.generic_count", "owner = $owner")], |_| Call::Tool("list", json!({"type": "note"}))),
+        ("cache list", &[("cache.list_records", "owner = $owner")], |_| Call::Tool("list", json!({"type": "note"}))),
     ];
     let probe = |caller: &Org, victim: &Org, call: Call| {
         let w = &w;
