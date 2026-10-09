@@ -1,5 +1,7 @@
 services:
   surrealdb:
+    # come back after a crash or reboot, like the backend
+    restart: unless-stopped
     # Exact patch pin; upgrade deliberately. Hardened: every
     # capability is denied except the function families the backend's SQL uses
     # (docs/architecture/surreal-functions.md), guests are refused, and a runaway query or
@@ -98,6 +100,8 @@ services:
       start_period: 30m
 
   frontend:
+    # come back after a crash or reboot, like the backend
+    restart: unless-stopped
     image: ghcr.io/qyrhal/eunomia-frontend:${EUNOMIA_IMAGE_TAG:-latest}
     build: ./frontend
     ports:
