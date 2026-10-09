@@ -19,10 +19,16 @@ case "$cmd" in
   export) if [ -f "$SHIM_FAIL" ] && grep -q "$db" "$SHIM_FAIL"; then
             rm -f "$SHIM_FAIL"; echo "OPTION IMPORT; -- dump of $db -- padding padding padding padding padding padding"; printf 'CREATE half'
             [ "$SHIM_MODE" = truncate ] && exit 0; exit 1; fi
-          echo "OPTION IMPORT; -- dump of $db -- padding padding padding padding padding padding padding padding;" ;;
+          echo "OPTION IMPORT; -- dump of $db -- padding padding padding padding padding padding padding padding;"
+          echo "DEFINE TABLE t TYPE ANY SCHEMALESS PERMISSIONS NONE;"; echo "-- TABLE DATA: t"; echo "-- ------"; echo
+          # MOCK_STUB: schema only, as after a server that died mid-export; MOCK_EMPTY: a database with no rows
+          [ -n "${MOCK_STUB:-}${MOCK_EMPTY:-}" ] || echo "INSERT [ { id: t:1 } ];" ;;
+  isready) [ -z "${MOCK_DEAD:-}" ] ;;
   import) echo "import $db: $(cat "$file")" >> "$SHIM_LOG" ;;
   sql) in="$(cat)"; echo "sql: $in" >> "$SHIM_LOG"
        case "$in" in
+         "INFO FOR DB;") echo '[{"tables":{"t":"DEFINE TABLE t TYPE ANY SCHEMALESS PERMISSIONS NONE"}}]' ;;
+         *"SELECT count() FROM"*) [ -n "${MOCK_EMPTY:-}" ] && echo '[[{"count":0}]]' || echo '[[{"count":5}]]' ;;
          "INFO FOR NS;") [ -z "${MOCK_INFO_FAIL:-}" ] || { echo "connection refused" >&2; exit 1; }
             [ -z "${MOCK_INFO_GARBAGE:-}" ] || { echo '[{"error":"namespace does not exist"}]'; exit 0; }
             if [ -n "${MOCK_TENANCY:-}" ]; then
@@ -90,6 +96,21 @@ check "an export that exits 0 but is cut off is refused too" test "$rc" -ne 0 -a
 check "no plaintext temp dump is left behind" test -z "$(ls -A "$TMP/tmpd")"
 rm -rf "$TMP/backups"/*; echo control > "$SHIM_FAIL"; SHIM_MODE=die MOCK_TENANCY=1 bk now manual >/dev/null 2>&1
 check "a tenancy backup failing on one database leaves no directory" test -z "$(ls "$TMP/backups")"
+
+# 5a. a backup must prove it holds the data: the server counts rows first, the dump must contain them
+rm -rf "$TMP/backups"/*
+MOCK_STUB=1 bk now manual >"$TMP/stub.out" 2>&1; rc=$?
+check "a schema-only export while the server reports rows is refused" test "$rc" -ne 0 -a -z "$(ls "$TMP/backups" | grep -v '^\.backup-key$')"
+check "the refusal says which table lost its rows" grep -q 'missing the rows of: t(5 rows)' "$TMP/stub.out"
+MOCK_TENANCY=1 MOCK_STUB=1 bk now manual >/dev/null 2>&1; rc=$?
+check "a tenancy backup with a stub database leaves no directory" test "$rc" -ne 0 -a -z "$(ls "$TMP/backups" | grep -v '^\.backup-key$')"
+MOCK_DEAD=1 bk now manual >/dev/null 2>&1; rc=$?
+check "a server that stopped answering after the export is refused" test "$rc" -ne 0 -a -z "$(ls "$TMP/backups" | grep -v '^\.backup-key$')"
+MOCK_EMPTY=1 MOCK_STUB=1 bk now manual >/dev/null 2>&1; rc=$?
+check "a database with no rows is a valid backup" test "$rc" -eq 0 -a -n "$(ls "$TMP"/backups/manual-*.surql.enc 2>/dev/null)"
+rm -rf "$TMP/backups"/*; sleep 1
+bk now manual >/dev/null 2>&1; rc=$?
+check "a normal export with rows is accepted" test "$rc" -eq 0 -a -n "$(ls "$TMP"/backups/manual-*.surql.enc 2>/dev/null)"
 
 # 5b. a failing INFO FOR NS is an error, never a quiet fallback to the stale single database
 rm -rf "$TMP/backups"/*

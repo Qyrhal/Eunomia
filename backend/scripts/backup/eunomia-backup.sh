@@ -93,11 +93,55 @@ encrypt_to() { # stdin -> $1, atomically; refuses an empty export
   mv "$tmp" "$1"
 }
 
-# dump_to DB OUT: export, then encrypt. sh has no pipefail, so the export goes to a private temp file
-# (shredded after) whose exit status and last line are checked: a dump that died midway never becomes a backup.
+sql_db() { # sql_db DB: statements on stdin, JSON on stdout
+  "$SURREAL" sql --endpoint "$ENDPOINT" --user "$USER_" --pass "$PASS_" --ns "$NS" --db "$1" --hide-welcome --json 2>/dev/null
+}
+
+# row_counts DB: prints "<table> <rows>" for every table of DB, asked of the live server BEFORE the export.
+# `INFO FOR DB` lists the tables (names must be plain identifiers, so they are safe to put in a query);
+# one `SELECT count() ... GROUP ALL` per table runs in a single call. Uses only the `count` function
+# family, which the hardened server allows.
+row_counts() {
+  info="$(echo 'INFO FOR DB;' | sql_db "$1")" || return 1
+  echo "$info" | grep -q '"tables"' || return 1
+  tables="$(echo "$info" | sed -n 's/.*"tables":{\(.*\)}.*/\1/p' | grep -oE '"[^"]+":"DEFINE TABLE' | sed -E 's/^"([^"]+)".*/\1/')"
+  [ -n "$tables" ] || return 0
+  q=""
+  for t in $tables; do
+    case "$t" in *[!A-Za-z0-9_]*) log "table name $t in $1 is not a plain identifier, cannot verify it" >&2; return 1 ;; esac
+    q="$q SELECT count() FROM \`$t\` GROUP ALL;"
+  done
+  res="$(echo "$q" | sql_db "$1")" || return 1
+  echo "$res" | grep -q '"error"' && return 1
+  # [[{"count":2}],[],[{"count":0}]] -> one line per statement, in table order
+  counts="$(echo "$res" | sed -e 's/^\[\[*//' -e 's/\]*\]$//' -e 's/\],\[/\n/g' | sed -E 's/.*"count":([0-9]+).*/\1/; s/^[^0-9].*$/0/; s/^$/0/')"
+  [ "$(echo "$counts" | wc -l)" -eq "$(echo "$tables" | wc -l)" ] || return 1
+  echo "$tables" | { while read -r t; do read -r c <&3; echo "$t $c"; done; } 3<<EOF
+$counts
+EOF
+}
+
+# verify_dump DUMP COUNTS DB: every table that had rows needs an INSERT under its "TABLE DATA" header.
+# An export cut short by a dying server keeps the schema but loses these, and exits 0 more often than you'd think.
+verify_dump() {
+  bad=""
+  while read -r t c; do
+    [ "$c" -gt 0 ] || continue
+    grep -A3 "^-- TABLE DATA: $t\$" "$1" | grep -q '^INSERT' || bad="$bad $t($c rows)"
+  done <<EOF
+$2
+EOF
+  [ -z "$bad" ] || { log "export of $3 is missing the rows of:$bad" >&2; return 1; }
+}
+
+# dump_to DB OUT: count rows, export, check the dump holds them, then encrypt. sh has no pipefail, so the
+# export goes to a private temp file (shredded after) whose exit status, last line and per-table rows are
+# checked, and the server must still answer: a dump that died midway never becomes a backup.
 dump_to() {
+  counts="$(row_counts "$1")" || { log "could not count the rows of $1 before exporting" >&2; return 1; }
   x="$(mktemp)" || return 1
-  if export_db "$1" > "$x" && tail -c 4096 "$x" | grep . | tail -n 1 | grep -q ';$'; then
+  if export_db "$1" > "$x" && tail -c 4096 "$x" | grep -v '^--' | grep . | tail -n 1 | grep -q ';$' \
+     && verify_dump "$x" "$counts" "$1" && "$SURREAL" isready --endpoint "$ENDPOINT" >/dev/null 2>&1; then
     encrypt_to "$2" < "$x"; rc=$?
   else
     rc=1
