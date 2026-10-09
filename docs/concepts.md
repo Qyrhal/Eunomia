@@ -40,16 +40,38 @@ symbols. Each one has **memories**:
 | `observation` | the entity's consolidated belief, one per entity, revised in place |
 
 Memories support full create, read, update and delete (`memory_write`,
-`entities_get`/`recall`, `memory_update`, `memory_delete`). Editing or adding
-a fact marks the entity's observation *stale* until it's consolidated again.
-Relations (`works_at`, `calls`, …) link entities, and an edge with the same
-label is stored only once.
+`entities_get`/`recall`, `memory_update`, `memory_delete`). Adding, editing
+or deleting a fact marks the entity's observation *stale*; a deleted fact
+also leaves the observation's lineage (`source_memories`), and an observation
+built from nothing but that fact is deleted with it. The next consolidation
+rebuilds a stale observation from the entity's surviving facts alone; until
+then `recall` leaves it out (`entities_get` still shows it, with
+`status: "stale"`).
+
+Within a vault an entity's name is unique per kind, case-insensitively, so
+two concurrent writes about "Ada" land on one entity, and each entity has at
+most one observation. Merging two entities happens in one transaction: the
+loser's facts and relations move to the winner, its name and aliases become
+the winner's aliases, and if both had an observation they become one stale
+observation to be rebuilt. Relations (`works_at`, `calls`, …) link entities,
+and an edge with the same label is stored only once.
 
 ## Synced records
 
 Connectors (Up Bank, GitHub, Gmail, …) sync raw records into a cache. With
 a model key, records are embedded for semantic search. Use `search`/`get`
-for these, and `recall` to search records and memories together.
+for these, and `recall` to search records and memories together. `search`
+filters (sources, types, `since`/`until`) apply before ranking and pages
+reach up to 1000 results (`offset` + `limit`, `has_more`); `list` filters
+take `field`, `field__gte`/`__gt`/`__lte`/`__lt`/`__ne` or
+`payload__<field>`, and reject anything else.
+
+When a record is deleted at its source it becomes a tombstone: `get`,
+`search`, `list`, `links` and `recall` treat it as gone, and a link to or
+from it disappears. Facts already derived from it are not deleted -- a
+memory is its own assertion and outlives its source; its `source` then
+points at a record `get` reports as not found. To forget such a fact, delete
+it with `memory_delete` (which also invalidates the observation, as above).
 
 ## Recall
 
@@ -61,6 +83,12 @@ results that several arms agree on and recent ones:
 3. **memory text**: full-text (BM25) over memories, so a fact is found by what it says
 4. **graph**: entities named in the question, then their memories and linked records
 5. **temporal**: an explicit `time_range`
+
+The semantic arm runs alongside the four database arms, and every arm has a
+4-second deadline: a slow or failing embedding provider drops only the
+semantic arm. Inputs are bounded (query at
+most 2000 characters, `limit` 1-100, `max_tokens` 1-100000, `time_range` two
+ISO 8601 dates with since <= until); anything else is a clear error.
 
 ## The graph
 
