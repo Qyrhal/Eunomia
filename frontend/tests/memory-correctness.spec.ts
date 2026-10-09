@@ -102,6 +102,11 @@ function startLlm() {
     req.on("data", (c) => (body += c));
     req.on("end", () => {
       res.setHeader("Content-Type", "application/json");
+      if (req.url?.endsWith("/models")) {
+        // chat-model discovery: nothing listed, so the default model is used
+        res.statusCode = 404;
+        return res.end("{}");
+      }
       if (req.url?.endsWith("/embeddings")) {
         if (hangEmbeddings) return; // never answers
         const n = (JSON.parse(body).input as string[]).length;

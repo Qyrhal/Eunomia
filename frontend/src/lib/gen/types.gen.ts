@@ -170,6 +170,17 @@ export type DeclinedBody = {
     declined: boolean;
 };
 
+export type DeleteDataOut = {
+    /**
+     * Extracted facts removed.
+     */
+    memories: number;
+    /**
+     * Synced records removed.
+     */
+    records: number;
+};
+
 export type DeletedBody = {
     deleted: boolean;
 };
@@ -488,6 +499,7 @@ export type SessionOut = {
 };
 
 export type SettingsOut = {
+    chat_model: string;
     embedding_model: string;
     memory_skill: string;
     memory_skill_custom: boolean;
@@ -509,6 +521,10 @@ export type SettingsOut = {
 };
 
 export type SettingsUpdate = {
+    /**
+     * "" = automatic (see embeddings::provider::chat_model)
+     */
+    chat_model?: string | null;
     embedding_model?: string | null;
     /**
      * "" resets to the built-in skill
@@ -1285,6 +1301,30 @@ export type UpdateConnectorResponses = {
 };
 
 export type UpdateConnectorResponse = UpdateConnectorResponses[keyof UpdateConnectorResponses];
+
+export type DeleteConnectorDataData = {
+    body?: never;
+    path: {
+        kind: string;
+    };
+    query?: never;
+    url: '/api/connectors/{kind}/data';
+};
+
+export type DeleteConnectorDataErrors = {
+    /**
+     * Error
+     */
+    default: Problem;
+};
+
+export type DeleteConnectorDataError = DeleteConnectorDataErrors[keyof DeleteConnectorDataErrors];
+
+export type DeleteConnectorDataResponses = {
+    200: DeleteDataOut;
+};
+
+export type DeleteConnectorDataResponse = DeleteConnectorDataResponses[keyof DeleteConnectorDataResponses];
 
 export type TestConnectorData = {
     body?: never;

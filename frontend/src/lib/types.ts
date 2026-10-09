@@ -29,6 +29,8 @@ export type OAuthGrant = {
 
 export type AppSettings = {
   embedding_model: string;
+  /** "" = automatic (OPENAI_CHAT_MODEL, else gpt-4o-mini on OpenAI, else the endpoint's first chat model). */
+  chat_model: string;
   sync_intervals: Record<string, number>;
   theme: { mode?: "light" | "dark" | "system"; accent?: string };
   openai_api_key_set: boolean;
@@ -129,6 +131,8 @@ export type ToolRecord = ToolHit & {
   external_id: string;
   body_text: string;
   payload: Record<string, unknown>;
+  /** A Pocket recording or transcript chunk: the whole stored recording. */
+  recording?: { summary: string; action_items: string[]; transcript: string };
 };
 
 export type EntityKind = "person" | "organisation" | "location" | "repository" | "file" | "symbol";

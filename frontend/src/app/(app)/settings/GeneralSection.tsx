@@ -15,6 +15,7 @@ export function GeneralSection({ settings }: { settings: AppSettings }) {
   const [apiKeyInput, setApiKeyInput] = useState("");
   const [baseUrlInput, setBaseUrlInput] = useState(settings.openai_base_url);
   const [modelInput, setModelInput] = useState(settings.embedding_model);
+  const [chatModelInput, setChatModelInput] = useState(settings.chat_model);
   const modelsQuery = useOpenAiModels(settings.openai_base_url, settings.openai_api_key_set);
   const models = modelsQuery.data?.models ?? [];
   const modelsError = modelsQuery.data?.error ?? (modelsQuery.isError ? "Could not reach the models endpoint." : null);
@@ -24,11 +25,12 @@ export function GeneralSection({ settings }: { settings: AppSettings }) {
 
   const urlInvalid = baseUrlInput.trim() !== "" && !/^https?:\/\/\S+$/.test(baseUrlInput.trim());
   const dirty =
-    apiKeyInput !== "" || baseUrlInput.trim() !== settings.openai_base_url || modelInput.trim() !== settings.embedding_model;
+    apiKeyInput !== "" || baseUrlInput.trim() !== settings.openai_base_url || modelInput.trim() !== settings.embedding_model ||
+    chatModelInput.trim() !== settings.chat_model;
 
   async function saveSettings() {
     if (urlInvalid) return;
-    const payload: SettingsUpdate = { theme: settings.theme, embedding_model: modelInput.trim() };
+    const payload: SettingsUpdate = { theme: settings.theme, embedding_model: modelInput.trim(), chat_model: chatModelInput.trim() };
     // The field shows the effective URL (the server's when you have none): only save it once you change it.
     if (baseUrlInput.trim() !== settings.openai_base_url) payload.openai_base_url = baseUrlInput.trim();
     if (apiKeyInput) payload.openai_api_key = apiKeyInput;
@@ -150,6 +152,40 @@ export function GeneralSection({ settings }: { settings: AppSettings }) {
                   Couldn&apos;t list models from this endpoint ({modelsError}). Type a model id directly.
                 </span>
               )}
+            </div>
+          </div>
+
+          <div className={row}>
+            <label htmlFor="chat-model" className="text-[13px] font-medium md:pt-1.5">
+              Chat model
+            </label>
+            <div className="flex flex-col gap-1">
+              {models.length > 0 ? (
+                <Select
+                  id="chat-model"
+                  mono
+                  className="h-8 text-[13px] w-full"
+                  value={chatModelInput}
+                  onChange={setChatModelInput}
+                  options={[
+                    { value: "", label: "Automatic" },
+                    ...(!models.includes(chatModelInput) && chatModelInput ? [chatModelInput] : []).map((m) => ({ value: m, label: m })),
+                    ...models.map((m) => ({ value: m, label: m })),
+                  ]}
+                />
+              ) : (
+                <input
+                  id="chat-model"
+                  className="field h-8 px-3 text-[13px] font-mono"
+                  value={chatModelInput}
+                  onChange={(e) => setChatModelInput(e.target.value)}
+                  placeholder="automatic"
+                />
+              )}
+              <span className="text-[12px]" style={{ color: "var(--ink-faint)" }}>
+                Extracts entities and relations from synced data, and powers chat. Blank picks one: gpt-4o-mini on OpenAI,
+                otherwise the first chat model this endpoint serves.
+              </span>
             </div>
           </div>
 

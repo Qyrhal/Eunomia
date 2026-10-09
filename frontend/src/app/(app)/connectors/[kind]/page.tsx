@@ -2,11 +2,12 @@
 
 import { Fragment, use, useState } from "react";
 import Link from "next/link";
-import { ChevronRight, ExternalLink, Search, Settings2, X } from "lucide-react";
-import type { SourceRow, ToolHit } from "@/lib/types";
+import { ChevronRight, ExternalLink, Search, Settings2, Trash2, X } from "lucide-react";
+import type { ConnectorKind, SourceRow, ToolHit } from "@/lib/types";
+import { useDeleteConnectorData } from "@/lib/queries/connectors";
 import { useSources, useSyncSource } from "@/lib/queries/sources";
 import { useRecord, useSourceRecords, useSourceSearch } from "@/lib/queries/tools";
-import ErrorLine, { failure } from "@/components/ErrorLine";
+import ErrorLine, { failure, type Failure } from "@/components/ErrorLine";
 import AuthorTag from "@/components/AuthorTag";
 import DigitRoll from "@/components/bits/DigitRoll";
 import SyncMark, { type SyncStatus } from "@/components/bits/SyncMark";
@@ -152,6 +153,16 @@ function RecordRow({ hit }: { hit: ToolHit }) {
                     </div>
                   ))}
                   {payload.length === 0 && <p style={{ color: "var(--ink-faint)" }}>This record has no payload fields.</p>}
+                  {detail.recording?.transcript && (
+                    <details>
+                      <summary className="cursor-pointer" style={{ color: "var(--ink-dim)" }}>
+                        Full transcript
+                      </summary>
+                      <pre className="mt-2 whitespace-pre-wrap font-sans max-h-96 overflow-auto" style={{ color: "var(--ink)" }}>
+                        {detail.recording.transcript}
+                      </pre>
+                    </details>
+                  )}
                   {hit.url && (
                     <a href={hit.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 self-start" style={{ color: "var(--accent-text)" }}>
                       Open in source <ExternalLink size={12} strokeWidth={1.75} aria-hidden />
@@ -184,6 +195,54 @@ function health(row: SourceRow): { tone: string; text: string } {
   if (fails > 0) return { tone: fails > 2 ? "var(--critical)" : "var(--warning)", text: `${fails} failed sync${fails === 1 ? "" : "s"} in a row` };
   if (!last_ok) return { tone: "var(--ink-faint)", text: "Waiting for first sync" };
   return { tone: "var(--good)", text: "Healthy" };
+}
+
+/** "Delete all data": a button that opens a confirm step saying what goes; the second press deletes. */
+function DeleteData({ row, kind }: { row: SourceRow; kind: ConnectorKind }) {
+  const del = useDeleteConnectorData();
+  const [confirm, setConfirm] = useState(false);
+  const [error, setError] = useState<Failure | null>(null);
+
+  async function run() {
+    setError(null);
+    try {
+      await del.mutateAsync(kind);
+      setConfirm(false);
+    } catch (e) {
+      setError(failure(e, `Could not delete the ${row.label} data. Try again.`));
+    }
+  }
+
+  return (
+    <section className="flex flex-col gap-3" aria-labelledby="delete-data-heading">
+      <h2 id="delete-data-heading" className="section-title">
+        Data
+      </h2>
+      {confirm ? (
+        <div className="flex flex-col gap-2 rounded-[7px] p-3" style={{ background: "var(--critical-soft)" }} role="alertdialog" aria-label={`Delete all ${row.label} data`}>
+          <p className="text-[12.5px]" style={{ color: "var(--ink)" }}>
+            This permanently deletes the {row.record_count.toLocaleString()} {row.label} records Eunomia has synced, their links, and every fact and
+            relation extracted from them. The connection itself stays, so later syncs bring in new data only. This can&apos;t be undone.
+          </p>
+          <div className="flex justify-end gap-1.5">
+            <button type="button" onClick={() => setConfirm(false)} className="btn btn-ghost btn-sm">
+              Cancel
+            </button>
+            <button type="button" onClick={run} disabled={del.isPending} className="btn btn-danger btn-sm">
+              <Trash2 size={14} strokeWidth={1.75} aria-hidden />
+              {del.isPending ? "Deleting…" : "Delete everything"}
+            </button>
+          </div>
+        </div>
+      ) : (
+        <button type="button" onClick={() => setConfirm(true)} className="btn btn-danger btn-sm self-start">
+          <Trash2 size={14} strokeWidth={1.75} aria-hidden />
+          Delete all {row.label} data
+        </button>
+      )}
+      {error && <ErrorLine error={error} />}
+    </section>
+  );
 }
 
 export default function ConnectorWorkspacePage({ params }: { params: Promise<{ kind: string }> }) {
@@ -456,6 +515,8 @@ export default function ConnectorWorkspacePage({ params }: { params: Promise<{ k
           </table>
         </div>
       </section>
+
+      {connectorKind && <DeleteData row={row} kind={connectorKind} />}
     </div>
   );
 }

@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { listConnectors, testConnector, updateConnector } from "@/lib/gen";
+import { deleteConnectorData, listConnectors, testConnector, updateConnector } from "@/lib/gen";
 import type { Connector, ConnectorKind, ConnectorUpdate } from "@/lib/types";
 import { call } from "./client";
 import { sourceKeys } from "./sources";
@@ -23,3 +23,12 @@ export function useUpdateConnector() {
 }
 
 export const useTestConnector = () => useMutation({ mutationFn: (kind: ConnectorKind) => call(testConnector({ path: { kind } })) });
+
+/** Deletes everything synced from one connector. Records, search, the graph and counts all change, so refetch them all. */
+export function useDeleteConnectorData() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (kind: ConnectorKind) => call(deleteConnectorData({ path: { kind } })),
+    onSuccess: () => qc.invalidateQueries(),
+  });
+}
