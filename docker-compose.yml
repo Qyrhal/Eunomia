@@ -16,13 +16,12 @@ services:
       - --pass
       - ${SURREAL_PASS:-root}
       - --deny-all
-      # --deny-all alone may also deny RPC, HTTP (the isready healthcheck) and root queries on 3.x:
-      # allow those explicitly. Not yet run against a live 3.3.1 server (docs/architecture/foundation-plan.md).
+      # --deny-all also refuses guests (adding --deny-guests is a startup error on 3.3.1) but denies RPC,
+      # HTTP (the isready healthcheck) and root queries too: allow those explicitly. Verified on a live 3.3.1 server.
       - --allow-rpc
       - --allow-http
       - --allow-arbitrary-query=system
       - --allow-funcs=time,string,search,count,array,vector,math
-      - --deny-guests
       - --query-timeout=60s
       - --transaction-timeout=60s
       - rocksdb:/data/eunomia.db

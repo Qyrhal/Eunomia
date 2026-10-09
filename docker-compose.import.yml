@@ -17,5 +17,4 @@ services:
       - --allow-http
       - --allow-arbitrary-query=system
       - --allow-funcs=time,string,search,count,array,vector,math
-      - --deny-guests
       - rocksdb:/data/eunomia.db

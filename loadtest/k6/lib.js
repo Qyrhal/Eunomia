@@ -63,7 +63,8 @@ export function setupUsers() {
 }
 
 export function pick(data, tier) {
-  const pool = data.users.filter((u) => u.tier === tier);
+  let pool = data.users.filter((u) => u.tier === tier);
+  if (pool.length === 0) pool = data.users; // a tier is empty when ORGS is small
   return pool[Math.floor(Math.random() * pool.length)];
 }
 

@@ -11,6 +11,10 @@ COPY migrations ./migrations
 COPY --from=docs . /docs
 ARG APP_VERSION
 ENV APP_VERSION=$APP_VERSION
+# Unset: cargo uses every core. On a small Docker VM (about 8 GB) the SurrealDB crates can run out of
+# memory at full parallelism: build with `--build-arg CARGO_BUILD_JOBS=2`.
+ARG CARGO_BUILD_JOBS
+ENV CARGO_BUILD_JOBS=$CARGO_BUILD_JOBS
 RUN cargo build --release --locked
 
 FROM debian:bookworm-slim

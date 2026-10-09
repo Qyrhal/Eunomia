@@ -2,7 +2,7 @@
 # Restore drill for the tenancy layout: one backup is a DIRECTORY holding a file per database
 # (`control` plus `org_<32 hex>`). Seeds both, backs up with the real backup image, removes both
 # databases, restores the directory, compares per-database per-table counts. Throwaway SurrealDB
-# container fw-backup-db (host port 8211), never your live stack. Needs Docker; not yet run.
+# container fw-backup-db (host port 8211), never your live stack.
 #   scripts/restore-drill-tenancy.sh
 set -euo pipefail
 cd "$(dirname "$0")/.."
