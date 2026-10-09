@@ -9,7 +9,7 @@ import { registerAndOnboard, uniqueEmail } from "./helpers";
 // it): a sync stores the whole recording, chunks + embeds it, extracts
 // entities and relations with the server's own chat model, the full
 // transcript reads back through `get`, and "Delete all data" removes it.
-function mockPocketAndModels(): Promise<{ base: string; chatModels: string[]; embedded: string[]; close: () => void }> {
+function mockPocketAndModels(): Promise<{ base: string; chatModels: string[]; embedded: string[]; extractionPrompts: string[]; close: () => void }> {
   const chatModels: string[] = [];
   const embedded: string[] = [];
   const recording = {
@@ -29,17 +29,27 @@ function mockPocketAndModels(): Promise<{ base: string; chatModels: string[]; em
         // Two ~3.5k-char turns: the transcript lands in two chunks.
         { speaker: "s2", speakerName: "Grace Hopper", start: 4000, end: 9000, text: "I will pair with Ada on the fix. " + "detail ".repeat(500) },
         { speaker: "s2", speakerName: "Grace Hopper", start: 9000, end: 14000, text: "detail ".repeat(500) },
+        // an unnamed speaker (labelled by its id)
+        { speaker: "s3", start: 14000, end: 15000, text: "We should meet at the Clayton lab on Friday." },
       ],
     },
     summarizations: { sm1: { v2: { summary: { markdown: "Ada and Grace agreed to fix the importer." }, actionItems: { items: [{ title: "Ship the importer fix" }] } } } },
   };
+  // What a model pulls out of the conversation -- including a placeholder
+  // speaker, which must not become a person.
   const extraction = {
     people: [
       { name: "Ada Lovelace", facts: ["Ada found the importer bug"] },
       { name: "Grace Hopper", facts: ["Grace pairs on the importer fix"] },
+      { name: "Unknown", facts: ["Unknown suggested meeting at the lab"] },
     ],
-    relations: [{ from: "Grace Hopper", from_kind: "person", to: "Ada Lovelace", to_kind: "person", label: "works_with" }],
+    locations: [{ name: "Clayton lab", facts: ["The team meets at the Clayton lab on Friday"] }],
+    relations: [
+      { from: "Grace Hopper", from_kind: "person", to: "Ada Lovelace", to_kind: "person", label: "works_with" },
+      { from: "Ada Lovelace", from_kind: "person", to: "Clayton lab", to_kind: "location", label: "meets_at" },
+    ],
   };
+  const extractionPrompts: string[] = [];
   const server = http.createServer((req, res) => {
     let body = "";
     req.on("data", (c) => (body += c));
@@ -64,6 +74,7 @@ function mockPocketAndModels(): Promise<{ base: string; chatModels: string[]; em
       if (path === "/chat/completions") {
         const req = JSON.parse(body);
         chatModels.push(req.model);
+        if (body.includes("Extract entities")) extractionPrompts.push(req.messages[0].content);
         const content = body.includes("Extract entities") ? JSON.stringify(extraction) : JSON.stringify({ belief: "Ada works on the importer." });
         return send({ choices: [{ message: { content } }] });
       }
@@ -74,7 +85,7 @@ function mockPocketAndModels(): Promise<{ base: string; chatModels: string[]; em
   return new Promise((resolve) =>
     server.listen(0, "127.0.0.1", () => {
       const { port } = server.address() as AddressInfo;
-      resolve({ base: `http://127.0.0.1:${port}`, chatModels, embedded, close: () => server.close() });
+      resolve({ base: `http://127.0.0.1:${port}`, chatModels, embedded, extractionPrompts, close: () => server.close() });
     })
   );
 }
@@ -112,6 +123,15 @@ test("a Pocket recording is stored whole, embedded, graphed, and deletable", asy
     expect(graph).toContain("Ada Lovelace");
     expect(graph).toContain("Grace Hopper");
     expect(graph).toContain("works_with");
+    // The call's content is graphed -- the place discussed and who meets
+    // there -- but not a placeholder speaker, nor the meeting itself.
+    expect(graph).toContain("Clayton lab");
+    expect(graph).toContain("meets_at");
+    expect(graph).not.toMatch(/"name":"Unknown"/);
+    expect(graph).not.toContain("Zanzibar importer review");
+    // Extraction is told it reads a dated conversation.
+    const today = new Date().toISOString().slice(0, 10);
+    expect(mock.extractionPrompts.some((p) => p.includes("transcript") && p.includes(`dated ${today}`) && p.includes("We should meet at the Clayton lab"))).toBe(true);
     expect(mock.chatModels.length).toBeGreaterThan(0);
     expect(new Set(mock.chatModels)).toEqual(new Set(["llama3.1-e2e"]));
 

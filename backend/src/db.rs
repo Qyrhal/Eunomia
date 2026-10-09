@@ -204,7 +204,8 @@ pub const SCHEMA_STATEMENTS: &[&str] = &[
     "DEFINE FIELD IF NOT EXISTS created_at ON memory TYPE datetime DEFAULT time::now();",
     "DEFINE FIELD IF NOT EXISTS type ON memory TYPE string DEFAULT \"world\" ASSERT $value IN [\"world\",\"experience\",\"observation\"];",
     "DEFINE FIELD IF NOT EXISTS proof_count ON memory TYPE int DEFAULT 1;",
-    "DEFINE FIELD IF NOT EXISTS status ON memory TYPE option<string> ASSERT $value IN [\"fresh\",\"stale\"];",
+    // fresh/stale: an observation; superseded: a raw fact a later one contradicted.
+    "DEFINE FIELD OVERWRITE status ON memory TYPE option<string> ASSERT $value IN [\"fresh\",\"stale\",\"superseded\"];",
     "DEFINE FIELD IF NOT EXISTS source_memories ON memory TYPE option<array<record<memory>>>;",
     "DEFINE FIELD IF NOT EXISTS updated_at ON memory TYPE datetime DEFAULT time::now();",
     "DEFINE FIELD IF NOT EXISTS version ON memory TYPE int DEFAULT 1;",

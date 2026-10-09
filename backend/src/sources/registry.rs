@@ -122,33 +122,46 @@ pub async fn delete_data(db: &Db, owner: &RecordId, src: &dyn Source) -> AppResu
     // A record link pointing at one of those records (SurrealQL closures
     // can't see `$prefix`, hence the string).
     let mine = |field: &str| format!("({field} != NONE AND string::starts_with(record::id({field}), $prefix))");
-    let mut res = db
-        .query(format!(
-            "BEGIN TRANSACTION; \
-             LET $mems = SELECT id, subject FROM memory WHERE {source}; \
-             LET $ids = $mems.id; \
-             LET $subjects = array::distinct($mems.subject); \
-             DELETE $ids; \
-             DELETE memory WHERE type = \"observation\" AND subject IN $subjects \
-                 AND source_memories AND array::len(array::complement(source_memories, $ids)) = 0; \
-             UPDATE memory SET status = \"stale\", updated_at = time::now(), \
-                 source_memories = IF source_memories THEN array::complement(source_memories, $ids) ELSE NONE END \
-                 WHERE type = \"observation\" AND subject IN $subjects; \
-             DELETE relates_to WHERE {source}; \
-             DELETE linked_to WHERE {from} OR {to}; \
-             LET $records = (DELETE cache_record WHERE owner = $owner AND source = $source RETURN BEFORE).len(); \
-             IF $source = \"heypocket\" {{ DELETE pocket_recording WHERE owner = $owner }}; \
-             COMMIT TRANSACTION; \
-             RETURN {{ records: $records, memories: $ids.len() }};",
-            source = mine("source"),
-            from = mine("in"),
-            to = mine("out"),
-        ))
-        .bind(("owner", owner.clone()))
-        .bind(("source", src.key().to_string()))
-        .bind(("prefix", prefix))
-        .await?
-        .check()?;
+    let sql = format!(
+        "BEGIN TRANSACTION; \
+         LET $mems = SELECT id, subject FROM memory WHERE {source}; \
+         LET $ids = $mems.id; \
+         LET $subjects = array::distinct($mems.subject); \
+         DELETE $ids; \
+         DELETE memory WHERE type = \"observation\" AND subject IN $subjects \
+             AND source_memories AND array::len(array::complement(source_memories, $ids)) = 0; \
+         UPDATE memory SET status = \"stale\", updated_at = time::now(), \
+             source_memories = IF source_memories THEN array::complement(source_memories, $ids) ELSE NONE END \
+             WHERE type = \"observation\" AND subject IN $subjects; \
+         DELETE relates_to WHERE {source}; \
+         DELETE linked_to WHERE {from} OR {to}; \
+         LET $records = (DELETE cache_record WHERE owner = $owner AND source = $source RETURN BEFORE).len(); \
+         IF $source = \"heypocket\" {{ DELETE pocket_recording WHERE owner = $owner }}; \
+         COMMIT TRANSACTION; \
+         RETURN {{ records: $records, memories: $ids.len() }};",
+        source = mine("source"),
+        from = mine("in"),
+        to = mine("out"),
+    );
+    // Syncs and enrichment running at the same time can make SurrealDB reject
+    // the transaction as a retryable conflict: retry it a few times.
+    let mut attempt = 0;
+    let mut res = loop {
+        let out = db
+            .query(sql.as_str())
+            .bind(("owner", owner.clone()))
+            .bind(("source", src.key().to_string()))
+            .bind(("prefix", prefix.clone()))
+            .await
+            .and_then(|r| r.check());
+        match out {
+            Err(e) if attempt < 4 && e.to_string().contains("can be retried") => {
+                attempt += 1;
+                tokio::time::sleep(std::time::Duration::from_millis(100 * attempt)).await;
+            }
+            other => break other?,
+        }
+    };
     let n = res.num_statements();
     Ok(res.take::<Option<Value>>(n - 1)?.unwrap_or(Value::Null))
 }

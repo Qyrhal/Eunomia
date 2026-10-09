@@ -199,8 +199,11 @@ test.describe("MCP server", () => {
     await call("memory_write", { subject_name: "Dune", subject_kind: "organisation", text: "The club reads Dune in June.", vault_id: "Book Club" });
     const garden = (await call("recall", { query: "what happens in June?", vault_id: "Garden Project" })).results.map((r: { text: string }) => r.text);
     expect(garden).toEqual(["Tomatoes need staking by June."]); // nothing from the other vault
-    const personal = (await call("recall", { query: "what happens in June?" })).results;
-    expect(personal).toEqual([]); // nor in the personal vault
+    const personalId = (await call("vault_list", {})).results.find((v: { kind: string }) => v.kind === "personal").id;
+    expect((await call("recall", { query: "what happens in June?", vault_id: personalId })).results).toEqual([]); // nor in the personal vault
+    // no vault given: every org vault, each hit labelled with its vault
+    const everywhere = (await call("recall", { query: "what happens in June?" })).results.map((r: { text: string; vault_name: string }) => [r.vault_name, r.text]);
+    expect(everywhere).toEqual(expect.arrayContaining([["Garden Project", "Tomatoes need staking by June."], ["Book Club", "The club reads Dune in June."]]));
 
     expect((await call("recall", { query: "June", vault_id: "Nope" })).error).toContain("no vault named");
     expect((await call("vault_rename", { vault_id: "Book Club", name: "Reading Group" })).name).toBe("Reading Group");

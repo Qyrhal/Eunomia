@@ -42,9 +42,27 @@ pub async fn entities_search(
     vault_id: Option<&RecordId>,
 ) -> AppResult<service::ListEntitiesOut> {
     let needle = query.trim();
-    let page = service::list_entities(db, owner, kind, vault_id, None, 0).await?;
-    let hits: Vec<service::EntityOut> =
-        page.results.into_iter().filter(|r| matches_search(&r.name, &r.aliases, needle)).collect();
+    // No vault given: the personal vault plus every org vault the caller
+    // belongs to, so org facts aren't invisible to a lookup without `vault_id`.
+    let vaults = match vault_id {
+        Some(v) => vec![v.clone()],
+        None => crate::vaults::service::default_read_vault_ids(db, owner).await?,
+    };
+    // Name/alias matches first, then entities a fact mentions it in.
+    let mut hits = Vec::new();
+    let mut mentioned = Vec::new();
+    for vault in &vaults {
+        let page = service::list_entities(db, owner, kind, Some(vault), None, 0).await?;
+        let in_facts = if needle.is_empty() { Default::default() } else { service::subjects_mentioning(db, vault, needle).await? };
+        for r in page.results {
+            if matches_search(&r.name, &r.aliases, needle) {
+                hits.push(r);
+            } else if in_facts.contains(&r.id) {
+                mentioned.push(r);
+            }
+        }
+    }
+    hits.extend(mentioned);
     let total = hits.len();
     let sliced: Vec<service::EntityOut> = hits.into_iter().skip(offset).take(limit).collect();
     let has_more = offset + sliced.len() < total;
@@ -90,9 +108,12 @@ pub async fn code_relate(
     service::add_relation(db, owner, from_id, to_id, label, source_record_id).await
 }
 
+/// Writes the fact, then has the chat model mark earlier facts about the
+/// subject it makes no longer true (see `supersede`).
 #[allow(clippy::too_many_arguments)]
 pub async fn memory_write(
     db: &Db,
+    settings: &Settings,
     owner: &RecordId,
     subject_name: &str,
     subject_kind: &str,
@@ -101,7 +122,13 @@ pub async fn memory_write(
     mem_type: &str,
     vault_id: Option<&RecordId>,
 ) -> AppResult<service::WriteMemoryOut> {
-    service::write_memory(db, owner, subject_name, subject_kind, text, source_record_id, mem_type, vault_id).await
+    let mut out = service::write_memory(db, owner, subject_name, subject_kind, text, source_record_id, mem_type, vault_id).await?;
+    if out.memory.mem_type != "observation" {
+        let subject: RecordId = out.entity.id.parse().map_err(|_| crate::error::AppError::internal("entity id did not round-trip"))?;
+        let new: RecordId = out.memory.id.parse().map_err(|_| crate::error::AppError::internal("memory id did not round-trip"))?;
+        out.superseded = super::supersede::check(db, settings, owner, &subject, &[new]).await.iter().map(|r| r.to_string()).collect();
+    }
+    Ok(out)
 }
 
 pub async fn memory_update(
