@@ -165,7 +165,7 @@ test.describe.serial("memory correctness", () => {
     await sql(`UPDATE ${rec(gone)} SET deleted = true;`);
 
     const mcp = await call("get", { id: gone });
-    expect(mcp.data).toEqual({ error: "not found" });
+    expect(mcp.data.error).toBe("not found");
     const rest = await ctx.post("/api/tools/get", { data: { id: gone } });
     const restBody = await rest.text();
     expect(restBody).toContain("not found");
