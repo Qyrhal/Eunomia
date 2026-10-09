@@ -332,7 +332,7 @@ async fn a_failing_merge_rolls_back_and_a_merge_of_two_observed_entities_leaves_
 
     // the real merge
     app.tool("entity_merge", json!({"winner_id": winner, "loser_id": loser})).await;
-    assert_eq!(refused(&app, "entities_get", json!({"id": loser})).await, "resource.not_found");
+    assert_eq!(refused(&app, "entities_get", json!({"id": loser})).await, "entity.not_found");
     let merged = app.tool("entities_get", json!({"id": winner})).await;
     assert!(merged["aliases"].as_array().unwrap().iter().any(|a| a == "Mergy Loser"));
     let obs = observations(&merged);

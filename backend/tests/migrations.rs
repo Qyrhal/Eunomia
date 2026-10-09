@@ -337,7 +337,7 @@ async fn case_variants_are_merged_and_existing_rows_get_their_keys_in_0010() {
     assert!(winner["aliases"].as_array().unwrap().iter().any(|a| a == "AL"), "the loser's aliases survive: {winner}");
     assert!(winner["alias_keys"].as_array().unwrap().iter().any(|a| a == "al"));
     // the case-insensitive unique index exists and bites; a computed key follows later renames
-    assert!(db.query("CREATE person SET owner = user:u, vault = vault:v, name = 'ADA'").await.unwrap().check().is_err());
+    assert!(db.query("CREATE person SET owner = user:u, vault = vault:v, name = 'aDa'").await.unwrap().check().is_err());
     db.query("UPDATE person:solo SET name = 'Rear Admiral'").await.unwrap().check().unwrap();
     let key: Option<String> = db.query("SELECT VALUE name_key FROM ONLY person:solo").await.unwrap().take(0).unwrap();
     assert_eq!(key.unwrap(), "rear admiral");

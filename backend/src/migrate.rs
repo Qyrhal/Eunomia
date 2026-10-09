@@ -178,6 +178,9 @@ async fn apply(db: &Db, set: &[(u32, &str, &str)], max: u32) -> surrealdb::Resul
         if (version == 2 || version == 10) && std::ptr::eq(set, MIGRATIONS) {
             dedupe_entity_names(db).await?;
         }
+        if version == 10 && std::ptr::eq(set, MIGRATIONS) {
+            backfill_entity_keys(db).await?;
+        }
         // DEFINE is allowed inside a transaction, so schema and ledger row commit together.
         let mut attempt = 1;
         loop {
@@ -240,6 +243,26 @@ async fn dedupe_entity_names(db: &Db) -> surrealdb::Result<()> {
                 merge_into(db, &mut winner, &loser).await?;
             }
         }
+    }
+    Ok(())
+}
+
+/// 0010 pre-step: define `name_key` / `alias_keys` and rewrite every entity so existing rows carry them.
+/// Done outside the migration's transaction on purpose: an index defined in the same transaction as the
+/// backfill is built without seeing it. The definitions repeat the ones in 0010 (`OVERWRITE`, so idempotent).
+async fn backfill_entity_keys(db: &Db) -> surrealdb::Result<()> {
+    for table in ENTITY_TABLES {
+        root(
+            db,
+            "migrate.backfill_keys",
+            format!(
+                "DEFINE FIELD OVERWRITE name_key ON {table} TYPE string VALUE string::lowercase(name); \
+                 DEFINE FIELD OVERWRITE alias_keys ON {table} TYPE array<string> VALUE (aliases ?? []).map(|$a| string::lowercase($a)); \
+                 UPDATE {table} SET name = name;"
+            ),
+        )
+        .await?
+        .check()?;
     }
     Ok(())
 }
