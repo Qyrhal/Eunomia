@@ -115,7 +115,7 @@ async fn statements_stay_in_their_database() {
 
     let app = common::TestApp::new().await;
     let tables = |v: Value| -> BTreeSet<String> {
-        v["tables"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap().to_string()).filter(|n| n != "_migration").collect()
+        v["tables"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap().to_string()).filter(|n| !n.starts_with("_migration")).collect()
     };
     let info = |db: &surrealdb::Surreal<surrealdb::engine::any::Any>| {
         let db = db.clone();

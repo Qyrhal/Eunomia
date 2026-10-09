@@ -19,7 +19,7 @@ async fn info(db: &Db) -> Value {
     let mut v: Value = r.take::<Option<Value>>(0).expect("take").expect("row");
     // The ledger is bookkeeping, not schema: legacy-then-migrate has it, a raw legacy DB does not.
     if let Some(a) = v.get_mut("tables").and_then(Value::as_array_mut) {
-        a.retain(|t| t["name"] != "_migration");
+        a.retain(|t| !t["name"].as_str().is_some_and(|n| n.starts_with("_migration")));
         for t in a.iter_mut() {
             // Table ids follow creation order, which differs between a fresh and an imported database.
             t.as_object_mut().unwrap().remove("id");
@@ -265,4 +265,20 @@ async fn concurrent_migrations_on_one_database_both_succeed() {
         rb.unwrap().unwrap_or_else(|e| panic!("round {round}, second tenant migrator: {e}"));
         assert_eq!(count(&ten, "_migration").await, migrate::MIGRATIONS.len());
     }
+}
+
+/// While one process holds a database's migration lock another waits (DDL from two boots is not
+/// isolated: a racing one saw "The table 'x' does not exist"); a lock left by a dead process goes stale
+/// and is taken over; the lock is released when the run ends.
+#[tokio::test]
+async fn migrations_wait_for_the_lock_and_take_over_a_stale_one() {
+    let db = fresh().await;
+    db.query("DEFINE TABLE _migration_lock SCHEMALESS; CREATE _migration_lock:run SET at = time::now();").await.unwrap().check().unwrap();
+    let held = tokio::time::timeout(std::time::Duration::from_millis(1500), migrate::migrate_control(&db)).await;
+    assert!(held.is_err(), "migrated while another process held the lock");
+
+    db.query("UPDATE _migration_lock:run SET at = time::now() - 10m").await.unwrap().check().unwrap();
+    migrate::migrate_control(&db).await.unwrap();
+    assert_eq!(count(&db, "_migration").await, migrate::CONTROL_MIGRATIONS.len());
+    assert_eq!(count(&db, "_migration_lock").await, 0, "lock released");
 }

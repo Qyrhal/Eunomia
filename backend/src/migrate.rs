@@ -91,24 +91,71 @@ fn checksum(sql: &str) -> String {
 
 /// Bring an org database to the latest tenant schema, then the settings-dependent field default.
 pub async fn migrate(db: &Db, settings: &Settings) -> surrealdb::Result<()> {
-    apply_up_to(db, u32::MAX).await?;
-    // The one config-dependent definition: re-applied on every migration pass, outside the ledger.
-    let sql = format!(
-        "DEFINE FIELD OVERWRITE openai_base_url ON app_settings TYPE string DEFAULT \"{}\";",
-        settings.openai_base_url.replace('"', "\\\"")
-    );
-    crate::tx::with_retry(|| async { root(db, "migrate.openai_base_url", &sql).await?.check().map(|_| ()) }).await?;
-    Ok(())
+    locked(db, async {
+        apply(db, MIGRATIONS, u32::MAX).await?;
+        // The one config-dependent definition: re-applied on every migration pass, outside the ledger.
+        let sql = format!(
+            "DEFINE FIELD OVERWRITE openai_base_url ON app_settings TYPE string DEFAULT \"{}\";",
+            settings.openai_base_url.replace('"', "\\\"")
+        );
+        crate::tx::with_retry(|| async { root(db, "migrate.openai_base_url", &sql).await?.check().map(|_| ()) }).await
+    })
+    .await
 }
 
 /// Bring the control database to the latest control schema.
 pub async fn migrate_control(db: &Db) -> surrealdb::Result<()> {
-    apply(db, CONTROL_MIGRATIONS, u32::MAX).await
+    locked(db, apply(db, CONTROL_MIGRATIONS, u32::MAX)).await
 }
 
 /// Apply pending tenant migrations with `version <= max`. Public for tests that need a half-migrated DB.
 pub async fn apply_up_to(db: &Db, max: u32) -> surrealdb::Result<()> {
-    apply(db, MIGRATIONS, max).await
+    locked(db, apply(db, MIGRATIONS, max)).await
+}
+
+const LOCK_DDL: &str = "DEFINE TABLE IF NOT EXISTS _migration_lock SCHEMALESS;";
+/// A lock older than this belongs to a process that died mid-migration; the next one takes it over.
+const LOCK_STALE: &str = "5m";
+
+/// Runs `f` while holding this database's migration lock, so two replicas booting together never run
+/// schema changes in one database at the same time. Racing DDL transactions are not isolated from each
+/// other (one can see a table the other is redefining as missing: "The table 'x' does not exist"),
+/// and the commit-conflict retry below cannot recover from that. The loser waits, then finds every
+/// migration applied. The lock is one row in `_migration_lock`, created atomically (a second
+/// `CREATE` of the same id fails), released when `f` ends and taken over once stale.
+// ponytail: no heartbeat; a migration that runs longer than LOCK_STALE could be run twice concurrently. Refresh `at` from `apply` if one ever does.
+async fn locked<T>(db: &Db, f: impl std::future::Future<Output = surrealdb::Result<T>>) -> surrealdb::Result<T> {
+    crate::tx::with_retry(|| async { root(db, "migrate.lock_ddl", LOCK_DDL).await?.check().map(|_| ()) }).await?;
+    let mut waited = 0u32;
+    loop {
+        let taken = root(
+            db,
+            "migrate.lock_take",
+            format!(
+                "BEGIN TRANSACTION;
+                 DELETE _migration_lock:run WHERE at < time::now() - {LOCK_STALE};
+                 CREATE _migration_lock:run SET at = time::now();
+                 COMMIT TRANSACTION;"
+            ),
+        )
+        .await
+        .and_then(|r| r.check());
+        match taken {
+            Ok(_) => break,
+            Err(e) if crate::tx::is_duplicate(&e) || crate::tx::is_conflict(&e) => {
+                waited += 1;
+                if waited == 1 {
+                    tracing::info!("another process is migrating this database; waiting for it");
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(100 + rand::random::<u64>() % 100)).await;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    let result = f.await;
+    // best effort: a lock that cannot be released goes stale
+    let _ = root(db, "migrate.lock_release", "DELETE _migration_lock:run").await;
+    result
 }
 
 async fn apply(db: &Db, set: &[(u32, &str, &str)], max: u32) -> surrealdb::Result<()> {
