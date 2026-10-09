@@ -17,7 +17,7 @@
 use std::time::Duration;
 
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, RETRY_AFTER, USER_AGENT};
-use reqwest::{Method, StatusCode};
+use axum::http::{Method, StatusCode};
 use serde_json::{json, Value};
 
 use crate::error::{AppError, AppResult};

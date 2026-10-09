@@ -267,6 +267,9 @@ async fn source_webhook(
     };
 
     let ignored = || Ok(Json(json!({"status": "ignored"})));
+    if !src.has_webhook() {
+        return ignored();
+    }
     let Ok(owner) = crate::rid::parse(&owner_id) else { return ignored() };
     let Ok(org) = crate::models_user::org_of(&state.control, &owner).await else { return ignored() };
     let state = state.org(&org).await?;

@@ -220,8 +220,8 @@ fn openai_mock_routes() -> Vec<Route> {
 async fn point_openai_at(org: &OrgState, owner: &RecordId, base: &str) {
     org.db
         .test_raw()
-        .query("UPSERT type::record('app_settings', $k) SET owner = $owner, openai_base_url = $base")
-        .bind(("k", owner_key_str(owner)))
+        .query("UPSERT $id SET owner = $owner, openai_base_url = $base")
+        .bind(("id", RecordId::new("app_settings", owner_key_str(owner))))
         .bind(("owner", owner.clone()))
         .bind(("base", base.to_string()))
         .await

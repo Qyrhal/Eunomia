@@ -82,6 +82,12 @@ pub trait Source: Send + Sync {
     /// One raw origin value -> a cache envelope, or `None` to skip.
     fn map(&self, raw: &Value) -> Option<Value>;
 
+    /// Whether [`Source::webhook`] does anything. The route answers "ignored" without opening the
+    /// owner's database for a source that has none.
+    fn has_webhook(&self) -> bool {
+        false
+    }
+
     /// Verify + translate a provider push into raw records (or `None`).
     /// Default: no webhook support.
     async fn webhook(&self, _conn: &Conn, _headers: &HeaderMap, _body: &[u8]) -> AppResult<Option<Vec<Value>>> {

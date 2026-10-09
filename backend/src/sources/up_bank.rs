@@ -90,6 +90,10 @@ impl Source for UpBankSource {
         }
     }
 
+    fn has_webhook(&self) -> bool {
+        true
+    }
+
     async fn webhook(&self, conn: &Conn, headers: &HeaderMap, body: &[u8]) -> AppResult<Option<Vec<Value>>> {
         let secret = conn.credentials.get("webhook_secret_key").and_then(|v| v.as_str()).unwrap_or("");
         let sig = headers
