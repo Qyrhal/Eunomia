@@ -403,11 +403,11 @@ async fn job_claim_throughput() {
     let state = bare_state().await;
 
     for chunk in (0..JOBS).collect::<Vec<_>>().chunks(2_500) {
-        let rows: Vec<Value> = chunk.iter().map(|i| json!({"k": format!("s3-{i}"), "o": format!("u{}", i % 8)})).collect();
+        let rows: Vec<Value> = chunk.iter().map(|i| json!({"k": format!("s3-{i}"), "o": format!("user:u{}", i % 8)})).collect();
         state
             .control
             .test_raw()
-            .query("INSERT INTO job (SELECT type::record('user', o) AS owner, 'spike' AS kind, k AS idempotency_key, 50 AS max_attempts FROM $rows)")
+            .query("INSERT INTO job (SELECT <record> o AS owner, 'spike' AS kind, k AS idempotency_key, 50 AS max_attempts FROM $rows)")
             .bind(("rows", rows))
             .await
             .unwrap()

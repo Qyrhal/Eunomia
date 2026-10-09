@@ -45,7 +45,7 @@ Checks before you rely on it:
 The grep above missed some families. The list `docker-compose.yml` ships, and that the whole test suite runs under (`TEST_HARDENED=1 cargo nextest run`, which reads the `--allow-funcs=` value out of the compose file; CI runs it as its own step after the plain `cargo nextest run`, plus `ISOLATION_TEST_NO_APP_FILTERS=1 cargo nextest run --test isolation`), is:
 
 ```
---deny-all --allow-funcs=time,string,search,count,array,vector,math --deny-guests --query-timeout=60s --transaction-timeout=60s
+--deny-all --allow-funcs=time,string,search,count,array,vector,math --query-timeout=60s --transaction-timeout=60s
 ```
 
 - `array::` (len, concat, slice, sort, union): store/vaults.rs, store/entities.rs, store/jobs.rs.
