@@ -40,6 +40,7 @@ services:
       - SURREAL_DB=${SURREAL_DB:-eunomia}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      - OPENAI_CHAT_MODEL=${OPENAI_CHAT_MODEL:-}
       - EMBEDDINGS_BACKEND=${EMBEDDINGS_BACKEND:-openai}
       - CORS_ALLOWED_ORIGINS=${FRONTEND_URL:-http://localhost:3000}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}

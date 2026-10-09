@@ -63,6 +63,7 @@ their local-dev defaults in production:
 | `ENCRYPTION_KEY` | none: the backend refuses to start without one (min. 16 characters) | `openssl rand -base64 32` (the installer generates one) |
 | `SURREAL_PASS` | `root` | a real password |
 | `OPENAI_API_KEY` | blank (settable per-user instead) | set it server-wide, or rely on each user setting their own in Settings. It is only ever sent to `OPENAI_BASE_URL`; a user who points Settings at another endpoint uses their own key there |
+| `OPENAI_CHAT_MODEL` | blank (automatic) | the model that extracts entities and relations, synthesizes answers and powers chat. Blank picks `gpt-4o-mini` on api.openai.com, otherwise the first chat model your endpoint lists at `/models` (e.g. a local Ollama/vLLM model). Each user can override it in Settings |
 | `CORS_ALLOWED_ORIGINS` | `http://localhost:3000` | only needed for browsers calling the backend port directly; the bundled frontend goes through its own `/api` proxy |
 | `FRONTEND_URL` | `http://localhost:3000` | same as above (this is what `CORS_ALLOWED_ORIGINS` defaults from in `docker-compose.yml`) |
 

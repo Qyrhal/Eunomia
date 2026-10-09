@@ -76,7 +76,7 @@ pub fn description(name: &str) -> &'static str {
     match name {
         "docs" => "Read Eunomia's own documentation: how to install, connect agents, every tool, vaults/memories/recall concepts, deployment. No arguments lists the docs; `topic` returns one in full.",
         "search" => "Search the user's synced source records (transactions, meetings, messages, ...) by keyword. Supports filtering by source, record type and time range. Returns record ids usable with `get` and `links`.",
-        "get" => "Fetch one synced source record by id, with its full content.",
+        "get" => "Fetch one synced source record by id, with its full content. For a Pocket recording (or one of its transcript chunks) this includes the whole stored recording: full speaker-labelled transcript, summary, action items, speakers and tags.",
         "list" => "List synced source records, optionally filtered by type and field values, sorted and paginated. Use for browsing rather than searching.",
         "links" => "List the records linked to a given record (e.g. a meeting's attendees, a transaction's merchant), optionally only one relation type.",
         "recall" => "Retrieve the memories most relevant to a question from the user's memory graph, ranked by combining semantic, keyword, graph and recency signals within a token budget. Use this first when answering questions about people, organisations, places or past events.",

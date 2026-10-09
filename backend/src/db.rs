@@ -38,6 +38,7 @@ pub const SCHEMA_STATEMENTS: &[&str] = &[
     "DEFINE TABLE IF NOT EXISTS app_settings SCHEMAFULL;",
     "DEFINE FIELD IF NOT EXISTS owner ON app_settings TYPE record<user>;",
     "DEFINE FIELD IF NOT EXISTS embedding_model ON app_settings TYPE string DEFAULT \"text-embedding-3-small\";",
+    "DEFINE FIELD IF NOT EXISTS chat_model ON app_settings TYPE string DEFAULT \"\";",
     "DEFINE FIELD IF NOT EXISTS sync_intervals ON app_settings FLEXIBLE TYPE object DEFAULT {};",
     "DEFINE FIELD IF NOT EXISTS theme ON app_settings FLEXIBLE TYPE object DEFAULT {};",
     "DEFINE FIELD IF NOT EXISTS openai_api_key_encrypted ON app_settings TYPE string DEFAULT \"\";",
@@ -97,6 +98,26 @@ pub const SCHEMA_STATEMENTS: &[&str] = &[
     // `@N@` only resolves against a composite search index's FIRST field
     // (title above), so body_text gets its own index.
     "DEFINE INDEX IF NOT EXISTS cache_record_body_fts_idx ON cache_record FIELDS body_text SEARCH ANALYZER cache_text_analyzer BM25;",
+    // Everything Pocket returns for a recording, verbatim (`raw`), plus the
+    // full speaker-labelled transcript -- the cache holds it chunked.
+    "DEFINE TABLE IF NOT EXISTS pocket_recording SCHEMAFULL;",
+    "DEFINE FIELD IF NOT EXISTS owner ON pocket_recording TYPE record<user>;",
+    "DEFINE FIELD IF NOT EXISTS recording_id ON pocket_recording TYPE string;",
+    "DEFINE FIELD IF NOT EXISTS title ON pocket_recording TYPE string DEFAULT \"\";",
+    "DEFINE FIELD IF NOT EXISTS recorded_at ON pocket_recording TYPE option<datetime>;",
+    "DEFINE FIELD IF NOT EXISTS duration_seconds ON pocket_recording TYPE number DEFAULT 0;",
+    "DEFINE FIELD IF NOT EXISTS tags ON pocket_recording TYPE array<string> DEFAULT [];",
+    "DEFINE FIELD IF NOT EXISTS speakers ON pocket_recording TYPE array<string> DEFAULT [];",
+    "DEFINE FIELD IF NOT EXISTS summary ON pocket_recording TYPE string DEFAULT \"\";",
+    "DEFINE FIELD IF NOT EXISTS action_items ON pocket_recording TYPE array<string> DEFAULT [];",
+    "DEFINE FIELD IF NOT EXISTS transcript ON pocket_recording TYPE string DEFAULT \"\";",
+    "DEFINE FIELD IF NOT EXISTS raw ON pocket_recording FLEXIBLE TYPE object DEFAULT {};",
+    "DEFINE FIELD IF NOT EXISTS synced_at ON pocket_recording TYPE datetime DEFAULT time::now();",
+    "DEFINE INDEX IF NOT EXISTS pocket_recording_owner_idx ON pocket_recording FIELDS owner;",
+    // Pocket syncs before pocket_recording existed stored no transcript or
+    // summary: restart those cursors so the next sync refetches them. A
+    // no-op once the owner has any stored recording.
+    "UPDATE sync_status SET cursor = \"\" WHERE cursor != \"\" AND string::ends_with(record::id(id), \":heypocket\") AND count((SELECT id FROM pocket_recording WHERE owner = $parent.owner LIMIT 1)) = 0;",
     "DEFINE TABLE IF NOT EXISTS linked_to SCHEMAFULL TYPE RELATION FROM cache_record TO cache_record;",
     "DEFINE FIELD IF NOT EXISTS rel ON linked_to TYPE string;",
     "DEFINE FIELD IF NOT EXISTS origin ON linked_to TYPE string ASSERT $value IN [\"sync\",\"agent\"];",

@@ -20,6 +20,7 @@ use crate::sources::base::owner_key_str;
 use crate::sources::mock::{route, serve, Mock};
 use crate::sources::registry;
 use crate::sources::scheduler::{poll_all, sync_source};
+use crate::sources::heypocket::HeyPocketSource;
 use crate::sources::up_bank::UpBankSource;
 use crate::state::{AppState, AppStateInner};
 
@@ -263,6 +264,79 @@ async fn no_model_stores_raw_data_and_a_failed_embedding_is_repaired_on_replay()
     let out = sync_source(&db, &settings, &owner, "github").await;
     assert_eq!(out["skipped"], 1, "{out}");
     assert_eq!(count(&db, "SELECT count() FROM cache_record WHERE owner = $owner AND embedding != NONE", &owner).await, 1);
+}
+
+/// Pocket: everything a recording carries is stored whole and readable
+/// through `get`; the cache side is chunked, embedded and entity-extracted
+/// with the server's own chat model; a shorter re-sync tombstones the
+/// stale chunks.
+#[tokio::test]
+async fn a_pocket_recording_is_stored_whole_chunked_embedded_and_extracted() {
+    let Some((db, mut settings)) = test_db().await else { return };
+    settings.openai_api_key = Some("sk-test".into());
+    let owner = new_user(&db).await;
+    let mut routes = openai_mock_routes();
+    routes.push(route("GET", "/models", json!({"data": [{"id": "nomic-embed-text"}, {"id": "llama3.1"}]})));
+    let mock = serve(routes).await;
+    point_openai_at(&db, &owner, &mock.base).await;
+
+    let mut rec = json!({
+        "id": "rec_1", "title": "Importer review", "recording_at": "2024-05-02T09:00:00Z", "duration": 900,
+        "tags": [{"id": "t1", "name": "work"}], "speakers": {"s1": {"name": "Ada Lovelace", "speakerId": "s1"}},
+        "transcript": {"segments": [
+            {"speaker": "s1", "start": 0, "end": 1000, "text": "Ada here, the importer drops the last row."},
+            {"speaker": "s2", "speakerName": "Grace", "start": 1000, "end": 9000, "text": "word ".repeat(1500)},
+        ]},
+        "summarizations": {"sm1": {"v2": {"summary": {"markdown": "Agreed to fix the importer."},
+                                          "actionItems": {"items": [{"title": "Ship the fix"}]}}}},
+    });
+    let report = registry::ingest(&db, &settings, &owner, &[rec.clone()], &HeyPocketSource).await.unwrap();
+    assert_eq!((report.written, report.failed), (4, 0), "recording + 3 chunks: {:?}", report.errors);
+
+    let got = crate::tools::generic::get(&db, &owner, "heypocket:heypocket.transcript_chunk:rec_1:2").await.unwrap();
+    let stored = &got["recording"];
+    assert_eq!(stored["summary"], "Agreed to fix the importer.", "{got}");
+    assert_eq!(stored["action_items"], json!(["Ship the fix"]));
+    assert_eq!(stored["tags"], json!(["work"]));
+    assert_eq!(stored["speakers"], json!(["Ada Lovelace", "Grace"]));
+    let transcript = stored["transcript"].as_str().unwrap();
+    assert!(transcript.starts_with("Ada Lovelace: Ada here, the importer drops the last row.\nGrace: word word"), "{transcript}");
+    assert_eq!(transcript.matches("word").count(), 1500);
+    assert_eq!(count(&db, "SELECT count() FROM pocket_recording WHERE owner = $owner AND raw.summarizations.sm1.v2 != NONE", &owner).await, 1);
+
+    assert_eq!(count(&db, "SELECT count() FROM cache_record WHERE owner = $owner AND embedding != NONE", &owner).await, 4);
+    assert!(count(&db, "SELECT count() FROM memory WHERE owner = $owner AND source != NONE", &owner).await >= 1);
+    let chats: Vec<_> = mock.requests().into_iter().filter(|r| r.path == "/chat/completions").collect();
+    assert!(!chats.is_empty() && chats.iter().all(|r| r.body.contains("\"llama3.1\"")), "the server's own chat model draws the relations");
+
+    // Another user's `get` sees nothing.
+    let other = new_user(&db).await;
+    assert_eq!(crate::tools::generic::get(&db, &other, "heypocket:heypocket.recording:rec_1").await.unwrap()["error"], "not found");
+
+    rec["transcript"]["segments"] = json!([{"speaker": "s1", "text": "Short now."}]);
+    registry::ingest(&db, &settings, &owner, &[rec.clone()], &HeyPocketSource).await.unwrap();
+    assert_eq!(count(&db, "SELECT count() FROM cache_record WHERE owner = $owner AND deleted = false", &owner).await, 2);
+
+    // Deleting the connector's data takes everything derived from it, and
+    // nothing from another source or another user.
+    registry::ingest(&db, &settings, &other, &[rec], &HeyPocketSource).await.unwrap();
+    let up = json!({"type": "transactions", "id": "t1",
+        "attributes": {"description": "Coles", "createdAt": "2024-03-01T00:00:00+11:00", "status": "SETTLED",
+                       "amount": {"value": "-5.00", "valueInBaseUnits": -500, "currencyCode": "AUD"}},
+        "relationships": {"account": {"data": {"id": "acc"}}}});
+    registry::ingest(&db, &settings, &owner, &[up], &UpBankSource).await.unwrap();
+    let up_memories = count(&db, "SELECT count() FROM memory WHERE owner = $owner AND source.source = 'up_bank'", &owner).await;
+    let out = registry::delete_data(&db, &owner, &HeyPocketSource).await.unwrap();
+    assert_eq!(out["records"], 4, "{out}");
+    assert!(out["memories"].as_i64().unwrap() >= 1, "{out}");
+    assert_eq!(count(&db, "SELECT count() FROM cache_record WHERE owner = $owner AND source = 'heypocket'", &owner).await, 0);
+    assert_eq!(count(&db, "SELECT count() FROM pocket_recording WHERE owner = $owner", &owner).await, 0);
+    assert_eq!(count(&db, "SELECT count() FROM memory WHERE owner = $owner AND source.source = 'heypocket'", &owner).await, 0);
+    assert_eq!(count(&db, "SELECT count() FROM linked_to WHERE in.source = 'heypocket' AND in.owner = $owner", &owner).await, 0);
+    assert_eq!(count(&db, "SELECT count() FROM cache_record WHERE owner = $owner AND source = 'up_bank'", &owner).await, 1);
+    assert_eq!(count(&db, "SELECT count() FROM memory WHERE owner = $owner AND source.source = 'up_bank'", &owner).await, up_memories);
+    assert_eq!(count(&db, "SELECT count() FROM pocket_recording WHERE owner = $owner", &other).await, 1);
+    assert_eq!(count(&db, "SELECT count() FROM cache_record WHERE owner = $owner AND source = 'heypocket'", &other).await, 2);
 }
 
 /// #63: changed links are reconciled without duplicating the raw record.

@@ -92,13 +92,65 @@ pub async fn enabled(db: &Db, owner: &RecordId) -> AppResult<Vec<Arc<dyn Source>
     Ok(all().into_iter().filter(|s| on.contains(s.provider_key())).collect())
 }
 
-/// Map -> ingest every raw record for `src`, scoped to `owner`.
+/// Persist -> map -> ingest every raw record for `src`, scoped to `owner`.
 pub async fn ingest(db: &Db, settings: &Settings, owner: &RecordId, raw_records: &[Value], src: &dyn Source) -> AppResult<IngestReport> {
-    ingest::ingest(db, settings, owner, src.key(), raw_records, |raw| match src.map(raw) {
-        None => Ok(None),
-        Some(env) => serde_json::from_value::<Envelope>(env).map(Some).map_err(|e| e.to_string()),
+    let mut persist_errors = Vec::new();
+    for raw in raw_records {
+        if let Err(e) = src.persist(db, owner, raw).await {
+            persist_errors.push(format!("store {}: {}", raw.get("id").and_then(Value::as_str).unwrap_or("?"), e.message));
+        }
+    }
+    let mut report = ingest::ingest(db, settings, owner, src.key(), raw_records, |raw| {
+        src.map_many(raw).into_iter().map(|env| serde_json::from_value::<Envelope>(env).map_err(|e| e.to_string())).collect()
     })
-    .await
+    .await?;
+    report.failed += persist_errors.len() as u64;
+    report.errors.extend(persist_errors);
+    Ok(report)
+}
+
+/// Deletes everything `owner` has from `src`: its cache records (with their
+/// embeddings and links), the facts and relations extracted from them, and
+/// anything the source stores itself (heypocket's `pocket_recording`).
+/// Observations built from deleted facts go stale (rebuilt from the
+/// surviving facts), or are deleted if nothing else backs them -- the same
+/// rule as deleting one memory. Entities, the connector's credentials and
+/// its sync cursor are kept. Returns how many records and memories went.
+pub async fn delete_data(db: &Db, owner: &RecordId, src: &dyn Source) -> AppResult<Value> {
+    // cache_record keys are "{owner}:{source}:{type}:{external_id}".
+    let prefix = format!("{}:{}:", crate::cache::search::owner_key(owner), src.key());
+    // A record link pointing at one of those records (SurrealQL closures
+    // can't see `$prefix`, hence the string).
+    let mine = |field: &str| format!("({field} != NONE AND string::starts_with(record::id({field}), $prefix))");
+    let mut res = db
+        .query(format!(
+            "BEGIN TRANSACTION; \
+             LET $mems = SELECT id, subject FROM memory WHERE {source}; \
+             LET $ids = $mems.id; \
+             LET $subjects = array::distinct($mems.subject); \
+             DELETE $ids; \
+             DELETE memory WHERE type = \"observation\" AND subject IN $subjects \
+                 AND source_memories AND array::len(array::complement(source_memories, $ids)) = 0; \
+             UPDATE memory SET status = \"stale\", updated_at = time::now(), \
+                 source_memories = IF source_memories THEN array::complement(source_memories, $ids) ELSE NONE END \
+                 WHERE type = \"observation\" AND subject IN $subjects; \
+             DELETE relates_to WHERE {source}; \
+             DELETE linked_to WHERE {from} OR {to}; \
+             LET $records = (DELETE cache_record WHERE owner = $owner AND source = $source RETURN BEFORE).len(); \
+             IF $source = \"heypocket\" {{ DELETE pocket_recording WHERE owner = $owner }}; \
+             COMMIT TRANSACTION; \
+             RETURN {{ records: $records, memories: $ids.len() }};",
+            source = mine("source"),
+            from = mine("in"),
+            to = mine("out"),
+        ))
+        .bind(("owner", owner.clone()))
+        .bind(("source", src.key().to_string()))
+        .bind(("prefix", prefix))
+        .await?
+        .check()?;
+    let n = res.num_statements();
+    Ok(res.take::<Option<Value>>(n - 1)?.unwrap_or(Value::Null))
 }
 
 /// Builds the context the cache-reading source helpers take.
