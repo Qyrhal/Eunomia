@@ -87,16 +87,15 @@ async fn consolidate_touched_subjects(db: &Db, settings: &Settings, owner: &Reco
     }
 }
 
-/// `raw_records` are JSON values; `map_fn` maps one raw record to
-/// `Some(Envelope)`, `None` to skip it, or `Err(message)` on a mapping
-/// failure.
+/// `raw_records` are JSON values; `map_fn` maps one raw record to its
+/// envelopes (none to skip it), or `Err(message)` on a mapping failure.
 pub async fn ingest(
     db: &Db,
     settings: &Settings,
     owner: &RecordId,
     source_key: &str,
     raw_records: &[Value],
-    map_fn: impl Fn(&Value) -> Result<Option<Envelope>, String>,
+    map_fn: impl Fn(&Value) -> Result<Vec<Envelope>, String>,
 ) -> AppResult<IngestReport> {
     let mut report = IngestReport::new(source_key);
     let mut touched_subjects: HashSet<String> = HashSet::new();
@@ -104,55 +103,69 @@ pub async fn ingest(
     let can_extract = crate::embeddings::service::chat_available(db, settings, owner).await;
 
     for raw in raw_records {
-        let env = match map_fn(raw) {
-            Ok(Some(mut env)) => {
-                if env.source.is_empty() {
-                    env.source = source_key.to_string();
-                }
-                env
-            }
-            Ok(None) => {
+        let envs = match map_fn(raw) {
+            Ok(envs) if envs.is_empty() => {
                 report.skipped += 1;
                 continue;
             }
+            Ok(envs) => envs,
             Err(e) => {
                 report.failed += 1;
                 report.errors.push(format!("{}: {e}", raw_id(raw)));
                 continue;
             }
         };
-
-        let (rec, changed) = match search::upsert(db, owner, &env).await {
-            Ok(r) => r,
-            Err(e) => {
-                report.failed += 1;
-                report.errors.push(format!("{}: {}", env.id, e.message));
+        for mut env in envs {
+            if env.source.is_empty() {
+                env.source = source_key.to_string();
+            }
+            let (rec, changed) = match upsert_retrying(db, owner, &env).await {
+                Ok(r) => r,
+                Err(e) => {
+                    report.failed += 1;
+                    report.errors.push(format!("{}: {}", env.id, e.message));
+                    continue;
+                }
+            };
+            if changed {
+                report.written += 1;
+            } else {
+                report.skipped += 1;
+            }
+            if rec.deleted {
                 continue;
             }
-        };
-        if changed {
-            report.written += 1;
-        } else {
-            report.skipped += 1;
-        }
-        if rec.deleted {
-            continue;
-        }
 
-        // An unchanged record is re-embedded only if a previous attempt failed.
-        if can_embed && (changed || !has_embedding(db, owner, &rec.id).await.unwrap_or(true)) {
-            if let Err(e) = embed_record(db, settings, owner, &rec).await {
-                report.errors.push(format!("embed {}: {}", rec.id, e.message));
+            // An unchanged record is re-embedded only if a previous attempt failed.
+            if can_embed && (changed || !has_embedding(db, owner, &rec.id).await.unwrap_or(true)) {
+                if let Err(e) = embed_record(db, settings, owner, &rec).await {
+                    report.errors.push(format!("embed {}: {}", rec.id, e.message));
+                }
             }
-        }
-        if changed && can_extract {
-            let record = extract::ExtractRecord { id: rec.id.clone(), title: rec.title.clone(), body_text: rec.body_text.clone() };
-            touched_subjects.extend(extract::extract_entities(db, settings, owner, &record).await);
+            if changed && can_extract {
+                let record = extract::ExtractRecord { id: rec.id.clone(), title: rec.title.clone(), body_text: rec.body_text.clone() };
+                touched_subjects.extend(extract::extract_entities(db, settings, owner, &record).await);
+            }
         }
     }
 
     consolidate_touched_subjects(db, settings, owner, &touched_subjects).await;
     Ok(report)
+}
+
+/// Concurrent writers (other syncs, other users) can conflict on the shared
+/// indexes; SurrealDB rejects the loser as retryable, so retry it a few times.
+async fn upsert_retrying(db: &Db, owner: &RecordId, env: &Envelope) -> AppResult<(search::CacheRecord, bool)> {
+    let mut attempt = 0;
+    loop {
+        match search::upsert(db, owner, env).await {
+            Err(e) if attempt < 4 && e.message.contains("can be retried") => {
+                attempt += 1;
+                tokio::time::sleep(std::time::Duration::from_millis(50 * attempt)).await;
+            }
+            other => return other,
+        }
+    }
 }
 
 fn raw_id(raw: &Value) -> String {

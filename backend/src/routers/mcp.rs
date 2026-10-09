@@ -276,6 +276,7 @@ mod tests {
             surreal_db: String::new(),
             openai_api_key: None,
             openai_base_url: "https://api.openai.com/v1".into(),
+            openai_chat_model: String::new(),
             encryption_key: "k".into(),
             embeddings_backend: "stub".into(),
             cors_allowed_origins: "http://localhost:3000".into(),

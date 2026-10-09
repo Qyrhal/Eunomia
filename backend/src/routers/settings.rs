@@ -48,6 +48,8 @@ struct AppSettingsRow {
     observations_mission: String,
     #[serde(default)]
     memory_skill: String,
+    #[serde(default)]
+    chat_model: String,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -60,6 +62,8 @@ struct SettingsUpdate {
     observations_mission: Option<String>,
     /// "" resets to the built-in skill
     memory_skill: Option<String>,
+    /// "" = automatic (see embeddings::provider::chat_model)
+    chat_model: Option<String>,
 }
 
 fn app_settings_id(owner: &RecordId) -> RecordId {
@@ -69,6 +73,7 @@ fn app_settings_id(owner: &RecordId) -> RecordId {
 fn out(row: &AppSettingsRow, server_base_url: &str) -> Value {
     json!({
         "embedding_model": row.embedding_model,
+        "chat_model": row.chat_model,
         "sync_intervals": row.sync_intervals,
         "theme": row.theme,
         "openai_api_key_set": !row.openai_api_key_encrypted.is_empty(),
@@ -120,6 +125,9 @@ async fn update_app_settings(db: &Db, owner: &RecordId, body: &SettingsUpdate, e
     get_app_settings(db, owner).await?; // ensure the row exists
 
     let mut set_parts: Vec<&str> = Vec::new();
+    if body.chat_model.is_some() {
+        set_parts.push("chat_model = $chat_model");
+    }
     if body.embedding_model.is_some() {
         set_parts.push("embedding_model = $embedding_model");
     }
@@ -149,6 +157,9 @@ async fn update_app_settings(db: &Db, owner: &RecordId, body: &SettingsUpdate, e
     let query_str = format!("UPDATE $id SET {}, updated_at = time::now() RETURN AFTER", set_parts.join(", "));
     let rid = app_settings_id(owner);
     let mut q = db.query(query_str).bind(("id", rid));
+    if let Some(v) = &body.chat_model {
+        q = q.bind(("chat_model", v.trim().to_string()));
+    }
     if let Some(v) = &body.embedding_model {
         q = q.bind(("embedding_model", v.clone()));
     }
@@ -284,6 +295,7 @@ mod tests {
             openai_base_url: String::new(),
             observations_mission: DEFAULT_OBSERVATIONS_MISSION.to_string(),
             memory_skill: String::new(),
+            chat_model: String::new(),
         }
     }
 

@@ -39,7 +39,6 @@ use crate::error::{AppError, AppResult};
 use crate::state::AppState;
 use crate::tools::registry;
 
-const MODEL: &str = "gpt-4o-mini";
 
 /// Caps the tool-call loop so a confused model can't spin forever -- if the
 /// model still hasn't produced a final reply after this many rounds,
@@ -508,9 +507,10 @@ async fn run_send(
 
     let client = provider::client();
     let url = p.url("chat/completions");
+    let model = provider::chat_model(&p).await;
 
     for _ in 0..MAX_TOOL_ITERATIONS {
-        let body = json!({ "model": MODEL, "messages": messages, "tools": tools, "stream": true });
+        let body = json!({ "model": model, "messages": messages, "tools": tools, "stream": true });
         let resp = client
             .post(&url)
             .bearer_auth(p.bearer())

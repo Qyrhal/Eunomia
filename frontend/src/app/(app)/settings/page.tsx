@@ -510,6 +510,7 @@ function Settings() {
   const [apiKeyInput, setApiKeyInput] = useState("");
   const [baseUrlInput, setBaseUrlInput] = useState("");
   const [modelInput, setModelInput] = useState("");
+  const [chatModelInput, setChatModelInput] = useState("");
   const [models, setModels] = useState<string[]>([]);
   const [modelsError, setModelsError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
@@ -521,6 +522,7 @@ function Settings() {
       setSettings(s);
       setBaseUrlInput(s.openai_base_url);
       setModelInput(s.embedding_model);
+      setChatModelInput(s.chat_model);
     });
   }, []);
 
@@ -540,6 +542,7 @@ function Settings() {
       theme: settings.theme,
       openai_base_url: baseUrlInput.trim(),
       embedding_model: modelInput.trim(),
+      chat_model: chatModelInput.trim(),
     };
     if (apiKeyInput) payload.openai_api_key = apiKeyInput;
     let updated: AppSettings;
@@ -667,6 +670,26 @@ function Settings() {
                   Couldn&apos;t list models from this endpoint ({modelsError}) — type a model id directly.
                 </span>
               )}
+            </label>
+
+            <label className="text-[13px] flex flex-col gap-1.5" style={{ color: "var(--ink-dim)" }}>
+              Chat model
+              <input
+                className="field px-3 py-2.5 text-[13.5px] font-mono"
+                list="chat-models"
+                value={chatModelInput}
+                onChange={(e) => setChatModelInput(e.target.value)}
+                placeholder="automatic"
+              />
+              <datalist id="chat-models">
+                {models.map((m) => (
+                  <option key={m} value={m} />
+                ))}
+              </datalist>
+              <span className="text-[11px]" style={{ color: "var(--ink-faint)" }}>
+                Extracts entities and relations from synced data, and powers chat. Blank picks one: gpt-4o-mini on
+                OpenAI, otherwise the first chat model this endpoint serves.
+              </span>
             </label>
           </section>
 

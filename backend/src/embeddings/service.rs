@@ -305,7 +305,7 @@ mod tests {
 
     #[test]
     fn selected_model_is_used_and_defaults_when_blank() {
-        let p = |m: &str| Provider { base_url: "http://x/v1".into(), api_key: String::new(), embedding_model: m.into() };
+        let p = |m: &str| Provider { base_url: "http://x/v1".into(), api_key: String::new(), embedding_model: m.into(), chat_model: String::new() };
         assert_eq!(model_for(&p("")), DEFAULT_MODEL);
         assert_eq!(model_for(&p(" nomic-embed ")), "nomic-embed");
     }

@@ -35,6 +35,7 @@ pub fn router() -> Router<AppState> {
         .route("/connectors/pocketai/detail/:recording_id", get(pocketai_detail))
         .route("/connectors/:kind", get(get_one).put(put_one))
         .route("/connectors/:kind/test", axum::routing::post(test_one))
+        .route("/connectors/:kind/data", axum::routing::delete(delete_data))
 }
 
 pub fn snapshot_router() -> Router<AppState> {
@@ -195,6 +196,14 @@ async fn test_one(State(state): State<AppState>, user: User, Path(kind): Path<St
         Ok(()) => Ok(Json(json!({ "ok": true }))),
         Err(err) => Ok(Json(json!({ "ok": false, "error": err.message }))),
     }
+}
+
+/// Deletes all of the caller's data from one connector (see
+/// `registry::delete_data`); the connection itself stays.
+async fn delete_data(State(state): State<AppState>, user: User, Path(kind): Path<String>) -> AppResult<Json<Value>> {
+    require_known_kind(&kind)?;
+    let src = registry::for_provider(&kind).ok_or_else(|| AppError::not_found("unknown connector"))?;
+    Ok(Json(registry::delete_data(&state.db, &user.id, src.as_ref()).await?))
 }
 
 /// Best-effort figures for each connected account, read live from each

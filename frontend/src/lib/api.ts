@@ -84,6 +84,8 @@ export const auth = {
 
 export type AppSettings = {
   embedding_model: string;
+  /** "" = automatic (OPENAI_CHAT_MODEL, else gpt-4o-mini on OpenAI, else the server's first chat model). */
+  chat_model: string;
   sync_intervals: Record<string, number>;
   theme: { mode?: "light" | "dark" | "system"; accent?: string };
   openai_api_key_set: boolean;
@@ -96,6 +98,7 @@ export type AppSettings = {
 export type SettingsUpdate = Partial<{
   memory_skill: string;
   embedding_model: string;
+  chat_model: string;
   sync_intervals: Record<string, number>;
   theme: AppSettings["theme"];
   openai_api_key: string;
@@ -213,6 +216,8 @@ export const connectors = {
   get: (kind: ConnectorKind) => api.get<Connector>(`/api/connectors/${kind}`),
   update: (kind: ConnectorKind, body: ConnectorUpdate) => api.put<Connector>(`/api/connectors/${kind}`, body),
   test: (kind: ConnectorKind) => api.post<{ ok: boolean; error?: string }>(`/api/connectors/${kind}/test`),
+  /** Deletes all of one connector's synced data; the connection stays. */
+  deleteData: (kind: string) => api.del<{ records: number; memories: number }>(`/api/connectors/${kind}/data`),
   snapshot: () => api.get<Snapshot>("/api/snapshot"),
 };
 
@@ -264,6 +269,8 @@ export type ToolRecord = ToolHit & {
   external_id: string;
   body_text: string;
   payload: Record<string, unknown>;
+  /** A Pocket recording, stored whole. */
+  recording?: { summary: string; action_items: string[]; transcript: string };
 };
 
 export const tools = {

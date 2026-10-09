@@ -1,9 +1,9 @@
 "use client";
 
-import { use, useCallback, useEffect, useState } from "react";
+import { use, useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { ArrowRight, ChevronDown, ChevronRight, Search } from "lucide-react";
-import { sources, tools, type SourceRow, type ToolHit, type ToolRecord } from "@/lib/api";
+import { ArrowRight, ChevronDown, ChevronRight, Search, Trash2 } from "lucide-react";
+import { connectors, sources, tools, type SourceRow, type ToolHit, type ToolRecord } from "@/lib/api";
 import SyncStatusCard from "@/components/SyncStatusCard";
 
 const DATE_KEY = /(_at|date|time)$/i;
@@ -123,6 +123,16 @@ function RecordRow({ hit }: { hit: ToolHit }) {
                   No payload fields.
                 </p>
               )}
+              {detail.recording?.transcript && (
+                <details className="text-[12.5px]">
+                  <summary className="cursor-pointer" style={{ color: "var(--ink-dim)" }}>
+                    Full transcript
+                  </summary>
+                  <pre className="mt-2 whitespace-pre-wrap font-sans max-h-96 overflow-auto" style={{ color: "var(--ink)" }}>
+                    {detail.recording.transcript}
+                  </pre>
+                </details>
+              )}
             </div>
           )}
           {!loading && !detail && (
@@ -133,6 +143,91 @@ function RecordRow({ hit }: { hit: ToolHit }) {
         </div>
       )}
     </li>
+  );
+}
+
+/** "Delete all data" with a two-step confirmation: what goes, then type
+ * the connector's name. */
+function DeleteData({ row, onDeleted }: { row: SourceRow; onDeleted: () => void }) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  const [step, setStep] = useState<1 | 2>(1);
+  const [typed, setTyped] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  function open() {
+    setStep(1);
+    setTyped("");
+    setError(null);
+    dialog.current?.showModal();
+  }
+
+  async function confirm() {
+    setBusy(true);
+    try {
+      await connectors.deleteData(row.provider);
+      dialog.current?.close();
+      onDeleted();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <>
+      <button
+        onClick={open}
+        className="self-start px-4 py-2 text-[13px] rounded-xl inline-flex items-center gap-1.5"
+        style={{ border: "1px solid var(--critical)", color: "var(--critical)" }}
+      >
+        <Trash2 size={13} /> Delete all {row.label} data
+      </button>
+      <dialog ref={dialog} aria-labelledby="delete-data-title" className="ledger p-6 max-w-md w-[calc(100%-32px)] m-auto backdrop:bg-black/50" style={{ color: "var(--ink)" }}>
+        <h2 id="delete-data-title" className="font-display text-xl mb-3">
+          {step === 1 ? `Delete all ${row.label} data?` : "Are you sure?"}
+        </h2>
+        {step === 1 ? (
+          <p className="text-[13px] mb-5" style={{ color: "var(--ink-dim)" }}>
+            This permanently deletes the {row.record_count.toLocaleString()} {row.label} records Eunomia has synced, their
+            search index, and every fact and relation extracted from them. The connection itself stays, so later syncs
+            bring in new data only.
+          </p>
+        ) : (
+          <label className="text-[13px] flex flex-col gap-1.5 mb-5" style={{ color: "var(--ink-dim)" }}>
+            <span>
+              Type <span className="font-mono" style={{ color: "var(--ink)" }}>{row.label}</span> to confirm. This can&apos;t be undone.
+            </span>
+            <input autoFocus className="field px-3 py-2.5 text-[13.5px] font-mono" value={typed} onChange={(e) => setTyped(e.target.value)} />
+          </label>
+        )}
+        {error && (
+          <p role="alert" className="text-[12.5px] mb-3" style={{ color: "var(--critical)" }}>
+            {error}
+          </p>
+        )}
+        <div className="flex justify-end gap-2">
+          <button onClick={() => dialog.current?.close()} className="field px-4 py-2 text-[13px]">
+            Cancel
+          </button>
+          {step === 1 ? (
+            <button onClick={() => setStep(2)} className="px-4 py-2 text-[13px] font-medium rounded-xl" style={{ background: "var(--critical)", color: "var(--canvas)" }}>
+              Continue
+            </button>
+          ) : (
+            <button
+              onClick={confirm}
+              disabled={typed !== row.label || busy}
+              className="px-4 py-2 text-[13px] font-medium rounded-xl disabled:opacity-40"
+              style={{ background: "var(--critical)", color: "var(--canvas)" }}
+            >
+              {busy ? "Deleting…" : "Delete everything"}
+            </button>
+          )}
+        </div>
+      </dialog>
+    </>
   );
 }
 
@@ -264,6 +359,14 @@ export default function ConnectorWorkspacePage({ params }: { params: Promise<{ k
           </li>
         )}
       </ul>
+
+      <DeleteData
+        row={row}
+        onDeleted={() => {
+          loadRow();
+          loadRecords();
+        }}
+      />
     </div>
   );
 }
