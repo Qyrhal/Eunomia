@@ -22,7 +22,7 @@ pub const WRITE_OBSERVATION: Stmt = Stmt::at(
         LET $row = IF array::len($target) > 0 {
             (UPDATE $target[0] SET text = $text, version = version + 1, status = "fresh", updated_at = time::now() RETURN AFTER)
         } ELSE {
-            (CREATE $obs_id SET owner = $owner, vault = $vault, subject = $subject, text = $text, type = "observation", source = $source RETURN AFTER)
+            (CREATE $obs_id SET owner = $owner, vault = $vault, subject = $subject, text = $text, type = "observation", status = "fresh", source = $source RETURN AFTER)
         };
         RETURN $row;
         COMMIT TRANSACTION;"#,
@@ -71,9 +71,78 @@ pub const UPDATE_MEMORY_TEXT_TYPE: Stmt = Stmt::new(
     "UPDATE $id SET version = version + 1, updated_at = time::now(), text = $text, type = $type RETURN AFTER",
 );
 
+
 pub const STALE_OBSERVATIONS: Stmt = Stmt::new(
     "entities.stale_observations",
     r#"UPDATE memory SET status = "stale" WHERE subject = $subject AND type = "observation""#,
+);
+
+/// Deleting a memory. A deleted raw fact leaves its subject's observation's lineage and makes the
+/// observation stale (rebuilt from the surviving facts on the next consolidation); an observation
+/// built from nothing but this fact goes with it. One transaction, so a failure leaves all of it.
+pub const DELETE_MEMORY: Stmt = Stmt::new(
+    "entities.delete_memory",
+    r#"BEGIN TRANSACTION;
+        DELETE $id;
+        IF $raw {
+            DELETE memory WHERE subject = $subject AND type = "observation" AND source_memories = [$id];
+            UPDATE memory SET status = "stale", updated_at = time::now(),
+                source_memories = IF source_memories THEN array::complement(source_memories, [$id]) ELSE NONE END
+                WHERE subject = $subject AND type = "observation";
+        };
+        COMMIT TRANSACTION;"#,
+);
+
+/// The memory half of a merge, for a caller's transaction: observations folded into the oldest one
+/// (texts joined, lineages unioned, marked stale so the next consolidation rebuilds it from the merged
+/// facts), then every memory of `$loser` moved to `$winner`, and the winner's observation marked stale.
+macro_rules! merge_memories {
+    () => {
+        r#"
+    LET $obs = (SELECT id, text, source_memories, created_at FROM memory
+        WHERE subject IN [$winner, $loser] AND type = "observation" ORDER BY created_at, id);
+    IF array::len($obs) > 1 {
+        DELETE array::slice($obs.id, 1);
+        UPDATE $obs[0].id SET subject = $winner, text = array::join($obs.text, "\n\n"), version += 1,
+            source_memories = array::distinct(array::flatten($obs.map(|$o| $o.source_memories ?? []))),
+            status = "stale", updated_at = time::now();
+    };
+    UPDATE memory SET subject = $winner WHERE subject = $loser;
+    UPDATE memory SET status = "stale", updated_at = time::now() WHERE subject = $winner AND type = "observation";
+"#
+    };
+}
+
+pub const MERGE_MEMORIES_SQL: &str = merge_memories!();
+
+/// Moves everything of `$loser` onto `$winner` (same kind and vault, checked by the caller) and
+/// deletes `$loser`, in ONE transaction: memories (see [`MERGE_MEMORIES_SQL`]), `relates_to` edges in
+/// both directions (re-created on the winner unless it already has that exact edge; edges between
+/// the two are dropped), and `$aliases` onto the winner. Any failing statement rolls all of it back.
+pub const MERGE_ENTITIES: Stmt = Stmt::new(
+    "entities.merge_entities",
+    concat!(
+        "BEGIN TRANSACTION;",
+        merge_memories!(),
+        r#"
+    FOR $e IN (SELECT * FROM relates_to WHERE in = $loser AND out NOT IN [$winner, $loser]) {
+        IF array::len(SELECT id FROM relates_to WHERE in = $winner AND out = $e.out AND label = $e.label) = 0 {
+            LET $o = $e.out;
+            RELATE $winner->relates_to->$o SET label = $e.label, owner = $e.owner, source = $e.source, created_at = $e.created_at;
+        };
+    };
+    FOR $e IN (SELECT * FROM relates_to WHERE out = $loser AND in NOT IN [$winner, $loser]) {
+        IF array::len(SELECT id FROM relates_to WHERE in = $e.in AND out = $winner AND label = $e.label) = 0 {
+            LET $i = $e.in;
+            RELATE $i->relates_to->$winner SET label = $e.label, owner = $e.owner, source = $e.source, created_at = $e.created_at;
+        };
+    };
+    DELETE relates_to WHERE in = $loser OR out = $loser;
+    UPDATE $winner SET aliases = array::sort(array::union(aliases, $aliases)), updated_at = time::now();
+    DELETE $loser;
+"#,
+        "COMMIT TRANSACTION;"
+    ),
 );
 
 pub const DELETE_ENTITY: Stmt = Stmt::new(
@@ -82,22 +151,13 @@ pub const DELETE_ENTITY: Stmt = Stmt::new(
      DELETE relates_to WHERE in = $id OR out = $id; DELETE $id; COMMIT TRANSACTION;",
 );
 
-pub const REASSIGN_MEMORIES: Stmt =
-    Stmt::new("entities.reassign_memories", "UPDATE memory SET subject = $winner WHERE subject = $loser");
 
-pub const EDGES_OUT: Stmt = Stmt::new("entities.edges_out", "SELECT * FROM relates_to WHERE in = $id");
-pub const EDGES_IN: Stmt = Stmt::new("entities.edges_in", "SELECT * FROM relates_to WHERE out = $id");
 // the other endpoint must be in the entity's own vault: an edge left over from before relations were confined to one vault stays hidden
 pub const EDGES_OUT_IN_VAULT: Stmt =
     Stmt::new("entities.edges_out_in_vault", "SELECT * FROM relates_to WHERE in = $id AND out.vault = $vault");
 pub const EDGES_IN_IN_VAULT: Stmt =
     Stmt::new("entities.edges_in_in_vault", "SELECT * FROM relates_to WHERE out = $id AND in.vault = $vault");
-pub const DELETE_EDGES: Stmt = Stmt::new("entities.delete_edges", "DELETE relates_to WHERE in = $id OR out = $id");
 
-pub const SET_ALIASES: Stmt = Stmt::new(
-    "entities.set_aliases",
-    "UPDATE $id SET aliases = $aliases, updated_at = time::now() RETURN AFTER",
-);
 
 pub const MEMORIES_OF: Stmt =
     Stmt::new("entities.memories_of", "SELECT * FROM memory WHERE subject = $id AND vault = $vault ORDER BY created_at DESC");
@@ -153,18 +213,15 @@ pub const ALL: &[&Stmt] = &[
     &RELATE,
     &FIND_RELATION,
     &DELETE_RECORD,
+    &DELETE_MEMORY,
+    &STALE_OBSERVATIONS,
+    &MERGE_ENTITIES,
     &UPDATE_MEMORY_TEXT,
     &UPDATE_MEMORY_TYPE,
     &UPDATE_MEMORY_TEXT_TYPE,
-    &STALE_OBSERVATIONS,
     &DELETE_ENTITY,
-    &REASSIGN_MEMORIES,
-    &EDGES_OUT,
-    &EDGES_IN,
     &EDGES_OUT_IN_VAULT,
     &EDGES_IN_IN_VAULT,
-    &DELETE_EDGES,
-    &SET_ALIASES,
     &MEMORIES_OF,
     &EDGES_AMONG,
     &SET_SUMMARY,
@@ -200,4 +257,18 @@ pub fn create_entity<'a>(db: &'a OrgDb, table: &str) -> Q<'a> {
 /// Entity edit where only the passed fields change (7 combinations).
 pub fn update_entity<'a>(db: &'a OrgDb, set: &str) -> Q<'a> {
     dynamic(db, "entities.update_entity", format!("UPDATE $id SET {set} RETURN AFTER"))
+}
+
+/// The `table` entity in `vault` whose lowercase name or an alias is `$needle`, a name match first;
+/// both lookups are index reads. `table` is always a `kind_table()`-validated entity table.
+pub fn find_by_key<'a>(db: &'a OrgDb, table: &str) -> Q<'a> {
+    dynamic(
+        db,
+        "entities.find_by_key",
+        format!(
+            "SELECT * FROM {table} WHERE vault = $vault AND name_key = $needle LIMIT 1; \
+             SELECT * FROM {table} WITH INDEX {table}_alias_keys_idx WHERE alias_keys CONTAINS $needle AND vault = $vault \
+             ORDER BY created_at LIMIT 1;"
+        ),
+    )
 }

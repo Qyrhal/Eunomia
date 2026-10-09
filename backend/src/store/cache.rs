@@ -1,10 +1,10 @@
 //! Statements for the cache area. See the module docs in store/mod.rs.
 //!
 //! Not here, built at runtime with `store::dynamic` (the variant count
-//! explodes or the SQL embeds a literal): `cache.search_filtered`,
-//! `cache.semantic_ids` (KNN `<|k,ef|>` needs literal integers),
-//! `cache.list_records`, `cache.count_records`, `cache.generic_search`,
-//! `cache.generic_list`, `cache.generic_count`.
+//! explodes, the SQL embeds a literal, or one statement is repeated per term or entity):
+//! `cache.keyword_ids` (per term, filtered), `cache.semantic_ids` (KNN `<|k,ef|>` needs literal
+//! integers), `cache.semantic_exact`, `cache.list_records`, `cache.graph_entities`,
+//! `cache.graph_memories`, `cache.memory_text_terms`.
 
 use super::Stmt;
 
@@ -14,40 +14,16 @@ pub const RECORDS_FOR_EMBED: Stmt = Stmt::new(
     "SELECT id, title, body_text, embedding FROM cache_record WHERE owner = $owner AND deleted = false LIMIT $limit",
 );
 
-macro_rules! entity_names {
-    ($($ident:ident => $table:literal),* $(,)?) => {
-        $(pub const $ident: Stmt = Stmt::new(
-            concat!("cache.entity_names_", $table),
-            concat!("SELECT id, name, aliases FROM ", $table, " WHERE vault = $vault"),
-        );)*
-        /// One statement per entity table, in the order recall scans them.
-        pub const ENTITY_NAMES: &[&Stmt] = &[$(&$ident),*];
-    };
-}
-entity_names! {
-    ENTITY_NAMES_PERSON => "person",
-    ENTITY_NAMES_ORGANISATION => "organisation",
-    ENTITY_NAMES_LOCATION => "location",
-    ENTITY_NAMES_REPOSITORY => "repository",
-    ENTITY_NAMES_FILE => "file",
-    ENTITY_NAMES_SYMBOL => "symbol",
-}
-
-pub const MEMORIES_BY_SUBJECT: Stmt = Stmt::new("cache.memories_by_subject", "SELECT * FROM memory WHERE subject = $id ORDER BY created_at DESC");
-pub const MEMORY_BM25: Stmt = Stmt::new(
-    "cache.memory_bm25",
-    "SELECT id, search::score(1) AS score FROM memory \
-     WHERE vault = $vault AND text @1@ $t ORDER BY score DESC LIMIT $limit",
-);
+// newest first, limited in the database, so a broad range never loads the whole range
 pub const CACHE_RECORDS_IN_RANGE: Stmt = Stmt::new(
     "cache.records_in_range",
     "SELECT id, occurred_at FROM cache_record WHERE owner = $owner AND deleted = false \
-     AND occurred_at >= <datetime>$since AND occurred_at <= <datetime>$until",
+     AND occurred_at >= $since AND occurred_at <= $until ORDER BY occurred_at DESC LIMIT $limit",
 );
 pub const MEMORIES_IN_RANGE: Stmt = Stmt::new(
     "cache.memories_in_range",
     "SELECT id, created_at FROM memory WHERE vault = $vault \
-     AND created_at >= <datetime>$since AND created_at <= <datetime>$until",
+     AND created_at >= $since AND created_at <= $until ORDER BY created_at DESC LIMIT $limit",
 );
 
 pub const DELETE_SYNC_LINKS: Stmt = Stmt::new("cache.delete_sync_links", "DELETE linked_to WHERE in = $id AND origin = 'sync'");
@@ -63,25 +39,45 @@ pub const UPSERT_RECORD: Stmt = Stmt::new(
 /// Whether a stored record already has its embedding (an unchanged replayed record is re-embedded only if not).
 pub const HAS_EMBEDDING: Stmt = Stmt::new("cache.has_embedding", "SELECT VALUE embedding != NONE FROM ONLY $id");
 pub const SET_EMBEDDING: Stmt = Stmt::new("cache.set_embedding", "UPDATE $id SET embedding = $embedding");
-pub const KEYWORD_IDS: Stmt = Stmt::new(
-    "cache.keyword_ids",
-    "SELECT id, search::score(1) AS score FROM cache_record \
-     WHERE owner = $owner AND title @1@ $t AND deleted = false ORDER BY score DESC LIMIT $limit; \
-     SELECT id, 0.0 AS score FROM cache_record WHERE owner = $owner AND deleted = false \
-     AND body_text @1@ $t LIMIT $limit",
+
+/// One live record of the owner by id (`$id` a `cache_record` record id), a tombstone reads as absent.
+pub const RECORDS_BY_IDS: Stmt =
+    Stmt::new("cache.records_by_ids", "SELECT * FROM $ids WHERE owner = $owner AND deleted = false");
+
+/// A memory page for recall's hydrate: this vault's, and not a stale observation (its facts changed
+/// since it was consolidated, so it is not a current fact; the raw facts are still recalled).
+pub const MEMORIES_FOR_RECALL: Stmt = Stmt::new(
+    "cache.memories_for_recall",
+    "SELECT id, text, source, created_at, type FROM $ids WHERE vault = $vault \
+     AND !(type = \"observation\" AND status = \"stale\")",
 );
 
-/// Exact cosine ranking of one owner's embedded records; the fallback when KNN comes up short.
-pub const SEMANTIC_EXACT: Stmt = Stmt::new(
-    "cache.semantic_exact",
-    "SELECT id, vector::similarity::cosine(embedding, $vec) AS sim FROM cache_record \
-     WHERE owner = $owner AND deleted = false AND embedding != NONE ORDER BY sim DESC LIMIT $limit",
+/// Each source's live linked records in either direction, one traversal for the whole batch (recall's
+/// graph arm). Tombstoned sources and targets are skipped.
+pub const LIVE_NEIGHBOURS: Stmt = Stmt::new(
+    "cache.live_neighbours",
+    "SELECT id, ->linked_to->(cache_record WHERE deleted = false) AS fwd, \
+     <-linked_to<-(cache_record WHERE deleted = false) AS back FROM $ids WHERE deleted = false",
 );
 
-pub const LINKS_OUT: Stmt = Stmt::new("cache.links_out", "SELECT rel, out FROM linked_to WHERE in = $id");
-pub const LINKS_OUT_REL: Stmt = Stmt::new("cache.links_out_rel", "SELECT rel, out FROM linked_to WHERE in = $id AND rel = $rel");
-pub const LINKS_IN: Stmt = Stmt::new("cache.links_in", "SELECT rel, in FROM linked_to WHERE out = $id");
-pub const LINKS_IN_REL: Stmt = Stmt::new("cache.links_in_rel", "SELECT rel, in FROM linked_to WHERE out = $id AND rel = $rel");
+// A tombstoned endpoint hides the link (a not-yet-synced target, like a category placeholder, does not),
+// and a tombstoned record has no links at all.
+pub const LINKS_OUT: Stmt = Stmt::new(
+    "cache.links_out",
+    "SELECT rel, out FROM linked_to WHERE in = $id AND in.deleted != true AND out.deleted != true",
+);
+pub const LINKS_OUT_REL: Stmt = Stmt::new(
+    "cache.links_out_rel",
+    "SELECT rel, out FROM linked_to WHERE in = $id AND rel = $rel AND in.deleted != true AND out.deleted != true",
+);
+pub const LINKS_IN: Stmt = Stmt::new(
+    "cache.links_in",
+    "SELECT rel, in FROM linked_to WHERE out = $id AND in.deleted != true AND out.deleted != true",
+);
+pub const LINKS_IN_REL: Stmt = Stmt::new(
+    "cache.links_in_rel",
+    "SELECT rel, in FROM linked_to WHERE out = $id AND rel = $rel AND in.deleted != true AND out.deleted != true",
+);
 
 pub const EMBED_CACHE_GET: Stmt = Stmt::new("cache.embed_cache_get", "SELECT text_hmac, vector FROM embed_cache WHERE text_hmac IN $keys");
 pub const EMBED_CACHE_PUT: Stmt = Stmt::new("cache.embed_cache_put", "UPSERT $id SET text_hmac = $hmac, vector = $vector");
@@ -100,14 +96,6 @@ pub const AUDIT_COUNT: Stmt = Stmt::new("cache.audit_count", "SELECT count() FRO
 pub const ALL: &[&Stmt] = &[
     &MEMORY_FOR_EMBED,
     &RECORDS_FOR_EMBED,
-    &ENTITY_NAMES_PERSON,
-    &ENTITY_NAMES_ORGANISATION,
-    &ENTITY_NAMES_LOCATION,
-    &ENTITY_NAMES_REPOSITORY,
-    &ENTITY_NAMES_FILE,
-    &ENTITY_NAMES_SYMBOL,
-    &MEMORIES_BY_SUBJECT,
-    &MEMORY_BM25,
     &CACHE_RECORDS_IN_RANGE,
     &MEMORIES_IN_RANGE,
     &DELETE_SYNC_LINKS,
@@ -115,9 +103,10 @@ pub const ALL: &[&Stmt] = &[
     &TOUCH_INGESTED,
     &UPSERT_RECORD,
     &HAS_EMBEDDING,
+    &RECORDS_BY_IDS,
+    &MEMORIES_FOR_RECALL,
+    &LIVE_NEIGHBOURS,
     &SET_EMBEDDING,
-    &KEYWORD_IDS,
-    &SEMANTIC_EXACT,
     &LINKS_OUT,
     &LINKS_OUT_REL,
     &LINKS_IN,

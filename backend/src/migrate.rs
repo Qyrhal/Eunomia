@@ -20,6 +20,7 @@ pub const MIGRATIONS: &[(u32, &str, &str)] = &[
     (7, "capsules", include_str!("../migrations/tenant/0007_capsules.surql")),
     (8, "v3_indexes", include_str!("../migrations/tenant/0008_v3_indexes.surql")),
     (9, "drop_control_tables", include_str!("../migrations/tenant/0009_drop_control_tables.surql")),
+    (10, "entity_name_key", include_str!("../migrations/tenant/0010_entity_name_key.surql")),
 ];
 
 /// The tenant schema version this code writes. An org database is current at this version.
@@ -174,7 +175,7 @@ async fn apply(db: &Db, set: &[(u32, &str, &str)], max: u32) -> surrealdb::Resul
             continue;
         }
         // a pre-step of the tenant set only: control 0002 is unrelated
-        if version == 2 && std::ptr::eq(set, MIGRATIONS) {
+        if (version == 2 || version == 10) && std::ptr::eq(set, MIGRATIONS) {
             dedupe_entity_names(db).await?;
         }
         // DEFINE is allowed inside a transaction, so schema and ledger row commit together.
@@ -214,8 +215,11 @@ async fn is_applied(db: &Db, version: u32) -> surrealdb::Result<bool> {
     Ok(!rows.is_empty())
 }
 
-/// 0002 pre-step: merge entities sharing (vault, name) into the oldest, so the UNIQUE index can build.
+/// 0002 and 0010 pre-step: merge entities sharing (vault, lowercase name) into the oldest, so the UNIQUE
+/// index can build (0002's exact-name index is satisfied by the stricter case-insensitive grouping too).
 /// Mirrors `entities::service::merge_entities`. Idempotent: a crash midway just resumes next boot.
+/// A duplicate created between this pass and the index definition fails the definition; the runner
+/// retries it and the next boot runs this pass again.
 async fn dedupe_entity_names(db: &Db) -> surrealdb::Result<()> {
     for table in ENTITY_TABLES {
         let rows: Vec<Entity> = root(db, "migrate.dedupe_list", format!("SELECT id, vault, name, aliases, created_at FROM {table} ORDER BY created_at, id"))
@@ -223,7 +227,7 @@ async fn dedupe_entity_names(db: &Db) -> surrealdb::Result<()> {
             .take(0)?;
         let mut groups: Vec<Vec<Entity>> = Vec::new();
         for e in rows {
-            match groups.iter_mut().find(|g| g[0].vault == e.vault && g[0].name == e.name) {
+            match groups.iter_mut().find(|g| g[0].vault == e.vault && g[0].name.to_lowercase() == e.name.to_lowercase()) {
                 Some(g) => g.push(e),
                 None => groups.push(vec![e]),
             }
@@ -241,9 +245,10 @@ async fn dedupe_entity_names(db: &Db) -> surrealdb::Result<()> {
 }
 
 async fn merge_into(db: &Db, winner: &mut Entity, loser: &Entity) -> surrealdb::Result<()> {
-    root(db, "migrate.dedupe_memory", "UPDATE memory SET subject = $w WHERE subject = $l")
-        .bind(("w", winner.id.clone()))
-        .bind(("l", loser.id.clone()))
+    // both may have an observation: fold them into one stale one before the loser's facts move over
+    root(db, "migrate.dedupe_memory", format!("BEGIN TRANSACTION; {} COMMIT TRANSACTION;", crate::store::entities::MERGE_MEMORIES_SQL))
+        .bind(("winner", winner.id.clone()))
+        .bind(("loser", loser.id.clone()))
         .await?
         .check()?;
     // Relation endpoints are immutable: re-create each edge on the winner (the (in, out, label)

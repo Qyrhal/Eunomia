@@ -264,11 +264,28 @@ expression: info(&db).await
       "indexes": [
         {
           "cols": [
+            "alias_keys"
+          ],
+          "index": "",
+          "name": "file_alias_keys_idx",
+          "table": "file"
+        },
+        {
+          "cols": [
             "vault",
             "name"
           ],
           "index": "",
           "name": "file_vault_name_idx",
+          "table": "file"
+        },
+        {
+          "cols": [
+            "vault",
+            "name_key"
+          ],
+          "index": "UNIQUE",
+          "name": "file_vault_name_key_unique",
           "table": "file"
         },
         {
@@ -331,11 +348,28 @@ expression: info(&db).await
       "indexes": [
         {
           "cols": [
+            "alias_keys"
+          ],
+          "index": "",
+          "name": "location_alias_keys_idx",
+          "table": "location"
+        },
+        {
+          "cols": [
             "vault",
             "name"
           ],
           "index": "",
           "name": "location_vault_name_idx",
+          "table": "location"
+        },
+        {
+          "cols": [
+            "vault",
+            "name_key"
+          ],
+          "index": "UNIQUE",
+          "name": "location_vault_name_key_unique",
           "table": "location"
         },
         {
@@ -414,11 +448,28 @@ expression: info(&db).await
       "indexes": [
         {
           "cols": [
+            "alias_keys"
+          ],
+          "index": "",
+          "name": "organisation_alias_keys_idx",
+          "table": "organisation"
+        },
+        {
+          "cols": [
             "vault",
             "name"
           ],
           "index": "",
           "name": "organisation_vault_name_idx",
+          "table": "organisation"
+        },
+        {
+          "cols": [
+            "vault",
+            "name_key"
+          ],
+          "index": "UNIQUE",
+          "name": "organisation_vault_name_key_unique",
           "table": "organisation"
         },
         {
@@ -448,11 +499,28 @@ expression: info(&db).await
       "indexes": [
         {
           "cols": [
+            "alias_keys"
+          ],
+          "index": "",
+          "name": "person_alias_keys_idx",
+          "table": "person"
+        },
+        {
+          "cols": [
             "vault",
             "name"
           ],
           "index": "",
           "name": "person_vault_name_idx",
+          "table": "person"
+        },
+        {
+          "cols": [
+            "vault",
+            "name_key"
+          ],
+          "index": "UNIQUE",
+          "name": "person_vault_name_key_unique",
           "table": "person"
         },
         {
@@ -525,11 +593,28 @@ expression: info(&db).await
       "indexes": [
         {
           "cols": [
+            "alias_keys"
+          ],
+          "index": "",
+          "name": "repository_alias_keys_idx",
+          "table": "repository"
+        },
+        {
+          "cols": [
             "vault",
             "name"
           ],
           "index": "",
           "name": "repository_vault_name_idx",
+          "table": "repository"
+        },
+        {
+          "cols": [
+            "vault",
+            "name_key"
+          ],
+          "index": "UNIQUE",
+          "name": "repository_vault_name_key_unique",
           "table": "repository"
         },
         {
@@ -559,11 +644,28 @@ expression: info(&db).await
       "indexes": [
         {
           "cols": [
+            "alias_keys"
+          ],
+          "index": "",
+          "name": "symbol_alias_keys_idx",
+          "table": "symbol"
+        },
+        {
+          "cols": [
             "vault",
             "name"
           ],
           "index": "",
           "name": "symbol_vault_name_idx",
+          "table": "symbol"
+        },
+        {
+          "cols": [
+            "vault",
+            "name_key"
+          ],
+          "index": "UNIQUE",
+          "name": "symbol_vault_name_key_unique",
           "table": "symbol"
         },
         {

@@ -20,7 +20,7 @@ expression: stable
     "created_at": "<ts>",
     "type": "observation",
     "proof_count": 1,
-    "status": null,
+    "status": "fresh",
     "source_memories": null,
     "updated_at": "<ts>",
     "version": 1,

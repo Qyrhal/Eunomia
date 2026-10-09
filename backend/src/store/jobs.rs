@@ -23,7 +23,6 @@ pub const CONTROL_ALL: &[&ControlStmt] = &[
 pub const ALL: &[&Stmt] = &[
     &EMBED_BACKLOG,
     &STALE_OBSERVATIONS,
-    &OBSERVATION_MARK_FRESH,
 ];
 
 /// Idempotent: the record id is derived from the key, and IGNORE turns a second
@@ -141,10 +140,6 @@ pub const STALE_OBSERVATIONS: Stmt = Stmt::new(
     "jobs.stale_observations",
     "SELECT owner, subject FROM memory WHERE type = 'observation' AND status = 'stale' LIMIT $limit",
 );
-
-/// Consolidation found nothing new for a stale observation: it is up to date.
-pub const OBSERVATION_MARK_FRESH: Stmt =
-    Stmt::new("jobs.observation_mark_fresh", "UPDATE $id SET status = 'fresh' WHERE status = 'stale'");
 
 /// Early wake-up when a job is created. LIVE queries are node-local and have had stability fixes,
 /// so this is only a latency optimisation: polling is the guarantee.

@@ -378,31 +378,37 @@ pub async fn upsert_entity(
     let table = kind_table(kind)?;
     let vault = resolve_vault(db, owner, vault_id, Action::WriteMemories).await?;
     let aliases = aliases.unwrap_or_default();
-    let needle = name.trim().to_lowercase();
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(AppError::bad_request("entity name can't be empty"));
+    }
+    let needle = name.to_lowercase();
 
-    // Read-then-write: a concurrent upsert of the same name loses on the
-    // `{table}_vault_name_unique` index, and the retry's re-read finds the winner.
+    // Read-then-write: a concurrent upsert of the same name (in any case) loses on the
+    // `(vault, name_key)` unique index, and the retry's re-read finds the winner. Both lookups are
+    // index reads (`name_key`, `alias_keys`), however large the vault.
     let row = with_retry_dup(|| async {
-        let mut res = q::select_by_vault(db, table, false).bind(("vault", vault.clone())).await?.check()?;
-        let rows: Vec<EntityRow> = res.take(0)?;
+        let mut res = q::find_by_key(db, table)
+            .bind(("vault", vault.clone()))
+            .bind(("needle", needle.clone()))
+            .await?
+            .check()?;
+        let by_name: Vec<EntityRow> = res.take(0)?;
+        let by_alias: Vec<EntityRow> = res.take(1)?;
 
-        for row in rows {
-            let mut known: HashSet<String> = row.aliases.iter().map(|a| a.to_lowercase()).collect();
-            known.insert(row.name.to_lowercase());
-            if known.contains(&needle) {
-                if aliases.iter().all(|a| row.aliases.contains(a)) {
-                    return Ok(row);
-                }
-                // array::union is atomic, so two alias merges cannot lose each other's update.
-                let mut updated = q::MERGE_ALIASES
-                    .on(db)
-                    .bind(("id", row.id.clone()))
-                    .bind(("aliases", aliases.clone()))
-                    .await?
-                    .check()?;
-                let rows: Vec<EntityRow> = updated.take(0)?;
-                return Ok(rows.into_iter().next().unwrap_or(row));
+        if let Some(row) = by_name.into_iter().chain(by_alias).next() {
+            if aliases.iter().all(|a| row.aliases.contains(a)) {
+                return Ok(row);
             }
+            // array::union is atomic, so two alias merges cannot lose each other's update.
+            let mut updated = q::MERGE_ALIASES
+                .on(db)
+                .bind(("id", row.id.clone()))
+                .bind(("aliases", aliases.clone()))
+                .await?
+                .check()?;
+            let rows: Vec<EntityRow> = updated.take(0)?;
+            return Ok(rows.into_iter().next().unwrap_or(row));
         }
 
         let mut created = q::create_entity(db, table)
@@ -603,7 +609,18 @@ pub async fn delete_memory(db: &OrgDb, owner: &RecordId, memory_id: &RecordId) -
     if !accessible(db, owner, &row.vault, Action::WriteMemories).await? {
         return Ok(false);
     }
-    q::DELETE_RECORD.on(db).bind(("id", memory_id.clone())).await?;
+    // A deleted raw fact leaves its subject's observation's lineage and makes it stale; an
+    // observation built from nothing but this fact is deleted with it (one transaction).
+    with_retry(|| async {
+        q::DELETE_MEMORY
+            .on(db)
+            .bind(("id", memory_id.clone()))
+            .bind(("subject", row.subject.clone()))
+            .bind(("raw", row.mem_type != "observation"))
+            .await?
+            .check()
+    })
+    .await?;
     Ok(true)
 }
 
@@ -740,8 +757,10 @@ pub async fn delete_entity(db: &OrgDb, owner: &RecordId, entity_id: &RecordId) -
 /// Merge `loser_id` into `winner_id` -- for two entities of the same `kind`
 /// that turned out to be duplicates. Reassigns the loser's `memory` rows and
 /// `relates_to` edges (both directions) to the winner, adds the loser's name
-/// as an alias of the winner (if not already present), then deletes the
-/// loser. Returns the winner's row after the merge.
+/// and aliases as aliases of the winner, then deletes the loser, all in one
+/// transaction ([`merge_rows`]). If both had an observation they become one
+/// stale observation, rebuilt on the next consolidation. Returns the winner's
+/// row after the merge.
 ///
 /// Errors (400) if the two ids are the same, of different kinds or vaults, or not
 /// found / `owner` isn't a member of either one's vault.
@@ -762,9 +781,8 @@ pub async fn merge_entities(
         )));
     }
 
-    let mut winner = select_entity(db, winner_id)
+    let winner = select_entity(db, winner_id)
         .await?
-        .filter(|_| true)
         .ok_or_else(|| AppError::bad_request(format!("winner entity not found: {}", winner_id.to_string())))?;
     if !accessible(db, owner, &winner.vault, Action::WriteMemories).await? {
         return Err(AppError::bad_request(format!("winner entity not found: {}", winner_id.to_string())));
@@ -777,67 +795,31 @@ pub async fn merge_entities(
     }
     same_vault(&winner, &loser)?;
 
-    q::REASSIGN_MEMORIES
-        .on(db)
-        .bind(("winner", winner_id.clone()))
-        .bind(("loser", loser_id.clone()))
-        .await?;
-
-    // `relates_to` edges can't have their `in`/`out` endpoints updated in
-    // place (they're a RELATION table) -- re-create each edge pointing at
-    // the winner instead, skip self-loops this would create, and leave the
-    // (in, out, label) unique index to protect against a duplicate the
-    // winner already has, then drop all of the loser's edges.
-    let mut outgoing = q::EDGES_OUT.on(db).bind(("id", loser_id.clone())).await?;
-    let outgoing_rows: Vec<RelationRow> = outgoing.take(0)?;
-    for edge in outgoing_rows {
-        if edge.out_ == *winner_id {
-            continue;
-        }
-        let _ = q::RELATE
-            .on(db)
-            .bind(("in", winner_id.clone()))
-            .bind(("out", edge.out_))
-            .bind(("label", edge.label))
-            .bind(("owner", edge.owner))
-            .bind(("source", edge.source))
-            .await; // winner already has this edge -- unique index, safe no-op
-    }
-    let mut incoming = q::EDGES_IN.on(db).bind(("id", loser_id.clone())).await?;
-    let incoming_rows: Vec<RelationRow> = incoming.take(0)?;
-    for edge in incoming_rows {
-        if edge.in_ == *winner_id {
-            continue;
-        }
-        let _ = q::RELATE
-            .on(db)
-            .bind(("in", edge.in_))
-            .bind(("out", winner_id.clone()))
-            .bind(("label", edge.label))
-            .bind(("owner", edge.owner))
-            .bind(("source", edge.source))
-            .await;
-    }
-    q::DELETE_EDGES.on(db).bind(("id", loser_id.clone())).await?;
-
-    let mut new_aliases: HashSet<String> = winner.aliases.iter().cloned().collect();
-    if !loser.name.is_empty() {
-        new_aliases.insert(loser.name.clone());
-    }
-    let mut new_aliases: Vec<String> = new_aliases.into_iter().collect();
-    new_aliases.sort();
-
-    let mut updated = q::SET_ALIASES
-        .on(db)
-        .bind(("id", winner_id.clone()))
-        .bind(("aliases", new_aliases))
-        .await?;
-    let updated_rows: Vec<EntityRow> = updated.take(0)?;
-    winner = updated_rows.into_iter().next().ok_or_else(|| AppError::internal("winner update returned no row"))?;
-
-    q::DELETE_RECORD.on(db).bind(("id", loser_id.clone())).await?;
-
+    merge_rows(db, winner_id, loser_id, loser_names(&loser)).await?;
+    let winner = select_entity(db, winner_id).await?.ok_or_else(|| AppError::internal("winner vanished during merge"))?;
     Ok(entity_out(winner_id.table(), &winner))
+}
+
+/// What a merged-away entity leaves on the winner: its name and aliases.
+fn loser_names(loser: &EntityRow) -> Vec<String> {
+    std::iter::once(&loser.name).chain(&loser.aliases).filter(|n| !n.is_empty()).cloned().collect()
+}
+
+/// Moves everything of `loser` onto `winner` (same kind and vault, already checked) and deletes
+/// `loser`, in ONE transaction (see [`q::MERGE_ENTITIES`]): any failing statement rolls all of it
+/// back, so a merge never half-happens. Retried on a commit conflict with a concurrent write.
+async fn merge_rows(db: &OrgDb, winner: &RecordId, loser: &RecordId, add_aliases: Vec<String>) -> AppResult<()> {
+    with_retry(|| async {
+        q::MERGE_ENTITIES
+            .on(db)
+            .bind(("winner", winner.clone()))
+            .bind(("loser", loser.clone()))
+            .bind(("aliases", add_aliases.clone()))
+            .await?
+            .check()
+    })
+    .await?;
+    Ok(())
 }
 
 /// An entity's row plus its `memory` entries and `relates_to` edges in both

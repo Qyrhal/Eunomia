@@ -282,3 +282,63 @@ async fn migrations_wait_for_the_lock_and_take_over_a_stale_one() {
     assert_eq!(count(&db, "_migration").await, migrate::CONTROL_MIGRATIONS.len());
     assert_eq!(count(&db, "_migration_lock").await, 0, "lock released");
 }
+
+/// 0010 backfills `name_key` / `alias_keys` on rows that predate them and, before the case-insensitive
+/// UNIQUE index builds, folds entities that differ only by case into the oldest: memories move over,
+/// two observations become one stale one, edges follow, and a lone survivor keeps its own data.
+#[tokio::test]
+async fn case_variants_are_merged_and_existing_rows_get_their_keys_in_0010() {
+    let db = fresh().await;
+    migrate::apply_up_to(&db, 9).await.unwrap();
+    db.query(
+        "CREATE user:u SET email = 'a@b.c', password_hash = 'x';
+         CREATE vault:v SET name = 'v';
+         CREATE vault:w SET name = 'w';
+         CREATE organisation:o SET owner = user:u, vault = vault:v, name = 'Acme';
+         CREATE person:a SET owner = user:u, vault = vault:v, name = 'Ada', aliases = ['The Countess'], created_at = d'2024-01-01T00:00:00Z';
+         CREATE person:b SET owner = user:u, vault = vault:v, name = 'ada', aliases = ['AL'], created_at = d'2024-02-01T00:00:00Z';
+         CREATE person:solo SET owner = user:u, vault = vault:v, name = 'Grace Hopper', aliases = ['Amazing Grace'];
+         CREATE person:other SET owner = user:u, vault = vault:w, name = 'ADA';
+         CREATE memory:f1 SET owner = user:u, vault = vault:v, subject = person:a, text = 'fact one';
+         CREATE memory:f2 SET owner = user:u, vault = vault:v, subject = person:b, text = 'fact two';
+         CREATE memory:o1 SET owner = user:u, vault = vault:v, subject = person:a, type = 'observation', text = 'belief one', status = 'fresh', source_memories = [memory:f1], created_at = d'2024-01-02T00:00:00Z';
+         CREATE memory:o2 SET owner = user:u, vault = vault:v, subject = person:b, type = 'observation', text = 'belief two', status = 'fresh', source_memories = [memory:f2], created_at = d'2024-02-02T00:00:00Z';
+         RELATE person:b->relates_to->organisation:o SET label = 'works_at';",
+    )
+    .await
+    .unwrap()
+    .check()
+    .unwrap();
+
+    migrate::migrate(&db, &test_settings()).await.unwrap();
+
+    assert_eq!(count(&db, "person WHERE vault = vault:v").await, 2, "Ada/ada folded; Grace stays");
+    assert_eq!(count(&db, "person:a").await, 1, "oldest survives");
+    assert_eq!(count(&db, "person:other").await, 1, "same name in another vault is untouched");
+    assert_eq!(count(&db, "memory WHERE subject = person:a AND type != 'observation'").await, 2);
+    assert_eq!(count(&db, "memory WHERE subject = person:a AND type = 'observation'").await, 1, "one observation");
+    let obs: Option<Value> = db
+        .query("SELECT text, status, source_memories FROM memory WHERE subject = person:a AND type = 'observation'")
+        .await
+        .unwrap()
+        .take(0)
+        .unwrap();
+    let obs = obs.unwrap();
+    assert_eq!(obs["status"], "stale");
+    assert!(obs["text"].as_str().unwrap().contains("belief one") && obs["text"].as_str().unwrap().contains("belief two"));
+    assert_eq!(obs["source_memories"].as_array().unwrap().len(), 2);
+    assert_eq!(count(&db, "relates_to WHERE in = person:a AND out = organisation:o").await, 1, "edge followed");
+    let keys: Option<Value> = db.query("SELECT name_key, alias_keys FROM person:solo").await.unwrap().take(0).unwrap();
+    let keys = keys.unwrap();
+    assert_eq!(keys["name_key"], "grace hopper");
+    assert_eq!(keys["alias_keys"], serde_json::json!(["amazing grace"]));
+    let winner: Option<Value> = db.query("SELECT aliases, alias_keys FROM person:a").await.unwrap().take(0).unwrap();
+    let winner = winner.unwrap();
+    assert!(winner["aliases"].as_array().unwrap().iter().any(|a| a == "AL"), "the loser's aliases survive: {winner}");
+    assert!(winner["alias_keys"].as_array().unwrap().iter().any(|a| a == "al"));
+    // the case-insensitive unique index exists and bites; a computed key follows later renames
+    assert!(db.query("CREATE person SET owner = user:u, vault = vault:v, name = 'ADA'").await.unwrap().check().is_err());
+    db.query("UPDATE person:solo SET name = 'Rear Admiral'").await.unwrap().check().unwrap();
+    let key: Option<String> = db.query("SELECT VALUE name_key FROM ONLY person:solo").await.unwrap().take(0).unwrap();
+    assert_eq!(key.unwrap(), "rear admiral");
+}
