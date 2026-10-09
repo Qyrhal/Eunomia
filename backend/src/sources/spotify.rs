@@ -63,7 +63,7 @@ impl Source for SpotifySource {
             "spotify",
             "spotify.play",
             &format!("{played_at}:{}", s(track, "/id")),
-            &format!("{name} — {artists}"),
+            &format!("{name} · {artists}"),
             &format!("Played {name} by {artists} from {album}"),
             rfc3339(played_at),
             s(track, "/external_urls/spotify"),
@@ -106,7 +106,7 @@ mod tests {
         assert_eq!(mock.requests()[1].header("authorization"), "Bearer BQ-fresh");
 
         let envs = envelopes(&SpotifySource, &res.records);
-        assert_eq!(envs[0].title, "Never Gonna Give You Up — Rick Astley");
+        assert_eq!(envs[0].title, "Never Gonna Give You Up · Rick Astley");
         assert_eq!(envs[0].url, "https://open.spotify.com/track/4uLU6hMCjMI75M1A2tKUQC");
     }
 

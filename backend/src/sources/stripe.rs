@@ -64,7 +64,7 @@ impl Source for StripeSource {
         let currency = s(raw, "/currency").to_uppercase();
         let description = s(raw, "/description");
         let customer = s(raw, "/billing_details/email");
-        let title = format!("{amount:.2} {currency} — {}", if description.is_empty() { s(raw, "/status") } else { description });
+        let title = format!("{amount:.2} {currency} · {}", if description.is_empty() { s(raw, "/status") } else { description });
         let body = format!("Charge of {amount:.2} {currency} ({}) {description} {customer}", s(raw, "/status"));
         let url_id = raw.get("payment_intent").and_then(|v| v.as_str()).unwrap_or(id);
         Some(envelope(
@@ -116,7 +116,7 @@ mod tests {
         assert!(mock.requests().iter().all(|r| r.header("authorization") == "Bearer rk_test_x"));
 
         let envs = envelopes(&StripeSource, &res.records);
-        assert_eq!(envs[0].title, "25.00 AUD — Pro plan");
+        assert_eq!(envs[0].title, "25.00 AUD · Pro plan");
         assert_eq!(envs[0].url, "https://dashboard.stripe.com/payments/pi_ch_1");
         assert!(envs[0].occurred_at.is_some());
     }

@@ -187,11 +187,15 @@ fn initialize_result(params: &Value, skill: &str) -> Value {
     })
 }
 
+/// Only the tools the credential's scopes allow (OAuth token or PAT alike); calls are refused
+/// either way, but a client should not be offered what it cannot use. No credential lists none.
 fn tool_list() -> Vec<Value> {
+    let caller = crate::authz::current();
     let mut names: Vec<&&str> = registry::all_tools().keys().collect();
     names.sort();
     names
         .into_iter()
+        .filter(|name| caller.as_ref().is_some_and(|c| c.allows(crate::scopes::for_tool(name, registry::is_read_only(name)))))
         .map(|name| {
             let spec = &registry::all_tools()[*name];
             let schema = if spec.schema.is_object() { spec.schema.clone() } else { json!({ "type": "object", "properties": {} }) };
@@ -257,9 +261,9 @@ mod tests {
         assert_eq!(negotiate_version(None), DEFAULT_VERSION);
     }
 
-    #[test]
-    fn tool_list_exposes_every_tool_with_schema_and_annotations() {
-        let tools = tool_list();
+    #[tokio::test]
+    async fn tool_list_exposes_every_tool_with_schema_and_annotations() {
+        let tools = crate::authz::as_system(async { tool_list() }).await;
         assert_eq!(tools.len(), registry::all_tools().len());
         for t in &tools {
             assert!(!t["description"].as_str().unwrap().is_empty());
@@ -352,7 +356,7 @@ mod tests {
         assert!(rpc(json!({ "jsonrpc": "2.0", "method": "notifications/initialized" })).await.is_none());
         assert!(rpc(json!({ "jsonrpc": "2.0", "id": 1, "result": {} })).await.is_none());
 
-        let list = rpc(json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" })).await.unwrap();
+        let list = crate::authz::as_system(rpc(json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }))).await.unwrap();
         let names: Vec<&str> = list["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
         for expected in ["recall", "reflect", "search", "memory_write", "entities_search", "vault_list"] {
             assert!(names.contains(&expected), "tools/list is missing {expected}");

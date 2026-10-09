@@ -238,11 +238,16 @@ pub async fn set_embedding(db: &OrgDb, owner: &RecordId, record_id: &str, vector
     if vector.len() != DIM {
         return Err(AppError::bad_request(format!("embedding dim {} != {DIM}", vector.len())));
     }
-    store::cache::SET_EMBEDDING
-        .on(db)
-        .bind(("id", rid(owner, record_id)))
-        .bind(("embedding", vector))
-        .await?;
+    // The embedding index is shared with concurrent syncs; a commit conflict is retryable.
+    crate::tx::with_retry(|| async {
+        store::cache::SET_EMBEDDING
+            .on(db)
+            .bind(("id", rid(owner, record_id)))
+            .bind(("embedding", vector.clone()))
+            .await?
+            .check()
+    })
+    .await?;
     Ok(())
 }
 

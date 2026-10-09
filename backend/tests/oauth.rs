@@ -212,6 +212,11 @@ async fn read_only_token_cannot_write() {
     let (_, t) = connect(&app, Some("memory:read")).await;
     let access = t["access_token"].as_str().unwrap();
 
+    // the tool list offers only what the scopes allow
+    let list = mcp(&app, access, rpc("tools/list", json!({}))).await;
+    let names: Vec<&str> = list.body["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
+    assert!(names.contains(&"recall") && !names.contains(&"memory_write") && !names.contains(&"vault_delete"), "{names:?}");
+
     let read = mcp(&app, access, rpc("tools/call", json!({"name": "vault_list", "arguments": {}}))).await;
     assert_eq!(read.status, StatusCode::OK);
 

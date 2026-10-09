@@ -197,7 +197,7 @@ fn map_account(raw: &Value) -> Value {
         "up.account",
         s(raw, "/id"),
         display_name,
-        &format!("{display_name} — {}", s(a, "/accountType")),
+        &format!("{display_name} · {}", s(a, "/accountType")),
         rfc3339(s(a, "/createdAt")),
         "",
         json!({
@@ -392,7 +392,7 @@ mod tests {
                 "balance": {"value": "100.00", "valueInBaseUnits": 10000}},
         });
         let env = map_account(&raw);
-        assert_eq!(env["body_text"], "Spending — TRANSACTIONAL");
+        assert_eq!(env["body_text"], "Spending · TRANSACTIONAL");
         assert_eq!(env["deleted"], false);
     }
 

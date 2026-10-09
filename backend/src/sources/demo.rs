@@ -30,7 +30,7 @@ const CATEGORIES: [(&str, &[&str]); 6] = [
 const POCKET_TITLES: [&str; 10] = [
     "Weekly standup",
     "1:1 with manager",
-    "Client call — Acme Corp",
+    "Client call · Acme Corp",
     "Sprint planning",
     "Design review",
     "Onboarding call",
