@@ -157,7 +157,7 @@ pub async fn readyz(axum::extract::State(state): axum::extract::State<state::App
     };
     match problem {
         None => {
-            let warning = state.settings.encryption_key.is_empty().then(|| "ENCRYPTION_KEY is empty: stored credentials use a public key. Set one; see docs/deployment.md.".to_string());
+            let warning = connectors::crypto::validate_key(&state.settings.encryption_key).err().map(|why| format!("{why} See docs/deployment.md."));
             axum::Json(openapi::OkBody { ok: true, warning }).into_response()
         }
         Some(detail) => {

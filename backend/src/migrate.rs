@@ -89,16 +89,14 @@ fn checksum(sql: &str) -> String {
     hex::encode(Sha256::digest(sql.as_bytes()))
 }
 
-/// Bring an org database to the latest tenant schema, then the settings-dependent field default.
-pub async fn migrate(db: &Db, settings: &Settings) -> surrealdb::Result<()> {
+/// Bring an org database to the latest tenant schema, then the base URL field default.
+pub async fn migrate(db: &Db, _settings: &Settings) -> surrealdb::Result<()> {
     locked(db, async {
         apply(db, MIGRATIONS, u32::MAX).await?;
-        // The one config-dependent definition: re-applied on every migration pass, outside the ledger.
-        let sql = format!(
-            "DEFINE FIELD OVERWRITE openai_base_url ON app_settings TYPE string DEFAULT \"{}\";",
-            settings.openai_base_url.replace('"', "\\\"")
-        );
-        crate::tx::with_retry(|| async { root(db, "migrate.openai_base_url", &sql).await?.check().map(|_| ()) }).await
+        // Re-applied on every migration pass, outside the ledger: "" means "the server's OPENAI_BASE_URL"
+        // (see `embeddings::provider`), so a row never pins a URL the operator may later change.
+        let sql = "DEFINE FIELD OVERWRITE openai_base_url ON app_settings TYPE string DEFAULT \"\";";
+        crate::tx::with_retry(|| async { root(db, "migrate.openai_base_url", sql).await?.check().map(|_| ()) }).await
     })
     .await
 }

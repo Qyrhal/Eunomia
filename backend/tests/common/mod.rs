@@ -45,7 +45,7 @@ pub fn test_settings() -> Settings {
         surreal_ns: ns,
         surreal_db: "legacy".into(),
         openai_api_key: None,
-        openai_base_url: "http://127.0.0.1:9/v1".into(), // unroutable: never reached without a key
+        openai_base_url: "https://api.openai.com/v1".into(), // no server key: no model is configured, so nothing is called
         encryption_key: "test-encryption-key".into(),
         embeddings_backend: "openai".into(),
         cors_allowed_origins: "http://localhost:3000".into(),

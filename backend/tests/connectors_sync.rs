@@ -37,6 +37,9 @@ async fn app_with(openai_key: Option<&str>) -> (TestApp, OrgState) {
     allow_base_url();
     let mut settings = test_settings();
     settings.openai_api_key = openai_key.map(String::from);
+    if openai_key.is_some() {
+        settings.openai_base_url = "http://127.0.0.1:9/v1".into(); // unroutable: a keyed run must point a mock at itself
+    }
     let app = TestApp::with_settings(settings).await;
     let org = app.state.org(&app.user.org).await.unwrap();
     (app, org)
@@ -342,7 +345,7 @@ async fn signed_webhooks_ingest_and_failed_persistence_is_retryable() {
                               "amount": {"value": "-5.00", "valueInBaseUnits": -500, "currencyCode": "AUD"}},
                "relationships": {}}})
     };
-    let mock = serve(vec![route("GET", "/transactions/t9", txn("POISON")).query("v=1"), route("GET", "/transactions/t9", txn("Coles"))]).await;
+    let mock = serve(vec![route("GET", "/transactions/t9", txn("POISON")).query_has("v=1"), route("GET", "/transactions/t9", txn("Coles"))]).await;
     service::upsert_connector(
         &org.db,
         &org.settings.encryption_key,

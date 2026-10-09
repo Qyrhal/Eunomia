@@ -28,11 +28,9 @@ export function GeneralSection({ settings }: { settings: AppSettings }) {
 
   async function saveSettings() {
     if (urlInvalid) return;
-    const payload: SettingsUpdate = {
-      theme: settings.theme,
-      openai_base_url: baseUrlInput.trim(),
-      embedding_model: modelInput.trim(),
-    };
+    const payload: SettingsUpdate = { theme: settings.theme, embedding_model: modelInput.trim() };
+    // The field shows the effective URL (the server's when you have none): only save it once you change it.
+    if (baseUrlInput.trim() !== settings.openai_base_url) payload.openai_base_url = baseUrlInput.trim();
     if (apiKeyInput) payload.openai_api_key = apiKeyInput;
     setSaving(true);
     setError(null);
@@ -126,7 +124,7 @@ export function GeneralSection({ settings }: { settings: AppSettings }) {
 
           <div className={row}>
             <label htmlFor="model" className="text-[13px] font-medium md:pt-1.5">
-              Model
+              Embedding model
             </label>
             <div className="flex flex-col gap-1">
               {models.length > 0 ? (

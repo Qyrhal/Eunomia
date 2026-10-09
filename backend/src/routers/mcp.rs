@@ -317,7 +317,7 @@ mod tests {
             surreal_db: "legacy".into(),
             openai_api_key: None,
             openai_base_url: "https://api.openai.com/v1".into(),
-            encryption_key: "k".into(),
+            encryption_key: "mcp-unit-test-encryption-key".into(),
             embeddings_backend: "stub".into(),
             cors_allowed_origins: "http://localhost:3000".into(),
             log_level: "INFO".into(),

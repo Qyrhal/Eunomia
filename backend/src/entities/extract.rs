@@ -29,6 +29,7 @@ use crate::rid::RecordIdExt;
 use crate::config::Settings;
 use crate::pool::OrgDb;
 use crate::store;
+use crate::embeddings::provider;
 use crate::error::{AppError, AppResult};
 use crate::store::entities as q;
 
@@ -37,8 +38,6 @@ use super::service;
 /// Text shorter than this has nothing worth extracting -- skip the LLM call
 /// entirely rather than spend tokens on "ok", "thanks", etc.
 const MIN_BODY_LEN: usize = 40;
-
-const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 
 /// One ingested record's fields relevant to extraction -- mirrors the `id`/
 /// `title`/`body_text` subset of a `cache_record` row.
@@ -103,18 +102,11 @@ fn should_extract(body: &str, embeddings_backend: &str) -> bool {
 pub(super) struct AppSettingsRow {
     #[serde(default)]
     #[surreal(default)]
-    pub openai_base_url: String,
-    #[serde(default)]
-    #[surreal(default)]
-    pub openai_api_key_encrypted: String,
-    #[serde(default)]
-    #[surreal(default)]
     pub observations_mission: String,
 }
 
 /// The `app_settings:<owner_id>` row, creating it with (schema-)defaults if
-/// missing. Shared by `resolve_openai` (below) and `consolidate.rs`'s
-/// mission lookup.
+/// missing. Used by `consolidate.rs`'s mission lookup.
 pub(super) async fn app_settings_row(db: &OrgDb, owner: &RecordId) -> AppResult<AppSettingsRow> {
     let rid = RecordId::from_table_key("app_settings", owner.key().clone());
     let row: Option<AppSettingsRow> = store::get(db, &rid).await?;
@@ -131,21 +123,8 @@ pub(super) async fn app_settings_row(db: &OrgDb, owner: &RecordId) -> AppResult<
     }
 }
 
-/// Resolve `(base_url, api_key)` for `owner`'s OpenAI-compatible backend.
-/// The per-user `app_settings` row overrides the env-level
-/// `settings.openai_api_key` default for the key; `base_url` is per-user
-/// only.
-pub(super) async fn resolve_openai(db: &OrgDb, settings: &Settings, owner: &RecordId) -> AppResult<(String, String)> {
-    let row = app_settings_row(db, owner).await?;
-    let base_url = if row.openai_base_url.is_empty() { DEFAULT_OPENAI_BASE_URL.to_string() } else { row.openai_base_url };
-    let decrypted = crate::connectors::crypto::decrypt_or_plaintext(&settings.encryption_key, &row.openai_api_key_encrypted);
-    let key = if !decrypted.is_empty() { decrypted } else { settings.openai_api_key.clone().unwrap_or_default() };
-    Ok((base_url, key))
-}
-
 async fn call_llm(db: &OrgDb, settings: &Settings, owner: &RecordId, text: &str) -> AppResult<ExtractionData> {
-    let (base_url, api_key) = resolve_openai(db, settings, owner).await?;
-    let key = if api_key.is_empty() { "not-needed".to_string() } else { api_key };
+    let p = provider::resolve(db, settings, owner).await?;
 
     let body = json!({
         "model": "gpt-4o-mini",
@@ -153,10 +132,11 @@ async fn call_llm(db: &OrgDb, settings: &Settings, owner: &RecordId, text: &str)
         "messages": [{"role": "user", "content": build_prompt(text)}],
     });
 
-    let resp = crate::llm_net::client(&base_url)
+    let resp = p
+        .client()
         .await?
-        .post(format!("{}/chat/completions", base_url.trim_end_matches('/')))
-        .bearer_auth(key)
+        .post(p.url("chat/completions"))
+        .bearer_auth(p.bearer())
         .json(&body)
         .timeout(Duration::from_secs(30))
         .send()

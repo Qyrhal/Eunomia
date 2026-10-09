@@ -3,7 +3,6 @@
 use super::Stmt;
 
 pub const ALL: &[&Stmt] = &[
-    &CHAT_SETTINGS_UPSERT,
     &CHAT_THREAD_CREATE,
     &CHAT_THREAD_LIST,
     &CHAT_THREAD_MESSAGES_DELETE,
@@ -33,9 +32,6 @@ pub const ALL: &[&Stmt] = &[
     &SOURCES_SYNC_INTERVALS,
     &SOURCES_UP_BY_TYPE,
 ];
-
-pub const CHAT_SETTINGS_UPSERT: Stmt =
-    Stmt::new("app.chat_settings_upsert", "UPSERT $id SET owner = $owner RETURN AFTER");
 
 pub const CHAT_THREAD_CREATE: Stmt =
     Stmt::new("app.chat_thread_create", "CREATE chat_thread SET owner = $owner, title = $title RETURN AFTER");

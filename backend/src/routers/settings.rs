@@ -3,6 +3,8 @@
 //!
 //! `openai_api_key` is stored AES-GCM-encrypted (`connectors::crypto`) in
 //! `openai_api_key_encrypted`; it is never returned, only `openai_api_key_set`.
+//! An empty `openai_base_url` means the server's `OPENAI_BASE_URL`; which key
+//! goes where is decided by `embeddings::provider`.
 
 use surrealdb::types::SurrealValue;
 use axum::{
@@ -15,13 +17,14 @@ use serde_json::{json, Value};
 use surrealdb::types::RecordId;
 use crate::rid::RecordIdExt;
 
+use crate::config::Settings;
+use crate::embeddings::{provider, service as embeddings};
 use crate::pool::OrgDb;
 use crate::store;
 use crate::error::{AppError, AppResult};
 use crate::models_user::User;
 use crate::state::AppState;
 
-const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 const DEFAULT_OBSERVATIONS_MISSION: &str = "Observations are stable facts about people and relationships: preferences, skills, roles, recurring patterns, and how they change over time. Ignore ephemeral or one-off details.";
 
 pub fn router() -> Router<AppState> {
@@ -88,13 +91,13 @@ struct SettingsOut {
     memory_skill_custom: bool,
 }
 
-fn out(row: &AppSettingsRow) -> SettingsOut {
+fn out(row: &AppSettingsRow, server_base_url: &str) -> SettingsOut {
     SettingsOut {
         embedding_model: row.embedding_model.clone(),
         sync_intervals: row.sync_intervals.clone(),
         theme: row.theme.clone(),
         openai_api_key_set: !row.openai_api_key_encrypted.is_empty(),
-        openai_base_url: row.openai_base_url.clone(),
+        openai_base_url: provider::effective_base_url(server_base_url, &row.openai_base_url).to_string(),
         observations_mission: row.observations_mission.clone(),
         memory_skill: crate::docs::effective_skill(&row.memory_skill).to_string(),
         memory_skill_custom: !row.memory_skill.trim().is_empty(),
@@ -119,11 +122,11 @@ async fn get_app_settings(db: &OrgDb, owner: &RecordId) -> AppResult<AppSettings
         .on(db)
         .bind(("id", rid))
         .bind(("owner", owner.clone()))
-        .bind(("embedding_model", "text-embedding-3-small"))
+        .bind(("embedding_model", embeddings::DEFAULT_MODEL))
         .bind(("sync_intervals", json!({ "heypocket": 86400 })))
         .bind(("theme", json!({})))
         .bind(("observations_mission", DEFAULT_OBSERVATIONS_MISSION))
-        .bind(("openai_base_url", DEFAULT_OPENAI_BASE_URL))
+        .bind(("openai_base_url", "")) // "" = the server's
         .await?;
     let rows: Vec<AppSettingsRow> = res.take(0)?;
     rows.into_iter()
@@ -134,9 +137,6 @@ async fn get_app_settings(db: &OrgDb, owner: &RecordId) -> AppResult<AppSettings
 /// Partial update: each provided field replaces its current value outright
 /// (no deep merge).
 async fn update_app_settings(db: &OrgDb, owner: &RecordId, body: &SettingsUpdate, encryption_key: &str) -> AppResult<AppSettingsRow> {
-    if let Some(u) = &body.openai_base_url {
-        crate::llm_net::check_base_url(u, crate::llm_net::allow_private_llm_url()).await?;
-    }
     get_app_settings(db, owner).await?; // ensure the row exists
 
     let mut set_parts: Vec<&str> = Vec::new();
@@ -201,20 +201,17 @@ async fn update_app_settings(db: &OrgDb, owner: &RecordId, body: &SettingsUpdate
         .ok_or_else(|| AppError::internal("app_settings update returned no row"))
 }
 
-/// Resolve `(base_url, api_key)` for `owner`'s OpenAI-compatible backend.
-async fn resolve_openai(db: &OrgDb, owner: &RecordId, env_api_key: &Option<String>, encryption_key: &str) -> AppResult<(String, String)> {
+/// Rejects an embedding model the update would make unusable on the endpoint it would be sent to,
+/// before anything is written. (The base URL itself is checked by `llm_net::check_base_url`.)
+async fn validate_update(db: &OrgDb, settings: &Settings, owner: &RecordId, body: &SettingsUpdate) -> AppResult<()> {
+    if body.openai_base_url.is_none() && body.embedding_model.is_none() {
+        return Ok(());
+    }
     let row = get_app_settings(db, owner).await?;
-    let base_url = if row.openai_base_url.is_empty() {
-        DEFAULT_OPENAI_BASE_URL.to_string()
-    } else {
-        row.openai_base_url
-    };
-    let key = if !row.openai_api_key_encrypted.is_empty() {
-        crate::connectors::crypto::decrypt_or_plaintext(encryption_key, &row.openai_api_key_encrypted)
-    } else {
-        env_api_key.clone().unwrap_or_default()
-    };
-    Ok((base_url, key))
+    let base = body.openai_base_url.as_deref().unwrap_or(&row.openai_base_url);
+    let model = body.embedding_model.as_deref().unwrap_or(&row.embedding_model).trim();
+    let model = if model.is_empty() { embeddings::DEFAULT_MODEL } else { model };
+    embeddings::check_model(provider::effective_base_url(&settings.openai_base_url, base), model).map_err(AppError::bad_request)
 }
 
 #[utoipa::path(
@@ -229,7 +226,7 @@ async fn resolve_openai(db: &OrgDb, owner: &RecordId, env_api_key: &Option<Strin
 async fn read_settings(State(state): State<AppState>, user: User) -> AppResult<Json<SettingsOut>> {
     let state = state.org(&user.org).await?;
     let row = get_app_settings(&state.db, &user.id).await?;
-    Ok(Json(out(&row)))
+    Ok(Json(out(&row, &state.settings.openai_base_url)))
 }
 
 #[utoipa::path(
@@ -248,8 +245,12 @@ async fn patch_settings(
     Json(body): Json<SettingsUpdate>,
 ) -> AppResult<Json<SettingsOut>> {
     let state = state.org(&user.org).await?;
+    if let Some(u) = &body.openai_base_url {
+        crate::llm_net::check_base_url(u, crate::llm_net::allow_private_llm_url()).await?;
+    }
+    validate_update(&state.db, &state.settings, &user.id, &body).await?;
     let row = update_app_settings(&state.db, &user.id, &body, &state.settings.encryption_key).await?;
-    Ok(Json(out(&row)))
+    Ok(Json(out(&row, &state.settings.openai_base_url)))
 }
 
 #[utoipa::path(
@@ -301,14 +302,11 @@ struct ModelsOut {
 )]
 async fn openai_models(State(state): State<AppState>, user: User) -> AppResult<Json<ModelsOut>> {
     let state = state.org(&user.org).await?;
-    let (base_url, api_key) = resolve_openai(&state.db, &user.id, &state.settings.openai_api_key, &state.settings.encryption_key).await?;
-    let url = format!("{}/models", base_url.trim_end_matches('/'));
-    let auth_key = if api_key.is_empty() { "not-needed" } else { api_key.as_str() };
-
     // Generic codes only: upstream error or status text would let a caller probe internal hosts and ports.
     let fail = |code: &str| Json(ModelsOut { models: vec![], error: Some(code.to_string()) });
-    let Ok(client) = crate::llm_net::client(&base_url).await else { return Ok(fail("base_url_not_allowed")) };
-    let Ok(resp) = client.get(&url).bearer_auth(auth_key).timeout(std::time::Duration::from_secs(15)).send().await else {
+    let Ok(p) = provider::resolve(&state.db, &state.settings, &user.id).await else { return Ok(fail("credential_unreadable")) };
+    let Ok(client) = p.client().await else { return Ok(fail("base_url_not_allowed")) };
+    let Ok(resp) = client.get(p.url("models")).bearer_auth(p.bearer()).timeout(std::time::Duration::from_secs(15)).send().await else {
         return Ok(fail("unreachable"));
     };
     if !resp.status().is_success() {
@@ -339,11 +337,11 @@ mod tests {
 
     fn row(key_set: bool) -> AppSettingsRow {
         AppSettingsRow {
-            embedding_model: "text-embedding-3-small".to_string(),
+            embedding_model: embeddings::DEFAULT_MODEL.to_string(),
             sync_intervals: json!({ "heypocket": 86400 }),
             theme: json!({}),
             openai_api_key_encrypted: if key_set { "sk-very-secret-123".to_string() } else { String::new() },
-            openai_base_url: DEFAULT_OPENAI_BASE_URL.to_string(),
+            openai_base_url: String::new(),
             observations_mission: DEFAULT_OBSERVATIONS_MISSION.to_string(),
             memory_skill: String::new(),
         }
@@ -351,20 +349,30 @@ mod tests {
 
     #[test]
     fn out_reports_key_set_true_when_encrypted_value_present() {
-        let v = serde_json::to_value(out(&row(true))).unwrap();
+        let v = serde_json::to_value(out(&row(true), SERVER)).unwrap();
         assert_eq!(v["openai_api_key_set"], json!(true));
         assert!(v.get("openai_api_key_encrypted").is_none());
     }
 
     #[test]
     fn out_reports_key_set_false_when_empty() {
-        let v = serde_json::to_value(out(&row(false))).unwrap();
+        let v = serde_json::to_value(out(&row(false), SERVER)).unwrap();
         assert_eq!(v["openai_api_key_set"], json!(false));
+    }
+
+    const SERVER: &str = "http://llm.internal/v1";
+
+    #[test]
+    fn out_shows_the_servers_base_url_when_the_user_has_none() {
+        assert_eq!(serde_json::to_value(out(&row(false), SERVER)).unwrap()["openai_base_url"], json!(SERVER));
+        let mut r = row(false);
+        r.openai_base_url = "http://mine/v1".into();
+        assert_eq!(serde_json::to_value(out(&r, SERVER)).unwrap()["openai_base_url"], json!("http://mine/v1"));
     }
 
     #[test]
     fn out_never_leaks_the_raw_secret() {
-        let v = serde_json::to_value(out(&row(true))).unwrap();
+        let v = serde_json::to_value(out(&row(true), SERVER)).unwrap();
         let dumped = v.to_string();
         assert!(!dumped.contains("sk-very-secret-123"));
     }
