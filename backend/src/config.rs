@@ -16,6 +16,8 @@ pub struct Settings {
     pub surreal_db: String,
     pub openai_api_key: Option<String>,
     pub openai_base_url: String,
+    /// OPENAI_CHAT_MODEL: default chat model ("" = auto, see embeddings::provider::chat_model)
+    pub openai_chat_model: String,
     pub encryption_key: String,
     pub embeddings_backend: String,
     pub cors_allowed_origins: String,
@@ -55,6 +57,7 @@ impl Settings {
             surreal_db: env_or("SURREAL_DB", "eunomia"),
             openai_api_key: env::var("OPENAI_API_KEY").ok(),
             openai_base_url: env_or("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+            openai_chat_model: env_or("OPENAI_CHAT_MODEL", ""),
             encryption_key: env_or("ENCRYPTION_KEY", ""),
             embeddings_backend: env_or("EMBEDDINGS_BACKEND", "openai"),
             cors_allowed_origins: env_or("CORS_ALLOWED_ORIGINS", "http://localhost:3000"),

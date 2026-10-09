@@ -1135,6 +1135,56 @@
         ]
       }
     },
+    "/api/connectors/{kind}/data": {
+      "delete": {
+        "tags": [
+          "connectors"
+        ],
+        "summary": "Delete everything synced from a connector",
+        "description": "Removes the connector's synced records, their links, the facts and relations extracted from them, and (Pocket) the stored recordings. Observations built from removed facts go stale. Entities, the credentials and the sync cursor stay.",
+        "operationId": "deleteConnectorData",
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeleteDataOut"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/api/connectors/{kind}/test": {
       "post": {
         "tags": [
@@ -4072,6 +4122,27 @@
           }
         }
       },
+      "DeleteDataOut": {
+        "type": "object",
+        "required": [
+          "records",
+          "memories"
+        ],
+        "properties": {
+          "memories": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Extracted facts removed.",
+            "minimum": 0
+          },
+          "records": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Synced records removed.",
+            "minimum": 0
+          }
+        }
+      },
       "DeletedBody": {
         "type": "object",
         "required": [
@@ -5089,6 +5160,7 @@
         "type": "object",
         "required": [
           "embedding_model",
+          "chat_model",
           "sync_intervals",
           "theme",
           "openai_api_key_set",
@@ -5098,6 +5170,9 @@
           "memory_skill_custom"
         ],
         "properties": {
+          "chat_model": {
+            "type": "string"
+          },
           "embedding_model": {
             "type": "string"
           },
@@ -5129,6 +5204,13 @@
       "SettingsUpdate": {
         "type": "object",
         "properties": {
+          "chat_model": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "\"\" = automatic (see embeddings::provider::chat_model)"
+          },
           "embedding_model": {
             "type": [
               "string",

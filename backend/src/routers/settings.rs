@@ -57,6 +57,9 @@ struct AppSettingsRow {
     #[serde(default)]
     #[surreal(default)]
     memory_skill: String,
+    #[serde(default)]
+    #[surreal(default)]
+    chat_model: String,
 }
 
 #[derive(Debug, Default, Deserialize, utoipa::ToSchema)]
@@ -69,6 +72,8 @@ struct SettingsUpdate {
     observations_mission: Option<String>,
     /// "" resets to the built-in skill
     memory_skill: Option<String>,
+    /// "" = automatic (see embeddings::provider::chat_model)
+    chat_model: Option<String>,
 }
 
 fn app_settings_id(owner: &RecordId) -> RecordId {
@@ -78,6 +83,7 @@ fn app_settings_id(owner: &RecordId) -> RecordId {
 #[derive(Serialize, utoipa::ToSchema)]
 struct SettingsOut {
     embedding_model: String,
+    chat_model: String,
     /// Open map of source key to sync interval seconds.
     #[schema(value_type = Object)]
     sync_intervals: Value,
@@ -94,6 +100,7 @@ struct SettingsOut {
 fn out(row: &AppSettingsRow, server_base_url: &str) -> SettingsOut {
     SettingsOut {
         embedding_model: row.embedding_model.clone(),
+        chat_model: row.chat_model.clone(),
         sync_intervals: row.sync_intervals.clone(),
         theme: row.theme.clone(),
         openai_api_key_set: !row.openai_api_key_encrypted.is_empty(),
@@ -140,6 +147,9 @@ async fn update_app_settings(db: &OrgDb, owner: &RecordId, body: &SettingsUpdate
     get_app_settings(db, owner).await?; // ensure the row exists
 
     let mut set_parts: Vec<&str> = Vec::new();
+    if body.chat_model.is_some() {
+        set_parts.push("chat_model = $chat_model");
+    }
     if body.embedding_model.is_some() {
         set_parts.push("embedding_model = $embedding_model");
     }
@@ -170,6 +180,9 @@ async fn update_app_settings(db: &OrgDb, owner: &RecordId, body: &SettingsUpdate
     let rid = app_settings_id(owner);
     // dynamic: the SET clause list depends on which fields the patch carries
     let mut q = store::dynamic(db, "app.settings_update", query_str).bind(("id", rid));
+    if let Some(v) = &body.chat_model {
+        q = q.bind(("chat_model", v.trim().to_string()));
+    }
     if let Some(v) = &body.embedding_model {
         q = q.bind(("embedding_model", v.clone()));
     }
@@ -344,6 +357,7 @@ mod tests {
             openai_base_url: String::new(),
             observations_mission: DEFAULT_OBSERVATIONS_MISSION.to_string(),
             memory_skill: String::new(),
+            chat_model: String::new(),
         }
     }
 

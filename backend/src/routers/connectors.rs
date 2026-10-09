@@ -36,6 +36,7 @@ pub fn router() -> Router<AppState> {
         .route("/connectors/pocketai/detail/{recording_id}", get(pocketai_detail))
         .route("/connectors/{kind}", get(get_one).put(put_one))
         .route("/connectors/{kind}/test", axum::routing::post(test_one))
+        .route("/connectors/{kind}/data", axum::routing::delete(delete_data))
 }
 
 pub fn snapshot_router() -> Router<AppState> {
@@ -321,6 +322,39 @@ async fn test_one(State(state): State<AppState>, user: User, Path(kind): Path<St
     }
 }
 
+#[derive(Serialize, utoipa::ToSchema)]
+struct DeleteDataOut {
+    /// Synced records removed.
+    records: u64,
+    /// Extracted facts removed.
+    memories: u64,
+}
+
+/// Deletes all of the caller's data from one connector (see `registry::delete_data`); the connection
+/// itself stays. Account-level: the gate refuses vault-restricted tokens.
+#[utoipa::path(
+    operation_id = "deleteConnectorData",
+    delete,
+    path = "/api/connectors/{kind}/data",
+    tag = "connectors",
+    summary = "Delete everything synced from a connector",
+    description = "Removes the connector's synced records, their links, the facts and relations extracted from them, and (Pocket) the stored recordings. Observations built from removed facts go stale. Entities, the credentials and the sync cursor stay.",
+    params(("kind" = String, Path)),
+    responses((status = 200, body = DeleteDataOut), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    security(("cookie" = []), ("bearer" = [])),
+)]
+async fn delete_data(State(app): State<AppState>, user: User, Path(kind): Path<String>) -> AppResult<Json<DeleteDataOut>> {
+    let state = app.org(&user.org).await?;
+    require_known_kind(&kind)?;
+    let src = registry::for_provider(&kind).ok_or_else(|| AppError::coded(ErrorCode::ConnectorNotFound, "unknown connector"))?;
+    let out = registry::delete_data(&state.db, &user.id, src.as_ref()).await?;
+    crate::audit::record_as_caller(&app.control, &user.id, "connector.delete_data", &kind, "ok").await;
+    Ok(Json(DeleteDataOut {
+        records: out["records"].as_u64().unwrap_or(0),
+        memories: out["memories"].as_u64().unwrap_or(0),
+    }))
+}
+
 /// Best-effort figures for each connected account, read live from each
 /// client. A connector that isn't connected, or whose call fails, comes back
 /// as null rather than failing the whole request.
@@ -381,6 +415,7 @@ async fn snapshot(State(state): State<AppState>, user: User) -> AppResult<Json<V
     get_one,
     put_one,
     test_one,
+    delete_data,
     snapshot,
 ))]
 pub struct Doc;

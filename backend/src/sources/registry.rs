@@ -91,13 +91,38 @@ pub async fn enabled(db: &OrgDb, owner: &RecordId) -> AppResult<Vec<Arc<dyn Sour
     Ok(all().into_iter().filter(|s| on.contains(s.provider_key())).collect())
 }
 
-/// Map -> ingest every raw record for `src`, scoped to `owner`.
+/// Persist -> map -> ingest every raw record for `src`, scoped to `owner`.
 pub async fn ingest(state: &OrgState, owner: &RecordId, raw_records: &[Value], src: &dyn Source) -> AppResult<IngestReport> {
-    ingest::ingest(state, owner, src.key(), raw_records, |raw| match src.map(raw) {
-        None => Ok(None),
-        Some(env) => serde_json::from_value::<Envelope>(env).map(Some).map_err(|e| e.to_string()),
+    let mut persist_errors = Vec::new();
+    for raw in raw_records {
+        if let Err(e) = src.persist(&state.db, owner, raw).await {
+            persist_errors.push(format!("store {}: {}", raw.get("id").and_then(Value::as_str).unwrap_or("?"), e.message));
+        }
+    }
+    let mut report = ingest::ingest(state, owner, src.key(), raw_records, |raw| {
+        src.map_many(raw).into_iter().map(|env| serde_json::from_value::<Envelope>(env).map_err(|e| e.to_string())).collect()
     })
-    .await
+    .await?;
+    report.failed += persist_errors.len() as u64;
+    report.errors.extend(persist_errors);
+    Ok(report)
+}
+
+/// Deletes everything `owner` has from `src` ([`store::cache::DELETE_SOURCE_DATA`]): its cache records
+/// (with their links), the facts and relations extracted from them, and anything the source stores
+/// itself (heypocket's `pocket_recording`). Observations built from deleted facts go stale, or are
+/// deleted if nothing else backs them. Entities, the connector's credentials and its sync cursor are
+/// kept. Returns how many records and memories went.
+pub async fn delete_data(db: &OrgDb, owner: &RecordId, src: &dyn Source) -> AppResult<Value> {
+    let mut res = crate::tx::with_retry(|| async {
+        store::cache::DELETE_SOURCE_DATA
+            .on(db)
+            .bind(("owner", owner.clone()))
+            .bind(("source", src.key().to_string()))
+            .await
+    })
+    .await?;
+    Ok(res.take::<Option<Value>>(store::cache::DELETE_SOURCE_DATA.slot)?.unwrap_or(Value::Null))
 }
 
 /// Builds the context the cache-reading source helpers take.

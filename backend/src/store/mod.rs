@@ -213,7 +213,7 @@ pub const CONTROL_TABLES: &[&str] = &[
 /// Tables that live in an org database.
 pub const TENANT_TABLES: &[&str] = &[
     "app_settings", "vault", "vault_member", "connector", "sync_status", "cache_record", "linked_to", "person", "organisation", "location", "repository",
-    "file", "symbol", "memory", "relates_to", "chat_thread", "chat_message", "audit_log", "embed_cache",
+    "file", "symbol", "memory", "relates_to", "chat_thread", "chat_message", "audit_log", "embed_cache", "pocket_recording",
 ];
 
 /// The first table `sql` reads or writes that lives in the other database. Looks only at the word

@@ -1,7 +1,7 @@
 //! The ingest pipeline: raw source record -> cache row -> enrichment.
 //!
 //! One entrypoint, [`ingest`], shared by scheduled syncs, manual syncs and webhooks (via
-//! `sources::registry::ingest`). Per record: map -> upsert (idempotent; reconciles `links`) ->
+//! `sources::registry::ingest`). Per record (one or more envelopes): map -> upsert (idempotent; reconciles `links`) ->
 //! embed -> queue entity extraction.
 //!
 //! Partial failure is isolated: a record that can't be mapped or stored is counted in `failed`
@@ -69,64 +69,63 @@ async fn has_embedding(db: &OrgDb, owner: &RecordId, record_id: &str) -> AppResu
     Ok(res.take::<Option<bool>>(0)?.unwrap_or(false))
 }
 
-/// `raw_records` are untyped JSON values; `map_fn` maps one raw record to `Some(Envelope)`, `None` to
-/// skip it, or `Err(message)` on a mapping failure.
+/// `raw_records` are untyped JSON values; `map_fn` maps one raw record to its envelopes (none to skip
+/// it), or `Err(message)` on a mapping failure.
 pub async fn ingest(
     state: &crate::state::OrgState,
     owner: &RecordId,
     source_key: &str,
     raw_records: &[Value],
-    map_fn: impl Fn(&Value) -> Result<Option<Envelope>, String>,
+    map_fn: impl Fn(&Value) -> Result<Vec<Envelope>, String>,
 ) -> AppResult<IngestReport> {
     let (db, settings) = (&state.db, &state.settings);
     let mut report = IngestReport::new(source_key);
     let can_embed = crate::embeddings::service::available(db, settings, owner).await;
 
     for raw in raw_records {
-        let env = match map_fn(raw) {
-            Ok(Some(mut env)) => {
-                if env.source.is_empty() {
-                    env.source = source_key.to_string();
-                }
-                env
-            }
-            Ok(None) => {
+        let envs = match map_fn(raw) {
+            Ok(envs) if envs.is_empty() => {
                 report.skipped += 1;
                 continue;
             }
+            Ok(envs) => envs,
             Err(e) => {
                 report.failed += 1;
                 report.errors.push(format!("{}: {e}", raw_id(raw)));
                 continue;
             }
         };
-
-        let (rec, changed) = match search::upsert(db, owner, &env).await {
-            Ok(r) => r,
-            Err(e) => {
-                report.failed += 1;
-                report.errors.push(format!("{}: {}", env.id, e.message));
+        for mut env in envs {
+            if env.source.is_empty() {
+                env.source = source_key.to_string();
+            }
+            let (rec, changed) = match search::upsert(db, owner, &env).await {
+                Ok(r) => r,
+                Err(e) => {
+                    report.failed += 1;
+                    report.errors.push(format!("{}: {}", env.id, e.message));
+                    continue;
+                }
+            };
+            if changed {
+                report.written += 1;
+            } else {
+                report.skipped += 1;
+            }
+            if rec.deleted {
                 continue;
             }
-        };
-        if changed {
-            report.written += 1;
-        } else {
-            report.skipped += 1;
-        }
-        if rec.deleted {
-            continue;
-        }
 
-        // An unchanged record is re-embedded only if a previous attempt failed.
-        if can_embed
-            && (changed || !has_embedding(db, owner, &rec.id).await.unwrap_or(true))
-            && let Err(e) = embed_record(db, settings, owner, &rec).await
-        {
-            report.errors.push(format!("embed {}: {}", rec.id, e.message));
-        }
-        if changed {
-            crate::jobs::handlers::enqueue_extract(state, owner, &rec.id, &rec.content_hash).await;
+            // An unchanged record is re-embedded only if a previous attempt failed.
+            if can_embed
+                && (changed || !has_embedding(db, owner, &rec.id).await.unwrap_or(true))
+                && let Err(e) = embed_record(db, settings, owner, &rec).await
+            {
+                report.errors.push(format!("embed {}: {}", rec.id, e.message));
+            }
+            if changed {
+                crate::jobs::handlers::enqueue_extract(state, owner, &rec.id, &rec.content_hash).await;
+            }
         }
     }
 

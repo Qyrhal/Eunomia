@@ -127,7 +127,7 @@ async fn call_llm(db: &OrgDb, settings: &Settings, owner: &RecordId, text: &str)
     let p = provider::resolve(db, settings, owner).await?;
 
     let body = json!({
-        "model": "gpt-4o-mini",
+        "model": provider::chat_model(&p).await,
         "response_format": {"type": "json_object"},
         "messages": [{"role": "user", "content": build_prompt(text)}],
     });

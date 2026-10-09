@@ -74,7 +74,16 @@ pub async fn get(db: &OrgDb, owner: &RecordId, id: &str) -> AppResult<Value> {
         return Ok(json!({ "error": "not found" }));
     };
     let links = cs::links(db, owner, &rec.id, None).await?;
-    Ok(json!({
+    // A Pocket recording or transcript chunk: attach the whole stored recording (full transcript,
+    // summary, action items, tags).
+    let recording = match rec.source.as_str() {
+        "heypocket" => {
+            let rid = rec.payload.get("recording_id").and_then(Value::as_str).unwrap_or(&rec.external_id);
+            crate::sources::heypocket::stored(db, owner, rid).await?
+        }
+        _ => None,
+    };
+    let mut out = json!({
         "id": rec.id,
         "source": rec.source,
         "type": rec.type_,
@@ -85,7 +94,11 @@ pub async fn get(db: &OrgDb, owner: &RecordId, id: &str) -> AppResult<Value> {
         "url": if rec.url.is_empty() { Value::Null } else { Value::String(rec.url.clone()) },
         "payload": rec.payload,
         "links": { "links": links },
-    }))
+    });
+    if let Some(recording) = recording {
+        out["recording"] = recording;
+    }
+    Ok(out)
 }
 
 pub async fn list(

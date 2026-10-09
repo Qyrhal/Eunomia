@@ -17,6 +17,7 @@ use eunomia_backend::models_user::User;
 use eunomia_backend::rid::RecordIdExt;
 use eunomia_backend::sources::base::owner_key_str;
 use eunomia_backend::sources::mock::{route, serve, Route};
+use eunomia_backend::sources::heypocket::HeyPocketSource;
 use eunomia_backend::sources::registry;
 use eunomia_backend::sources::scheduler::{due_syncs, sync_source};
 use eunomia_backend::sources::up_bank::UpBankSource;
@@ -300,6 +301,112 @@ async fn no_model_stores_raw_data_and_a_failed_embedding_is_repaired_on_replay()
     let out = sync_source(&org, &owner, "github", None).await;
     assert_eq!(out["skipped"], 1, "{out}");
     assert_eq!(count(&org, "SELECT count() FROM cache_record WHERE owner = $owner AND embedding != NONE", &owner).await, 1);
+}
+
+/// Pocket: everything a recording carries is stored whole and readable through `get`; the cache side
+/// is chunked, embedded and entity-extracted (as a job) with the endpoint's own chat model; a shorter
+/// re-sync tombstones the stale chunks; deleting the connector's data takes everything derived from
+/// it and nothing from another source or another owner.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_pocket_recording_is_stored_whole_chunked_embedded_and_extracted() {
+    let (app, org) = app_with(Some("sk-test")).await;
+    let owner = app.user.id.clone();
+    let mut routes = openai_mock_routes();
+    routes.push(route("GET", "/models", json!({"data": [{"id": "nomic-embed-text"}, {"id": "llama3.1"}]})));
+    let mock = serve(routes).await;
+    point_openai_at(&org, &owner, &mock.base).await;
+
+    let mut rec = json!({
+        "id": "rec_1", "title": "Importer review", "recording_at": "2024-05-02T09:00:00Z", "duration": 900,
+        "tags": [{"id": "t1", "name": "work"}], "speakers": {"s1": {"name": "Ada Lovelace", "speakerId": "s1"}},
+        "transcript": {"segments": [
+            {"speaker": "s1", "start": 0, "end": 1000, "text": "Ada here, the importer drops the last row."},
+            {"speaker": "s2", "speakerName": "Grace", "start": 1000, "end": 9000, "text": "word ".repeat(1500)},
+        ]},
+        "summarizations": {"sm1": {"v2": {"summary": {"markdown": "Agreed to fix the importer."},
+                                          "actionItems": {"items": [{"title": "Ship the fix"}]}}}},
+    });
+    let report = registry::ingest(&org, &owner, &[rec.clone()], &HeyPocketSource).await.unwrap();
+    assert_eq!((report.written, report.failed), (4, 0), "recording + 3 chunks: {:?}", report.errors);
+
+    let got = eunomia_backend::tools::generic::get(&org.db, &owner, "heypocket:heypocket.transcript_chunk:rec_1:2").await.unwrap();
+    let stored = &got["recording"];
+    assert_eq!(stored["summary"], "Agreed to fix the importer.", "{got}");
+    assert_eq!(stored["action_items"], json!(["Ship the fix"]));
+    assert_eq!(stored["tags"], json!(["work"]));
+    assert_eq!(stored["speakers"], json!(["Ada Lovelace", "Grace"]));
+    let transcript = stored["transcript"].as_str().unwrap();
+    assert!(transcript.starts_with("Ada Lovelace: Ada here, the importer drops the last row.\nGrace: word word"), "{transcript}");
+    assert_eq!(transcript.matches("word").count(), 1500);
+    assert_eq!(count(&org, "SELECT count() FROM pocket_recording WHERE owner = $owner AND raw.summarizations.sm1.v2 != NONE", &owner).await, 1);
+    assert_eq!(count(&org, "SELECT count() FROM cache_record WHERE owner = $owner AND embedding != NONE", &owner).await, 4);
+
+    // Entity extraction is a queued job; it uses the endpoint's own chat model.
+    let stop = spawn_worker(&app.state);
+    wait_for("extracted facts", 30, || async {
+        count(&org, "SELECT count() FROM memory WHERE owner = $owner AND source != NONE", &owner).await >= 1
+    })
+    .await;
+    let chats: Vec<_> = mock.requests().into_iter().filter(|r| r.path == "/chat/completions").collect();
+    assert!(!chats.is_empty() && chats.iter().all(|r| r.body.contains("\"llama3.1\"")), "the endpoint's own chat model draws the relations");
+
+    // Another owner's `get` sees nothing.
+    let other = RecordId::new("user", "other-owner");
+    assert_eq!(eunomia_backend::tools::generic::get(&org.db, &other, "heypocket:heypocket.recording:rec_1").await.unwrap()["error"], "not found");
+
+    rec["transcript"]["segments"] = json!([{"speaker": "s1", "text": "Short now."}]);
+    registry::ingest(&org, &owner, &[rec.clone()], &HeyPocketSource).await.unwrap();
+    assert_eq!(count(&org, "SELECT count() FROM cache_record WHERE owner = $owner AND deleted = false", &owner).await, 2);
+
+    registry::ingest(&org, &other, &[rec], &HeyPocketSource).await.unwrap();
+    let up = json!({"type": "transactions", "id": "t1",
+        "attributes": {"description": "Coles", "createdAt": "2024-03-01T00:00:00+11:00", "status": "SETTLED",
+                       "amount": {"value": "-5.00", "valueInBaseUnits": -500, "currencyCode": "AUD"}},
+        "relationships": {"account": {"data": {"id": "acc"}}}});
+    registry::ingest(&org, &owner, &[up], &UpBankSource).await.unwrap();
+    let up_memories = count(&org, "SELECT count() FROM memory WHERE owner = $owner AND source.source = 'up_bank'", &owner).await;
+    let out = registry::delete_data(&org.db, &owner, &HeyPocketSource).await.unwrap();
+    assert_eq!(out["records"], 4, "{out}");
+    assert!(out["memories"].as_i64().unwrap() >= 1, "{out}");
+    assert_eq!(count(&org, "SELECT count() FROM cache_record WHERE owner = $owner AND source = 'heypocket'", &owner).await, 0);
+    assert_eq!(count(&org, "SELECT count() FROM pocket_recording WHERE owner = $owner", &owner).await, 0);
+    assert_eq!(count(&org, "SELECT count() FROM memory WHERE owner = $owner AND source.source = 'heypocket'", &owner).await, 0);
+    assert_eq!(count(&org, "SELECT count() FROM linked_to WHERE in.source = 'heypocket' AND in.owner = $owner", &owner).await, 0);
+    assert_eq!(count(&org, "SELECT count() FROM cache_record WHERE owner = $owner AND source = 'up_bank'", &owner).await, 1);
+    assert_eq!(count(&org, "SELECT count() FROM memory WHERE owner = $owner AND source.source = 'up_bank'", &owner).await, up_memories);
+    assert_eq!(count(&org, "SELECT count() FROM pocket_recording WHERE owner = $owner", &other).await, 1);
+    assert_eq!(count(&org, "SELECT count() FROM cache_record WHERE owner = $owner AND source = 'heypocket'", &other).await, 2);
+    let _ = stop.send(true);
+}
+
+/// A source's `persist` failing holds the cursor (the record counts as failed and is retried).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_failed_pocket_store_counts_as_failed_so_the_cursor_holds() {
+    let (app, org) = app_with(None).await;
+    let owner = app.user.id.clone();
+    org.db.test_raw().query("DEFINE FIELD OVERWRITE title ON pocket_recording TYPE string DEFAULT '' ASSERT $value != 'POISON'").await.unwrap().check().unwrap();
+    let rec = json!({"id": "rec_p", "title": "POISON", "recording_at": "2024-05-02T09:00:00Z"});
+    let report = registry::ingest(&org, &owner, &[rec], &HeyPocketSource).await.unwrap();
+    assert_eq!(report.failed, 1, "{:?}", report.errors);
+    assert!(report.errors[0].starts_with("store rec_p"), "{:?}", report.errors);
+}
+
+/// Concurrent writers of the same records (other syncs, other owners) can collide on the shared
+/// indexes; the loser is retried instead of counted as a failed record.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_ingests_of_the_same_records_all_land() {
+    let (app, org) = app_with(None).await;
+    let raw: Vec<Value> = (0..20).map(|i| issue(i, &format!("Issue {i}"), "2024-02-01T00:00:00Z")).collect();
+    let src = registry::get("github").unwrap();
+    let owners: Vec<RecordId> = std::iter::once(app.user.id.clone()).chain((0..5).map(|i| RecordId::new("user", format!("o{i}")))).collect();
+    let runs = owners.iter().map(|o| registry::ingest(&org, o, &raw, src.as_ref()));
+    for report in futures::future::join_all(runs).await {
+        let report = report.unwrap();
+        assert_eq!(report.failed, 0, "{:?}", report.errors);
+    }
+    for o in &owners {
+        assert_eq!(count(&org, "SELECT count() FROM cache_record WHERE owner = $owner", o).await, 20);
+    }
 }
 
 /// Changed links are reconciled without duplicating the raw record.

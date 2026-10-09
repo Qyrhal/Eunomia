@@ -25,6 +25,8 @@ pub const ALL: &[&Stmt] = &[
     &SOURCES_SYNC_STATUS_LIST,
     &SOURCES_RECORD_COUNTS,
     &SOURCES_HEYPOCKET_RECENT,
+    &SOURCES_POCKET_RECORDING_PUT,
+    &SOURCES_POCKET_RECORDING_GET,
     &SOURCES_HEYPOCKET_SEARCH,
     &SOURCES_SYNC_STATUS_UPSERT,
     &SOURCES_SYNC_OK,
@@ -112,6 +114,24 @@ pub const SOURCES_HEYPOCKET_RECENT: Stmt = Stmt::new(
     "SELECT title, occurred_at, url, payload FROM cache_record \
      WHERE owner = $owner AND type = 'heypocket.recording' AND deleted = false \
      AND occurred_at != NONE AND occurred_at >= $since ORDER BY occurred_at DESC LIMIT 2000",
+);
+
+/// One Pocket recording whole (`pocket_recording`), plus tombstones for transcript chunks beyond the new
+/// transcript's length. Written before the recording's cache records are ingested.
+pub const SOURCES_POCKET_RECORDING_PUT: Stmt = Stmt::new(
+    "app.sources_pocket_recording_put",
+    "UPSERT $id CONTENT { owner: $owner, recording_id: $rid, title: $title, recorded_at: $recorded_at, \
+     duration_seconds: $duration, tags: $tags, speakers: $speakers, summary: $summary, \
+     action_items: $action_items, transcript: $transcript, raw: $raw, synced_at: time::now() }; \
+     UPDATE cache_record SET deleted = true, updated_at = time::now() WHERE owner = $owner \
+     AND type = 'heypocket.transcript_chunk' AND payload.recording_id = $rid AND payload.part >= $parts;",
+);
+
+/// The stored recording without the verbatim `raw` (which can be large and stays in the table).
+pub const SOURCES_POCKET_RECORDING_GET: Stmt = Stmt::new(
+    "app.sources_pocket_recording_get",
+    "SELECT recording_id, title, recorded_at, duration_seconds, tags, speakers, summary, action_items, transcript \
+     FROM ONLY $id",
 );
 
 pub const SOURCES_HEYPOCKET_SEARCH: Stmt = Stmt::new(

@@ -108,6 +108,29 @@ async fn connectors_scope_gates_connector_routes() {
     assert_eq!(status, StatusCode::FORBIDDEN);
 }
 
+/// Deleting a connector's data is account-level: it needs the `connectors` scope, is closed to a
+/// vault-restricted token, answers an unknown kind with a problem, and leaves an audit row.
+#[tokio::test]
+async fn deleting_connector_data_is_account_level_and_audited() {
+    let app = TestApp::new().await;
+    let path = "/api/connectors/pocketai/data";
+    let read = token(&app, &[scopes::MEMORY_READ], None).await;
+    let (status, _, body) = send(&app.router, "DELETE", path, None, &bearer(&read)).await;
+    assert_eq!((status, body["code"].as_str()), (StatusCode::FORBIDDEN, Some("auth.scope")));
+    let org = org_vault(&app).await;
+    let restricted = token(&app, scopes::ALL, Some(&org)).await;
+    let (status, _, _) = send(&app.router, "DELETE", path, None, &bearer(&restricted)).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "a vault-restricted token cannot reach account routes");
+
+    let (status, _, body) = send(&app.router, "DELETE", "/api/connectors/nope/data", None, &bearer(&app.token)).await;
+    assert_eq!((status, body["code"].as_str()), (StatusCode::NOT_FOUND, Some("connector.not_found")), "{body}");
+
+    let only = token(&app, &[scopes::CONNECTORS], None).await;
+    let (status, _, body) = send(&app.router, "DELETE", path, None, &bearer(&only)).await;
+    assert_eq!((status, body["records"].as_u64(), body["memories"].as_u64()), (StatusCode::OK, Some(0), Some(0)), "{body}");
+    assert_eq!(events(&app, "action = 'connector.delete_data' AND target = 'pocketai' AND outcome = 'ok'").await.len(), 1);
+}
+
 #[tokio::test]
 async fn tool_scopes_hold_over_rest_and_mcp() {
     let app = TestApp::new().await;

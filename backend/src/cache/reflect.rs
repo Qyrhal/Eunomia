@@ -125,11 +125,12 @@ async fn synthesize(query: &str, items: &[RecallItem], p: &Provider) -> AppResul
     let prompt = build_prompt(query, &render_memories(items));
 
     let client = p.client().await?;
+    let model = provider::chat_model(p).await;
     let resp = client
         .post(p.url("chat/completions"))
         .bearer_auth(p.bearer())
         .json(&json!({
-            "model": "gpt-4o-mini",
+            "model": model,
             "response_format": {"type": "json_object"},
             "messages": [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": prompt}],
         }))

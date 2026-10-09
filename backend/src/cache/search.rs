@@ -202,25 +202,31 @@ pub async fn upsert(db: &OrgDb, owner: &RecordId, env: &Envelope) -> AppResult<(
             return Ok((rec, false));
         }
 
-    let mut res = store::cache::UPSERT_RECORD
-        .on(db)
-        .bind(("id", record_rid.clone()))
-        .bind(("owner", owner.clone()))
-        .bind(("source", env.source.clone()))
-        .bind(("type", env.type_.clone()))
-        .bind(("external_id", env.external_id.clone()))
-        .bind(("title", env.title.clone()))
-        .bind(("body_text", env.body_text.clone()))
-        .bind(("occurred_at", env.occurred_at))
-        .bind(("url", env.url.clone()))
-        // 3.x rejects NULL for the `object` field; an envelope without a payload means "none".
-        .bind(("payload", if env.payload.is_null() { json!({}) } else { env.payload.clone() }))
-        .bind(("content_hash", h))
-        .bind(("ingested_at", Datetime::from(chrono::Utc::now())))
-        .bind(("updated_at", Datetime::from(chrono::Utc::now())))
-        .bind(("deleted", env.deleted))
-        .await?;
-    let rows: Vec<Row> = res.take(0)?;
+    // Concurrent writers (other syncs, other users) can conflict on the shared indexes; the loser is
+    // rejected as retryable, so retry it.
+    let (now, payload) = (Datetime::from(chrono::Utc::now()), if env.payload.is_null() { json!({}) } else { env.payload.clone() });
+    let rows: Vec<Row> = crate::tx::with_retry(|| async {
+        let mut res = store::cache::UPSERT_RECORD
+            .on(db)
+            .bind(("id", record_rid.clone()))
+            .bind(("owner", owner.clone()))
+            .bind(("source", env.source.clone()))
+            .bind(("type", env.type_.clone()))
+            .bind(("external_id", env.external_id.clone()))
+            .bind(("title", env.title.clone()))
+            .bind(("body_text", env.body_text.clone()))
+            .bind(("occurred_at", env.occurred_at))
+            .bind(("url", env.url.clone()))
+            // 3.x rejects NULL for the `object` field; an envelope without a payload means "none".
+            .bind(("payload", payload.clone()))
+            .bind(("content_hash", h.clone()))
+            .bind(("ingested_at", now))
+            .bind(("updated_at", now))
+            .bind(("deleted", env.deleted))
+            .await?;
+        res.take(0)
+    })
+    .await?;
     let row = rows.into_iter().next().ok_or_else(|| AppError::internal("cache_record upsert returned no row"))?;
     let rec = row_to_record(row);
 

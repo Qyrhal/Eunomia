@@ -7,7 +7,8 @@
 //! value into a cache envelope. `sources::registry` lists the sources and runs
 //! them through the ingest pipeline; neither half touches the database, so
 //! both are tested against a local mock of the provider's API
-//! (`sources::mock`).
+//! (`sources::mock`). A source that keeps its own tables besides the cache
+//! (heypocket) does so in [`Source::persist`].
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -81,6 +82,18 @@ pub trait Source: Send + Sync {
 
     /// One raw origin value -> a cache envelope, or `None` to skip.
     fn map(&self, raw: &Value) -> Option<Value>;
+
+    /// Every envelope for one raw value: [`Source::map`]'s, unless a source splits a record
+    /// (heypocket chunks long transcripts).
+    fn map_many(&self, raw: &Value) -> Vec<Value> {
+        self.map(raw).into_iter().collect()
+    }
+
+    /// Stores one raw value outside the cache, before it is ingested (heypocket's own tables). A
+    /// failure counts as a failed record, so the sync cursor holds and the record is retried.
+    async fn persist(&self, _db: &OrgDb, _owner: &RecordId, _raw: &Value) -> AppResult<()> {
+        Ok(())
+    }
 
     /// Whether [`Source::webhook`] does anything. The route answers "ignored" without opening the
     /// owner's database for a source that has none.

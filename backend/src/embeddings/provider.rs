@@ -30,6 +30,8 @@ pub struct Provider {
     pub api_key: String,
     /// The user's `embedding_model` setting ("" = default).
     pub embedding_model: String,
+    /// The user's `chat_model` setting, else OPENAI_CHAT_MODEL ("" = auto, see [`chat_model`]).
+    pub chat_model: String,
 }
 
 impl Provider {
@@ -81,7 +83,7 @@ fn pick(server_base: &str, server_key: Option<&str>, user_base: &str, user_key: 
 /// The server's own provider (no per-user settings).
 pub fn server(settings: &Settings) -> Provider {
     let (base_url, api_key) = pick(&settings.openai_base_url, settings.openai_api_key.as_deref(), "", "");
-    Provider { base_url, api_key, embedding_model: String::new() }
+    Provider { base_url, api_key, embedding_model: String::new(), chat_model: settings.openai_chat_model.clone() }
 }
 
 #[derive(Debug, Default, Deserialize, SurrealValue)]
@@ -95,6 +97,9 @@ struct Row {
     #[serde(default)]
     #[surreal(default)]
     embedding_model: String,
+    #[serde(default)]
+    #[surreal(default)]
+    chat_model: String,
 }
 
 /// `owner`'s provider. A stored key that can't be decrypted is an error,
@@ -105,12 +110,84 @@ pub async fn resolve(db: &OrgDb, settings: &Settings, owner: &RecordId) -> AppRe
     let user_key = crypto::decrypt_or_plaintext(&settings.encryption_key, &row.openai_api_key_encrypted)?;
     let (base_url, api_key) =
         pick(&settings.openai_base_url, settings.openai_api_key.as_deref(), &row.openai_base_url, &user_key);
-    Ok(Provider { base_url, api_key, embedding_model: row.embedding_model })
+    let chat_model = if row.chat_model.trim().is_empty() { settings.openai_chat_model.clone() } else { row.chat_model };
+    Ok(Provider { base_url, api_key, embedding_model: row.embedding_model, chat_model })
+}
+
+pub const DEFAULT_CHAT_MODEL: &str = "gpt-4o-mini";
+
+/// The chat model to ask `p` for: the configured one; else `gpt-4o-mini` on api.openai.com; else the
+/// first chat model the endpoint itself lists, so a self-hosted server (Ollama, vLLM, LM Studio, ...)
+/// uses what it has. Listings are cached per endpoint for 10 minutes.
+pub async fn chat_model(p: &Provider) -> String {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    use std::time::{Duration, Instant};
+    static CACHE: OnceLock<Mutex<HashMap<String, (Instant, String)>>> = OnceLock::new();
+
+    if !p.chat_model.trim().is_empty() {
+        return p.chat_model.trim().to_string();
+    }
+    if same_url(&p.base_url, OPENAI_BASE_URL) {
+        return DEFAULT_CHAT_MODEL.to_string();
+    }
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some((at, model)) = cache.lock().unwrap().get(&p.base_url)
+        && at.elapsed() < Duration::from_secs(600)
+    {
+        return model.clone();
+    }
+    let listed = async {
+        let v: serde_json::Value = p
+            .client()
+            .await
+            .ok()?
+            .get(p.url("models"))
+            .bearer_auth(p.bearer())
+            .timeout(Duration::from_secs(10))
+            .send()
+            .await
+            .ok()?
+            .error_for_status()
+            .ok()?
+            .json()
+            .await
+            .ok()?;
+        let ids: Vec<String> = v.get("data")?.as_array()?.iter().filter_map(|m| m.get("id")?.as_str().map(String::from)).collect();
+        pick_chat_model(&ids)
+    }
+    .await;
+    let model = listed.unwrap_or_else(|| DEFAULT_CHAT_MODEL.to_string());
+    cache.lock().unwrap().insert(p.base_url.clone(), (Instant::now(), model.clone()));
+    model
+}
+
+/// First model id that isn't an embedding/speech/image/moderation model.
+pub fn pick_chat_model(ids: &[String]) -> Option<String> {
+    const NOT_CHAT: &[&str] = &["embed", "whisper", "tts", "rerank", "moderation", "dall-e", "image", "transcribe"];
+    ids.iter().find(|id| { let l = id.to_lowercase(); !NOT_CHAT.iter().any(|w| l.contains(w)) }).cloned()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn picks_the_first_chat_capable_model() {
+        let ids = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(pick_chat_model(&ids(&["nomic-embed-text", "whisper-1", "llama3.1:8b", "qwen2.5"])).as_deref(), Some("llama3.1:8b"));
+        assert_eq!(pick_chat_model(&ids(&["text-embedding-3-small"])), None);
+        assert_eq!(pick_chat_model(&[]), None);
+    }
+
+    #[tokio::test]
+    async fn chat_model_prefers_config_then_openai_default() {
+        let mk = |base: &str, model: &str| Provider { base_url: base.into(), api_key: String::new(), embedding_model: String::new(), chat_model: model.into() };
+        assert_eq!(chat_model(&mk("http://localhost:1/v1", "my-model")).await, "my-model");
+        assert_eq!(chat_model(&mk(OPENAI_BASE_URL, "")).await, DEFAULT_CHAT_MODEL);
+        // unreachable self-hosted endpoint: falls back rather than failing
+        assert_eq!(chat_model(&mk("http://127.0.0.1:9/v1", "")).await, DEFAULT_CHAT_MODEL);
+    }
 
     const SERVER: &str = "https://api.openai.com/v1";
     const SERVER_KEY: Option<&str> = Some("sk-server");
@@ -149,7 +226,7 @@ mod tests {
 
     #[test]
     fn configured_needs_a_key_only_for_openai() {
-        let p = |base: &str, key: &str| Provider { base_url: base.into(), api_key: key.into(), embedding_model: String::new() };
+        let p = |base: &str, key: &str| Provider { base_url: base.into(), api_key: key.into(), embedding_model: String::new(), chat_model: String::new() };
         assert!(!p(OPENAI_BASE_URL, "").configured());
         assert!(p(OPENAI_BASE_URL, "sk-abc").configured());
         assert!(p("http://localhost:11434/v1", "").configured());

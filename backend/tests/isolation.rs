@@ -217,7 +217,7 @@ async fn plant(state: &AppState, router: &Router, name: &'static str, user: User
     let mem: Vec<surrealdb::types::RecordId> = db.test_raw().query("SELECT VALUE id FROM memory WHERE vault = $v").bind(("v", eunomia_backend::rid::parse(&vault).unwrap())).await.unwrap().take(0).unwrap();
     ids.memory = mem[0].to_string();
 
-    // cache_record (+ linked_to), chat, settings, connector, sync_status, embed_cache: no tool plants them
+    // cache_record (+ linked_to), chat, settings, connector, sync_status, embed_cache, pocket_recording: no tool plants them
     let env = |n: &str| -> eunomia_backend::cache::search::Envelope {
         serde_json::from_value(json!({
             "id": format!("demo:note:{name}-{n}"), "source": "demo", "type": "note", "external_id": format!("{name}-{n}"),
@@ -240,6 +240,7 @@ async fn plant(state: &AppState, router: &Router, name: &'static str, user: User
         CREATE connector SET owner = $u, kind = 'github', enabled = true, config = {note: $c}, credentials_encrypted = $enc;
         UPSERT $sync SET owner = $u, cursor = $c, last_error = $c;
         CREATE embed_cache SET text_hmac = $c, vector = [0.5, 0.25];
+        CREATE pocket_recording SET owner = $u, recording_id = 'rec', title = $c, transcript = $c, raw = {note: $c};
         DELETE vault_member WHERE vault = $v;
         CREATE $vm SET vault = $v, user = $u, role = 'owner';";
     let uid = user.id.clone();

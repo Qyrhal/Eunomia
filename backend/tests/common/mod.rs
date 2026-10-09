@@ -46,6 +46,7 @@ pub fn test_settings() -> Settings {
         surreal_db: "legacy".into(),
         openai_api_key: None,
         openai_base_url: "https://api.openai.com/v1".into(), // no server key: no model is configured, so nothing is called
+        openai_chat_model: String::new(),
         encryption_key: "test-encryption-key".into(),
         embeddings_backend: "openai".into(),
         cors_allowed_origins: "http://localhost:3000".into(),

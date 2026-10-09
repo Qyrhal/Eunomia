@@ -93,7 +93,36 @@ pub const AUDIT_PAGE: Stmt = Stmt::new(
 );
 pub const AUDIT_COUNT: Stmt = Stmt::new("cache.audit_count", "SELECT count() FROM audit_log WHERE owner = $owner GROUP ALL");
 
+/// Deletes everything `$owner` has from `$source` (`sources::registry::delete_data`): the facts
+/// drawn from its records, then (like deleting one memory) each affected subject's observations lose
+/// those facts from their lineage and go stale, or are deleted when nothing else backs them; relations
+/// extracted from its records; links either end of which is one of its records; the records
+/// themselves; and the source's own tables (heypocket's `pocket_recording`). Entities, the
+/// connector's credentials and its sync cursor stay. One transaction.
+pub const DELETE_SOURCE_DATA: Stmt = Stmt::at(
+    "cache.delete_source_data",
+    r#"BEGIN TRANSACTION;
+        LET $mems = (SELECT id, subject FROM memory WHERE source.owner = $owner AND source.source = $source);
+        LET $ids = $mems.id;
+        LET $subjects = array::distinct($mems.subject);
+        DELETE $ids;
+        DELETE memory WHERE type = "observation" AND subject IN $subjects
+            AND array::len(source_memories ?? []) > 0 AND array::len(array::complement(source_memories ?? [], $ids)) = 0;
+        UPDATE memory SET status = "stale", updated_at = time::now(),
+            source_memories = IF source_memories THEN array::complement(source_memories, $ids) ELSE NONE END
+            WHERE type = "observation" AND subject IN $subjects;
+        DELETE relates_to WHERE source.owner = $owner AND source.source = $source;
+        DELETE linked_to WHERE (in.owner = $owner AND in.source = $source) OR (out.owner = $owner AND out.source = $source);
+        LET $records = (SELECT VALUE id FROM cache_record WHERE owner = $owner AND source = $source);
+        DELETE $records;
+        DELETE pocket_recording WHERE owner = $owner AND $source = "heypocket";
+        RETURN { records: array::len($records), memories: array::len($ids) };
+        COMMIT TRANSACTION;"#,
+    12, // BEGIN 0, three LETs 1 to 3, four writes 4 to 8, LET 9, DELETE 10, DELETE 11, RETURN 12
+);
+
 pub const ALL: &[&Stmt] = &[
+    &DELETE_SOURCE_DATA,
     &MEMORY_FOR_EMBED,
     &RECORDS_FOR_EMBED,
     &CACHE_RECORDS_IN_RANGE,

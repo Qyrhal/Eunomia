@@ -21,6 +21,7 @@ pub const MIGRATIONS: &[(u32, &str, &str)] = &[
     (8, "v3_indexes", include_str!("../migrations/tenant/0008_v3_indexes.surql")),
     (9, "drop_control_tables", include_str!("../migrations/tenant/0009_drop_control_tables.surql")),
     (10, "entity_name_key", include_str!("../migrations/tenant/0010_entity_name_key.surql")),
+    (11, "pocket_recording_chat_model", include_str!("../migrations/tenant/0011_pocket_recording_chat_model.surql")),
 ];
 
 /// The tenant schema version this code writes. An org database is current at this version.
