@@ -18,6 +18,8 @@ export function GeneralSection({ settings }: { settings: AppSettings }) {
   const [chatModelInput, setChatModelInput] = useState(settings.chat_model);
   const modelsQuery = useOpenAiModels(settings.openai_base_url, settings.openai_api_key_set);
   const models = modelsQuery.data?.models ?? [];
+  // an endpoint that lists embedding models gets only those; one that lists none keeps the full list
+  const embeddingModels = models.some((m) => /embed/i.test(m)) ? models.filter((m) => /embed/i.test(m)) : models;
   const modelsError = modelsQuery.data?.error ?? (modelsQuery.isError ? "Could not reach the models endpoint." : null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -48,6 +50,20 @@ export function GeneralSection({ settings }: { settings: AppSettings }) {
     }
   }
 
+  /* An explicit empty key clears the stored one (the server then falls back to its own, if any). */
+  async function removeKey() {
+    setSaving(true);
+    setError(null);
+    try {
+      await updateSettings.mutateAsync({ openai_api_key: "" });
+      setApiKeyInput("");
+    } catch (e) {
+      setError(failure(e, "Could not remove the key. Try again."));
+    } finally {
+      setSaving(false);
+    }
+  }
+
   const row = "grid gap-1.5 md:grid-cols-[180px_minmax(0,1fr)] md:gap-6 px-5 py-4 items-start";
 
   return (
@@ -58,7 +74,7 @@ export function GeneralSection({ settings }: { settings: AppSettings }) {
           <Plug {...ICON} style={{ color: "var(--ink-faint)" }} aria-hidden />
           <div className="flex-1 min-w-0">
             <div className="text-[13.5px] font-medium">Connectors</div>
-            <div className="label mt-0.5">Up Bank, PocketAI, Open Connector: credentials and connection status</div>
+            <div className="label mt-0.5">Up Bank, PocketAI and more: credentials and connection status</div>
           </div>
           <span className="text-[12.5px] flex items-center gap-1" style={{ color: "var(--accent-text)" }}>
             Manage
@@ -113,15 +129,22 @@ export function GeneralSection({ settings }: { settings: AppSettings }) {
                 </span>
               )}
             </label>
-            <input
-              id="api-key"
-              type="password"
-              className="field h-8 px-3 text-[13px]"
-              value={apiKeyInput}
-              onChange={(e) => setApiKeyInput(e.target.value)}
-              placeholder={settings.openai_api_key_set ? "Leave blank to keep the current key" : "Optional, not every base URL needs one"}
-              autoComplete="off"
-            />
+            <div className="flex items-center gap-2">
+              <input
+                id="api-key"
+                type="password"
+                className="field h-8 px-3 text-[13px] flex-1 min-w-0"
+                value={apiKeyInput}
+                onChange={(e) => setApiKeyInput(e.target.value)}
+                placeholder={settings.openai_api_key_set ? "Leave blank to keep the current key" : "Optional, not every base URL needs one"}
+                autoComplete="off"
+              />
+              {settings.openai_api_key_set && (
+                <button type="button" onClick={removeKey} disabled={saving} className="btn btn-sm shrink-0">
+                  Remove key
+                </button>
+              )}
+            </div>
           </div>
 
           <div className={row}>
@@ -136,7 +159,7 @@ export function GeneralSection({ settings }: { settings: AppSettings }) {
                   className="h-8 text-[13px] w-full"
                   value={modelInput}
                   onChange={setModelInput}
-                  options={[...(!models.includes(modelInput) && modelInput ? [modelInput] : []), ...models].map((m) => ({ value: m, label: m }))}
+                  options={[...(!embeddingModels.includes(modelInput) && modelInput ? [modelInput] : []), ...embeddingModels].map((m) => ({ value: m, label: m }))}
                 />
               ) : (
                 <input

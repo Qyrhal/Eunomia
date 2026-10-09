@@ -4,6 +4,7 @@ import ErrorLine, { failure, type Failure } from "@/components/ErrorLine";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, Loader2, X } from "lucide-react";
+import { nextPath } from "@/lib/nextPath";
 import { useMe } from "@/lib/queries/auth";
 import { useCompleteOnboarding, useSettings, useUpdateSettings } from "@/lib/queries/settings";
 import EunomiaMark from "@/components/EunomiaMark";
@@ -35,7 +36,7 @@ export default function OnboardingPage() {
   const { isError, data } = meQuery;
   useEffect(() => {
     if (isError) router.replace("/login");
-    else if (data?.onboarded) router.replace("/");
+    else if (data?.onboarded) router.replace(nextPath());
   }, [isError, data, router]);
 
   // The 2nd step is pointless if an OpenAI key is already configured
@@ -47,7 +48,7 @@ export default function OnboardingPage() {
   async function finish(from?: Element | null) {
     await completeOnboarding.mutateAsync();
     spark(from, { count: 8 });
-    router.replace("/");
+    router.replace(nextPath());
   }
 
   async function saveApiKey(e: React.MouseEvent<HTMLButtonElement>) {
@@ -75,7 +76,7 @@ export default function OnboardingPage() {
       // Finishing the wizard shouldn't trap the user even if the server
       // call fails: let them into the app and they can set things up
       // from Settings/Connectors later.
-      router.replace("/");
+      router.replace(nextPath());
     }
   }
 

@@ -249,7 +249,7 @@ export default function ConnectorWorkspacePage({ params }: { params: Promise<{ k
   const { kind } = use(params);
   const connectorKind = kindForSource(kind);
   const rowsQuery = useSources();
-  const row: SourceRow | null | undefined = rowsQuery.data ? (rowsQuery.data.find((r) => r.key === kind) ?? null) : undefined;
+  const listed: SourceRow | null | undefined = rowsQuery.data ? (rowsQuery.data.find((r) => r.key === kind) ?? null) : undefined;
   const [query, setQuery] = useState("");
   // The submitted search; "" shows the latest records.
   const [activeQuery, setActiveQuery] = useState("");
@@ -259,10 +259,17 @@ export default function ConnectorWorkspacePage({ params }: { params: Promise<{ k
   const shown = activeQuery ? (searchQuery.data ?? listQuery.data) : listQuery.data;
   const results: ToolHit[] | null = activeQuery && searchQuery.isError ? [] : (shown ?? (listQuery.isError ? [] : null));
   const searching = activeQuery !== "" && searchQuery.isFetching;
+  // Records can outlive their connector (demo data, a removed connector): keep them readable under a read-only row.
+  const orphaned = listed === null && (listQuery.data?.length ?? 0) > 0;
+  const row: SourceRow | null | undefined = orphaned
+    ? { key: kind, label: formatKey(kind), provider: kind, record_types: [], connected: false, record_count: listQuery.data?.length ?? 0, sync_status: { cursor: "", last_run: null, last_ok: null, last_error: "", consecutive_failures: 0 } }
+    : listed === null && listQuery.isPending
+      ? undefined
+      : listed;
   const [syncing, setSyncing] = useState(false);
   // Result mark after a sync: holds 1.2s, then the button goes back to idle.
   const [syncResult, setSyncResult] = useState<"done" | "failed" | null>(null);
-  const [syncError, setSyncError] = useState<string | null>(null);
+  const [syncError, setSyncError] = useState<Failure | null>(null);
 
   function loadRecords() {
     setActiveQuery("");
@@ -295,7 +302,7 @@ export default function ConnectorWorkspacePage({ params }: { params: Promise<{ k
       await syncSource.mutateAsync(kind);
     } catch (e) {
       result = "failed";
-      setSyncError((e as Error).message);
+      setSyncError(failure(e, "The sync could not start."));
     } finally {
       setSyncing(false);
     }
@@ -330,9 +337,9 @@ export default function ConnectorWorkspacePage({ params }: { params: Promise<{ k
     return (
       <div className="max-w-5xl flex flex-col gap-6">
         <Breadcrumb label={kind} />
-        <h1 className="page-title">Unknown source</h1>
+        <h1 className="page-title">{formatKey(kind)}</h1>
         <div className="ledger px-5 py-4 flex items-center justify-between gap-4 flex-wrap text-[13px]">
-          <span style={{ color: "var(--ink-dim)" }}>There is no source called &ldquo;{kind}&rdquo;. It may have been renamed or removed.</span>
+          <span style={{ color: "var(--ink-dim)" }}>This source was removed: &ldquo;{kind}&rdquo; is not a connector any more and has no records left.</span>
           <Link href="/connectors" className="btn btn-sm">
             Back to connectors
           </Link>
@@ -381,19 +388,21 @@ export default function ConnectorWorkspacePage({ params }: { params: Promise<{ k
             <h1 className="page-title">{row.label}</h1>
             <span className="text-[12.5px] flex items-center gap-1.5" style={{ color: "var(--ink-dim)" }}>
               <span className="dot" style={{ background: h.tone }} aria-hidden />
-              {row.connected ? "Connected" : "Seeded data, no live connection"}
+              {row.connected ? "Connected" : orphaned ? "Source no longer connected, records kept" : "Seeded data, no live connection"}
             </span>
           </div>
           <div className="flex items-center gap-2">
             {settingsHref && (
               <Link href={settingsHref} className="btn">
-                <Settings2 size={14} strokeWidth={1.75} aria-hidden /> Settings
+                <Settings2 size={14} strokeWidth={1.75} aria-hidden /> Setup
               </Link>
             )}
-            <button type="button" onClick={sync} disabled={syncing} className="btn btn-primary" aria-live="polite">
-              <SyncMark status={syncStatus} />
-              {syncing ? "Syncing…" : "Sync now"}
-            </button>
+            {!orphaned && (
+              <button type="button" onClick={sync} disabled={syncing} className="btn btn-primary" aria-live="polite">
+                <SyncMark status={syncStatus} />
+                {syncing ? "Syncing…" : "Sync now"}
+              </button>
+            )}
           </div>
         </div>
       </header>
@@ -424,12 +433,20 @@ export default function ConnectorWorkspacePage({ params }: { params: Promise<{ k
       </dl>
 
       {(syncError || row.sync_status.last_error) && (
-        <div className="rounded-[10px] px-4 py-3 text-[13px] flex flex-col gap-1" style={{ background: "var(--critical-soft)", color: "var(--critical)" }} role="alert">
-          <span className="font-medium">{syncError ? "Sync could not start." : "The last sync failed."}</span>
-          <span className="font-mono text-[12px] break-words">{syncError ?? row.sync_status.last_error}</span>
-          <span style={{ color: "var(--ink-dim)" }}>
-            {settingsHref ? "Check the credentials in Settings, then sync again." : "Try syncing again in a moment."}
-          </span>
+        <div className="flex flex-col gap-1.5">
+          <ErrorLine error={syncError}>
+            <span className="font-medium">{syncError ? "Sync could not start." : "The last sync failed."}</span>{" "}
+            <span className="font-mono text-[12px] break-words">{syncError?.message ?? row.sync_status.last_error}</span>
+          </ErrorLine>
+          <p className="text-[12.5px]" style={{ color: "var(--ink-dim)" }}>
+            {settingsHref ? (
+              <>
+                Check the credentials in the <Link href={settingsHref} className="underline" style={{ color: "var(--accent-text)" }}>connector setup</Link>, then sync again.
+              </>
+            ) : (
+              "Try syncing again in a moment."
+            )}
+          </p>
         </div>
       )}
 

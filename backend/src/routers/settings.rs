@@ -91,19 +91,22 @@ struct SettingsOut {
     #[schema(value_type = Object)]
     theme: Value,
     openai_api_key_set: bool,
+    /// A usable model endpoint resolves for this user (their key, the server's, or a keyless local endpoint): chat can answer.
+    model_configured: bool,
     openai_base_url: String,
     observations_mission: String,
     memory_skill: String,
     memory_skill_custom: bool,
 }
 
-fn out(row: &AppSettingsRow, server_base_url: &str) -> SettingsOut {
+fn out(row: &AppSettingsRow, server_base_url: &str, model_configured: bool) -> SettingsOut {
     SettingsOut {
         embedding_model: row.embedding_model.clone(),
         chat_model: row.chat_model.clone(),
         sync_intervals: row.sync_intervals.clone(),
         theme: row.theme.clone(),
         openai_api_key_set: !row.openai_api_key_encrypted.is_empty(),
+        model_configured,
         openai_base_url: provider::effective_base_url(server_base_url, &row.openai_base_url).to_string(),
         observations_mission: row.observations_mission.clone(),
         memory_skill: crate::docs::effective_skill(&row.memory_skill).to_string(),
@@ -227,6 +230,11 @@ async fn validate_update(db: &OrgDb, settings: &Settings, owner: &RecordId, body
     embeddings::check_model(provider::effective_base_url(&settings.openai_base_url, base), model).map_err(AppError::bad_request)
 }
 
+async fn respond(state: &crate::state::OrgState, user: &User, row: &AppSettingsRow) -> AppResult<Json<SettingsOut>> {
+    let ready = crate::chat::service::ensure_configured(&state.db, &state.settings, &user.id).await.is_ok();
+    Ok(Json(out(row, &state.settings.openai_base_url, ready)))
+}
+
 #[utoipa::path(
     operation_id = "getSettings",
     get,
@@ -239,7 +247,7 @@ async fn validate_update(db: &OrgDb, settings: &Settings, owner: &RecordId, body
 async fn read_settings(State(state): State<AppState>, user: User) -> AppResult<Json<SettingsOut>> {
     let state = state.org(&user.org).await?;
     let row = get_app_settings(&state.db, &user.id).await?;
-    Ok(Json(out(&row, &state.settings.openai_base_url)))
+    respond(&state, &user, &row).await
 }
 
 #[utoipa::path(
@@ -263,7 +271,7 @@ async fn patch_settings(
     }
     validate_update(&state.db, &state.settings, &user.id, &body).await?;
     let row = update_app_settings(&state.db, &user.id, &body, &state.settings.encryption_key).await?;
-    Ok(Json(out(&row, &state.settings.openai_base_url)))
+    respond(&state, &user, &row).await
 }
 
 #[utoipa::path(
@@ -363,14 +371,14 @@ mod tests {
 
     #[test]
     fn out_reports_key_set_true_when_encrypted_value_present() {
-        let v = serde_json::to_value(out(&row(true), SERVER)).unwrap();
+        let v = serde_json::to_value(out(&row(true), SERVER, false)).unwrap();
         assert_eq!(v["openai_api_key_set"], json!(true));
         assert!(v.get("openai_api_key_encrypted").is_none());
     }
 
     #[test]
     fn out_reports_key_set_false_when_empty() {
-        let v = serde_json::to_value(out(&row(false), SERVER)).unwrap();
+        let v = serde_json::to_value(out(&row(false), SERVER, false)).unwrap();
         assert_eq!(v["openai_api_key_set"], json!(false));
     }
 
@@ -378,15 +386,15 @@ mod tests {
 
     #[test]
     fn out_shows_the_servers_base_url_when_the_user_has_none() {
-        assert_eq!(serde_json::to_value(out(&row(false), SERVER)).unwrap()["openai_base_url"], json!(SERVER));
+        assert_eq!(serde_json::to_value(out(&row(false), SERVER, false)).unwrap()["openai_base_url"], json!(SERVER));
         let mut r = row(false);
         r.openai_base_url = "http://mine/v1".into();
-        assert_eq!(serde_json::to_value(out(&r, SERVER)).unwrap()["openai_base_url"], json!("http://mine/v1"));
+        assert_eq!(serde_json::to_value(out(&r, SERVER, false)).unwrap()["openai_base_url"], json!("http://mine/v1"));
     }
 
     #[test]
     fn out_never_leaks_the_raw_secret() {
-        let v = serde_json::to_value(out(&row(true), SERVER)).unwrap();
+        let v = serde_json::to_value(out(&row(true), SERVER, false)).unwrap();
         let dumped = v.to_string();
         assert!(!dumped.contains("sk-very-secret-123"));
     }

@@ -26,7 +26,7 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
       .then((me) => {
         if (cancelled) return;
         if (!me.onboarded) {
-          router.replace("/onboarding");
+          router.replace(`/onboarding?next=${encodeURIComponent(pathname + window.location.search)}`);
           return;
         }
         setReady(true);

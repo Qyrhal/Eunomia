@@ -3,6 +3,7 @@
 import ErrorLine, { failure, type Failure } from "@/components/ErrorLine";
 import Link from "next/link";
 import { useState } from "react";
+import ConfirmButton from "@/components/ConfirmButton";
 import Markdown from "@/components/Markdown";
 import CopyButton from "@/components/bits/CopyButton";
 import SyncMark from "@/components/bits/SyncMark";
@@ -96,13 +97,9 @@ export default function SkillPage() {
               ) : (
                 <>
                   {custom && (
-                    <button
-                      onClick={() => window.confirm("Replace your version with the built-in skill?") && save("")}
-                      disabled={busy}
-                      className="btn btn-sm btn-ghost"
-                    >
+                    <ConfirmButton label="Reset to default" confirmLabel="Replace with built-in" onConfirm={() => save("")} disabled={busy} className="btn btn-sm btn-ghost">
                       Reset to default
-                    </button>
+                    </ConfirmButton>
                   )}
                   <button
                     onClick={() => {

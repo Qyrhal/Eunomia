@@ -5,7 +5,9 @@ export type Failure = { message: string; code?: string; traceId?: string };
 
 /* Turns a caught value into a Failure, keeping the server message when present. */
 export function failure(e: unknown, fallback: string, suffix = ""): Failure {
-  const message = (e instanceof Error && e.message ? e.message : fallback) + suffix;
+  const base = e instanceof Error && e.message ? e.message : fallback;
+  // a server message may lack its full stop: "... 'x'" + " Check the address" must still read as two sentences
+  const message = suffix && !/[.!?]$/.test(base) ? `${base}.${suffix}` : base + suffix;
   return e instanceof ApiError ? { message, code: e.code, traceId: e.traceId } : { message };
 }
 

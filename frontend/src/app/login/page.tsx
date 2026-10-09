@@ -5,13 +5,9 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Loader2 } from "lucide-react";
 import { useLogin } from "@/lib/queries/auth";
-import AuthShell, { FormError, LABEL, RevealToggle } from "./AuthShell";
-
-/** Where to go after signing in: `?next=` when it is a same-site path (the OAuth consent page), else the dashboard. */
-function nextPath(): string {
-  const next = new URLSearchParams(window.location.search).get("next");
-  return next && next.startsWith("/") && !next.startsWith("//") && !next.includes("\\") ? next : "/";
-}
+import ErrorLine, { failure, type Failure } from "@/components/ErrorLine";
+import { keepNext, nextPath } from "@/lib/nextPath";
+import AuthShell, { LABEL, RevealToggle } from "./AuthShell";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -19,7 +15,7 @@ export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [show, setShow] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<Failure | null>(null);
   const [busy, setBusy] = useState(false);
 
   async function submit(e: React.FormEvent) {
@@ -30,7 +26,7 @@ export default function LoginPage() {
       await login.mutateAsync({ email, password });
       router.replace(nextPath());
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not sign in. Check your email and password, then try again.");
+      setError(failure(err, "Could not sign in. Check your email and password, then try again."));
       setBusy(false);
     }
   }
@@ -80,7 +76,7 @@ export default function LoginPage() {
           </div>
         </div>
 
-        {error && <FormError message={error} />}
+        {error && <ErrorLine error={error} />}
 
         <button type="submit" disabled={busy} aria-busy={busy} className="btn btn-primary mt-1 h-9 w-full">
           {busy && <Loader2 size={14} strokeWidth={1.75} className="animate-spin" aria-hidden />}
@@ -89,7 +85,7 @@ export default function LoginPage() {
 
         <p className="mt-2 text-[13px]" style={{ color: "var(--ink-faint)" }}>
           No account yet?{" "}
-          <Link href="/register" className="font-medium underline" style={{ color: "var(--accent-text)" }}>
+          <Link href="/register" onClick={(e) => { e.preventDefault(); router.push(keepNext("/register")); }} className="font-medium underline" style={{ color: "var(--accent-text)" }}>
             Create one
           </Link>
         </p>

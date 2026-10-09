@@ -419,6 +419,7 @@ async fn delete_token(
 #[derive(Deserialize, SurrealValue)]
 struct SessionRow {
     id: RecordId,
+    sid: String,
     #[serde(default)]
     #[surreal(default)]
     user_agent: String,
@@ -434,6 +435,8 @@ struct SessionOut {
     created_at: Datetime,
     #[schema(value_type = String)]
     last_seen_at: Datetime,
+    /// This is the session the request itself is using.
+    current: bool,
 }
 
 #[utoipa::path(
@@ -445,7 +448,8 @@ struct SessionOut {
     responses((status = 200, body = Vec<SessionOut>), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
     security(("cookie" = []), ("bearer" = [])),
 )]
-async fn get_sessions(State(state): State<AppState>, user: User) -> AppResult<Json<Vec<SessionOut>>> {
+async fn get_sessions(State(state): State<AppState>, user: User, headers: HeaderMap) -> AppResult<Json<Vec<SessionOut>>> {
+    let mine = auth::session_sid(&state.settings.jwt_secret, &headers);
     let mut res = store::control::AUTH_SESSION_LIST
         .on(&state.control)
         .bind(("owner", user.id.clone()))
@@ -458,6 +462,7 @@ async fn get_sessions(State(state): State<AppState>, user: User) -> AppResult<Js
                 user_agent: r.user_agent,
                 created_at: r.created_at,
                 last_seen_at: r.last_seen_at,
+                current: mine.as_deref() == Some(r.sid.as_str()),
             })
             .collect(),
     ))

@@ -1,5 +1,4 @@
 import Link from "next/link";
-import { CircleAlert } from "lucide-react";
 import EunomiaMark from "@/components/EunomiaMark";
 import ThemeToggle from "@/components/ThemeToggle";
 import { InputModeTracker } from "@/components/bits/motion";
@@ -28,19 +27,6 @@ export default function AuthShell({ children }: { children: React.ReactNode }) {
       </div>
       <AgentCanvas />
       <InputModeTracker />
-    </div>
-  );
-}
-
-export function FormError({ message }: { message: string }) {
-  return (
-    <div
-      role="alert"
-      className="flex items-start gap-2 rounded-[7px] px-3 py-2 text-[13px] leading-[1.45]"
-      style={{ background: "var(--critical-soft)", color: "var(--critical)" }}
-    >
-      <CircleAlert size={14} strokeWidth={1.75} className="mt-[3px] shrink-0" aria-hidden />
-      <span>{message}</span>
     </div>
   );
 }

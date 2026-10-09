@@ -11,6 +11,7 @@ import {
   Lock,
   LogOut,
   Mail,
+  Pencil,
   Plus,
   Trash2,
   UserPlus,
@@ -32,6 +33,7 @@ import {
   useMergeVaults,
   useRefreshVaults,
   useRemoveMember,
+  useRenameVault,
   useVaultMembers,
   useVaults,
 } from "@/lib/queries/vaults";
@@ -123,6 +125,10 @@ function VaultInspector({
   const deleteVault = useDeleteVault();
   const leaveVault = useLeaveVault();
   const cloneVault = useCloneVault();
+  const renameVault = useRenameVault();
+  const [renaming, setRenaming] = useState(false);
+  const [renameValue, setRenameValue] = useState(vault.name);
+  const running = useRef(false);
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<VaultRole>("member");
   const [touched, setTouched] = useState(false);
@@ -176,13 +182,26 @@ function VaultInspector({
     fallback: string,
     after: () => void,
   ) {
+    if (running.current) return; // a double click must not leave or delete twice
+    running.current = true;
     setError(null);
     try {
       await action();
       after();
     } catch (e) {
       setError(failure(e, fallback));
+    } finally {
+      running.current = false;
     }
+  }
+
+  async function doRename() {
+    const name = renameValue.trim();
+    if (!name || name === vault.name) {
+      setRenaming(false);
+      return;
+    }
+    await run(() => renameVault.mutateAsync({ id: vault.id, name }), "Could not rename this vault. Try a different name.", () => setRenaming(false));
   }
 
   async function doClone() {
@@ -209,12 +228,53 @@ function VaultInspector({
       aria-label={`${vault.name} details`}
     >
       <div className="px-5 pt-4 pb-4 flex flex-col gap-1">
-        <div className="flex items-center gap-2 min-w-0">
-          <h2 className="text-[17px] font-semibold tracking-[-0.015em] truncate">
-            {vault.name}
-          </h2>
-          <RoleChip role={vault.role} />
-        </div>
+        {renaming ? (
+          <form
+            className="flex items-center gap-1.5"
+            onSubmit={(e) => {
+              e.preventDefault();
+              doRename();
+            }}
+          >
+            <input
+              aria-label="Vault name"
+              autoFocus
+              maxLength={80}
+              className="field h-8 px-3 text-[14px] flex-1 min-w-0"
+              value={renameValue}
+              onChange={(e) => setRenameValue(e.target.value)}
+              onKeyDown={(e) => e.key === "Escape" && setRenaming(false)}
+            />
+            <button type="submit" disabled={!renameValue.trim() || renameVault.isPending} className="btn btn-sm">
+              {renameVault.isPending ? "Saving…" : "Save"}
+            </button>
+            <button type="button" onClick={() => setRenaming(false)} className="btn btn-ghost btn-sm">
+              Cancel
+            </button>
+          </form>
+        ) : (
+          <div className="flex items-center gap-2 min-w-0">
+            <h2 className="text-[17px] font-semibold tracking-[-0.015em] truncate">
+              {vault.name}
+            </h2>
+            <RoleChip role={vault.role} />
+            {isOwner && (
+              <Tooltip label="Rename vault">
+                <button
+                  onClick={() => {
+                    setRenameValue(vault.name);
+                    setError(null);
+                    setRenaming(true);
+                  }}
+                  aria-label="Rename vault"
+                  className="btn btn-ghost btn-sm btn-icon shrink-0"
+                >
+                  <Pencil {...ICON} />
+                </button>
+              </Tooltip>
+            )}
+          </div>
+        )}
         <span className="label">
           {isOrg
             ? "Org vault · shared with every member below"
@@ -436,6 +496,7 @@ function VaultInspector({
                         onVaultsChanged,
                       )
                 }
+                disabled={leaveVault.isPending || deleteVault.isPending}
                 className="btn btn-danger btn-sm"
               >
                 {confirm === "delete" ? (

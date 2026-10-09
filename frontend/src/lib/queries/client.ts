@@ -1,5 +1,6 @@
 import { MutationCache, QueryCache, QueryClient } from "@tanstack/react-query";
 import { ApiError } from "@/lib/api";
+import { getBootstrap } from "@/lib/gen";
 
 // What every generated operation resolves to (responseStyle "fields", throwOnError off).
 type Result<D> = Promise<{ data?: D; error?: unknown; response?: Response }>;
@@ -30,13 +31,14 @@ export const isSessionEnded = (e: unknown) =>
   e instanceof ApiError && e.status === 401 && ["auth.unauthorized", "auth.session_expired", "auth.token_expired"].includes(e.code);
 
 /** Sends any query or mutation that finds the session gone to /login, remembering where the user was. */
-function onSessionEnded(e: unknown) {
+async function onSessionEnded(e: unknown) {
   if (typeof window === "undefined" || !isSessionEnded(e)) return;
   const { pathname, search } = window.location;
   if (/^\/(login|register|consent|onboarding)/.test(pathname)) return;
+  // a fresh install has no account to sign in to: register, as AuthGuard does
+  const { has_users } = await call(getBootstrap()).catch(() => ({ has_users: true }));
   // full reload on purpose: drops every cached query of the ended session
-  // eslint-disable-next-line @next/next/no-location-assign-relative-destination
-  window.location.href = `/login?next=${encodeURIComponent(pathname + search)}`;
+  window.location.href = has_users ? `/login?next=${encodeURIComponent(pathname + search)}` : "/register";
 }
 
 export const makeQueryClient = () =>

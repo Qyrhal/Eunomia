@@ -13,6 +13,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { ApiError, chat } from "@/lib/api";
 import type { ChatMessage, ChatThread } from "@/lib/types";
 import { useMe } from "@/lib/queries/auth";
+import { useSettings } from "@/lib/queries/settings";
 import { chatKeys, historyQuery, threadsQuery, useCreateThread, useDeleteThread, useThreads } from "@/lib/queries/chat";
 
 // The built-in agent, labelled by the name its system prompt gives it.
@@ -336,6 +337,8 @@ export default function ChatPage() {
   const [loadError, setLoadError] = useState<Failure | null>(null);
   const [needsKey, setNeedsKey] = useState(false);
   const me = useMe().data?.email ?? null;
+  // unknown while loading counts as ready: the server still refuses a send it cannot answer
+  const modelReady = useSettings().data?.model_configured ?? true;
   const [lastSent, setLastSent] = useState("");
   // When the current reply was asked for, and how long it took to start answering.
   const [startedAt, setStartedAt] = useState<number | null>(null);
@@ -417,7 +420,7 @@ export default function ChatPage() {
 
   async function send(raw: string = input, retry = false) {
     const text = raw.trim();
-    if (!text || sending || !activeId) return;
+    if (!text || sending || !activeId || !modelReady) return;
     const threadId = activeId;
     if (!retry) setInput("");
     setError(null);
@@ -479,7 +482,7 @@ export default function ChatPage() {
 
   const turns = messages ? toTurns(messages) : null;
   const activeTool = liveSteps.find((s) => s.running)?.name;
-  const canSend = !!input.trim() && !sending && !!activeId;
+  const canSend = !!input.trim() && !sending && !!activeId && modelReady;
 
   return (
     <TooltipGroup>
@@ -530,7 +533,15 @@ export default function ChatPage() {
             <div className="max-w-[720px] mx-auto px-4 md:px-6 py-6 flex flex-col gap-7 min-h-full" aria-live="polite" aria-busy={sending}>
               {loadError && <ErrorLine error={loadError} />}
               {turns === null && <LoadingTurns />}
-              {turns !== null && turns.length === 0 && !sending && !loadError && <EmptyState onPick={(text) => send(text)} />}
+              {turns !== null && turns.length === 0 && !sending && !loadError && modelReady && <EmptyState onPick={(text) => send(text)} />}
+              {!modelReady && (
+                <div role="status" className="ledger flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3 text-[13px]">
+                  <p className="flex-1 min-w-[220px]" style={{ color: "var(--ink-dim)" }}>
+                    No model is configured, so the assistant can&apos;t answer yet. Chat needs an OpenAI key or a local model endpoint.
+                  </p>
+                  <Link href="/settings" className="btn btn-sm">Set up a model</Link>
+                </div>
+              )}
               {turns?.map((t, i) => <TurnView key={i} turn={t} me={me} />)}
               {sending && (
                 <article className="fade-in">
@@ -608,7 +619,8 @@ export default function ChatPage() {
                 aria-label="Message"
                 rows={1}
                 className="composer w-full resize-none bg-transparent outline-none px-3.5 pt-3 pb-1 text-[14px] leading-relaxed"
-                placeholder="Ask something…"
+                placeholder={modelReady ? "Ask something…" : "Set up a model to chat"}
+                disabled={!modelReady}
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => {

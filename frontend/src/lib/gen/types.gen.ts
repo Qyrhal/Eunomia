@@ -493,6 +493,10 @@ export type RemovedBody = {
 
 export type SessionOut = {
     created_at: string;
+    /**
+     * This is the session the request itself is using.
+     */
+    current: boolean;
     id: string;
     last_seen_at: string;
     user_agent: string;
@@ -503,6 +507,10 @@ export type SettingsOut = {
     embedding_model: string;
     memory_skill: string;
     memory_skill_custom: boolean;
+    /**
+     * A usable model endpoint resolves for this user (their key, the server's, or a keyless local endpoint): chat can answer.
+     */
+    model_configured: boolean;
     observations_mission: string;
     openai_api_key_set: boolean;
     openai_base_url: string;

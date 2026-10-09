@@ -60,7 +60,7 @@ export function PanelHead({ title, children, action }: { title: string; children
 }
 
 /* Inline revoke: one click arms it, the second confirms. Holding the icon for 650ms is the accelerator. */
-export function RevokeButton({ label, onRevoke }: { label: string; onRevoke: () => Promise<void> }) {
+export function RevokeButton({ label, onRevoke, warn }: { label: string; onRevoke: () => Promise<void>; warn?: string }) {
   const [armed, setArmed] = useState(false);
   const [busy, setBusy] = useState(false);
   async function confirm() {
@@ -91,6 +91,7 @@ export function RevokeButton({ label, onRevoke }: { label: string; onRevoke: () 
     );
   return (
     <span className="inline-flex items-center gap-1">
+      {warn && <span className="text-[12px] mr-1" style={{ color: "var(--critical)" }}>{warn}</span>}
       <button
         onClick={confirm}
         disabled={busy}

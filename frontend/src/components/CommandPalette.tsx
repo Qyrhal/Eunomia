@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { BookOpen, CornerDownLeft, FileText, FolderGit2, LayoutDashboard, MessageSquare, Plug, Search, Settings, Share2, User, Vault } from "lucide-react";
+import { BookOpen, Building2, MapPin, CornerDownLeft, FileText, FolderGit2, LayoutDashboard, MessageSquare, Plug, Search, Settings, Share2, User, Vault } from "lucide-react";
 import type { EntityKind } from "@/lib/types";
 import { useSources } from "@/lib/queries/sources";
 import { usePaletteSearch } from "@/lib/queries/tools";
@@ -16,6 +16,9 @@ const OPEN_EVENT = "eunomia:open-palette";
 export function openCommandPalette() {
   window.dispatchEvent(new Event(OPEN_EVENT));
 }
+
+// organisation and location read as a building and a pin, not a person
+const ENTITY_ICON: Record<string, IconType> = { person: User, organisation: Building2, location: MapPin, repository: FolderGit2, file: FileText };
 
 const STATIC_ITEMS: { label: string; href: string; icon: IconType }[] = [
   { label: "Dashboard", href: "/", icon: LayoutDashboard },
@@ -94,7 +97,7 @@ function Palette({ onClose }: { onClose: () => void }) {
     key: `entity:${e.id}`,
     label: e.name,
     sub: e.kind,
-    icon: User,
+    icon: ENTITY_ICON[e.kind] ?? User,
     go: () => router.push(CODE_KINDS.has(e.kind) ? "/code" : "/entities"),
   }));
   const recordItems: Item[] = (searching ? recordHits : []).map((h) => ({

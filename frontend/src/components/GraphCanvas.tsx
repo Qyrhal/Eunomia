@@ -2,7 +2,7 @@
 
 // The entity graph's canvas: a flat SVG with a live d3-force layout. Drag a
 // node and the links follow; release and physics settles it back. Drag the
-// background to pan, scroll or use the buttons to zoom, click (or Enter) a node
+// background to pan, scroll or use the buttons to zoom, click (or Enter or Space) a node
 // to select it. The vector cloud stays 3D (Scene3D).
 
 import { useEffect, useRef, useState } from "react";
@@ -41,6 +41,16 @@ function computeFit(nodes: { x?: number; y?: number }[], w: number, h: number, i
   const cy = ins.top + freeH / 2;
   // screen = w/2 + zoom * (p - w/2 + view.x), so solve for the view that puts the box centre on (cx, cy)
   return { zoom, x: (cx - w / 2) / zoom + w / 2 - (minX + maxX) / 2, y: (cy - h / 2) / zoom + h / 2 - (minY + maxY) / 2 };
+}
+
+function ToolButton({ label, icon, run }: { label: string; icon: React.ReactNode; run: () => void }) {
+  return (
+    <Tooltip label={label}>
+      <button type="button" className="btn btn-ghost btn-sm btn-icon w-[26px]" aria-label={label} onClick={run}>
+        {icon}
+      </button>
+    </Tooltip>
+  );
 }
 
 export default function GraphCanvas({
@@ -82,7 +92,18 @@ export default function GraphCanvas({
     dimsRef.current = dims;
   });
 
-  const zoomBy = (f: number) => setView((v) => ({ ...v, zoom: Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, v.zoom * f)) }));
+  // True until the person pans, zooms or drags: then a change in the free area (the toolbar wrapping, a resize) re-fits.
+  const autoFit = useRef(true);
+  useEffect(() => {
+    if (!autoFit.current) return;
+    const s = simRef.current;
+    if (s) setView(computeFit(s.nodes(), dims.w, dims.h, insets));
+  }, [dims.w, dims.h, insets]);
+
+  const zoomBy = (f: number) => {
+    autoFit.current = false;
+    setView((v) => ({ ...v, zoom: Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, v.zoom * f)) }));
+  };
 
   // Track the canvas size so the viewBox and the centre force follow a resize.
   useEffect(() => {
@@ -98,6 +119,7 @@ export default function GraphCanvas({
 
   // The simulation runs live (not a one-shot layout) so a released node settles back in.
   useEffect(() => {
+    autoFit.current = true;
     const sim: Sim[] = inNodes.map((n) => ({ ...n }));
     const byId = new Map(sim.map((n) => [n.id, n]));
     const links = edges.flatMap((e) => {
@@ -112,7 +134,7 @@ export default function GraphCanvas({
       .force("collide", forceCollide(26))
       .on("tick", () => setNodes([...s.nodes()]))
       // fit once the layout settles, so a reload or vault switch never leaves nodes off screen
-      .on("end", () => setView(computeFit(s.nodes(), dimsRef.current.w, dimsRef.current.h, insetsRef.current)));
+      .on("end", () => autoFit.current && setView(computeFit(s.nodes(), dimsRef.current.w, dimsRef.current.h, insetsRef.current)));
     simRef.current = s;
     return () => {
       s.stop();
@@ -135,6 +157,16 @@ export default function GraphCanvas({
     svg.addEventListener("wheel", onWheel, { passive: false });
     return () => svg.removeEventListener("wheel", onWheel);
   }, []);
+
+  function fitToView() {
+    autoFit.current = true;
+    setView(computeFit(nodes.filter((n) => visibleKinds.has(n.kind)), dims.w, dims.h, insets));
+  }
+
+  function resetView() {
+    autoFit.current = false;
+    setView({ zoom: 1, x: 0, y: 0 });
+  }
 
   function svgPoint(e: React.PointerEvent): { x: number; y: number } {
     const ctm = svgRef.current?.getScreenCTM();
@@ -162,7 +194,10 @@ export default function GraphCanvas({
     const d = dragRef.current;
     if (!d || d.id !== n.id) return;
     const { x, y } = svgPoint(e);
-    if (!d.moved && (Math.abs(x - (n.fx ?? x)) > DRAG_THRESHOLD || Math.abs(y - (n.fy ?? y)) > DRAG_THRESHOLD)) d.moved = true;
+    if (!d.moved && (Math.abs(x - (n.fx ?? x)) > DRAG_THRESHOLD || Math.abs(y - (n.fy ?? y)) > DRAG_THRESHOLD)) {
+      d.moved = true;
+      autoFit.current = false;
+    }
     n.fx = x;
     n.fy = y;
     setNodes((prev) => [...prev]);
@@ -200,6 +235,7 @@ export default function GraphCanvas({
         onPointerDown={(e) => {
           if (e.target !== e.currentTarget) return; // a node handled its own pointerdown
           e.currentTarget.setPointerCapture(e.pointerId);
+          autoFit.current = false;
           panRef.current = { startX: e.clientX, startY: e.clientY, originX: view.x, originY: view.y };
           setPanning(true);
         }}
@@ -239,7 +275,12 @@ export default function GraphCanvas({
                 onPointerMove={(e) => nodeMove(e, n)}
                 onPointerUp={() => nodeUp(n)}
                 onPointerCancel={() => nodeUp(n)}
-                onKeyDown={(e) => e.key === "Enter" && onSelect(n.id)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault(); // Space would scroll the page
+                    onSelect(n.id);
+                  }
+                }}
                 onMouseEnter={() => setHovered(n.id)}
                 onMouseLeave={() => setHovered((h) => (h === n.id ? null : h))}
               >
@@ -282,18 +323,10 @@ export default function GraphCanvas({
 
       <TooltipGroup>
         <div className="panel p-0.5 absolute right-4 md:right-[25.5rem] bottom-4 flex gap-0.5">
-          {[
-            { label: "Zoom in", icon: <Plus size={13} strokeWidth={1.75} />, run: () => zoomBy(1 + ZOOM_STEP) },
-            { label: "Zoom out", icon: <Minus size={13} strokeWidth={1.75} />, run: () => zoomBy(1 - ZOOM_STEP) },
-            { label: "Fit to view", icon: <Maximize2 size={13} strokeWidth={1.75} />, run: () => setView(computeFit(visible, dims.w, dims.h, insets)) },
-            { label: "Reset view", icon: <RotateCcw size={13} strokeWidth={1.75} />, run: () => setView({ zoom: 1, x: 0, y: 0 }) },
-          ].map((b) => (
-            <Tooltip key={b.label} label={b.label}>
-              <button type="button" className="btn btn-ghost btn-sm btn-icon w-[26px]" aria-label={b.label} onClick={b.run}>
-                {b.icon}
-              </button>
-            </Tooltip>
-          ))}
+          <ToolButton label="Zoom in" icon={<Plus size={13} strokeWidth={1.75} />} run={() => zoomBy(1 + ZOOM_STEP)} />
+          <ToolButton label="Zoom out" icon={<Minus size={13} strokeWidth={1.75} />} run={() => zoomBy(1 - ZOOM_STEP)} />
+          <ToolButton label="Fit to view" icon={<Maximize2 size={13} strokeWidth={1.75} />} run={fitToView} />
+          <ToolButton label="Reset view" icon={<RotateCcw size={13} strokeWidth={1.75} />} run={resetView} />
         </div>
       </TooltipGroup>
       <p className="label absolute left-10 bottom-4 hidden md:block pointer-events-none">Drag to rearrange, scroll to zoom, click a node to open it</p>

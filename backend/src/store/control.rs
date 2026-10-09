@@ -84,7 +84,7 @@ pub const AUTH_SESSION_REVOKE: ControlStmt = ControlStmt::new("app.auth_session_
 
 pub const AUTH_SESSION_LIST: ControlStmt = ControlStmt::new(
     "app.auth_session_list",
-    "SELECT id, user_agent, created_at, last_seen_at FROM session \
+    "SELECT id, sid, user_agent, created_at, last_seen_at FROM session \
      WHERE owner = $owner AND revoked = false ORDER BY last_seen_at DESC",
 );
 

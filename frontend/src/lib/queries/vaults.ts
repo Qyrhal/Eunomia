@@ -57,14 +57,29 @@ export const useCreateVault = () =>
   useVaultMutation(({ name, kind = "org" }: { name: string; kind?: VaultKind }) => call(createVault({ body: { name, kind } })));
 export const useRenameVault = () =>
   useVaultMutation(({ id, name }: { id: string; name: string }) => call(renameVault({ path: { vault_id: id }, body: { name } })));
-export const useDeleteVault = () => useVaultMutation((id: string) => call(deleteVault({ path: { vault_id: id } })));
+// Leaving or deleting ends your access: refresh everything except that vault's own members, which would now answer 403.
+const useEndAccessMutation = (fn: (id: string) => Promise<unknown>) => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: fn,
+    onSuccess: async (_d, id) => {
+      await qc.cancelQueries({ queryKey: vaultKeys.members(id) });
+      qc.removeQueries({ queryKey: vaultKeys.members(id) });
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: vaultKeys.all, predicate: (q) => q.queryKey[1] !== "members" || q.queryKey[2] !== id }),
+        qc.invalidateQueries({ queryKey: entityKeys.all }),
+      ]);
+    },
+  });
+};
+export const useDeleteVault = () => useEndAccessMutation((id: string) => call(deleteVault({ path: { vault_id: id } })));
 export const useInviteMember = () =>
   useVaultMutation(({ id, email, role = "member" }: { id: string; email: string; role?: VaultRole }) =>
     call(inviteMember({ path: { vault_id: id }, body: { email, role } })),
   );
 export const useRemoveMember = () =>
   useVaultMutation(({ id, email }: { id: string; email: string }) => call(removeMember({ path: { vault_id: id, email } })));
-export const useLeaveVault = () => useVaultMutation((id: string) => call(leaveVault({ path: { vault_id: id } })));
+export const useLeaveVault = () => useEndAccessMutation((id: string) => call(leaveVault({ path: { vault_id: id } })));
 // Accepting does not refresh by itself: the page plays its join animation first, then calls `useRefreshVaults()`.
 export const useAcceptInvitation = () => useMutation({ mutationFn: (id: string) => call(acceptInvitation({ path: { vault_id: id } })) });
 export function useRefreshVaults() {

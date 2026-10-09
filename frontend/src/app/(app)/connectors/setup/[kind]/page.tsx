@@ -11,7 +11,7 @@ import { useConnectors, useTestConnector, useUpdateConnector } from "@/lib/queri
 import { useSettings, useUpdateSettings } from "@/lib/queries/settings";
 import { useSyncSource } from "@/lib/queries/sources";
 import { CONNECTOR_META, CONNECTOR_ORDER, ConnectorTile, connectorStatus, type FieldDef } from "@/lib/connectorMeta";
-import ErrorLine, { failure } from "@/components/ErrorLine";
+import ErrorLine, { failure, type Failure } from "@/components/ErrorLine";
 import CopyButton from "@/components/bits/CopyButton";
 import SyncMark from "@/components/bits/SyncMark";
 import Tooltip from "@/components/bits/Tooltip";
@@ -114,10 +114,10 @@ function ConnectorSetup({ kind }: { kind: ConnectorKind }) {
   const [shown, setShown] = useState<Record<string, boolean>>({});
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<Failure | null>(null);
   const [savedFlash, setSavedFlash] = useState(false);
   const [testing, setTesting] = useState(false);
-  const [testResult, setTestResult] = useState<{ ok: boolean; error?: string } | null>(null);
+  const [testResult, setTestResult] = useState<{ ok: boolean; error?: Failure } | null>(null);
   const appSettings = useSettings(Boolean(meta.sourceKey)).data;
   const [intervalState, setIntervalState] = useState<"idle" | "saved" | "error">("idle");
   const me = useMe(Boolean(meta.webhooks)).data;
@@ -141,9 +141,9 @@ function ConnectorSetup({ kind }: { kind: ConnectorKind }) {
     setTestResult(null);
     try {
       const r = await testConnector.mutateAsync(kind);
-      setTestResult({ ok: r.ok, error: r.error ?? undefined });
+      setTestResult({ ok: r.ok, error: r.ok ? undefined : { message: r.error || "The provider gave no reason." } });
     } catch (e) {
-      setTestResult({ ok: false, error: (e as Error).message });
+      setTestResult({ ok: false, error: failure(e, "The test could not run.") });
     } finally {
       setTesting(false);
     }
@@ -180,7 +180,7 @@ function ConnectorSetup({ kind }: { kind: ConnectorKind }) {
     try {
       await updateConnector.mutateAsync({ kind, body });
     } catch (err) {
-      setSaveError((err as Error).message);
+      setSaveError(failure(err, "Could not save.", " Check the values and try again."));
       return;
     } finally {
       setSaving(false);
@@ -209,7 +209,7 @@ function ConnectorSetup({ kind }: { kind: ConnectorKind }) {
               : { ok: true, text: `Synced: ${r.written ?? 0} new or changed, ${r.skipped ?? 0} unchanged` },
       );
     } catch (e) {
-      setSyncMessage({ ok: false, text: `Sync failed: ${(e as Error).message}` });
+      setSyncMessage({ ok: false, text: `Sync failed: ${failure(e, "unknown error").message}` });
     } finally {
       setSyncing(false);
     }
@@ -236,14 +236,16 @@ function ConnectorSetup({ kind }: { kind: ConnectorKind }) {
       setConfirmDisconnect(false);
       setTestResult(null);
     } catch (err) {
-      setSaveError(`Could not disconnect: ${(err as Error).message}. Try again.`);
+      setSaveError(failure(err, "Could not disconnect.", " Try again."));
     } finally {
       setDisconnecting(false);
     }
   }
 
-  const statusText = connector === null ? "Checking…" : isDemo ? "Demo data" : connected ? "Connected" : "Not connected";
-  const statusTone = isDemo ? "var(--warning)" : connected ? "var(--good)" : "var(--ink-faint)";
+  // Credentials the provider just turned down are not "Connected", whatever was saved.
+  const rejected = connected && testResult !== null && !testResult.ok;
+  const statusText = connector === null ? "Checking…" : isDemo ? "Demo data" : rejected ? "Credentials rejected" : connected ? "Connected" : "Not connected";
+  const statusTone = isDemo ? "var(--warning)" : rejected ? "var(--critical)" : connected ? "var(--good)" : "var(--ink-faint)";
   const sourceKey = meta.sourceKey;
   const override = sourceKey ? appSettings?.sync_intervals?.[sourceKey] : undefined;
   const defaultInterval = sourceKey ? SOURCE_DEFAULT_INTERVAL[sourceKey] ?? 900 : 900;
@@ -276,7 +278,7 @@ function ConnectorSetup({ kind }: { kind: ConnectorKind }) {
 
       {isDemo && (
         <p className="text-[13px] rounded-[10px] px-4 py-3" style={{ background: "var(--surface-raised)", color: "var(--ink-dim)" }}>
-          Running on demo data seeded from Settings. Save a real token below to switch over, or clear the demo data from Settings.
+          Running on demo data. Save a real token below to switch over.
         </p>
       )}
 
@@ -351,9 +353,9 @@ function ConnectorSetup({ kind }: { kind: ConnectorKind }) {
         </div>
 
         {saveError && (
-          <p className="mx-5 mb-4 rounded-[7px] px-3 py-2 text-[12.5px]" style={{ background: "var(--critical-soft)", color: "var(--critical)" }} role="alert">
-            {saveError.startsWith("Could not") ? saveError : `Could not save: ${saveError}. Check the values and try again.`}
-          </p>
+          <div className="mx-5 mb-4">
+            <ErrorLine error={saveError} />
+          </div>
         )}
 
         <div className="px-5 py-3 flex items-center gap-2 flex-wrap border-t">
@@ -370,10 +372,11 @@ function ConnectorSetup({ kind }: { kind: ConnectorKind }) {
         </div>
 
         {testResult && !testResult.ok && (
-          <div className="mx-5 mb-4 rounded-[7px] px-3 py-2 text-[12.5px] flex flex-col gap-0.5" style={{ background: "var(--critical-soft)", color: "var(--critical)" }} role="alert">
-            <span className="font-medium">{meta.label} rejected the connection.</span>
-            <span className="font-mono text-[12px] break-words">{testResult.error || "The provider gave no reason."}</span>
-            <span style={{ color: "var(--ink-dim)" }}>Check the token is current and has the scope described above, then save it again.</span>
+          <div className="mx-5 mb-4">
+            <ErrorLine error={testResult.error}>
+              <span className="font-medium">{meta.label} rejected the connection.</span> {testResult.error?.message}{" "}
+              <span style={{ color: "var(--ink-dim)" }}>Check the token is current and has the scope described above, then save it again.</span>
+            </ErrorLine>
           </div>
         )}
       </form>

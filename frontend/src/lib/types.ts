@@ -15,7 +15,7 @@ export type ApiToken = {
   /** Null for a token that never expires. */
   expires_at: string | null;
 };
-export type Session = { id: string; user_agent: string; created_at: string | null; last_seen_at: string | null };
+export type Session = { id: string; user_agent: string; created_at: string | null; last_seen_at: string | null; current: boolean };
 
 export type OAuthGrant = {
   id: string;
@@ -34,6 +34,8 @@ export type AppSettings = {
   sync_intervals: Record<string, number>;
   theme: { mode?: "light" | "dark" | "system"; accent?: string };
   openai_api_key_set: boolean;
+  /** A usable model endpoint resolves for this user, so chat can answer. */
+  model_configured: boolean;
   openai_base_url: string;
   observations_mission: string;
   memory_skill: string;

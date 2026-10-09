@@ -175,6 +175,12 @@ pub async fn authenticate(state: &AppState, headers: &HeaderMap, mcp: bool) -> A
     Ok(None)
 }
 
+/// The `sid` of the session cookie on this request, if it carries a well-formed one.
+pub fn session_sid(secret: &str, headers: &HeaderMap) -> Option<String> {
+    let token = session_token(headers)?;
+    decode::<Claims>(&token, &DecodingKey::from_secret(secret.as_bytes()), &validation()).ok().map(|d| d.claims.sid)
+}
+
 pub async fn revoke_session_by_jwt(db: &ControlDb, secret: &str, token: &str) {
     let Ok(data) = decode::<Claims>(
         token,

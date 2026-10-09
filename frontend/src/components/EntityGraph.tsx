@@ -3,6 +3,7 @@
 import ErrorLine, { failure, type Failure } from "@/components/ErrorLine";
 import Select from "@/components/Select";
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import ConfirmButton from "@/components/ConfirmButton";
 import { ArrowLeft, ArrowRight, Pencil, Plus, Trash2, X } from "lucide-react";
 import GraphCanvas, { type CanvasInsets } from "./GraphCanvas";
 import AuthorTag from "./AuthorTag";
@@ -232,7 +233,6 @@ export default function EntityGraph({
 
   async function deleteSelected() {
     if (!selected) return;
-    if (!window.confirm(`Delete ${selected.name}? This also removes its memory and relations.`)) return;
     setBusy(true);
     setActionError(null);
     try {
@@ -269,7 +269,6 @@ export default function EntityGraph({
 
   async function deleteMemory(memoryId: string) {
     if (!selected) return;
-    if (!window.confirm("Delete this memory?")) return;
     setBusy(true);
     setActionError(null);
     try {
@@ -553,10 +552,10 @@ export default function EntityGraph({
                 <Pencil {...ICON} />
               </button>
             </Tooltip>
-            <Tooltip label="Delete">
-              <button className="btn btn-ghost btn-sm btn-icon w-[26px]" onClick={deleteSelected} aria-label="Delete" disabled={busy}>
+            <Tooltip label="Delete. Also removes its memory and relations">
+              <ConfirmButton label="Delete" confirmLabel="Delete" onConfirm={deleteSelected} disabled={busy} className="btn btn-ghost btn-sm btn-icon w-[26px]">
                 <Trash2 {...ICON} />
-              </button>
+              </ConfirmButton>
             </Tooltip>
             <Tooltip label="Close" shortcut="Esc">
               <button className="btn btn-ghost btn-sm btn-icon w-[26px]" onClick={() => setSelected(null)} aria-label="Close">
@@ -654,14 +653,15 @@ export default function EntityGraph({
                     )}
                   </div>
                   <Tooltip label="Delete memory">
-                    <button
-                      onClick={() => deleteMemory(m.id)}
-                      aria-label="Delete memory"
+                    <ConfirmButton
+                      label="Delete memory"
+                      confirmLabel="Delete"
+                      onConfirm={() => deleteMemory(m.id)}
                       disabled={busy}
                       className="btn btn-ghost btn-sm btn-icon w-[24px] h-[24px] shrink-0 -mr-1"
                     >
                       <X size={13} strokeWidth={1.75} />
-                    </button>
+                    </ConfirmButton>
                   </Tooltip>
                 </li>
               ))}

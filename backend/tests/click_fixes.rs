@@ -66,3 +66,30 @@ async fn vault_names_are_trimmed_bounded_and_unique() {
     assert_eq!(s, 200, "{b}");
     assert_ne!(a["name"], b["name"]);
 }
+
+#[tokio::test]
+async fn the_session_list_marks_the_one_in_use() {
+    let app = TestApp::new().await;
+    let first = app.session_cookie().await;
+    let second = app.session_cookie().await;
+    let (s, list) = common::http(&app.router, "GET", "/api/auth/sessions", None, None, Some(&second)).await.0;
+    assert_eq!(s, 200);
+    let rows = list.as_array().unwrap();
+    assert!(rows.len() >= 2);
+    assert_eq!(rows.iter().filter(|r| r["current"] == true).count(), 1, "{list}");
+    let (_, list) = common::http(&app.router, "GET", "/api/auth/sessions", None, None, Some(&first)).await.0;
+    let cur_second = rows.iter().find(|r| r["current"] == true).unwrap()["id"].clone();
+    let cur_first = list.as_array().unwrap().iter().find(|r| r["current"] == true).unwrap()["id"].clone();
+    assert_ne!(cur_first, cur_second);
+}
+
+#[tokio::test]
+async fn a_stored_openai_key_can_be_removed_and_settings_say_whether_a_model_is_usable() {
+    let app = TestApp::new().await;
+    let (_, s) = app.http("GET", "/api/settings", None, true).await;
+    assert_eq!((s["openai_api_key_set"].clone(), s["model_configured"].clone()), (json!(false), json!(false)), "{s}");
+    let (_, s) = app.http("PATCH", "/api/settings", Some(json!({"openai_api_key": "sk-test-123"})), true).await;
+    assert_eq!((s["openai_api_key_set"].clone(), s["model_configured"].clone()), (json!(true), json!(true)), "{s}");
+    let (_, s) = app.http("PATCH", "/api/settings", Some(json!({"openai_api_key": ""})), true).await;
+    assert_eq!((s["openai_api_key_set"].clone(), s["model_configured"].clone()), (json!(false), json!(false)), "{s}");
+}

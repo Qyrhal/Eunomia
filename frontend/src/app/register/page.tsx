@@ -5,7 +5,9 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Loader2 } from "lucide-react";
 import { useRegister } from "@/lib/queries/auth";
-import AuthShell, { FormError, LABEL, RevealToggle } from "../login/AuthShell";
+import ErrorLine, { failure, type Failure } from "@/components/ErrorLine";
+import { keepNext } from "@/lib/nextPath";
+import AuthShell, { LABEL, RevealToggle } from "../login/AuthShell";
 
 const MISMATCH = "Passwords don't match.";
 
@@ -16,27 +18,27 @@ export default function RegisterPage() {
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [show, setShow] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<Failure | null>(null);
   const [busy, setBusy] = useState(false);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     if (password !== confirmPassword) {
-      setError(MISMATCH);
+      setError({ message: MISMATCH });
       return;
     }
     setBusy(true);
     setError(null);
     try {
       await register.mutateAsync({ email, password });
-      router.replace("/onboarding");
+      router.replace(keepNext("/onboarding"));
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not create the account. Try again.");
+      setError(failure(err, "Could not create the account. Try again."));
       setBusy(false);
     }
   }
 
-  const mismatch = error === MISMATCH;
+  const mismatch = error?.message === MISMATCH;
 
   return (
     <AuthShell>
@@ -113,7 +115,7 @@ export default function RegisterPage() {
           />
         </div>
 
-        {error && <FormError message={error} />}
+        {error && <ErrorLine error={error} />}
 
         <button type="submit" disabled={busy} aria-busy={busy} className="btn btn-primary mt-1 h-9 w-full">
           {busy && <Loader2 size={14} strokeWidth={1.75} className="animate-spin" aria-hidden />}
@@ -122,7 +124,7 @@ export default function RegisterPage() {
 
         <p className="mt-2 text-[13px]" style={{ color: "var(--ink-faint)" }}>
           Already have an account?{" "}
-          <Link href="/login" className="font-medium underline" style={{ color: "var(--accent-text)" }}>
+          <Link href="/login" onClick={(e) => { e.preventDefault(); router.push(keepNext("/login")); }} className="font-medium underline" style={{ color: "var(--accent-text)" }}>
             Sign in
           </Link>
         </p>

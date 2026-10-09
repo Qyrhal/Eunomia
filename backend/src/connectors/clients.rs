@@ -71,8 +71,20 @@ fn provider_error(url: &str, status: StatusCode, body: &str) -> AppError {
         500..=599 => " (provider-side error -- retried on the next sync)",
         _ => "",
     };
-    let snippet: String = body.chars().take(200).collect();
+    let snippet: String = reason(body).unwrap_or_else(|| body.chars().take(200).collect());
     AppError::new(StatusCode::BAD_GATEWAY, format!("{} returned HTTP {}{hint}: {}", host(url), status.as_u16(), snippet.trim()))
+}
+
+/// The provider's own words from a JSON error body (`message`, `error.message`, `error`, `detail`, `errors[0].message`), if it has any.
+fn reason(body: &str) -> Option<String> {
+    let v: Value = serde_json::from_str(body).ok()?;
+    let text = |v: &Value| v.as_str().filter(|s| !s.trim().is_empty()).map(str::to_string);
+    let found = text(&v["message"])
+        .or_else(|| text(&v["error"]["message"]))
+        .or_else(|| text(&v["error"]))
+        .or_else(|| text(&v["detail"]))
+        .or_else(|| text(&v["errors"][0]["message"]))?;
+    Some(found.chars().take(200).collect())
 }
 
 fn retry_after(headers: &HeaderMap) -> Option<u64> {
@@ -527,6 +539,12 @@ mod tests {
         let e = provider_error("https://api.github.com/issues", StatusCode::UNAUTHORIZED, "{\"message\":\"Bad credentials\"}");
         assert!(e.message.starts_with("api.github.com returned HTTP 401 (check the token"), "{}", e.message);
         assert!(e.message.contains("Bad credentials"));
+        // a JSON body is reduced to the provider's message, not echoed raw
+        assert!(!e.message.contains('{'), "{}", e.message);
+        let plain = provider_error("https://x.test/a", StatusCode::BAD_GATEWAY, "upstream down");
+        assert!(plain.message.ends_with(": upstream down"), "{}", plain.message);
+        let nested = provider_error("https://x.test/a", StatusCode::BAD_REQUEST, "{\"error\":{\"message\":\"bad model\"}}");
+        assert!(nested.message.ends_with(": bad model"), "{}", nested.message);
     }
 
     #[test]

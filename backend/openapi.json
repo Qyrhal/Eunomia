@@ -5139,11 +5139,16 @@
           "id",
           "user_agent",
           "created_at",
-          "last_seen_at"
+          "last_seen_at",
+          "current"
         ],
         "properties": {
           "created_at": {
             "type": "string"
+          },
+          "current": {
+            "type": "boolean",
+            "description": "This is the session the request itself is using."
           },
           "id": {
             "type": "string"
@@ -5164,6 +5169,7 @@
           "sync_intervals",
           "theme",
           "openai_api_key_set",
+          "model_configured",
           "openai_base_url",
           "observations_mission",
           "memory_skill",
@@ -5181,6 +5187,10 @@
           },
           "memory_skill_custom": {
             "type": "boolean"
+          },
+          "model_configured": {
+            "type": "boolean",
+            "description": "A usable model endpoint resolves for this user (their key, the server's, or a keyless local endpoint): chat can answer."
           },
           "observations_mission": {
             "type": "string"

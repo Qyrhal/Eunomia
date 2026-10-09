@@ -33,7 +33,7 @@ export function SessionsSection() {
               <th>Device</th>
               <th className="w-[120px]">Signed in</th>
               <th className="w-[120px]">Last seen</th>
-              <th className="w-[110px]">
+              <th className="w-[220px]">
                 <span className="sr-only">Actions</span>
               </th>
             </tr>
@@ -55,6 +55,7 @@ export function SessionsSection() {
                     <span className="truncate max-w-[360px]" title={s.user_agent}>
                       {s.user_agent || "Unknown device"}
                     </span>
+                    {s.current && <span className="pill shrink-0">This device</span>}
                   </span>
                 </td>
                 <td className="font-mono text-[12px]" style={{ color: "var(--ink-dim)" }}>
@@ -64,7 +65,7 @@ export function SessionsSection() {
                   {relativeTime(s.last_seen_at)}
                 </td>
                 <td className="text-right">
-                  <RevokeButton label="this session" onRevoke={() => revoke(s.id)} />
+                  <RevokeButton label="this session" onRevoke={() => revoke(s.id)} warn={s.current ? "Signs you out here." : undefined} />
                 </td>
               </tr>
             ))}
