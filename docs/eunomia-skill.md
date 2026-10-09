@@ -38,9 +38,17 @@ When you learn how a codebase fits together, map it with
 `reflect` gives a cited answer. If it returns `mode: "recall_only"`, write the
 answer yourself from the numbered memories and cite them like [1].
 
-## Scope
+## Scope: separate vaults for separate areas
 
-Everything defaults to the user's personal vault. Pass `vault_id` when the user
-says something belongs to a shared/team vault (`vault_list` shows them).
+Everything defaults to the user's personal vault. If the user keeps
+separate vaults (`vault_list` shows them), for example for different
+projects, services, clients, teams or their homelab, keep each area's memory in its vault:
+
+- When the work clearly belongs to one of those areas, pass `vault_id` with
+  the vault's **name** (e.g. `vault_id: "Acme"`) to `recall`, `memory_write`,
+  `entities_search`, etc.
+- Don't create vaults on your own. Use `vault_create` when the user asks for
+  a new area or agrees to one.
+- Don't mix one vault's facts into another or into the personal vault.
 
 For anything else, call `docs`.

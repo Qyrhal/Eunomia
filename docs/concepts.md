@@ -2,10 +2,15 @@
 
 ## Vaults
 
-A vault is a scope for entities and memories. Everyone has a **personal
-vault** (the default for every tool). Org vaults are shared: invite people
-by email, and they accept from the Vaults page. Roles are `owner` and
-`member`.
+A vault is a separate scope for entities and memories. Everyone has a
+**personal vault** (the default for every tool). Make more for anything you
+want kept apart, like a project or service, a client, a team or your homelab. Invite people to
+share a vault, and they accept from the Vaults page. Roles are `owner` and `member`.
+
+Agents can name a vault instead of using its id: every tool's `vault_id`
+takes a name, e.g. `memory_write` with `vault_id: "Acme"`. The memory skill
+tells agents to keep each area's memory in its own vault, and to create
+vaults only when you ask.
 
 - **Clone** copies a vault into a new one you own.
 - **Merge** takes two vaults and creates a **new** vault from copies of
@@ -48,11 +53,11 @@ results that several arms agree on and recent ones:
 4. **graph**: entities named in the question, then their memories and linked records
 5. **temporal**: an explicit `time_range`
 
-## The graph (3D)
+## The graph
 
-Entities → Graph shows the entity graph in 3D. Drag to orbit, scroll to
-zoom, and click a node to open it. The Code page shows the code graph the
-same way.
+Entities → Graph shows the entity graph. Drag nodes to rearrange them,
+scroll or use the buttons to zoom, and click a node to open it. The Code
+page shows the code graph the same way.
 
 ## The vector cloud
 

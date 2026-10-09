@@ -1,7 +1,8 @@
 "use client";
 
 import ErrorLine, { failure } from "@/components/ErrorLine";
-import { useRef, useState } from "react";
+import { Suspense, useRef } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useSettings } from "@/lib/queries/settings";
 
 import { TokensSection } from "./TokensSection";
@@ -24,24 +25,28 @@ type TabId = (typeof TABS)[number]["id"];
 
 const isTab = (t: string | null): t is TabId => TABS.some((x) => x.id === t);
 
+// useSearchParams needs a Suspense boundary for the static build.
 export default function SettingsPage() {
-  // ?tab=updates (the sidebar's "Update available" link) opens that tab; any tab id works
-  const [tab, setTab] = useState<TabId>(() => {
-    if (typeof window === "undefined") return "general";
-    const q = new URLSearchParams(window.location.search).get("tab");
-    return isTab(q) ? q : "general";
-  });
+  return (
+    <Suspense>
+      <Settings />
+    </Suspense>
+  );
+}
+
+function Settings() {
+  // The tab lives in the URL (?tab=updates), so links to it, like the sidebar's
+  // "Update available" badge, work from any page, this one included.
+  const router = useRouter();
+  const requested = useSearchParams().get("tab");
+  const tab: TabId = isTab(requested) ? requested : "general";
   const settingsQuery = useSettings();
   const settings = settingsQuery.data ?? null;
   const loadError = settingsQuery.isError ? failure(settingsQuery.error, "Could not load settings.", " Check that the Eunomia API is running, then reload this page.") : null;
   const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
 
   function choose(id: TabId) {
-    setTab(id);
-    const url = new URL(window.location.href);
-    if (id === "general") url.searchParams.delete("tab");
-    else url.searchParams.set("tab", id);
-    window.history.replaceState(null, "", url);
+    router.replace(id === "general" ? "/settings" : `/settings?tab=${id}`, { scroll: false });
   }
 
   function onKey(e: React.KeyboardEvent, i: number) {

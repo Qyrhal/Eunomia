@@ -39,7 +39,7 @@ pub(super) fn register_all(registry: &mut HashMap<&'static str, ToolSpec>) {
                 "kind": {"type": "string", "enum": KINDS},
                 "limit": {"type": "integer"},
                 "offset": {"type": "integer"},
-                "vault_id": {"type": "string", "description": "search this vault instead of your personal one"},
+                "vault_id": {"type": "string", "description": "search this vault instead of your personal one (a vault id or its name, e.g. \"Acme\")"},
             },
             "required": ["query"],
         }),
@@ -110,7 +110,7 @@ pub(super) fn register_all(registry: &mut HashMap<&'static str, ToolSpec>) {
                     "items": {"type": "string", "enum": KINDS},
                     "description": "restrict to these entity kinds (e.g. just the code kinds); omit for the full graph",
                 },
-                "vault_id": {"type": "string", "description": "use this vault instead of your personal one"},
+                "vault_id": {"type": "string", "description": "use this vault instead of your personal one (a vault id or its name, e.g. \"Acme\")"},
             },
         }),
         Arc::new(|state, owner, args| {

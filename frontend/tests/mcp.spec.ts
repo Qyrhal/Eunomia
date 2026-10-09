@@ -183,6 +183,29 @@ test.describe("MCP server", () => {
     expect(trimmed.length).toBeLessThanOrEqual(800);
   });
 
+  test("vaults keep separate areas apart and can be used by name", async ({ request }) => {
+    const token = await newToken(request);
+    let n = 0;
+    const call = async (name: string, args: object) =>
+      JSON.parse(
+        (await (await rpc(request, token, { jsonrpc: "2.0", id: ++n, method: "tools/call", params: { name, arguments: args } })).json())
+          .result.content[0].text
+      );
+    expect((await call("vault_create", { name: "Garden Project" })).name).toBe("Garden Project");
+    await call("vault_create", { name: "Book Club" });
+
+    // write and read by name -- no vault ids needed
+    expect((await call("memory_write", { subject_name: "Tomatoes", subject_kind: "organisation", text: "Tomatoes need staking by June.", vault_id: "garden project" })).memory).toBeTruthy();
+    await call("memory_write", { subject_name: "Dune", subject_kind: "organisation", text: "The club reads Dune in June.", vault_id: "Book Club" });
+    const garden = (await call("recall", { query: "what happens in June?", vault_id: "Garden Project" })).results.map((r: { text: string }) => r.text);
+    expect(garden).toEqual(["Tomatoes need staking by June."]); // nothing from the other vault
+    const personal = (await call("recall", { query: "what happens in June?" })).results;
+    expect(personal).toEqual([]); // nor in the personal vault
+
+    expect((await call("recall", { query: "June", vault_id: "Nope" })).error).toContain("no vault named");
+    expect((await call("vault_rename", { vault_id: "Book Club", name: "Reading Group" })).name).toBe("Reading Group");
+  });
+
   test("initialize tells the agent it is the model", async ({ request }) => {
     const token = await newToken(request);
     const init = await (

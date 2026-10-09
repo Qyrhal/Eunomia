@@ -32,7 +32,7 @@ pub(super) fn register_all(registry: &mut HashMap<&'static str, ToolSpec>) {
                 "name": {"type": "string"},
                 "parent_id": {"type": "string", "description": "e.g. the repository a file belongs to"},
                 "summary": {"type": "string"},
-                "vault_id": {"type": "string", "description": "write into this vault instead of your personal one"},
+                "vault_id": {"type": "string", "description": "write into this vault instead of your personal one (a vault id or its name, e.g. \"Acme\")"},
             },
             "required": ["kind", "name"],
         }),

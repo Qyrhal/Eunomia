@@ -29,7 +29,8 @@ use tracing::{field::Empty, Instrument};
 
 use crate::audit::{self, Event};
 use crate::authz;
-use crate::pool::ControlDb;
+use crate::pool::{ControlDb, OrgDb};
+use crate::vaults::service::{list_my_vaults, VaultWithRole};
 use crate::models_user::User;
 use crate::scopes;
 use crate::store;
@@ -119,8 +120,8 @@ pub fn description(name: &str) -> &'static str {
         "memory_delete" => "Delete one memory by id. Irreversible.",
         "entity_delete" => "Delete an entity and its memories and relations. Irreversible.",
         "entity_merge" => "Merge a duplicate entity (`loser_id`) into another of the same kind (`winner_id`): memories and relations move to the winner, the loser's name becomes an alias, and the loser is deleted.",
-        "vault_create" => "Create a vault (a shared scope for entities and memories); the caller becomes its owner.",
-        "vault_list" => "List the vaults the user belongs to, with their role in each. The personal vault is the default scope for every other tool.",
+        "vault_create" => "Create a vault: a separate scope for entities and memories, for whatever the user wants kept apart (a project or service, a client, a team, a homelab, ...). Kind `org` = any non-personal vault. The caller owns it. Every tool's `vault_id` accepts the vault's name, e.g. `vault_id: \"Acme\"`.",
+        "vault_list" => "List the vaults the user belongs to (personal plus any they've made or joined), with their role in each. The personal vault is the default scope for every other tool; pass `vault_id` (an id or the vault's name) to work in another.",
         "vault_clone" => "Copy a vault's entities and memories into a new vault owned by the caller.",
         "vault_merge" => "Merge two vaults you belong to into a NEW vault: both are copied into it (the originals are never changed), and entities with the same kind and name are folded together -- aliases unioned, identical facts kept once, relations deduplicated.",
         "vault_invite" => "Invite a registered user by email to a vault (owner only). They must accept the invitation before getting access.",
@@ -259,7 +260,7 @@ pub fn all_tools() -> &'static HashMap<&'static str, ToolSpec> {
 /// anything not in [`READ_ONLY_TOOLS`]. Returns `{"error": "unknown tool
 /// ..."}`` for a name that isn't registered, rather than a 404 -- the REST router is the one that turns an unknown
 /// name into a 404 before ever calling this.
-pub async fn call(app: &AppState, user: &User, name: &str, args: Value) -> AppResult<Value> {
+pub async fn call(app: &AppState, user: &User, name: &str, mut args: Value) -> AppResult<Value> {
     let owner = &user.id;
     let tools = all_tools();
     let Some(spec) = tools.get(name) else {
@@ -274,6 +275,9 @@ pub async fn call(app: &AppState, user: &User, name: &str, args: Value) -> AppRe
         return Err(e);
     }
     let state = &app.org(&user.org).await?;
+    if let Err(e) = resolve_vault_names(&state.db, owner, &mut args).await {
+        return Ok(json!({ "error": e }));
+    }
 
     let vault = args.get("vault_id").and_then(Value::as_str).unwrap_or("personal").to_string();
     let span = tracing::info_span!("tool.call", tool = name, vault = %vault, outcome = Empty, duration_ms = Empty);
@@ -300,6 +304,41 @@ pub async fn call(app: &AppState, user: &User, name: &str, args: Value) -> AppRe
     let source = source.lock().unwrap().take();
     record_failure(state, owner, name, captured, &result, source).await;
     result
+}
+
+const VAULT_ARGS: &[&str] = &["vault_id", "vault_id_a", "vault_id_b"];
+
+/// A vault given by name ("Acme", "personal") -> its id, among the caller's
+/// vaults, case-insensitively. Ids (`vault:...`) pass through unchanged.
+fn match_vault(given: &str, vaults: &[VaultWithRole]) -> Result<String, String> {
+    if given.starts_with("vault:") {
+        return Ok(given.to_string());
+    }
+    let want = given.trim().to_lowercase();
+    let hits: Vec<&VaultWithRole> = vaults.iter().filter(|v| v.name.to_lowercase() == want || (v.kind == "personal" && want == "personal")).collect();
+    match hits.as_slice() {
+        [one] => Ok(one.id.clone()),
+        [] => Err(format!("no vault named {given:?}: vault_list shows yours, vault_create makes one")),
+        many => Err(format!("several vaults are named {given:?}; pass one of these ids: {}", many.iter().map(|v| v.id.as_str()).collect::<Vec<_>>().join(", "))),
+    }
+}
+
+/// Lets every tool take a vault by name wherever it takes a vault id, so an
+/// agent can keep separate areas (projects, clients, ...) apart without tracking ids.
+/// `list_my_vaults` already honours a vault-restricted token, so a name outside it never resolves.
+async fn resolve_vault_names(db: &OrgDb, owner: &RecordId, args: &mut Value) -> Result<(), String> {
+    let Some(obj) = args.as_object_mut() else { return Ok(()) };
+    if !VAULT_ARGS.iter().any(|k| obj.get(*k).and_then(Value::as_str).is_some_and(|v| !v.starts_with("vault:"))) {
+        return Ok(());
+    }
+    let vaults = list_my_vaults(db, owner).await.map_err(|e| e.message)?;
+    for key in VAULT_ARGS {
+        if let Some(given) = obj.get(*key).and_then(Value::as_str) {
+            let id = match_vault(given, &vaults)?;
+            obj.insert(key.to_string(), Value::String(id));
+        }
+    }
+    Ok(())
 }
 
 /// A capsule for any failure but bad input, so `eunomia replay` can reproduce it.
@@ -347,6 +386,22 @@ async fn run_tool(state: &OrgState, owner: &RecordId, name: &str, spec: &ToolSpe
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn vault(id: &str, name: &str, kind: &str) -> VaultWithRole {
+        VaultWithRole { id: id.into(), name: name.into(), kind: kind.into(), created_at: None, role: "owner".into() }
+    }
+
+    #[test]
+    fn vaults_resolve_by_name_case_insensitively() {
+        let vs = [vault("vault:p", "Midhun", "personal"), vault("vault:a", "Acme Corp", "org"), vault("vault:b", "Beta", "org")];
+        assert_eq!(match_vault("acme corp", &vs).unwrap(), "vault:a");
+        assert_eq!(match_vault(" Beta ", &vs).unwrap(), "vault:b");
+        assert_eq!(match_vault("personal", &vs).unwrap(), "vault:p");
+        assert_eq!(match_vault("vault:zzz", &vs).unwrap(), "vault:zzz"); // ids pass through untouched
+        assert!(match_vault("Gamma", &vs).unwrap_err().contains("no vault named"));
+        let dup = [vault("vault:1", "Acme", "org"), vault("vault:2", "acme", "org")];
+        assert!(match_vault("Acme", &dup).unwrap_err().contains("vault:1, vault:2"));
+    }
 
     #[test]
     fn every_tool_has_the_intended_scope() {

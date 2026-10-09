@@ -2,10 +2,9 @@
 
 import ErrorLine, { failure, type Failure } from "@/components/ErrorLine";
 import Select from "@/components/Select";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { forceCenter, forceLink, forceManyBody, forceSimulation } from "d3-force-3d";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ArrowLeft, ArrowRight, Pencil, Plus, Trash2, X } from "lucide-react";
-import Scene3D, { type SceneInsets } from "./Scene3D";
+import GraphCanvas, { type CanvasInsets } from "./GraphCanvas";
 import AuthorTag from "./AuthorTag";
 import SyncMark from "./bits/SyncMark";
 import Tooltip, { TooltipGroup } from "./bits/Tooltip";
@@ -45,24 +44,6 @@ const KIND_LABEL: Record<EntityKind, string> = {
 };
 
 const ALL_KINDS: EntityKind[] = ["person", "organisation", "location", "repository", "file", "symbol"];
-
-const KIND_SIZE: Record<EntityKind, number> = { person: 1, organisation: 1.15, location: 1, repository: 1.4, file: 0.85, symbol: 0.7 };
-
-// Static force layout on a plane, run to completion once per graph (KISS:
-// view the result rather than simulate live). Flat like a canvas: a 3D layout
-// let nodes at different depths project onto each other.
-function layout(graph: EntityGraphData): Map<string, { x: number; y: number; z: number }> {
-  const nodes = graph.nodes.map((n) => ({ id: n.id }));
-  const ids = new Set(nodes.map((n) => n.id));
-  const links = graph.edges.filter((e) => ids.has(e.source) && ids.has(e.target)).map((e) => ({ source: e.source, target: e.target }));
-  forceSimulation(nodes, 2)
-    .force("link", forceLink<{ id: string }>(links).id((n) => n.id).distance(60))
-    .force("charge", forceManyBody().strength(-180))
-    .force("center", forceCenter())
-    .stop()
-    .tick(300);
-  return new Map(nodes.map((n: { id: string; x?: number; y?: number }) => [n.id, { x: n.x ?? 0, y: n.y ?? 0, z: 0 }]));
-}
 
 // Compact age for a timestamp: "now", "4m", "3h", "2d", then a date.
 function age(iso?: string): string | null {
@@ -143,7 +124,7 @@ export default function EntityGraph({
   // px of canvas covered by the floating header/toolbar (top) and, on desktop,
   // the inspector column (right), so the camera fits nodes into what is left.
   const chromeRef = useRef<HTMLDivElement>(null);
-  const [insets, setInsets] = useState<SceneInsets>({ top: 0, right: 0, bottom: 0, left: 0 });
+  const [insets, setInsets] = useState<CanvasInsets>({ top: 0, right: 0, bottom: 0, left: 0 });
   useEffect(() => {
     const el = chromeRef.current;
     if (!el) return;
@@ -180,22 +161,6 @@ export default function EntityGraph({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [selected, showCreate, editing]);
-
-  const positions = useMemo(() => (graph ? layout(graph) : new Map()), [graph]);
-  // Stable across selection, so selecting a node never rebuilds the scene (and its pick ring, reticle, edge fade).
-  const points = useMemo(
-    () =>
-      (graph?.nodes ?? [])
-        .filter((n) => visibleKinds.has(n.kind))
-        .map((n) => ({
-          id: n.id,
-          ...(positions.get(n.id) ?? { x: 0, y: 0, z: 0 }),
-          color: KIND_COLOR[n.kind],
-          size: KIND_SIZE[n.kind],
-          label: n.name,
-        })),
-    [graph, positions, visibleKinds],
-  );
 
   async function selectNode(id: string) {
     setEditing(false);
@@ -335,7 +300,7 @@ export default function EntityGraph({
 
   // Everything floats over one full-bleed canvas: header and toolbar top left
   // at the same page inset as every other route (main's px-4 py-6, md px-10
-  // py-8), inspector top right, zoom bottom right (inside Scene3D).
+  // py-8), inspector top right, zoom bottom right (inside GraphCanvas).
   const frame = (toolbar: ReactNode, content: ReactNode, inspector?: ReactNode, aside?: ReactNode) => (
     <div className="absolute inset-0 overflow-hidden">
       <div className="absolute inset-0">{content}</div>
@@ -796,18 +761,17 @@ export default function EntityGraph({
       {frame(
         toolbar,
         <>
-          <Scene3D
-            points={points}
-            links={graph.edges}
-            labels
-            flat
+          <GraphCanvas
+            nodes={graph.nodes}
+            edges={graph.edges}
+            kindColor={KIND_COLOR}
+            visibleKinds={visibleKinds}
             insets={insets}
-            zoomControls
             selectedId={selected?.id}
             onSelect={selectNode}
+            myEmail={myEmail}
             ariaLabel="Entity relationship graph"
           />
-          <p className="label absolute left-10 bottom-4 hidden md:block pointer-events-none">Drag to orbit, scroll to zoom, click a node to open it</p>
         </>,
         inspector,
         guide && graph.nodes.length < SPARSE && (

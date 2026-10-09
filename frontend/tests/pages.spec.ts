@@ -37,3 +37,23 @@ test("every page and tab renders cleanly", async ({ page }) => {
   await expect(page.getByRole("group", { name: "Vault layers" })).toBeVisible();
   expect(errors).toEqual([]);
 });
+
+test("the sidebar's update badge opens Settings → Updates, from any page including Settings", async ({ page }) => {
+  await page.route("**/api/update/status", (route) =>
+    route.fulfill({
+      json: { configured: true, current_version: "v1.0.0", latest_version: "v9.9.9", update_available: true, checked_at: new Date().toISOString(), applying: false, error: null },
+    })
+  );
+  await registerAndOnboard(page, uniqueEmail("badge"));
+  const badge = page.getByRole("link", { name: /Update available · v9\.9\.9/ });
+
+  await badge.click(); // from the dashboard
+  await expect(page.getByRole("tab", { name: "Updates" })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByText("v9.9.9 is available")).toBeVisible();
+
+  await page.getByRole("tab", { name: "General" }).click();
+  await expect(page).toHaveURL(/\/settings$/);
+  await badge.click(); // already on Settings: must still switch tabs
+  await expect(page.getByRole("tab", { name: "Updates" })).toHaveAttribute("aria-selected", "true");
+  await expect(page).toHaveURL(/tab=updates/);
+});

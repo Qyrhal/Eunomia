@@ -706,7 +706,7 @@ function CreateVaultForm({
           id="new-vault-name"
           autoFocus
           className="field h-8 px-3 text-[13px] flex-1 min-w-[180px]"
-          placeholder="Vault name (e.g. Acme Team)"
+          placeholder="Vault name, e.g. a project, service, client, team or homelab"
           value={name}
           onChange={(e) => setName(e.target.value)}
           onKeyDown={(e) => e.key === "Escape" && onCancel()}
@@ -1005,9 +1005,10 @@ export default function VaultsPage() {
             className="text-[13px] mt-1.5 max-w-[62ch]"
             style={{ color: "var(--ink-dim)" }}
           >
-            A vault is a scope of shared entities and memory. Your personal
-            vault is always private. Invite people to an org vault and every
-            agent they connect reads and writes the same memory.
+            A vault is a separate scope of entities and memory. Your personal
+            vault is always private. Make more for anything you want kept apart
+            (a project or service, a client, a team, your homelab), and share
+            one by inviting people. Agents can refer to a vault by its name.
           </p>
         </div>
         <button
@@ -1016,7 +1017,7 @@ export default function VaultsPage() {
           className="btn btn-primary"
         >
           <Plus {...ICON} />
-          New org vault
+          New vault
         </button>
       </header>
 
@@ -1039,7 +1040,7 @@ export default function VaultsPage() {
                 aria-hidden
                 style={{ color: "var(--ink-faint)" }}
               />
-              Shared and organisation
+              Other vaults
               {vaults && <span className="label font-mono">{org.length}</span>}
             </h2>
             {creating && (
@@ -1057,8 +1058,8 @@ export default function VaultsPage() {
                     className="text-[13px]"
                     style={{ color: "var(--ink-dim)" }}
                   >
-                    No shared vaults yet. Create one to share memory with your
-                    team, or accept an invite.
+                    No other vaults yet. Create one for anything you want kept
+                    apart, or accept an invite.
                   </p>
                   <button
                     onClick={() => setCreating(true)}
