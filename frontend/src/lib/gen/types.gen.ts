@@ -550,8 +550,10 @@ export type SpendByDay = {
 };
 
 /**
- * Outcome of a sync or webhook ingest: an ingest report, or `source` + `error`
- * when the sync failed. Schema only: the handlers pass the report through.
+ * Outcome of a sync or webhook ingest: an ingest report, `source` + `error` when the sync failed, or
+ * `status: "already_running"` when a sync of that source is already queued or running, or
+ * `status: "queued"` when it was queued but no worker finished it within the wait. Schema only:
+ * the handlers pass the report through.
  */
 export type SyncReport = {
     error?: string | null;
@@ -559,6 +561,7 @@ export type SyncReport = {
     failed?: number | null;
     skipped?: number | null;
     source: string;
+    status?: string | null;
     written?: number | null;
 };
 

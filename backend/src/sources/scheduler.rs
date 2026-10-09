@@ -99,6 +99,11 @@ impl Drop for Claim {
     }
 }
 
+/// The job is queued but no worker picked it up within the wait (e.g. an API-only node).
+fn queued(key: &str) -> Value {
+    json!({"source": key, "status": "queued"})
+}
+
 fn already_running(key: &str) -> Value {
     json!({"source": key, "status": "already_running"})
 }
@@ -210,7 +215,7 @@ struct StatusReport {
 
 /// "Sync now": queue a `sync` job and wait for the result, so a manual run gets the same lease, claim
 /// cap and retry rules as a scheduled one. If a sync job for the pair is already waiting or running (or
-/// the wait runs out), answers `{"status": "already_running"}` instead of starting another.
+/// answers `{"status": "already_running"}` instead of starting another. If no worker finishes it within the wait, answers `{"status": "queued"}`.
 pub async fn sync_now(state: &OrgState, owner: &RecordId, key: &str) -> AppResult<Value> {
     let Some(queueing) = Claim::take(&QUEUEING, owner, key) else { return Ok(already_running(key)) };
     if sync_active(state, owner, key).await? {
@@ -237,7 +242,7 @@ pub async fn sync_now(state: &OrgState, owner: &RecordId, key: &str) -> AppResul
             });
         }
     }
-    Ok(already_running(key))
+    Ok(queued(key))
 }
 
 /// One source that should sync now. `period` (the source's interval) sizes the idempotency window.

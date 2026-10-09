@@ -204,7 +204,9 @@ function ConnectorSetup({ kind }: { kind: ConnectorKind }) {
           ? { ok: false, text: `Sync failed: ${r.error}` }
           : r.status === "already_running"
             ? { ok: true, text: "A sync is already running; try again in a moment" }
-            : { ok: true, text: `Synced: ${r.written ?? 0} new or changed, ${r.skipped ?? 0} unchanged` },
+            : r.status === "queued"
+              ? { ok: true, text: "Sync queued. It will run as soon as a worker is free" }
+              : { ok: true, text: `Synced: ${r.written ?? 0} new or changed, ${r.skipped ?? 0} unchanged` },
       );
     } catch (e) {
       setSyncMessage({ ok: false, text: `Sync failed: ${(e as Error).message}` });

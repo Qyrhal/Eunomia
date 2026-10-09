@@ -117,7 +117,8 @@ struct SourceOut {
 }
 
 /// Outcome of a sync or webhook ingest: an ingest report, `source` + `error` when the sync failed, or
-/// `status: "already_running"` when a sync of that source is already queued or running. Schema only:
+/// `status: "already_running"` when a sync of that source is already queued or running, or
+/// `status: "queued"` when it was queued but no worker finished it within the wait. Schema only:
 /// the handlers pass the report through.
 #[derive(Serialize, utoipa::ToSchema)]
 #[allow(dead_code)]

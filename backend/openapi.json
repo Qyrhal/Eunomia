@@ -5263,7 +5263,7 @@
       },
       "SyncReport": {
         "type": "object",
-        "description": "Outcome of a sync or webhook ingest: an ingest report, or `source` + `error`\nwhen the sync failed. Schema only: the handlers pass the report through.",
+        "description": "Outcome of a sync or webhook ingest: an ingest report, `source` + `error` when the sync failed, or\n`status: \"already_running\"` when a sync of that source is already queued or running, or\n`status: \"queued\"` when it was queued but no worker finished it within the wait. Schema only:\nthe handlers pass the report through.",
         "required": [
           "source"
         ],
@@ -5299,6 +5299,12 @@
           },
           "source": {
             "type": "string"
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "written": {
             "type": [
