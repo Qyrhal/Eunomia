@@ -2,192 +2,272 @@
 
 # Eunomia
 
-**A Super Intelligence Agent AI memory system, built for enterprise scale in Rust.**
+```bash
+curl -fsSL https://midhunkumar05.github.io/eunomia/install.sh | bash
+```
 
-Vaults · an entity/memory graph · external connectors · a tool-calling chat agent —
-all on one [SurrealDB](https://surrealdb.com/) schema, all exposed identically to the UI and the agent.
+**Vaults for persistent, shared AI memory.**
+
+Give each project, client or team its own memory vault. Keep its people,
+facts and decisions together, share it with collaborators, and let your
+agents pick up that context across sessions.
 
 [![CI](https://github.com/Qyrhal/Eunomia/actions/workflows/ci.yml/badge.svg)](https://github.com/Qyrhal/Eunomia/actions/workflows/ci.yml)
 [![Latest release](https://img.shields.io/github/v/release/Qyrhal/Eunomia?label=release)](https://github.com/Qyrhal/Eunomia/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Rust](https://img.shields.io/badge/backend-Rust%20%2F%20Axum-dea584)](backend)
-[![Next.js](https://img.shields.io/badge/frontend-Next.js%20%2F%20TypeScript-000000)](frontend)
 
-```bash
-curl -fsSL https://midhunkumar05.github.io/eunomia/install.sh | bash
-```
+![Scattered knowledge becoming a connected memory graph](docs/images/eunomia-cover.png)
 
-[Install](#install) · [Quickstart](docs/quickstart.md) · [What's in it](#whats-in-it) · [Docs](docs/README.md) · [Install page](https://midhunkumar05.github.io/eunomia/)
+[Vaults](#vaults-are-the-core) · [Get started](#get-started) · [How it works](#how-it-works) · [Connect an agent](docs/agents.md) · [Documentation](docs/README.md)
 
 </div>
 
----
+## Why Eunomia?
 
-## Install
+An agent's conversation ends; the things it learned should stay useful.
+Eunomia is a self-hosted memory service built around **vaults**: separate
+spaces for the knowledge your agents read and update over MCP or REST.
+Each vault holds its own entities, memories and relationships, with access
+controlled by membership.
 
-```bash
-curl -fsSL https://midhunkumar05.github.io/eunomia/install.sh | bash
+- **Choose the memory scope.** Use a personal vault or a named project/team vault; share access through invitations.
+- **Remember across sessions.** Save facts and experiences about people, organisations, locations and code.
+- **Find context in several ways.** Recall combines semantic search, keywords, memory text, graph links and explicit date ranges.
+- **Bring in your apps.** Sync records from 12 built-in sources, then search them alongside remembered facts.
+- **Run it for a team.** Each org gets its own database, and tokens can be scoped, limited to one vault and set to expire.
+- **See what's stored.** Explore entity and code graphs, inspect memories, or compare vaults in a 3D vector cloud.
+
+## Vaults are the core
+
+A vault is the unit of organisation and sharing in Eunomia. Keep a client's
+facts, a project's decisions or a team's working knowledge in its own vault.
+The same person or repository can appear in several vaults, with different
+memories and relationships in each.
+
+```mermaid
+flowchart TD
+    A[Your agents: Claude Code, Codex, Hermes and more] --> B[Authenticated tools and active vault membership]
+    B --> P[Personal vault]
+    B --> J[Project vault: Acme]
+    B --> T[Shared team vault]
+    P --> PM[Your entities, facts and relationships]
+    J --> JM[Project entities, facts and relationships]
+    T --> TM[Team entities, facts and relationships]
+    C[Invited collaborators] --> B
 ```
 
-It asks a few questions (Enter accepts each default), then starts SurrealDB +
-backend + frontend, turns on one-click updates (Settings → Updates), creates
-your account, and connects your AI agents (Claude Code, Codex, Hermes, Gemini
-CLI, Cursor, Windsurf, OpenCode, VS Code, Claude Desktop) over MCP. Run by an agent, it connects that
-agent. No OpenAI key needed: the agent is the model. See the
-[Quickstart](docs/quickstart.md) and [Installation](docs/installation.md).
-
-## How it fits together
-
-```
- sources ──sync──▶ ingest pipeline ──▶ cache (SurrealDB: rows + FTS + vector index)
- (Up Bank,                │  embed + extract entities    │
-  heypocket, demo)        └───────────────────────────────┼──▶ tools: search / get / list / links
-                                                            │    + per-source tools
-                                                            ▼
-                                     REST /api/* (:8001)  ◀── frontend (:3000)
-```
-
-- **Sources** are plug-ins under `backend/src/sources/`; each registers
-  itself (`auth` / `sync` / `map`).
-- **Auth** is per-user: register/login issues a signed session cookie for
-  the browser; a personal long-lived API token (minted in Settings or via
-  `POST /api/auth/tokens`) authenticates other clients instead.
-
-## What's in it
-
-<table>
-<tr><td width="50%" valign="top">
-
-**Entity-memory graph**
-People, organisations, locations — auto-extracted from your synced data,
-rendered as a draggable/zoomable force-directed graph with kind-filter
-pills and avatars.
-
-**Code-entity graph**
-A separate, cross-linkable graph of repositories/files/symbols, populated
-by an agent calling `code_entity_upsert`/`code_relate` as it works in a
-codebase — not static analysis.
-
-**`recall()`**
-A 4-arm parallel retrieval pipeline (semantic / keyword / graph /
-temporal), fused with Reciprocal Rank Fusion and boosted by recency and
-proof count.
-
-**Observation consolidation**
-Raw memory facts synthesized into evolving "belief" observations per
-entity, with freshness, proof-count, and versioning.
-
-</td><td width="50%" valign="top">
-
-**One shared tool registry**
-`search` / `get` / `list` / `links`, `recall`, `memory_write`,
-`entities_search` / `entities_get` / `entities_graph`,
-`consolidate_observations`, `code_entity_upsert` / `code_relate`, vault
-management, plus per-source tools — called by both the chat agent and
-`POST /api/tools/:name`.
-
-**`/chat`**
-Talk to the configured OpenAI-compatible model, streamed over SSE, with
-full tool access to recall/write/modify memory through the same shared
-registry.
-
-**Sources & connectors**
-Up Bank, HeyPocket (meeting recordings/transcripts, synced every 24h), a
-generic Open Connector bridge, and a demo source for trying the app
-without creds. Marketplace-style grid with per-connector setup pages.
-
-**Multi-user accounts**
-bcrypt password hashing, JWT session cookies, personal API tokens, vaults
-scoped per-user or per-team.
-
-</td></tr>
-</table>
-
-## Stack
-
-| | |
+| Vault operation | What it gives you |
 |---|---|
-| **Backend** | Rust, [Axum](https://github.com/tokio-rs/axum), the official SurrealDB SDK |
-| **Database** | [SurrealDB](https://surrealdb.com/) — graph relations, full-text search, and vector search (MTREE) in one engine |
-| **Frontend** | Next.js, TypeScript |
-| **Deployment** | Docker Compose |
+| **Create** | A named space for a project, client, team or service; your personal vault is created with your account |
+| **Share** | Invite collaborators with owner/member roles; access begins when an invitation is accepted |
+| **Scope** | Pass a vault name or ID as `vault_id` to target its memory; membership is checked on every read and write |
+| **Clone** | Copy a vault's entities, memories and relationships into a new vault you own |
+| **Merge** | Combine two vaults into a new one, folding matching entities and deduplicating facts and relations; both originals stay intact |
 
-Inspired by [Hindsight](https://vectorize.io/) (vectorize.io) for the
-observation-consolidation model, and built on [SurrealDB](https://surrealdb.com/).
+**Writes go to your personal vault by default.** Name a vault to write into
+its project or team context. Without `vault_id`, `recall`, `reflect` and
+`entities_search` search your personal vault plus the project/team vaults
+you belong to. Recall hits identify their vault; an explicit vault narrows
+the search. Another user's shared personal vault is searched only when named.
 
-## Connecting an agent (MCP)
+Sharing a vault shares its memory graph. Raw synced connector records remain
+owned by the user who connected the source. Removing a member or leaving a
+vault takes effect on the next call. A token limited to one vault uses that
+vault as its default and cannot reach any other.
 
-Eunomia is an MCP server (Streamable HTTP) at `<your Eunomia URL>/mcp`,
-exposing the same tools the built-in chat agent uses (`recall`, `reflect`,
-memory CRUD, the entity/code-graph and vault tools, `docs`), with
-read-only/destructive hints. Calls are scoped to the token's owner and
-mutating calls are audit-logged. The installer wires up your agents;
-afterwards use `./scripts/connect-agents.sh` (see
-[AI agents & MCP](docs/agents.md)). Plain REST works too: `POST
-/api/tools/:name` with the same bearer token.
+Vaults live inside an org. A self-hosted install is one org by default, so
+everyone who signs up can be invited to its vaults; each org's data sits in
+its own database.
 
-## Connectors
+Explore [vault concepts](docs/concepts.md#vaults) and the
+[source-linked vault architecture](docs/architecture.md#vaults-define-the-memory-boundary).
 
-Up Bank: a personal access token from api.up.com.au. HeyPocket: an API key.
-Both are entered on the Connectors page and stored encrypted at rest (AES-
-256-GCM); Open Connector is optional and only needed to broker other apps.
+## Get started
 
-Up Bank also supports push-based sync: register
-`POST /api/sources/up_bank/webhook/<your-user-id>` (shown on the Up Bank
-setup page once you're logged in) as a webhook URL at
-[api.up.com.au](https://api.up.com.au), paste the `secretKey` it gives you
-back into the "Webhook secret key" field, and transaction events arrive
-immediately instead of waiting for the next poll. The route verifies every
-delivery's `X-Up-Authenticity-Signature` against that secret before
-trusting it. HeyPocket's API has no webhook support, so it stays poll-only;
-the underlying webhook route/dispatch (`backend/src/routers/sources.rs`) is
-generic for any future source whose provider does.
+Use Linux or macOS, or WSL on Windows. The installer checks for git, Docker
+with Compose, and other prerequisites, and offers to install missing tools.
 
-## Tests
+It starts the database, backend and web app, sets up updates and nightly
+backups, creates your account, and connects supported agents. Open
+[localhost:3000](http://localhost:3000), sign in, then restart your agent so
+it loads the MCP server.
+
+Try asking it:
+
+> Create a vault called Acme. In Acme, remember that Ada prefers async updates over meetings.
+
+Then, in another session:
+
+> In the Acme vault, what do you know about Ada?
+
+**No model key is required for agent-written memory or text/graph recall.**
+Your connected agent uses its own model. To enable semantic search, automatic
+entity extraction, observation synthesis and in-app chat, configure an
+OpenAI-compatible endpoint in Settings. Auth-free self-hosted endpoints can
+work without a key; embeddings must return 1,536-dimensional vectors.
+
+See [Quickstart](docs/quickstart.md) for the first run and
+[Installation](docs/installation.md) for manual setup and installer options.
+
+### Upgrading from 1.x
+
+2.0 moves to SurrealDB 3.3 and gives each org its own database. Update to
+the 1.4.2 bridge release first, then to 2.0, with **Update now** in Settings
+(instance admins only). The bridge installs the upgrade hook that 2.0 needs.
+
+During the update Eunomia takes an encrypted `pre-v3` backup, copies your
+data to a new SurrealDB 3 volume, checks every table's row count, and rolls
+back to the old volume if anything doesn't match. On its first boot, 2.0 then
+moves the single database into one org, verified the same way; the old
+database is kept until you remove it. The app is offline while this runs;
+plan for about four times your current data volume in free disk.
+
+Keep `ENCRYPTION_KEY`: it now also protects each org's database password. If an
+install skipped the bridge and SurrealDB won't start, run
+`bash scripts/upgrade-surreal-v3.sh` from the install folder. See
+[Upgrading to SurrealDB 3](docs/upgrading-to-surrealdb-3.md) and
+[Org databases and the one-time move](docs/deployment.md#org-databases-and-the-one-time-move).
+
+## How it works
+
+![Eunomia architecture: browser and agents reach the Rust API; job workers sync apps and enrich records; both use SurrealDB's control and per-org databases](docs/diagrams/architecture.svg)
+
+[Explore the interactive architecture](docs/diagrams/architecture.html)
+(download and open locally) · [Read the underlying workings](docs/architecture.md)
+
+1. **Choose a vault.** Agents write into your personal vault or a named project/team vault, with membership checked before access.
+2. **Collect.** Sync jobs, queued on each source's schedule or by **Sync now**, and supported webhooks map app data into a common record format.
+3. **Store and enrich.** Records and links are upserted into the org's database. When a model is configured, records are embedded, and background jobs extract entities and facts and consolidate observations.
+4. **Recall.** Five retrieval paths produce candidates. Reciprocal Rank Fusion combines their ranks; recency and agreement between paths adjust the results.
+5. **Use.** Agents, REST clients and in-app chat call one shared tool registry to recall, reflect, write memories and manage graphs and vaults.
+
+Records and memories are distinct: synced records belong to a user; memories
+belong to a vault. Sharing a vault shares its memories, without sharing a
+member's raw connector data. The code graph is populated by agent calls to
+`code_entity_upsert` and `code_relate`.
+
+Each org's data lives in its own SurrealDB database, reached through that
+org's own database user, so a query for one org cannot read another's.
+Accounts, tokens, the audit trail and the job queue live in a separate
+`control` database. Background work runs as leased jobs with retries, so a
+job from a crashed worker is picked up again.
+
+## Connect your agents and apps
+
+The installer supports Claude Code, Codex, Hermes, Gemini CLI, Cursor,
+Windsurf, OpenCode, VS Code and Claude Desktop. To connect more agents later:
 
 ```bash
-cd backend && cargo test --release     # includes MCP protocol tests (no DB needed)
-bash scripts/tests/connect-agents.test.sh && bash scripts/tests/auto-update.test.sh
-cd frontend && bunx tsc --noEmit && bun run build
-cd frontend && bun run test           # Playwright, starts `bun run dev`; needs backend + DB (./run.sh)
-E2E_BASE_URL=http://localhost:3000 bun run test   # or against an already-running stack
+./scripts/connect-agents.sh
 ```
 
-Backend tests, the script tests, a frontend typecheck+build and the whole Playwright suite (against the
-compose stack built from the repo: release backend, production frontend, SurrealDB 3.3) run on every
-push/PR to `main` via `.github/workflows/ci.yml`. The e2e job registers an admin first and sets
-`E2E_UPDATE_STATUS_DIR`, `E2E_ADMIN_EMAIL` / `E2E_ADMIN_PASSWORD` (the Settings, HTTPS tests) and
-`E2E_SURREAL_HTTP` / `E2E_SURREAL_NS` / `E2E_SURREAL_DB` (the SQL-fixture memory-correctness tests); see
-[`docs/testing.md`](docs/testing.md). Playwright keeps a trace of every failure and CI uploads it.
+The MCP endpoint is `<your Eunomia URL>/mcp`. Agents authenticate with a
+personal access token, which can be scoped, limited to one vault and set to
+expire, or sign in through MCP OAuth 2.1. REST clients use the same token with
+`POST /api/tools/:name`. Browser sessions use signed cookies. Mutating tool
+calls are audit-logged. See [AI agents & MCP](docs/agents.md) for
+configuration and the complete tool list.
 
-`tests/recall-eval.spec.ts` is a small retrieval evaluation: it seeds the labeled corpus in
-`tests/fixtures/recall-eval.json` (a personal and a shared vault, plus another user's decoys), prints
-Recall@5 and MRR, writes them to `test-results/**/recall-eval.json` (a CI artifact), fails on any
-cross-vault or other-user result, and fails if the metrics drop below the floors in the spec. Compare
-retrieval changes on this same corpus.
+| Source | Data you can bring in |
+|---|---|
+| Up Bank, Stripe | Banking and payment records |
+| HeyPocket | Meeting recordings and transcripts |
+| GitHub, Linear, Notion, Todoist | Issues, pull requests, documents and tasks |
+| Slack, Discord, Gmail, Google Calendar | Messages, mail and calendar events |
+| Spotify | Listening history |
 
-## Backups
+Set credentials and source options on the Connectors page. Connector secrets
+are encrypted at rest with AES-256-GCM. Up Bank supports signed webhooks;
+other sources use their sync adapters. A synthetic demo source is available
+for on-demand test data. See [Connectors](docs/connectors.md) for setup details.
 
-The stack takes a nightly encrypted export of every database into the `eunomia-backups`
-volume. How to take, list and restore backups is in [`INSTALLATION.md`](INSTALLATION.md)
-and [`docs/deployment.md`](docs/deployment.md). **Never run `docker compose down -v`**; it
-deletes the data volume.
+## Develop locally
 
-## Production deployment
-
-See [`docs/deployment.md`](docs/deployment.md) for reverse-proxy/TLS setup
-(Caddy example), which env vars need real (non-`localhost`, non-default)
-values in production, and how the frontend proxies `/api` to the backend
-so the browser only ever needs the frontend's address.
-
-## Local dev (without Docker)
+You need Rust, Bun and Docker. From the repository root, create `.env` if it
+doesn't already exist:
 
 ```bash
-./run.sh   # SurrealDB in Docker (localhost only) + `cargo run` + `bun run dev`
+cp .env.example .env
+openssl rand -base64 32
 ```
 
-Open http://localhost:3000 -- the dev server proxies `/api` to the backend on
-:8001, same as the production image.
+Put the generated value in `ENCRYPTION_KEY`. Set a stable `JWT_SECRET` too
+if you want browser sessions to survive backend restarts. Then run:
+
+```bash
+./run.sh
+```
+
+This starts SurrealDB 3.3.1 in Docker, the Rust backend on `:8001`, and Next.js
+on `:3000`. The frontend proxies `/api/*` and `/mcp` to the backend. A dev
+volume last used with SurrealDB 2.x must be removed or upgraded first.
+The Compose stack uses prebuilt images; see [Installation](docs/installation.md)
+for that path.
+
+Run checks from the repository root:
+
+```bash
+(cd backend && cargo test --release)
+bash scripts/tests/connect-agents.test.sh
+bash scripts/tests/auto-update.test.sh
+bash scripts/tests/https.test.sh
+(cd frontend && bun run lint && bun run build && bunx tsc --noEmit)
+```
+
+With the stack running and system Chrome installed:
+
+```bash
+(cd frontend && E2E_BASE_URL=http://localhost:3000 bun run test)
+```
+
+[CI](.github/workflows/ci.yml) runs clippy and the backend tests (also under
+the hardened SurrealDB settings, plus the org isolation proof), every script
+test, the frontend checks, Playwright against the Compose stack built from
+the repository with SurrealDB 3.3.1, the 2.x to 3.3 upgrade, and restore
+drills. The [recall evaluation](frontend/tests/recall-eval.spec.ts) measures
+Recall@5 and MRR on a fixed corpus, and checks for cross-vault and cross-user
+leaks. See [Testing](docs/testing.md) for every layer.
+
+Errors carry a stable code and a trace id (RFC 9457 problem+json); logs are
+JSON, and OpenTelemetry export is optional. `eunomia-backend replay <trace_id>`
+re-runs a recorded failure. See [Errors](docs/errors.md),
+[Debugging](docs/debugging.md) and [Observability](docs/observability.md).
+
+## Deploy and back up
+
+Use [Deployment](docs/deployment.md) for HTTPS, production secrets and
+updates. The `backup` service takes an encrypted export of every database
+(control and each org) nightly into the `eunomia-backups` volume. Set
+`BACKUP_ENCRYPTION_KEY` in `.env` and keep a copy off the machine. With the
+stack running:
+
+```bash
+backend/scripts/backup.sh               # back up now
+backend/scripts/backup.sh list          # list backups
+backend/scripts/restore.sh <file> --wipe
+```
+
+Without `--wipe`, restore replays the dump over existing data.
+`scripts/restore-drill.sh` proves a backup restores, using a throwaway
+database. See [Backups](INSTALLATION.md#backups).
+**`docker compose down -v` deletes the data volumes.**
+
+## Documentation
+
+| Guide | What it covers |
+|---|---|
+| [Quickstart](docs/quickstart.md) | Install, sign in and remember your first fact |
+| [Installation](docs/installation.md) | Installer flags, manual setup and supported platforms |
+| [AI agents & MCP](docs/agents.md) | Agent configuration, tokens, OAuth and every tool |
+| [Concepts](docs/concepts.md) | Vaults, facts, observations, graphs and the vector cloud |
+| [Underlying workings](docs/architecture.md) | Source-linked architecture, tenancy, jobs, ingestion, retrieval and access checks |
+| [Connectors](docs/connectors.md) | Source credentials and sync setup |
+| [Deployment](docs/deployment.md) | HTTPS, secrets, updates, org databases and backups |
+| [Upgrading to SurrealDB 3](docs/upgrading-to-surrealdb-3.md) | The 1.x to 2.0 database upgrade, rollback and recovery |
+
+The core user guides are also available on the app's Docs page and through
+the `docs` MCP tool. Developer references are listed in the
+[docs index](docs/README.md).
 
 ## License
 
