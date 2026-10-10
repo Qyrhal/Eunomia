@@ -54,6 +54,9 @@ pub fn test_settings() -> Settings {
         update_status_dir: "/nonexistent".into(),
         bind_addr: "127.0.0.1:0".into(),
         public_url: "http://localhost:8001".into(),
+        // the embedded engine's in-process bucket; `TEST_DOCUMENTS_BACKEND` points it elsewhere (an S3 bucket)
+        documents_backend: std::env::var("TEST_DOCUMENTS_BACKEND").unwrap_or_else(|_| "memory".into()),
+        documents_max_bytes: 256 * 1024,
     }
 }
 
@@ -61,11 +64,13 @@ pub fn test_settings() -> Settings {
 /// everything denied except the `--allow-funcs` list in docker-compose.yml, so the whole suite
 /// proves the list is complete.
 pub fn engine_config() -> surrealdb::opt::Config {
-    let mut config = surrealdb::opt::Config::new();
+    use surrealdb::opt::capabilities::{Capabilities, ExperimentalFeature};
+    // file buckets (documents) are experimental: the server runs with --allow-experimental=files
+    let mut config = surrealdb::opt::Config::new().capabilities(Capabilities::new().with_experimental_feature_allowed(ExperimentalFeature::Files));
     if std::env::var("TEST_HARDENED").is_ok() {
         let compose = include_str!("../../../docker-compose.yml");
         let list = compose.split("--allow-funcs=").nth(1).expect("--allow-funcs in docker-compose.yml").split_whitespace().next().unwrap();
-        let mut caps = surrealdb::opt::capabilities::Capabilities::none();
+        let mut caps = Capabilities::none().with_experimental_feature_allowed(ExperimentalFeature::Files);
         for f in list.trim_end_matches(['"', '\'']).split(',') {
             caps = caps.with_function_allowed(f).expect("function target");
         }

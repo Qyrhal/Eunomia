@@ -329,6 +329,8 @@ mod tests {
             update_status_dir: String::new(),
             bind_addr: String::new(),
             public_url: "http://localhost:8001".into(),
+            documents_backend: String::new(),
+            documents_max_bytes: 1 << 20,
         };
         AppState::build(&settings, surrealdb::opt::Config::new()).await.unwrap()
     }

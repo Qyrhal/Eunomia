@@ -27,6 +27,11 @@ pub struct Settings {
     pub bind_addr: String,
     /// Public origin of this server, used in OAuth metadata and as the token audience.
     pub public_url: String,
+    /// `EUNOMIA_DOCUMENTS_BACKEND`: where uploaded documents' bytes go, a SurrealDB bucket backend
+    /// (`file:/documents`, `s3://bucket?region=..`, `memory`). "" turns documents off. See docs/documents.md.
+    pub documents_backend: String,
+    /// `EUNOMIA_DOCUMENTS_MAX_BYTES`: the largest document accepted, default 25 MiB.
+    pub documents_max_bytes: usize,
 }
 
 fn env_or(key: &str, default: &str) -> String {
@@ -65,6 +70,8 @@ impl Settings {
             update_status_dir: env_or("UPDATE_STATUS_DIR", "/update-status"),
             bind_addr: env::var("BIND_ADDR").unwrap_or_else(|_| format!("0.0.0.0:{}", env_or("PORT", "8001"))),
             public_url: env_or("PUBLIC_URL", "http://localhost:8001").trim_end_matches('/').to_string(),
+            documents_backend: env_or("EUNOMIA_DOCUMENTS_BACKEND", "").trim().to_string(),
+            documents_max_bytes: env::var("EUNOMIA_DOCUMENTS_MAX_BYTES").ok().and_then(|v| v.trim().parse().ok()).filter(|n| *n > 0).unwrap_or(25 << 20),
         }
     }
 }

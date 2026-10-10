@@ -91,6 +91,10 @@ pub struct RecallItem {
     /// The vault the hit came from (its id), and that vault's name.
     pub vault: String,
     pub vault_name: String,
+    /// For a chunk of an uploaded document: which document, revision, part and character range, and
+    /// where to download the original (`documents::chunk_ref`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub document: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -374,6 +378,7 @@ struct Hydrated {
     source: Option<String>,
     occurred_at: Option<DateTime<Utc>>,
     mem_type: String,
+    document: Option<serde_json::Value>,
 }
 
 /// Every candidate key's content, in two queries (records, memories) whatever the candidate count.
@@ -386,9 +391,11 @@ async fn hydrate(db: &OrgDb, owner: &RecordId, vault: &RecordId, keys: &[&String
     let record_ids: Vec<String> = keys.iter().filter_map(|k| k.strip_prefix("cache_record:")).map(str::to_string).collect();
     for rec in cs::get_many(db, owner, &record_ids).await? {
         let text = format!("{}\n{}", rec.title, rec.body_text).trim().to_string();
+        let document = crate::documents::chunk_ref(&rec.id, &rec.source, &rec.payload);
         out.insert(
             format!("cache_record:{}", rec.id),
             Hydrated {
+                document,
                 id: rec.id,
                 kind: "cache_record",
                 text,
@@ -436,6 +443,7 @@ async fn hydrate(db: &OrgDb, owner: &RecordId, vault: &RecordId, keys: &[&String
                 source: row.source.map(|s| cs::literal(&s)),
                 occurred_at: Some(to_chrono(row.updated_at.unwrap_or(row.created_at))),
                 mem_type: row.mem_type,
+                document: None,
             },
         );
     }
@@ -657,6 +665,7 @@ async fn recall_in(
             arms_hit,
             vault: String::new(),
             vault_name: String::new(),
+            document: item.document,
         });
     }
     Ok(scored)
@@ -725,7 +734,7 @@ mod tests {
     }
 
     fn item(text: &str) -> RecallItem {
-        RecallItem { id: "m".into(), kind: "memory", text: text.into(), source: None, occurred_at: None, score: 1.0, arms_hit: 1, vault: String::new(), vault_name: String::new() }
+        RecallItem { id: "m".into(), kind: "memory", text: text.into(), source: None, occurred_at: None, score: 1.0, arms_hit: 1, vault: String::new(), vault_name: String::new(), document: None }
     }
 
     #[test]

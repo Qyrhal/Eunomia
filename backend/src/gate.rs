@@ -76,6 +76,7 @@ pub fn explicit_class(method: &Method, path: &str) -> Option<Class> {
         ["api", "tools"] if read => Public,
         ["api", "tools", _] => Any,
         ["api", "entities", ..] => Vault(if read { scopes::MEMORY_READ } else { scopes::MEMORY_WRITE }),
+        ["api", "documents", ..] => Vault(if read { scopes::MEMORY_READ } else { scopes::MEMORY_WRITE }),
         ["api", "vaults", ..] => Vault(if read { scopes::MEMORY_READ } else { scopes::VAULTS_ADMIN }),
         ["api", "connectors", ..] | ["api", "snapshot"] => Account(scopes::CONNECTORS),
         ["api", "sources", _, "webhook", _] => Webhook,

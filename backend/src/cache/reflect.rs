@@ -195,6 +195,7 @@ mod tests {
             arms_hit: 1,
             vault: String::new(),
             vault_name: String::new(),
+            document: None,
         }
     }
 

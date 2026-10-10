@@ -26,7 +26,7 @@ fn hit(rec: &CacheRecord) -> Value {
     } else {
         rec.body_text.clone()
     };
-    json!({
+    let mut out = json!({
         "id": rec.id,
         "source": rec.source,
         "type": rec.type_,
@@ -34,7 +34,11 @@ fn hit(rec: &CacheRecord) -> Value {
         "snippet": snippet,
         "occurred_at": &rec.occurred_at,
         "url": if rec.url.is_empty() { Value::Null } else { Value::String(rec.url.clone()) },
-    })
+    });
+    if let Some(doc) = crate::documents::chunk_ref(&rec.id, &rec.source, &rec.payload) {
+        out["document"] = doc;
+    }
+    out
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -97,6 +101,17 @@ pub async fn get(db: &OrgDb, owner: &RecordId, id: &str) -> AppResult<Value> {
     });
     if let Some(recording) = recording {
         out["recording"] = recording;
+    }
+    // A chunk of an uploaded document: which document, where in it, and how to fetch the original.
+    if let Some(mut doc) = crate::documents::chunk_ref(&rec.id, &rec.source, &out["payload"]) {
+        if let Some(d) = crate::documents::summary(db, owner, doc["document_id"].as_str().unwrap_or_default()).await? {
+            doc["status"] = d.status.into();
+            doc["current_revision"] = d.revision.into();
+            doc["media_type"] = d.media_type.into();
+            doc["size_bytes"] = d.size_bytes.into();
+            doc["sha256"] = d.sha256.into();
+        }
+        out["document"] = doc;
     }
     Ok(out)
 }

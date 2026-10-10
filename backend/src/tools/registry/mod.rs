@@ -40,6 +40,7 @@ use crate::state::{AppState, OrgState};
 mod admin;
 mod code;
 mod docs;
+mod documents;
 mod entities;
 mod memory;
 mod records;
@@ -79,7 +80,15 @@ pub const READ_ONLY_TOOLS: &[&str] = &[
     "entities_graph",
     "vault_list",
     "vault_members",
+    "document_list",
+    "document_get",
+    "document_download",
+    "document_export",
 ];
+
+/// Read-only tools that still get an audit row: they disclose an original file or its vectors. The
+/// row records the document id, never its content.
+pub const DISCLOSURE_TOOLS: &[&str] = &["document_download", "document_export"];
 
 pub fn is_read_only(name: &str) -> bool {
     READ_ONLY_TOOLS.contains(&name)
@@ -88,7 +97,7 @@ pub fn is_read_only(name: &str) -> bool {
 /// Tools that irreversibly remove data or access -- flagged to MCP clients
 /// (`destructiveHint`) so they can ask before running them.
 pub fn is_destructive(name: &str) -> bool {
-    matches!(name, "memory_delete" | "entity_delete" | "entity_merge" | "vault_delete" | "vault_remove_member" | "vault_leave")
+    matches!(name, "memory_delete" | "entity_delete" | "entity_merge" | "vault_delete" | "vault_remove_member" | "vault_leave" | "document_delete")
 }
 
 /// Tools over the user's raw synced source records, which belong to no vault:
@@ -130,6 +139,12 @@ pub fn description(name: &str) -> &'static str {
         "vault_leave" => "Leave a vault. The last owner can't leave while others remain.",
         "vault_rename" => "Rename a vault (owner only).",
         "vault_delete" => "Delete a vault and all memberships (owner only). Irreversible.",
+        "document_upload" => "Store a document (plain text, Markdown, JSON, CSV, or a text-based PDF as content_base64) in the user's personal vault: the original is kept for download and its text is chunked and indexed in the background, so `search`, `recall` and `get` find its passages (each hit names the document) and entities are extracted from it like synced data. Status starts `indexing`; `document_get` shows when it is `ready`. Pass `document_id` to replace a document with a new version.",
+        "document_list" => "List the user's uploaded documents, newest first, with type, size, SHA-256, indexing status and chunk count.",
+        "document_get" => "One uploaded document: its metadata, the extracted text, and each chunk's id (usable with `get`) and character range.",
+        "document_download" => "How to download an uploaded document's original bytes: an authenticated HTTP GET (the bytes never pass through the tool), with the size and SHA-256 to verify them.",
+        "document_export" => "An uploaded document's export manifest: every chunk with its text, location and whether it has an embedding, plus the embedding model and dimension. Vectors are left out unless `include_vectors` is true; `vectors_url` serves the full manifest over HTTP.",
+        "document_delete" => "Delete an uploaded document: its stored file, its chunks (they leave search, recall and get at once) and the memories extracted from them. Irreversible.",
         _ => "",
     }
 }
@@ -139,12 +154,17 @@ pub fn description(name: &str) -> &'static str {
 const SECRET_KEY_HINTS: &[&str] = &["password", "token", "secret", "credential", "api_key", "apikey"];
 const ARGS_SUMMARY_MAX: usize = 500;
 
-fn summarize_args(args: &Value) -> String {
+// a document's content, kept out of the audit summary (its size stands in for it)
+const CONTENT_KEYS: &[&str] = &["text", "content_base64"];
+
+fn summarize_args(tool_name: &str, args: &Value) -> String {
     let mut redacted = serde_json::Map::new();
     if let Some(obj) = args.as_object() {
         for (k, v) in obj {
             let lower = k.to_lowercase();
-            if SECRET_KEY_HINTS.iter().any(|hint| lower.contains(hint)) {
+            if tool_name.starts_with("document_") && CONTENT_KEYS.contains(&k.as_str()) {
+                redacted.insert(k.clone(), json!(format!("<{} chars>", v.as_str().map_or(0, |s| s.chars().count()))));
+            } else if SECRET_KEY_HINTS.iter().any(|hint| lower.contains(hint)) {
                 redacted.insert(k.clone(), json!("***"));
             } else {
                 redacted.insert(k.clone(), v.clone());
@@ -160,8 +180,8 @@ fn summarize_args(args: &Value) -> String {
 
 /// The owner-facing `audit_log` row (what `GET /api/audit` shows) plus the
 /// append-only `audit_event` row with the actor, the outcome code and the trace id.
-async fn record_audit(state: &OrgState, owner: &RecordId, tool_name: &str, args: &Value, outcome: &str, code: &str) {
-    let summary = summarize_args(args);
+pub(crate) async fn record_audit(state: &OrgState, owner: &RecordId, tool_name: &str, args: &Value, outcome: &str, code: &str) {
+    let summary = summarize_args(tool_name, args);
     let _ = store::cache::RECORD_AUDIT
         .on(&state.db)
         .bind(("owner", owner.clone()))
@@ -245,6 +265,7 @@ fn to_tool_value<T: serde::Serialize>(result: AppResult<T>) -> Value {
 /// exist on the Rust side.
 fn register_all(registry: &mut HashMap<&'static str, ToolSpec>) {
     docs::register_all(registry);
+    documents::register_all(registry);
     records::register_all(registry);
     memory::register_all(registry);
     entities::register_all(registry);
@@ -369,7 +390,7 @@ async fn record_failure(state: &OrgState, owner: &RecordId, name: &str, args: Va
 }
 
 async fn run_tool(state: &OrgState, owner: &RecordId, name: &str, spec: &ToolSpec, args: Value) -> AppResult<Value> {
-    if is_read_only(name) {
+    if is_read_only(name) && !DISCLOSURE_TOOLS.contains(&name) {
         return (spec.handler)(state, owner, args).await;
     }
 
@@ -432,6 +453,10 @@ mod tests {
             "entities_graph",
             "vault_list",
             "vault_members",
+            "document_list",
+            "document_get",
+            "document_download",
+            "document_export",
         ];
         assert_eq!(READ_ONLY_TOOLS.len(), expected.len());
         for name in expected {
@@ -463,7 +488,7 @@ mod tests {
     #[test]
     fn summarize_args_redacts_secret_looking_keys() {
         let args = json!({ "password": "hunter2", "api_key": "abc", "query": "hello" });
-        let summary = summarize_args(&args);
+        let summary = summarize_args("memory_write", &args);
         assert!(!summary.contains("hunter2"));
         assert!(!summary.contains("abc"));
         assert!(summary.contains("hello"));
@@ -474,15 +499,23 @@ mod tests {
     fn summarize_args_truncates_long_summaries() {
         let long_value = "x".repeat(1000);
         let args = json!({ "q": long_value });
-        let summary = summarize_args(&args);
+        let summary = summarize_args("memory_write", &args);
         assert!(summary.chars().count() <= ARGS_SUMMARY_MAX + 1);
         assert!(summary.ends_with('\u{2026}'));
     }
 
     #[test]
     fn summarize_args_handles_non_object_args() {
-        let summary = summarize_args(&Value::Null);
+        let summary = summarize_args("search", &Value::Null);
         assert_eq!(summary, "{}");
+    }
+
+    #[test]
+    fn document_content_never_reaches_the_audit_summary() {
+        let args = json!({ "filename": "n.md", "text": "secret plan", "content_base64": "c2VjcmV0" });
+        let summary = summarize_args("document_upload", &args);
+        assert!(!summary.contains("secret plan") && !summary.contains("c2VjcmV0") && summary.contains("n.md"), "{summary}");
+        assert!(summary.contains("<11 chars>"));
     }
 
     #[test]
@@ -492,6 +525,7 @@ mod tests {
             "entities_graph", "code_entity_upsert", "code_relate", "memory_write", "consolidate_observations",
             "memory_update", "entity_update", "memory_delete", "entity_delete", "entity_merge", "vault_create", "vault_list", "vault_clone", "vault_merge",
             "vault_invite", "vault_members", "vault_remove_member", "vault_leave", "vault_rename", "vault_delete",
+            "document_upload", "document_list", "document_get", "document_download", "document_export", "document_delete",
         ];
         let tools = all_tools();
         for name in expected {

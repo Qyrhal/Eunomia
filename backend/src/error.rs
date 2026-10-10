@@ -40,6 +40,10 @@ pub enum ErrorCode {
     SourceNotFound,
     ToolNotFound,
     ResourceNotFound,
+    DocumentNotFound,
+    DocumentTooLarge,
+    DocumentUnsupportedType,
+    DocumentStorageUnavailable,
     ValidationInvalid,
     DbConflict,
     DbDuplicate,
@@ -74,6 +78,10 @@ impl ErrorCode {
         ErrorCode::SourceNotFound,
         ErrorCode::ToolNotFound,
         ErrorCode::ResourceNotFound,
+        ErrorCode::DocumentNotFound,
+        ErrorCode::DocumentTooLarge,
+        ErrorCode::DocumentUnsupportedType,
+        ErrorCode::DocumentStorageUnavailable,
         ErrorCode::ValidationInvalid,
         ErrorCode::DbConflict,
         ErrorCode::DbDuplicate,
@@ -108,6 +116,10 @@ impl ErrorCode {
             ErrorCode::SourceNotFound => "source.not_found",
             ErrorCode::ToolNotFound => "tool.not_found",
             ErrorCode::ResourceNotFound => "resource.not_found",
+            ErrorCode::DocumentNotFound => "document.not_found",
+            ErrorCode::DocumentTooLarge => "document.too_large",
+            ErrorCode::DocumentUnsupportedType => "document.unsupported_type",
+            ErrorCode::DocumentStorageUnavailable => "document.storage_unavailable",
             ErrorCode::ValidationInvalid => "validation.invalid",
             ErrorCode::DbConflict => "db.conflict",
             ErrorCode::DbDuplicate => "db.duplicate",
@@ -125,7 +137,9 @@ impl ErrorCode {
                 StatusCode::FORBIDDEN
             }
             ErrorCode::RateLimited => StatusCode::TOO_MANY_REQUESTS,
-            ErrorCode::TenantSchemaBehind => StatusCode::SERVICE_UNAVAILABLE,
+            ErrorCode::TenantSchemaBehind | ErrorCode::DocumentStorageUnavailable => StatusCode::SERVICE_UNAVAILABLE,
+            ErrorCode::DocumentTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
+            ErrorCode::DocumentUnsupportedType => StatusCode::UNSUPPORTED_MEDIA_TYPE,
             ErrorCode::TenantProvisioningDisabled => StatusCode::NOT_IMPLEMENTED,
             ErrorCode::AuthEmailTaken | ErrorCode::VaultNameTaken | ErrorCode::DbConflict | ErrorCode::DbDuplicate => StatusCode::CONFLICT,
             ErrorCode::AuthNotFound
@@ -137,7 +151,8 @@ impl ErrorCode {
             | ErrorCode::SourceNotFound
             | ErrorCode::ToolNotFound
             | ErrorCode::TenantNotFound
-            | ErrorCode::ResourceNotFound => StatusCode::NOT_FOUND,
+            | ErrorCode::ResourceNotFound
+            | ErrorCode::DocumentNotFound => StatusCode::NOT_FOUND,
             ErrorCode::ConnectorNotConnected | ErrorCode::ValidationInvalid => StatusCode::BAD_REQUEST,
             ErrorCode::JobNoHandler | ErrorCode::JobLeaseExpired | ErrorCode::JobPanicked | ErrorCode::Internal => {
                 StatusCode::INTERNAL_SERVER_ERROR
@@ -302,7 +317,8 @@ mod tests {
                 | ErrorCode::TenantProvisioningDisabled | ErrorCode::VaultNotFound | ErrorCode::VaultForbidden | ErrorCode::VaultNameTaken | ErrorCode::EntityNotFound
                 | ErrorCode::MemoryNotFound | ErrorCode::ChatThreadNotFound | ErrorCode::ConnectorNotFound
                 | ErrorCode::ConnectorNotConnected | ErrorCode::SourceNotFound | ErrorCode::ToolNotFound
-                | ErrorCode::ResourceNotFound | ErrorCode::ValidationInvalid | ErrorCode::DbConflict
+                | ErrorCode::ResourceNotFound | ErrorCode::DocumentNotFound | ErrorCode::DocumentTooLarge
+                | ErrorCode::DocumentUnsupportedType | ErrorCode::DocumentStorageUnavailable | ErrorCode::ValidationInvalid | ErrorCode::DbConflict
                 | ErrorCode::DbDuplicate | ErrorCode::JobNoHandler | ErrorCode::JobLeaseExpired | ErrorCode::JobPanicked
                 | ErrorCode::Internal => {}
             }

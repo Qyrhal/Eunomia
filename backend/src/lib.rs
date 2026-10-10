@@ -8,6 +8,7 @@ pub mod config;
 pub mod connectors;
 pub mod db;
 pub mod docs;
+pub mod documents;
 pub mod embeddings;
 pub mod entities;
 pub mod error;
@@ -113,13 +114,16 @@ pub fn app_with(state: AppState, limits: ratelimit::RateConfig) -> axum::Router 
 
     let open = axum::Router::new().route("/healthz", axum::routing::get(healthz)).route("/readyz", axum::routing::get(readyz)).merge(routers::mcp::router()).merge(oauth::router());
     // One ceiling for every request body, ahead of everything else (a handler that reads the body
-    // itself, like the webhook, is bounded too). No route needs more today; raise it with the env var.
+    // itself, like the webhook, is bounded too); raise it with the env var. Document uploads are the
+    // exception: their router has its own ceiling, the document size limit plus room for the request.
     let max_body = max_body_bytes();
-    guarded(open, open_cors)
-        .merge(guarded(axum::Router::new().nest("/api", api), cors))
+    let max_upload = state.settings.documents_max_bytes.saturating_add(64 * 1024).max(max_body);
+    let limited = |routes: axum::Router<AppState>, max: usize| {
+        routes.layer(axum::extract::DefaultBodyLimit::max(max)).layer(tower_http::limit::RequestBodyLimitLayer::new(max))
+    };
+    limited(guarded(open, open_cors).merge(guarded(axum::Router::new().nest("/api", api), cors.clone())), max_body)
+        .merge(limited(guarded(axum::Router::new().nest("/api", routers::documents::router()), cors), max_upload))
         .with_state(state)
-        .layer(axum::extract::DefaultBodyLimit::max(max_body))
-        .layer(tower_http::limit::RequestBodyLimitLayer::new(max_body))
 }
 
 /// `MAX_REQUEST_BODY_BYTES`, default 1 MiB.
