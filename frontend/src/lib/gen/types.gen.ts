@@ -249,6 +249,9 @@ export type DocumentOut = {
      * Authenticated `GET` for the original bytes (same credentials as this call).
      */
     download_url: string;
+    /**
+     * Why indexing failed. Absent otherwise (a tool result with an `error` key reads as a failed call).
+     */
     error?: string | null;
     filename: string;
     id: string;
