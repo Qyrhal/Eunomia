@@ -26,6 +26,8 @@ pub const MEMORIES_IN_RANGE: Stmt = Stmt::new(
      AND created_at >= $since AND created_at <= $until ORDER BY created_at DESC LIMIT $limit",
 );
 
+/// A record's sync links, to tell whether a replay changed only them.
+pub const SYNC_LINKS_OF: Stmt = Stmt::new("cache.sync_links_of", "SELECT rel, out FROM linked_to WHERE in = $id AND origin = 'sync'");
 pub const DELETE_SYNC_LINKS: Stmt = Stmt::new("cache.delete_sync_links", "DELETE linked_to WHERE in = $id AND origin = 'sync'");
 pub const RELATE_SYNC_LINK: Stmt = Stmt::new("cache.relate_sync_link", "RELATE $in->linked_to->$out SET rel = $rel, origin = 'sync'");
 pub const TOUCH_INGESTED: Stmt = Stmt::new("cache.touch_ingested", "UPDATE $id SET ingested_at = time::now()");
@@ -127,6 +129,7 @@ pub const ALL: &[&Stmt] = &[
     &RECORDS_FOR_EMBED,
     &CACHE_RECORDS_IN_RANGE,
     &MEMORIES_IN_RANGE,
+    &SYNC_LINKS_OF,
     &DELETE_SYNC_LINKS,
     &RELATE_SYNC_LINK,
     &TOUCH_INGESTED,
