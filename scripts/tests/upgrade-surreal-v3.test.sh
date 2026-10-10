@@ -44,7 +44,8 @@ services:
   backend:
     image: busybox:1.36
     entrypoint: ["sleep", "3600"]
-    healthcheck: {disable: true}
+    # `up --wait` fails a service with no healthcheck on current Compose: a trivial one
+    healthcheck: {test: ["CMD", "true"], interval: 1s, retries: 1}
 YML
 cp "$W/compose.old" "$W/docker-compose.yml"
 printf 'JWT_SECRET=x\nENCRYPTION_KEY=y\nBACKUP_ENCRYPTION_KEY=%s\n' "$BACKUP_ENCRYPTION_KEY" > "$W/.env"
