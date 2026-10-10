@@ -116,6 +116,7 @@ struct Ids {
     memory: String,
     thread: String,
     cache_literal: String,
+    document: String,
     token_id: String,
     session_id: String,
     grant_id: String,
@@ -230,6 +231,25 @@ async fn plant(state: &AppState, router: &Router, name: &'static str, user: User
     eunomia_backend::cache::search::upsert(&db, &user.id, &env("1")).await.unwrap();
     eunomia_backend::cache::search::upsert(&db, &user.id, &env("2")).await.unwrap();
     ids.cache_literal = format!("demo:note:{name}-1");
+
+    // a document: the canary in its name and text, stored in the org's bucket and indexed (the index job
+    // run by hand, there is no worker here), so its chunks carry the canary too
+    let doc = call(state, &user, "document_upload", json!({"filename": format!("{canary}.md"), "text": format!("{name} renewal terms {canary}")})).await;
+    ids.document = doc["id"].as_str().unwrap_or_else(|| panic!("{doc}")).to_string();
+    let job = jobs::Job {
+        id: surrealdb::types::RecordId::new("job", format!("plant-{name}")),
+        org: Some(user.org.key()),
+        kind: jobs::kind::INDEX_DOCUMENT.into(),
+        owner: user.id.clone(),
+        payload: json!({"document": ids.document, "revision": 1}),
+        idempotency_key: format!("plant-{name}"),
+        attempts: 1,
+        max_attempts: 5,
+        status: "running".into(),
+        locked_until: None,
+        traceparent: None,
+    };
+    common::sys(eunomia_backend::documents::index_job(state.clone(), job)).await.unwrap();
 
     let (_, body) = raw(router, "POST", "/api/chat/threads", Some(json!({"title": format!("{canary} thread")})), Some(&token), None).await;
     ids.thread = serde_json::from_str::<Value>(&body).unwrap()["id"].as_str().unwrap_or_else(|| panic!("{body}")).to_string();
@@ -357,6 +377,7 @@ fn attack_value(tool: &str, prop: &str, schema: &Value, victim: &Org) -> Value {
         (_, p) if p.contains("vault") && p.ends_with("ids") => json!(victim.ids.vault),
         (_, p) if p.contains("vault") => json!(victim.ids.vault),
         ("get", "id") | ("links", "id") => json!(victim.ids.cache_literal),
+        (t, "id" | "document_id") if t.starts_with("document_") => json!(victim.ids.document),
         (_, "source_record_id") => json!(victim.ids.cache_literal),
         ("entities_get", "id") => id(0),
         (_, "parent_id") => id(3),
@@ -406,6 +427,7 @@ fn path_value(param: &str, victim: &Org) -> String {
         "kind" => "github".into(),
         "name" => "recall".into(),
         "recording_id" => victim.ids.cache_literal.clone(),
+        "document_id" => victim.ids.document.clone(),
         _ => "x".into(),
     }
 }

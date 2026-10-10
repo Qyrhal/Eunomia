@@ -24,4 +24,11 @@ cdep '=3.3.1'; g commit -qam h; g tag v1.6.0
 check "3.x pin with a 3.x SDK backend passes (hook already in v1.2.0)" bash "$S" v1.6.0
 echo '    image: surrealdb/surrealdb:v2.3' > docker-compose.yml; cdep '2.3'; g commit -qam i; g tag v1.7.0
 check "2.x pin with a 2.x SDK backend passes" bash "$S" v1.7.0
+# a 3.x release that migrates by itself at `up` needs no bridge before it
+g checkout -q v1.0.0 2>/dev/null; g checkout -q -b selfup
+printf 'services:\n  surrealdb:\n    image: surrealdb/surrealdb:v3.3.1\n    depends_on:\n      surreal-upgrade:\n        condition: service_completed_successfully\n  surreal-upgrade:\n    image: docker:27-cli\n' > docker-compose.yml
+echo z > scripts/surreal-upgrade-service.sh; g add -A; g commit -qm j; g tag v2.0.0
+check "3.x pin with its own surreal-upgrade step passes without a bridge" bash "$S" v2.0.0
+sed -i.bak '/condition:/d' docker-compose.yml && rm -f docker-compose.yml.bak; g commit -qam k; g tag v2.0.1
+check "a surreal-upgrade service surrealdb does not wait for is not enough" bash -c "! bash '$S' v2.0.1 | grep -q 'moves 2.x data itself'"
 echo "release-order: $PASS passed, $FAIL failed"; [ "$FAIL" -eq 0 ]

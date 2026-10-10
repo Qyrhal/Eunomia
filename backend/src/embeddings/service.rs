@@ -170,6 +170,16 @@ async fn embed_openai(texts: &[String], p: &Provider, model: &str) -> AppResult<
     Ok(out)
 }
 
+/// What `owner`'s vectors are made with now: the provider's origin and the model (`stub` for the
+/// hermetic test backend). For export provenance; stored vectors do not record it yet.
+pub async fn spec_for(db: &OrgDb, settings: &Settings, owner: &RecordId) -> AppResult<EmbedSpec> {
+    if settings.embeddings_backend != "openai" {
+        return Ok(EmbedSpec { origin: "stub".to_string(), model: "stub".to_string() });
+    }
+    let p = provider::resolve(db, settings, owner).await?;
+    Ok(EmbedSpec { origin: p.base_url.trim_end_matches('/').to_string(), model: model_for(&p).to_string() })
+}
+
 pub fn dim() -> usize {
     DIM
 }

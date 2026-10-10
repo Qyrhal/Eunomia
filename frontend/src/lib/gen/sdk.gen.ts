@@ -2,7 +2,7 @@
 
 import type { Client, ClientMeta, Options as Options2, RequestResult, ServerSentEventsResult, TDataShape } from './client';
 import { client } from './client.gen';
-import type { AcceptInvitationData, AcceptInvitationErrors, AcceptInvitationResponses, AddMemoryData, AddMemoryErrors, AddMemoryResponses, AddRelationData, AddRelationErrors, AddRelationResponses, CheckForUpdateData, CheckForUpdateErrors, CheckForUpdateResponses, CloneVaultData, CloneVaultErrors, CloneVaultResponses, CompleteOnboardingData, CompleteOnboardingErrors, CompleteOnboardingResponses, CreateEntityData, CreateEntityErrors, CreateEntityResponses, CreateThreadData, CreateThreadErrors, CreateThreadResponses, CreateTokenData, CreateTokenErrors, CreateTokenResponses, CreateVaultData, CreateVaultErrors, CreateVaultResponses, DecideOauthConsentData, DecideOauthConsentErrors, DecideOauthConsentResponses, DeclineInvitationData, DeclineInvitationErrors, DeclineInvitationResponses, DeleteConnectorDataData, DeleteConnectorDataErrors, DeleteConnectorDataResponses, DeleteEntityData, DeleteEntityErrors, DeleteEntityResponses, DeleteMemoryData, DeleteMemoryErrors, DeleteMemoryResponses, DeleteThreadData, DeleteThreadErrors, DeleteThreadResponses, DeleteTokenData, DeleteTokenErrors, DeleteTokenResponses, DeleteVaultData, DeleteVaultErrors, DeleteVaultResponses, ExportDataData, ExportDataErrors, ExportDataResponses, GetBootstrapData, GetBootstrapErrors, GetBootstrapResponses, GetConnectorData, GetConnectorErrors, GetConnectorResponses, GetEntityData, GetEntityErrors, GetEntityGraphData, GetEntityGraphErrors, GetEntityGraphResponses, GetEntityResponses, GetFailureCapsuleData, GetFailureCapsuleErrors, GetFailureCapsuleResponses, GetHttpsStatusData, GetHttpsStatusErrors, GetHttpsStatusResponses, GetMeData, GetMeErrors, GetMeResponses, GetMetricsData, GetMetricsErrors, GetMetricsResponses, GetOauthConsentData, GetOauthConsentErrors, GetOauthConsentResponses, GetOpenapiData, GetOpenapiResponses, GetPocketaiAllData, GetPocketaiAllErrors, GetPocketaiAllResponses, GetPocketaiDetailData, GetPocketaiDetailErrors, GetPocketaiDetailResponses, GetPocketaiSummaryData, GetPocketaiSummaryErrors, GetPocketaiSummaryResponses, GetReadyzData, GetReadyzErrors, GetReadyzResponses, GetSettingsData, GetSettingsErrors, GetSettingsResponses, GetSnapshotData, GetSnapshotErrors, GetSnapshotResponses, GetSourcesStatusData, GetSourcesStatusErrors, GetSourcesStatusResponses, GetThreadHistoryData, GetThreadHistoryErrors, GetThreadHistoryResponses, GetUpBankFinanceSummaryData, GetUpBankFinanceSummaryErrors, GetUpBankFinanceSummaryResponses, GetUpdateStatusData, GetUpdateStatusErrors, GetUpdateStatusResponses, GetVectorCloudData, GetVectorCloudErrors, GetVectorCloudResponses, InviteMemberData, InviteMemberErrors, InviteMemberResponses, InvokeToolData, InvokeToolErrors, InvokeToolResponses, LeaveVaultData, LeaveVaultErrors, LeaveVaultResponses, ListAuditData, ListAuditErrors, ListAuditResponses, ListConnectorsData, ListConnectorsErrors, ListConnectorsResponses, ListEntitiesData, ListEntitiesErrors, ListEntitiesResponses, ListInvitationsData, ListInvitationsErrors, ListInvitationsResponses, ListMembersData, ListMembersErrors, ListMembersResponses, ListOauthGrantsData, ListOauthGrantsErrors, ListOauthGrantsResponses, ListOpenaiModelsData, ListOpenaiModelsErrors, ListOpenaiModelsResponses, ListSessionsData, ListSessionsErrors, ListSessionsResponses, ListSourcesData, ListSourcesErrors, ListSourcesResponses, ListThreadsData, ListThreadsErrors, ListThreadsResponses, ListTokensData, ListTokensErrors, ListTokensResponses, ListToolsData, ListToolsErrors, ListToolsResponses, ListVaultsData, ListVaultsErrors, ListVaultsResponses, LoginData, LoginErrors, LoginResponses, LogoutData, LogoutErrors, LogoutResponses, MergeEntitiesData, MergeEntitiesErrors, MergeEntitiesResponses, MergeVaultsData, MergeVaultsErrors, MergeVaultsResponses, ReceiveSourceWebhookData, ReceiveSourceWebhookErrors, ReceiveSourceWebhookResponses, RegisterData, RegisterErrors, RegisterResponses, RemoveMemberData, RemoveMemberErrors, RemoveMemberResponses, RenameVaultData, RenameVaultErrors, RenameVaultResponses, RequestHttpsData, RequestHttpsErrors, RequestHttpsResponses, RequestUpdateData, RequestUpdateErrors, RequestUpdateResponses, RevokeOauthGrantData, RevokeOauthGrantErrors, RevokeOauthGrantResponses, RevokeSessionData, RevokeSessionErrors, RevokeSessionResponses, SearchPocketaiData, SearchPocketaiErrors, SearchPocketaiResponses, SendMessageData, SendMessageErrors, SendMessageResponse, SendMessageResponses, SyncSourceData, SyncSourceErrors, SyncSourceResponses, TestConnectorData, TestConnectorErrors, TestConnectorResponses, UpdateConnectorData, UpdateConnectorErrors, UpdateConnectorResponses, UpdateEntityData, UpdateEntityErrors, UpdateEntityResponses, UpdateMemoryData, UpdateMemoryErrors, UpdateMemoryResponses, UpdateSettingsData, UpdateSettingsErrors, UpdateSettingsResponses } from './types.gen';
+import type { AcceptInvitationData, AcceptInvitationErrors, AcceptInvitationResponses, AddMemoryData, AddMemoryErrors, AddMemoryResponses, AddRelationData, AddRelationErrors, AddRelationResponses, CheckForUpdateData, CheckForUpdateErrors, CheckForUpdateResponses, CloneVaultData, CloneVaultErrors, CloneVaultResponses, CompleteOnboardingData, CompleteOnboardingErrors, CompleteOnboardingResponses, CreateEntityData, CreateEntityErrors, CreateEntityResponses, CreateThreadData, CreateThreadErrors, CreateThreadResponses, CreateTokenData, CreateTokenErrors, CreateTokenResponses, CreateVaultData, CreateVaultErrors, CreateVaultResponses, DecideOauthConsentData, DecideOauthConsentErrors, DecideOauthConsentResponses, DeclineInvitationData, DeclineInvitationErrors, DeclineInvitationResponses, DeleteConnectorDataData, DeleteConnectorDataErrors, DeleteConnectorDataResponses, DeleteDocumentData, DeleteDocumentErrors, DeleteDocumentResponses, DeleteEntityData, DeleteEntityErrors, DeleteEntityResponses, DeleteMemoryData, DeleteMemoryErrors, DeleteMemoryResponses, DeleteThreadData, DeleteThreadErrors, DeleteThreadResponses, DeleteTokenData, DeleteTokenErrors, DeleteTokenResponses, DeleteVaultData, DeleteVaultErrors, DeleteVaultResponses, DownloadDocumentData, DownloadDocumentErrors, DownloadDocumentResponses, ExportDataData, ExportDataErrors, ExportDataResponses, ExportDocumentData, ExportDocumentErrors, ExportDocumentResponses, GetBootstrapData, GetBootstrapErrors, GetBootstrapResponses, GetConnectorData, GetConnectorErrors, GetConnectorResponses, GetDocumentData, GetDocumentErrors, GetDocumentResponses, GetEntityData, GetEntityErrors, GetEntityGraphData, GetEntityGraphErrors, GetEntityGraphResponses, GetEntityResponses, GetFailureCapsuleData, GetFailureCapsuleErrors, GetFailureCapsuleResponses, GetHttpsStatusData, GetHttpsStatusErrors, GetHttpsStatusResponses, GetMeData, GetMeErrors, GetMeResponses, GetMetricsData, GetMetricsErrors, GetMetricsResponses, GetOauthConsentData, GetOauthConsentErrors, GetOauthConsentResponses, GetOpenapiData, GetOpenapiResponses, GetPocketaiAllData, GetPocketaiAllErrors, GetPocketaiAllResponses, GetPocketaiDetailData, GetPocketaiDetailErrors, GetPocketaiDetailResponses, GetPocketaiSummaryData, GetPocketaiSummaryErrors, GetPocketaiSummaryResponses, GetReadyzData, GetReadyzErrors, GetReadyzResponses, GetSettingsData, GetSettingsErrors, GetSettingsResponses, GetSnapshotData, GetSnapshotErrors, GetSnapshotResponses, GetSourcesStatusData, GetSourcesStatusErrors, GetSourcesStatusResponses, GetThreadHistoryData, GetThreadHistoryErrors, GetThreadHistoryResponses, GetUpBankFinanceSummaryData, GetUpBankFinanceSummaryErrors, GetUpBankFinanceSummaryResponses, GetUpdateStatusData, GetUpdateStatusErrors, GetUpdateStatusResponses, GetVectorCloudData, GetVectorCloudErrors, GetVectorCloudResponses, InviteMemberData, InviteMemberErrors, InviteMemberResponses, InvokeToolData, InvokeToolErrors, InvokeToolResponses, LeaveVaultData, LeaveVaultErrors, LeaveVaultResponses, ListAuditData, ListAuditErrors, ListAuditResponses, ListConnectorsData, ListConnectorsErrors, ListConnectorsResponses, ListDocumentsData, ListDocumentsErrors, ListDocumentsResponses, ListEntitiesData, ListEntitiesErrors, ListEntitiesResponses, ListInvitationsData, ListInvitationsErrors, ListInvitationsResponses, ListMembersData, ListMembersErrors, ListMembersResponses, ListOauthGrantsData, ListOauthGrantsErrors, ListOauthGrantsResponses, ListOpenaiModelsData, ListOpenaiModelsErrors, ListOpenaiModelsResponses, ListSessionsData, ListSessionsErrors, ListSessionsResponses, ListSourcesData, ListSourcesErrors, ListSourcesResponses, ListThreadsData, ListThreadsErrors, ListThreadsResponses, ListTokensData, ListTokensErrors, ListTokensResponses, ListToolsData, ListToolsErrors, ListToolsResponses, ListVaultsData, ListVaultsErrors, ListVaultsResponses, LoginData, LoginErrors, LoginResponses, LogoutData, LogoutErrors, LogoutResponses, MergeEntitiesData, MergeEntitiesErrors, MergeEntitiesResponses, MergeVaultsData, MergeVaultsErrors, MergeVaultsResponses, ReceiveSourceWebhookData, ReceiveSourceWebhookErrors, ReceiveSourceWebhookResponses, RegisterData, RegisterErrors, RegisterResponses, ReindexDocumentData, ReindexDocumentErrors, ReindexDocumentResponses, RemoveMemberData, RemoveMemberErrors, RemoveMemberResponses, RenameVaultData, RenameVaultErrors, RenameVaultResponses, RequestHttpsData, RequestHttpsErrors, RequestHttpsResponses, RequestUpdateData, RequestUpdateErrors, RequestUpdateResponses, RevokeOauthGrantData, RevokeOauthGrantErrors, RevokeOauthGrantResponses, RevokeSessionData, RevokeSessionErrors, RevokeSessionResponses, SearchPocketaiData, SearchPocketaiErrors, SearchPocketaiResponses, SendMessageData, SendMessageErrors, SendMessageResponse, SendMessageResponses, SyncSourceData, SyncSourceErrors, SyncSourceResponses, TestConnectorData, TestConnectorErrors, TestConnectorResponses, UpdateConnectorData, UpdateConnectorErrors, UpdateConnectorResponses, UpdateEntityData, UpdateEntityErrors, UpdateEntityResponses, UpdateMemoryData, UpdateMemoryErrors, UpdateMemoryResponses, UpdateSettingsData, UpdateSettingsErrors, UpdateSettingsResponses, UploadDocumentData, UploadDocumentErrors, UploadDocumentResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -379,6 +379,102 @@ export const getMetrics = <ThrowOnError extends boolean = false>(options?: Optio
             type: 'apiKey'
         }, { scheme: 'bearer', type: 'http' }],
     url: '/api/debug/metrics',
+    ...options
+});
+
+/**
+ * List uploaded documents, newest first
+ */
+export const listDocuments = <ThrowOnError extends boolean = false>(options?: Options<ListDocumentsData, ThrowOnError>): RequestResult<ListDocumentsResponses, ListDocumentsErrors, ThrowOnError> => (options?.client ?? client).get<ListDocumentsResponses, ListDocumentsErrors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: 'eunomia_session',
+            type: 'apiKey'
+        }, { scheme: 'bearer', type: 'http' }],
+    url: '/api/documents',
+    ...options
+});
+
+/**
+ * Upload a document (the request body is the file)
+ */
+export const uploadDocument = <ThrowOnError extends boolean = false>(options: Options<UploadDocumentData, ThrowOnError>): RequestResult<UploadDocumentResponses, UploadDocumentErrors, ThrowOnError> => (options.client ?? client).post<UploadDocumentResponses, UploadDocumentErrors, ThrowOnError>({
+    bodySerializer: null,
+    security: [{
+            in: 'cookie',
+            name: 'eunomia_session',
+            type: 'apiKey'
+        }, { scheme: 'bearer', type: 'http' }],
+    url: '/api/documents',
+    ...options,
+    headers: {
+        'Content-Type': 'application/octet-stream',
+        ...options.headers
+    }
+});
+
+/**
+ * Delete a document, its stored file, its chunks and what was extracted from them
+ */
+export const deleteDocument = <ThrowOnError extends boolean = false>(options: Options<DeleteDocumentData, ThrowOnError>): RequestResult<DeleteDocumentResponses, DeleteDocumentErrors, ThrowOnError> => (options.client ?? client).delete<DeleteDocumentResponses, DeleteDocumentErrors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: 'eunomia_session',
+            type: 'apiKey'
+        }, { scheme: 'bearer', type: 'http' }],
+    url: '/api/documents/{document_id}',
+    ...options
+});
+
+/**
+ * One document with its extracted text and chunk references
+ */
+export const getDocument = <ThrowOnError extends boolean = false>(options: Options<GetDocumentData, ThrowOnError>): RequestResult<GetDocumentResponses, GetDocumentErrors, ThrowOnError> => (options.client ?? client).get<GetDocumentResponses, GetDocumentErrors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: 'eunomia_session',
+            type: 'apiKey'
+        }, { scheme: 'bearer', type: 'http' }],
+    url: '/api/documents/{document_id}',
+    ...options
+});
+
+/**
+ * Download the original file, byte for byte
+ */
+export const downloadDocument = <ThrowOnError extends boolean = false>(options: Options<DownloadDocumentData, ThrowOnError>): RequestResult<DownloadDocumentResponses, DownloadDocumentErrors, ThrowOnError> => (options.client ?? client).get<DownloadDocumentResponses, DownloadDocumentErrors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: 'eunomia_session',
+            type: 'apiKey'
+        }, { scheme: 'bearer', type: 'http' }],
+    url: '/api/documents/{document_id}/download',
+    ...options
+});
+
+/**
+ * Download the document's export manifest: chunks, locations and vectors
+ */
+export const exportDocument = <ThrowOnError extends boolean = false>(options: Options<ExportDocumentData, ThrowOnError>): RequestResult<ExportDocumentResponses, ExportDocumentErrors, ThrowOnError> => (options.client ?? client).get<ExportDocumentResponses, ExportDocumentErrors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: 'eunomia_session',
+            type: 'apiKey'
+        }, { scheme: 'bearer', type: 'http' }],
+    url: '/api/documents/{document_id}/export',
+    ...options
+});
+
+/**
+ * Extract and index the stored file again, as a new revision
+ */
+export const reindexDocument = <ThrowOnError extends boolean = false>(options: Options<ReindexDocumentData, ThrowOnError>): RequestResult<ReindexDocumentResponses, ReindexDocumentErrors, ThrowOnError> => (options.client ?? client).post<ReindexDocumentResponses, ReindexDocumentErrors, ThrowOnError>({
+    security: [{
+            in: 'cookie',
+            name: 'eunomia_session',
+            type: 'apiKey'
+        }, { scheme: 'bearer', type: 'http' }],
+    url: '/api/documents/{document_id}/reindex',
     ...options
 });
 

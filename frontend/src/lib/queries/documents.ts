@@ -1,0 +1,47 @@
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { deleteDocument, getDocument, listDocuments, reindexDocument } from "@/lib/gen";
+import type { DocumentDetail, DocumentList } from "@/lib/gen";
+import { call } from "./client";
+import { toolKeys } from "./tools";
+
+export const documentKeys = {
+  all: ["documents"] as const,
+  list: () => [...documentKeys.all, "list"] as const,
+  detail: (id: string) => [...documentKeys.all, "detail", id] as const,
+};
+
+const indexing = (list?: DocumentList) => list?.results.some((d) => d.status === "indexing") ?? false;
+
+/** The user's documents. Polls every 2s while one is still indexing, so its status and passage count arrive on their own. */
+export const useDocuments = () =>
+  useQuery({
+    queryKey: documentKeys.list(),
+    queryFn: () => call(listDocuments({ query: { limit: 200 } })),
+    refetchInterval: (q) => (indexing(q.state.data) ? 2000 : false),
+  });
+
+export const useDocument = (id: string | null) =>
+  useQuery({
+    queryKey: documentKeys.detail(id ?? ""),
+    queryFn: () => call(getDocument({ path: { document_id: id! } })) as Promise<DocumentDetail>,
+    enabled: id !== null,
+    refetchInterval: (q) => (q.state.data?.document.status === "indexing" ? 2000 : false),
+  });
+
+// A change to a document changes what search finds: refresh the palette's record hits too.
+const useDocumentMutation = <V, R>(fn: (v: V) => Promise<R>) => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: fn,
+    onSuccess: () => Promise.all([qc.invalidateQueries({ queryKey: documentKeys.all }), qc.invalidateQueries({ queryKey: toolKeys.all })]),
+  });
+};
+
+export const useDeleteDocument = () => useDocumentMutation((id: string) => call(deleteDocument({ path: { document_id: id } })));
+export const useReindexDocument = () => useDocumentMutation((id: string) => call(reindexDocument({ path: { document_id: id } })));
+
+/** Call after an upload finishes (uploads go through `uploadDocumentFile`, which reports progress). */
+export const useRefreshDocuments = () => {
+  const qc = useQueryClient();
+  return () => Promise.all([qc.invalidateQueries({ queryKey: documentKeys.all }), qc.invalidateQueries({ queryKey: toolKeys.all })]);
+};

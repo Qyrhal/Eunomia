@@ -46,6 +46,68 @@ async function apiErrorFromResponse(res: Response, path: string): Promise<ApiErr
 // export
 // ---------------------------------------------------------------------------
 
+/** Saves a response body as a file named `name`. */
+async function saveResponse(res: Response, path: string, name: string): Promise<void> {
+  if (!res.ok) throw await apiErrorFromResponse(res, path);
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+/** Downloads a document's original bytes (`kind: "download"`) or its export manifest with vectors (`"export"`). */
+export async function downloadDocumentFile(id: string, filename: string, kind: "download" | "export"): Promise<void> {
+  const path = `/api/documents/${encodeURIComponent(id)}/${kind}`;
+  const res = await fetch(`${API_URL}${path}`, { credentials: "include", headers: { traceparent: traceparent() } });
+  await saveResponse(res, path, kind === "download" ? filename : `${filename}.export.json`);
+}
+
+/**
+ * Uploads one file as the raw request body (XMLHttpRequest, for upload progress). The browser's type
+ * goes in the query when it has one; without it the server goes by the file extension.
+ */
+export function uploadDocumentFile(file: File, onProgress: (fraction: number) => void): Promise<{ id: string; status: string }> {
+  const params = new URLSearchParams({ filename: file.name });
+  if (file.type) params.set("content_type", file.type);
+  const path = `/api/documents?${params}`;
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `${API_URL}${path}`);
+    xhr.withCredentials = true;
+    xhr.setRequestHeader("traceparent", traceparent());
+    xhr.setRequestHeader("Content-Type", file.type || "application/octet-stream");
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) onProgress(e.loaded / e.total);
+    };
+    xhr.onload = () => {
+      let body: { id?: string; status?: string; detail?: string; code?: string; trace_id?: string } = {};
+      try {
+        body = JSON.parse(xhr.responseText);
+      } catch {
+        // a proxy's plain-text error (a body too large for it, say)
+      }
+      if (xhr.status >= 200 && xhr.status < 300 && body.id) {
+        resolve({ id: body.id, status: body.status ?? "indexing" });
+        return;
+      }
+      const tooLarge = xhr.status === 413 && !body.detail;
+      reject(
+        new ApiError(
+          xhr.status,
+          body.code ?? (tooLarge ? "document.too_large" : `http.${xhr.status}`),
+          body.detail ?? (tooLarge ? "That file is larger than the server accepts." : `${xhr.status} /api/documents`),
+          body.trace_id ?? xhr.getResponseHeader("x-trace-id") ?? undefined,
+        ),
+      );
+    };
+    xhr.onerror = () => reject(new Error("The upload did not reach the server. Check your connection and try again."));
+    xhr.send(file);
+  });
+}
+
 export async function downloadExport(): Promise<void> {
   const res = await fetch(`${API_URL}/api/export`, { credentials: "include", headers: { traceparent: traceparent() } });
   if (!res.ok) throw await apiErrorFromResponse(res, "/api/export");

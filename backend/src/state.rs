@@ -57,6 +57,7 @@ impl AppState {
         let control = crate::pool::connect_control(&template, settings).await?;
         if let Some(p) = &provisioner {
             crate::provisioning::legacy::move_if_needed(p, &control, settings).await?;
+            p.ensure_document_buckets(&control).await;
         }
         crate::connectors::crypto::guard_key(settings, &control).await?;
         crate::connectors::crypto::rotate_tenant_passwords(settings, &control).await?;

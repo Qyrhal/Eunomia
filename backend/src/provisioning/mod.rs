@@ -139,8 +139,67 @@ impl Provisioner {
         let s = self.session(rt, db).await?;
         crate::migrate::migrate(&s, &self.settings).await?;
         root(&s, "provisioning.db_user", format!("DEFINE USER OVERWRITE {DB_USER} ON DATABASE PASSWORD '{pass}' ROLES EDITOR")).await?.check()?;
+        self.define_documents_bucket(&s, db).await;
         tracing::info!(db, ns, "org database ready");
         Ok(())
+    }
+
+    /// Define (or redefine) the org database's `documents` file bucket from `EUNOMIA_DOCUMENTS_BACKEND`
+    /// (see `documents::bucket_url`): root only, a database user cannot define buckets. Best effort: a
+    /// server without `--allow-experimental=files`, or a backend it cannot reach, leaves uploads
+    /// answering `document.storage_unavailable` and everything else working.
+    async fn define_documents_bucket(&self, s: &Db, db: &str) {
+        let base = &self.settings.documents_backend;
+        if base.is_empty() {
+            return;
+        }
+        let url = match crate::documents::bucket_url(base, db) {
+            Ok(url) => url,
+            Err(why) => {
+                tracing::error!(db, "EUNOMIA_DOCUMENTS_BACKEND is not usable, documents stay off: {why}");
+                return;
+            }
+        };
+        let res = crate::tx::with_retry(|| async {
+            root(s, "provisioning.documents_bucket", "DEFINE BUCKET OVERWRITE documents BACKEND $url").bind(("url", url.clone())).await?.check().map(|_| ())
+        })
+        .await;
+        if let Err(e) = res {
+            tracing::warn!(db, error = %e, "the documents bucket could not be defined; uploads are unavailable until it can (docs/documents.md)");
+        }
+    }
+
+    /// At boot: every ready org's bucket, so a changed `EUNOMIA_DOCUMENTS_BACKEND` (or an org provisioned
+    /// before documents existed) takes effect. One short root session for all of them.
+    pub async fn ensure_document_buckets(&self, control: &ControlDb) {
+        if self.settings.documents_backend.is_empty() {
+            return;
+        }
+        #[derive(serde::Deserialize, SurrealValue)]
+        struct Row {
+            db: String,
+            status: String,
+        }
+        let rows: Vec<Row> = match store::tenant::LIST.on(control).await.and_then(|mut r| r.take(0)) {
+            Ok(rows) => rows,
+            Err(e) => {
+                tracing::warn!(error = %e, "could not list org databases to define their documents buckets");
+                return;
+            }
+        };
+        let rt = match self.open().await {
+            Ok(rt) => rt,
+            Err(e) => {
+                tracing::warn!(error = %e, "could not open a root session to define the documents buckets");
+                return;
+            }
+        };
+        for row in rows.into_iter().filter(|r| r.status == "ready") {
+            match self.session(&rt, &row.db).await {
+                Ok(s) => self.define_documents_bucket(&s, &row.db).await,
+                Err(e) => tracing::warn!(db = row.db, error = %e, "could not open the org database to define its documents bucket"),
+            }
+        }
     }
 
     /// Apply pending tenant migrations to one org's database (the `migrate_tenant` job).

@@ -94,6 +94,15 @@ test("every MCP tool works end to end", async ({ request, baseURL }) => {
   await other.dispose();
   for (const v of [team.id, copy.id, both.id]) expect((await ok("vault_delete", { vault_id: v })).deleted).toBe(true);
 
+  // documents: upload, wait for indexing, read, download route, export, delete
+  const doc = await ok("document_upload", { filename: "notes.md", text: "# Notes\n\nThe kestrel survey starts in May." });
+  await expect.poll(async () => (await ok("document_get", { id: doc.id })).document.status, { timeout: 30_000 }).toBe("ready");
+  expect((await ok("document_list")).results.map((d: { id: string }) => d.id)).toContain(doc.id);
+  expect((await ok("document_download", { id: doc.id })).download.path).toBe(`/api/documents/${doc.id}/download`);
+  expect((await ok("document_export", { id: doc.id })).chunks.length).toBe(1);
+  expect((await call("document_upload", { filename: "x.exe", text: "MZ" })).isError).toBe(true);
+  expect((await ok("document_delete", { id: doc.id })).deleted).toBe(true);
+
   // coverage: every tool the server lists was exercised above
   const list = await request.post("/mcp", {
     headers: { Authorization: `Bearer ${me.token}` },

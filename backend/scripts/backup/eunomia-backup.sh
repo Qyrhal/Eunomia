@@ -14,6 +14,11 @@
 # file per database of the namespace (control.surql.enc, org_<uuid>.surql.enc, and the old
 # single database until you remove it). Without it (a pre-tenancy install, the restore drill) a
 # backup is the single file NAME.surql.enc as before.
+# Uploaded documents' files are not in any export: when the documents folder (DOCUMENTS_DIR: the
+# `file:` bucket folder, /data/documents in the database's data volume, mounted here as
+# /surreal-data/documents by docker-compose.yml) exists and is not empty, a tenancy backup also holds
+# documents.tar.enc (a tar of it, encrypted the same way), and restoring that backup unpacks it back.
+# A bucket whose backend is S3 is not copied: back that bucket up with its own tools.
 set -eu
 
 ENDPOINT="${SURREAL_ENDPOINT:-http://surrealdb:8000}"
@@ -24,6 +29,7 @@ DB="${SURREAL_DB:-eunomia}"
 DIR="${BACKUP_DIR:-/backups}"
 KEEP_DAILY="${KEEP_DAILY:-14}"
 KEEP_WEEKLY="${KEEP_WEEKLY:-8}"
+DOCS_DIR="${DOCUMENTS_DIR:-/documents}"
 
 log() { echo "[backup $(date -u +%FT%TZ)] $*"; }
 die() { log "ERROR: $*" >&2; exit 1; }
@@ -166,6 +172,10 @@ do_backup() {
     for d in $dbs; do
       dump_to "$d" "$out.part/$d.surql.enc" || { rm -rf "$out.part"; die "export of database $d failed (is SurrealDB reachable at $ENDPOINT and are the credentials right?)"; }
     done
+    if [ -d "$DOCS_DIR" ] && [ -n "$(ls -A "$DOCS_DIR" 2>/dev/null)" ]; then
+      tar -C "$DOCS_DIR" -cf - . | encrypt_to "$out.part/documents.tar.enc" \
+        || { rm -rf "$out.part"; die "could not archive the documents in $DOCS_DIR"; }
+    fi
     mv "$out.part" "$out"
   fi
   log "wrote $out ($(du -sk "$out" | cut -f1) KB, databases: $(echo $dbs))"
@@ -221,6 +231,15 @@ do_restore() {
       d="$(basename "$file" .surql.enc)"
       restore_one "$file" "$d" "${2:-}"
     done
+    if [ -f "$f/documents.tar.enc" ]; then
+      mkdir -p "$DOCS_DIR" 2>/dev/null; [ -w "$DOCS_DIR" ] || die "$f holds documents but $DOCS_DIR is not writable here"
+      plain="$(mktemp)"
+      decrypt_to "$f/documents.tar.enc" "$plain"
+      [ "${2:-}" != "--wipe" ] || find "$DOCS_DIR" -mindepth 1 -delete
+      tar -C "$DOCS_DIR" -xf "$plain" || { rm -f "$plain"; die "could not unpack the documents into $DOCS_DIR"; }
+      rm -f "$plain"
+      log "restored the documents into $DOCS_DIR"
+    fi
   else
     restore_one "$f" "$DB" "${2:-}"
   fi

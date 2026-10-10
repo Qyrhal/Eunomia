@@ -134,6 +134,19 @@ async fn every_registered_tool_has_a_golden() {
     g.snap("vault_leave", "vault_leave", json!({"vault_id": team})).await;
     g.snap("vault_delete", "vault_delete", json!({"vault_id": s(&clone, "/id")})).await;
 
+    // -- documents (the index job run by hand: no worker in this test, so nothing else moves) --
+    let up = g.snap("document_upload", "document_upload", json!({"filename": "anvil-budget.md", "text": "# Anvil budget\n\nThe anvil budget doubles in March."})).await;
+    let doc = s(&up, "/id");
+    let jobs = eunomia_backend::jobs::claim(g.app.control(), "golden", 10, std::time::Duration::from_secs(30), 100).await.unwrap();
+    for job in jobs.into_iter().filter(|j| j.kind == eunomia_backend::jobs::kind::INDEX_DOCUMENT) {
+        Box::pin(common::sys(eunomia_backend::documents::index_job(g.app.state.clone(), job))).await.unwrap();
+    }
+    g.snap("document_get", "document_get", json!({"id": doc})).await;
+    g.snap("document_list", "document_list", json!({})).await;
+    g.snap("document_download", "document_download", json!({"id": doc})).await;
+    g.snap("document_export", "document_export", json!({"id": doc})).await;
+    g.snap("document_delete", "document_delete", json!({"id": doc})).await;
+
     let registered: BTreeSet<String> = registry::all_tools().keys().map(|k| k.to_string()).collect();
     let missing: Vec<_> = registered.difference(&g.covered).collect();
     let extra: Vec<_> = g.covered.difference(&registered).collect();

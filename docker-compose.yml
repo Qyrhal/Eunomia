@@ -21,20 +21,46 @@ services:
       - --allow-rpc
       - --allow-http
       - --allow-arbitrary-query=system
-      - --allow-funcs=time,string,search,count,array,vector,math
+      # file and type::file: the documents bucket (file::put/get/delete on type::file pointers)
+      - --allow-funcs=time,string,search,count,array,vector,math,file,type::file
+      # file buckets are experimental in 3.3; write it with `=`, the flag takes several values and
+      # would swallow the database path below (docs/documents.md)
+      - --allow-experimental=files
       - --query-timeout=60s
       - --transaction-timeout=60s
       - rocksdb:/data/eunomia.db
+    environment:
+      # the only folder a `file:` bucket may use: uploaded documents (EUNOMIA_DOCUMENTS_BACKEND), kept in
+      # the database's own data volume, so documents need no other service or volume
+      - SURREAL_BUCKET_FOLDER_ALLOWLIST=/data/documents
     # No host port: only the backend talks to the DB, over the compose network.
     volumes:
-      # scripts/upgrade-surreal-v3.sh sets SURREAL_DATA_VOLUME=eunomia-surreal-data-v3
-      # in .env once the 2.x data has been moved to a fresh 3.x volume.
-      - ${SURREAL_DATA_VOLUME:-eunomia-surreal-data}:/data
+      # 3.x data lives on eunomia-surreal-data-v3. An install from before 2.0 keeps its 2.x data
+      # on eunomia-surreal-data, which is never opened by 3.x: surreal-upgrade (below) copies it
+      # across first and records SURREAL_DATA_VOLUME in .env.
+      - ${SURREAL_DATA_VOLUME:-eunomia-surreal-data-v3}:/data
+    depends_on:
+      surreal-upgrade:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "/surreal", "isready", "--endpoint", "http://localhost:8000"]
       interval: 5s
       timeout: 5s
       retries: 10
+
+  # One-shot, run by every `docker compose up` before surrealdb starts: moves an install's
+  # SurrealDB 2.x data to 3.x when it has some that was never moved, so a 1.x install that jumps
+  # straight to this release (its old updater just runs `up`) is migrated, not crash-looped.
+  # A no-op within a second otherwise. On failure it exits 1 and the old server and backend run
+  # again on the untouched old volume. See scripts/surreal-upgrade-service.sh and
+  # docs/upgrading-to-surrealdb-3.md. Holds the docker socket like the updater; no ports.
+  surreal-upgrade:
+    image: docker:27-cli
+    restart: "no"
+    entrypoint: ["sh", "/eunomia/scripts/surreal-upgrade-service.sh"]
+    volumes:
+      - .:/eunomia
+      - /var/run/docker.sock:/var/run/docker.sock
 
   backend:
     image: ghcr.io/qyrhal/eunomia-backend:${EUNOMIA_IMAGE_TAG:-latest}
@@ -84,6 +110,11 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-}
       - OTEL_SERVICE_NAME=eunomia-backend
+      # where SurrealDB's built-in file bucket keeps uploaded documents: by default a folder in its own
+      # data volume. Optionally an S3 URL, with the credentials in the surrealdb service's environment
+      # (docs/documents.md)
+      - EUNOMIA_DOCUMENTS_BACKEND=${EUNOMIA_DOCUMENTS_BACKEND:-file:/data/documents}
+      - EUNOMIA_DOCUMENTS_MAX_BYTES=${EUNOMIA_DOCUMENTS_MAX_BYTES:-26214400}
     # Read/write access to ONE small status directory -- not the repo, not
     # the docker socket. The `updater` service below does the actual update.
     volumes:
@@ -121,6 +152,11 @@ services:
   updater:
     image: docker:27-cli
     restart: unless-stopped
+    # A changed definition is what gets this release's scripts/updater.sh loaded: the updater of
+    # the release being replaced ends every update with `docker compose up -d updater`, which only
+    # recreates the container when this block differs (compose cannot see the script itself).
+    labels:
+      eunomia.updater: "2"
     entrypoint: ["sh", "-c", "cp /eunomia/scripts/updater.sh /tmp/updater.sh && exec sh /tmp/updater.sh"]
     volumes:
       - .:/eunomia
@@ -165,8 +201,12 @@ services:
       - SURREAL_PASS=${SURREAL_PASS:-root}
       - SURREAL_NS=${SURREAL_NS:-eunomia}
       - SURREAL_DB=${SURREAL_DB:-eunomia}
+      - DOCUMENTS_DIR=/surreal-data/documents
     volumes:
       - eunomia-backups:/backups
+      # the database's data volume, for the uploaded documents in it (/surreal-data/documents): written
+      # into each backup as documents.tar.enc and restored from it. Nothing else in it is touched.
+      - ${SURREAL_DATA_VOLUME:-eunomia-surreal-data-v3}:/surreal-data
     depends_on:
       surrealdb:
         condition: service_healthy

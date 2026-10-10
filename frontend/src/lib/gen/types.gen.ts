@@ -77,6 +77,23 @@ export type ChatRequest = {
     message: string;
 };
 
+/**
+ * Where one chunk sits in its document.
+ */
+export type ChunkRef = {
+    char_end: number;
+    /**
+     * Character offsets of the chunk in the extracted text, end exclusive.
+     */
+    char_start: number;
+    /**
+     * The chunk's record id for `get` (also its vector's reference).
+     */
+    chunk_id: string;
+    has_embedding: boolean;
+    part: number;
+};
+
 export type CloneOut = {
     created_at?: string | null;
     entities_copied: number;
@@ -183,6 +200,77 @@ export type DeleteDataOut = {
 
 export type DeletedBody = {
     deleted: boolean;
+};
+
+export type DocumentDeleted = {
+    /**
+     * Chunks removed from retrieval, and memories that had been extracted from them.
+     */
+    chunks: number;
+    deleted: boolean;
+    memories: number;
+};
+
+export type DocumentDetail = {
+    chunks: Array<ChunkRef>;
+    document: DocumentOut;
+    /**
+     * The extracted text of the current revision (up to `max_chars`; `text_truncated` says when cut).
+     */
+    text: string;
+    text_truncated: boolean;
+};
+
+export type DocumentList = {
+    has_more: boolean;
+    /**
+     * The largest upload accepted, in bytes.
+     */
+    max_bytes: number;
+    /**
+     * Accepted media types.
+     */
+    media_types: Array<string>;
+    results: Array<DocumentOut>;
+    /**
+     * Whether this server stores documents at all (`EUNOMIA_DOCUMENTS_BACKEND` is set).
+     */
+    storage: boolean;
+    total: number;
+};
+
+/**
+ * One document as callers see it.
+ */
+export type DocumentOut = {
+    chunk_count: number;
+    created_at: string;
+    /**
+     * Authenticated `GET` for the original bytes (same credentials as this call).
+     */
+    download_url: string;
+    /**
+     * Why indexing failed. Absent otherwise (a tool result with an `error` key reads as a failed call).
+     */
+    error?: string | null;
+    filename: string;
+    id: string;
+    indexed_at?: string | null;
+    media_type: string;
+    /**
+     * Bumped by a re-upload or a re-index; chunks name the revision they came from.
+     */
+    revision: number;
+    /**
+     * SHA-256 of the original bytes, hex.
+     */
+    sha256: string;
+    size_bytes: number;
+    /**
+     * `indexing`, `ready` or `failed` (`deleted` only while a deletion's cleanup is unfinished).
+     */
+    status: string;
+    updated_at: string;
 };
 
 export type EntityCreate = {
@@ -1404,6 +1492,203 @@ export type GetMetricsResponses = {
 };
 
 export type GetMetricsResponse = GetMetricsResponses[keyof GetMetricsResponses];
+
+export type ListDocumentsData = {
+    body?: never;
+    path?: never;
+    query?: {
+        /**
+         * At most 200, default 50.
+         */
+        limit?: number;
+        offset?: number;
+    };
+    url: '/api/documents';
+};
+
+export type ListDocumentsErrors = {
+    /**
+     * Error
+     */
+    default: Problem;
+};
+
+export type ListDocumentsError = ListDocumentsErrors[keyof ListDocumentsErrors];
+
+export type ListDocumentsResponses = {
+    200: DocumentList;
+};
+
+export type ListDocumentsResponse = ListDocumentsResponses[keyof ListDocumentsResponses];
+
+export type UploadDocumentData = {
+    /**
+     * The file's bytes
+     */
+    body: string;
+    path?: never;
+    query?: {
+        /**
+         * The file's name (shown, and used for the download); its extension decides the type when the
+         * body's Content-Type is missing or generic.
+         */
+        filename?: string;
+        /**
+         * Overrides the request's Content-Type.
+         */
+        content_type?: string;
+        /**
+         * Publish the body as a new revision of this document instead of a new document.
+         */
+        replace?: string;
+    };
+    url: '/api/documents';
+};
+
+export type UploadDocumentErrors = {
+    /**
+     * Error
+     */
+    default: Problem;
+};
+
+export type UploadDocumentError = UploadDocumentErrors[keyof UploadDocumentErrors];
+
+export type UploadDocumentResponses = {
+    200: DocumentOut;
+};
+
+export type UploadDocumentResponse = UploadDocumentResponses[keyof UploadDocumentResponses];
+
+export type DeleteDocumentData = {
+    body?: never;
+    path: {
+        document_id: string;
+    };
+    query?: never;
+    url: '/api/documents/{document_id}';
+};
+
+export type DeleteDocumentErrors = {
+    /**
+     * Error
+     */
+    default: Problem;
+};
+
+export type DeleteDocumentError = DeleteDocumentErrors[keyof DeleteDocumentErrors];
+
+export type DeleteDocumentResponses = {
+    200: DocumentDeleted;
+};
+
+export type DeleteDocumentResponse = DeleteDocumentResponses[keyof DeleteDocumentResponses];
+
+export type GetDocumentData = {
+    body?: never;
+    path: {
+        document_id: string;
+    };
+    query?: {
+        /**
+         * How much of the extracted text to return, default 100000 characters.
+         */
+        max_chars?: number;
+    };
+    url: '/api/documents/{document_id}';
+};
+
+export type GetDocumentErrors = {
+    /**
+     * Error
+     */
+    default: Problem;
+};
+
+export type GetDocumentError = GetDocumentErrors[keyof GetDocumentErrors];
+
+export type GetDocumentResponses = {
+    200: DocumentDetail;
+};
+
+export type GetDocumentResponse = GetDocumentResponses[keyof GetDocumentResponses];
+
+export type DownloadDocumentData = {
+    body?: never;
+    path: {
+        document_id: string;
+    };
+    query?: never;
+    url: '/api/documents/{document_id}/download';
+};
+
+export type DownloadDocumentErrors = {
+    /**
+     * Error
+     */
+    default: Problem;
+};
+
+export type DownloadDocumentError = DownloadDocumentErrors[keyof DownloadDocumentErrors];
+
+export type DownloadDocumentResponses = {
+    /**
+     * The original bytes
+     */
+    200: Blob | File;
+};
+
+export type DownloadDocumentResponse = DownloadDocumentResponses[keyof DownloadDocumentResponses];
+
+export type ExportDocumentData = {
+    body?: never;
+    path: {
+        document_id: string;
+    };
+    query?: never;
+    url: '/api/documents/{document_id}/export';
+};
+
+export type ExportDocumentErrors = {
+    /**
+     * Error
+     */
+    default: Problem;
+};
+
+export type ExportDocumentError = ExportDocumentErrors[keyof ExportDocumentErrors];
+
+export type ExportDocumentResponses = {
+    200: {
+        [key: string]: unknown;
+    };
+};
+
+export type ExportDocumentResponse = ExportDocumentResponses[keyof ExportDocumentResponses];
+
+export type ReindexDocumentData = {
+    body?: never;
+    path: {
+        document_id: string;
+    };
+    query?: never;
+    url: '/api/documents/{document_id}/reindex';
+};
+
+export type ReindexDocumentErrors = {
+    /**
+     * Error
+     */
+    default: Problem;
+};
+
+export type ReindexDocumentError = ReindexDocumentErrors[keyof ReindexDocumentErrors];
+
+export type ReindexDocumentResponses = {
+    200: DocumentOut;
+};
+
+export type ReindexDocumentResponse = ReindexDocumentResponses[keyof ReindexDocumentResponses];
 
 export type ListEntitiesData = {
     body?: never;

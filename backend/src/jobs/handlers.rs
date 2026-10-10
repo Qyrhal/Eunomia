@@ -24,6 +24,7 @@ pub fn registry() -> Registry {
         .register(kind::PRUNE_CAPSULES, prune_capsules)
         .register(kind::PRUNE_AUTH, prune_auth)
         .register(kind::MIGRATE_TENANT, migrate_tenant)
+        .register(kind::INDEX_DOCUMENT, crate::documents::index_job)
 }
 
 /// The org database a job works in. A missing org is permanent; a database that is not ready or is

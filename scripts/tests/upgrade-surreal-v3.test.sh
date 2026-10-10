@@ -5,6 +5,8 @@
 #   1. 2.7.0 on a RocksDB volume, legacy schema + data in every table
 #   2. a forced count mismatch must roll back to the 2.x volume with data intact
 #   3. the real upgrade must land on 3.3 with equal counts, KNN and full-text working
+#   D. skip-bridge: a released v1.2.2 stack, then the new compose file and a plain `docker compose up`
+#      (all an old release's updater does): the one-shot surreal-upgrade service must move the data
 # UPGRADE_TEST_LARGE=1 (or a row count) adds that many 1536-d cache_record rows (default 50000)
 # before the upgrade: the import must finish well past the hardened server's 60 s limits. Slow
 # (many minutes, a few GB of disk), so it is off by default and not run in CI.
@@ -36,8 +38,21 @@ mkdir -p "$W/backend/scripts/backup"
 cp "$ROOT"/backend/scripts/backup/* "$W/backend/scripts/backup/"
 sed -i.bak "s#^FROM surrealdb/surrealdb:.*AS surreal#FROM $OLD_IMG AS surreal#" "$W/backend/scripts/backup/Dockerfile"
 cp "$ROOT/scripts/upgrade-surreal-v3.sh" "$W/upgrade.sh"
+mkdir -p "$W/scripts" && cp "$ROOT/scripts/upgrade-surreal-v3.sh" "$ROOT/scripts/surreal-upgrade-service.sh" "$W/scripts/"
 cp "$ROOT/docker-compose.import.yml" "$W/"
-sed "s#surrealdb/surrealdb:v[0-9.]*#$OLD_IMG#" "$ROOT/docker-compose.yml" > "$W/compose.old"
+# the "installed" release: like a 1.x one, its data is on eunomia-surreal-data and it has no surreal-upgrade step
+python3 - "$ROOT/docker-compose.yml" "$OLD_IMG" > "$W/compose.old" <<'PYEOF'
+import re, sys
+s = open(sys.argv[1]).read()
+s = re.sub(r"surrealdb/surrealdb:v[0-9.]+", sys.argv[2], s)
+s = s.replace("${SURREAL_DATA_VOLUME:-eunomia-surreal-data-v3}", "eunomia-surreal-data")
+s = re.sub(r"\n    depends_on:\n      surreal-upgrade:\n        condition: service_completed_successfully", "", s)
+s = re.sub(r"\n  surreal-upgrade:\n(    .*\n|      .*\n)+", "\n", s)
+# 2.x refuses --allow-experimental=files (3.x file buckets)
+s = re.sub(r"\n      - --allow-experimental=files", "", s)
+print(s, end="")
+PYEOF
+grep -qE '^  surreal-upgrade:|service_completed_successfully' "$W/compose.old" && { echo "compose.old still has surreal-upgrade"; exit 1; }
 sed "s#surrealdb/surrealdb:v[0-9.]*#$NEW_IMG#" "$ROOT/docker-compose.yml" > "$W/compose.new"
 cat > "$W/standin.yml" <<'YML'
 services:
@@ -50,7 +65,7 @@ YML
 cp "$W/compose.old" "$W/docker-compose.yml"
 printf 'JWT_SECRET=x\nENCRYPTION_KEY=y\nBACKUP_ENCRYPTION_KEY=%s\n' "$BACKUP_ENCRYPTION_KEY" > "$W/.env"
 export COMPOSE_FILE="docker-compose.yml:standin.yml"
-docker pull -q busybox:1.36 >/dev/null
+docker pull -q busybox:1.36 >/dev/null; docker pull -q docker:27-cli >/dev/null
 # `--pull never` below: fetch both SurrealDB images up front (a fresh CI runner has neither)
 docker pull -q "$OLD_IMG" >/dev/null && docker pull -q "$NEW_IMG" >/dev/null || { echo "could not pull $OLD_IMG / $NEW_IMG"; exit 1; }
 cd "$W" || exit 1
@@ -214,6 +229,44 @@ if [ -z "$REL" ]; then echo "SKIP case B: tag v1.2.2 not available"; else
   check "case B: the backup restores (integrity check passes) with the key" bash -c "f=\$(docker compose run --rm --no-deps -T backup list | grep -o 'pre-v3-[^ ]*surql.enc' | head -1); docker compose run --rm --no-deps -T --entrypoint sh backup -c \"head -n1 /backups/\$f | grep -q '^EUNOMIA-BK2 '\""
   check "case B: scratch container and volumes are gone" test -z "$(docker ps -aq --filter name=fw-upgrade-v2scratch; docker volume ls -q --filter name=v2copy --filter name=oldbin)"
 fi
+
+# --- case D: skip-bridge. The released v1.2.2 stack, then what its updater does with a 3.x release:
+# check out the new compose file and `docker compose up`. No host-side script runs. ---
+echo "=== case D: v1.2.2 stack, then a plain docker compose up of the new release ==="
+if [ -z "$REL" ]; then echo "SKIP case D: tag v1.2.2 not available"; else
+  docker compose down -v --remove-orphans >/dev/null 2>&1
+  docker volume ls -q --filter label=com.docker.compose.project=fw-upgrade | xargs docker volume rm >/dev/null 2>&1
+  printf 'JWT_SECRET=x\nENCRYPTION_KEY=y-long-enough-key\nEUNOMIA_IMAGE_TAG=fw-local\n' > "$W/.env"   # v1.2 updaters write no backup key
+  printf '%s\n' "$REL" > "$W/docker-compose.yml"
+  docker compose up -d --wait --pull never surrealdb backend >/dev/null || { echo "case D stack did not start"; FAIL=$((FAIL + 1)); }
+  printf 'DEFINE TABLE person SCHEMALESS;\nCREATE person:a SET name = "a";\nCREATE person:b SET name = "b";\nDEFINE TABLE memory SCHEMALESS;\nCREATE memory:m1 SET text = "kept";\n' | sq "$OLD23" >/dev/null
+  cp "$W/compose.new" "$W/docker-compose.yml"
+  docker compose up -d --wait --pull never surrealdb backup backend; rc=$?
+  echo "=== case D up exit code $rc ==="
+  docker compose logs surreal-upgrade 2>&1 | grep -E 'nothing to do|OK:|ERROR|counts' | sed 's/^/       /'
+  check "case D: up succeeds (the one-shot moved the data)" test "$rc" -eq 0
+  check "case D: 3.3 runs with the same rows" test "$(running_image)" = "$NEW_IMG" -a "$(count "$NEW_IMG" person)" = 2 -a "$(count "$NEW_IMG" memory)" = 1
+  check "case D: .env records the v3 volume" grep -q '^SURREAL_DATA_VOLUME=eunomia-surreal-data-v3$' "$W/.env"
+  check "case D: no one-off server left behind" test -z "$(docker ps -aq --filter name=fw-upgrade-v3oneoff)"
+  check "case D: 3.3 runs on the v3 volume" bash -c "docker inspect -f '{{range .Mounts}}{{.Name}} {{end}}' \$(docker compose ps -q surrealdb) | grep -q 'fw-upgrade_eunomia-surreal-data-v3'"
+  check "case D: an encrypted pre-v3 backup was written" bash -c "docker compose run --rm --no-deps -T backup list | grep -q 'pre-v3-.*surql.enc'"
+  check "case D: old volume still holds the 2.x data" bash -c "docker run --rm -v fw-upgrade_eunomia-surreal-data:/d:ro busybox:1.36 ls /d/eunomia.db | grep -q ."
+  docker compose up -d --wait --pull never surrealdb backup backend >/dev/null 2>&1; rc=$?
+  check "case D: a second up is a no-op" bash -c "[ $rc -eq 0 ] && docker compose logs surreal-upgrade 2>&1 | tail -1 | grep -q 'nothing to do'"
+  check "case D: still the same rows after the second up" test "$(count "$NEW_IMG" person)" = 2
+fi
+
+# --- case E: a fresh install of this release (no 2.x volume): the one-shot does nothing ---
+echo "=== case E: fresh install ==="
+docker compose down -v --remove-orphans >/dev/null 2>&1
+docker volume ls -q --filter label=com.docker.compose.project=fw-upgrade | xargs docker volume rm >/dev/null 2>&1
+printf 'JWT_SECRET=x\nENCRYPTION_KEY=y-long-enough-key\nBACKUP_ENCRYPTION_KEY=%s\nEUNOMIA_IMAGE_TAG=fw-local\n' "$BACKUP_ENCRYPTION_KEY" > "$W/.env"
+cp "$W/compose.new" "$W/docker-compose.yml"
+docker compose up -d --wait --pull never surrealdb backup backend >/dev/null 2>&1; rc=$?
+check "case E: fresh up succeeds" test "$rc" -eq 0
+check "case E: the one-shot found nothing to move" bash -c "docker compose logs surreal-upgrade 2>&1 | grep -q 'no 2.x data volume: nothing to do'"
+check "case E: 3.3 on the v3 volume, no 2.x volume created" bash -c "[ '$(running_image)' = '$NEW_IMG' ] && [ -z \"\$(docker volume ls -q --filter name=fw-upgrade_eunomia-surreal-data\$)\" ]"
+check "case E: .env not touched" bash -c "! grep -q SURREAL_DATA_VOLUME '$W/.env'"
 
 echo "upgrade-surreal-v3: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

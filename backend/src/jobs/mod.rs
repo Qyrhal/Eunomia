@@ -35,6 +35,8 @@ pub mod kind {
     pub const PRUNE_AUTH: &str = "prune_auth";
     /// Bring one org's database to the latest tenant schema (the per-org fan-out of a migration).
     pub const MIGRATE_TENANT: &str = "migrate_tenant";
+    /// Extract, chunk and index one revision of an uploaded document (`documents::index_job`).
+    pub const INDEX_DOCUMENT: &str = "index_document";
 }
 
 /// Which loops this process runs (`EUNOMIA_ROLE`). `all` keeps the one-container install working.
