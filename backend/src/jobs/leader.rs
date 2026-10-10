@@ -56,6 +56,9 @@ pub async fn tick(state: &AppState, n: u64) {
         reconcile_observations(&org_state).await;
         if n.is_multiple_of(SLOW_EVERY) {
             reconcile_embeddings(&org_state).await;
+            if let Err(e) = crate::vaults::service::discard_stale_copies(&org_state.db).await {
+                tracing::warn!(error = %e.message, "deleting stale vault copies failed");
+            }
         }
     }
     if n.is_multiple_of(SLOW_EVERY)
