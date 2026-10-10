@@ -118,6 +118,18 @@ export type SourceRow = {
 };
 
 // A record as the generic `search`/`list` tools summarise it (no payload).
+/** Where a hit on an uploaded document's passage comes from (`documents::chunk_ref`). */
+export type DocumentRef = {
+  document_id: string;
+  chunk_id: string;
+  filename: string;
+  revision: number;
+  part: number;
+  char_start: number;
+  char_end: number;
+  download_url: string;
+};
+
 export type ToolHit = {
   id: string;
   source: string;
@@ -126,7 +138,12 @@ export type ToolHit = {
   snippet: string;
   occurred_at: string | null;
   url: string | null;
+  /** Set on a passage of an uploaded document. */
+  document?: DocumentRef;
 };
+
+/** The documents page for a hit's document, scrolled to the passage. */
+export const documentHref = (d: DocumentRef) => `/documents?id=${encodeURIComponent(d.document_id)}&chunk=${encodeURIComponent(d.chunk_id)}`;
 
 // A record as the generic `get` tool returns it in full.
 export type ToolRecord = ToolHit & {

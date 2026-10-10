@@ -1325,6 +1325,396 @@
         ]
       }
     },
+    "/api/documents": {
+      "get": {
+        "tags": [
+          "documents"
+        ],
+        "summary": "List uploaded documents, newest first",
+        "operationId": "listDocuments",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "At most 200, default 50.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentList"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "documents"
+        ],
+        "summary": "Upload a document (the request body is the file)",
+        "operationId": "uploadDocument",
+        "parameters": [
+          {
+            "name": "filename",
+            "in": "query",
+            "description": "The file's name (shown, and used for the download); its extension decides the type when the\nbody's Content-Type is missing or generic.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "content_type",
+            "in": "query",
+            "description": "Overrides the request's Content-Type.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "replace",
+            "in": "query",
+            "description": "Publish the body as a new revision of this document instead of a new document.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "The file's bytes",
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentOut"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/documents/{document_id}": {
+      "get": {
+        "tags": [
+          "documents"
+        ],
+        "summary": "One document with its extracted text and chunk references",
+        "operationId": "getDocument",
+        "parameters": [
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "max_chars",
+            "in": "query",
+            "description": "How much of the extracted text to return, default 100000 characters.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentDetail"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "documents"
+        ],
+        "summary": "Delete a document, its stored file, its chunks and what was extracted from them",
+        "operationId": "deleteDocument",
+        "parameters": [
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentDeleted"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/documents/{document_id}/download": {
+      "get": {
+        "tags": [
+          "documents"
+        ],
+        "summary": "Download the original file, byte for byte",
+        "operationId": "downloadDocument",
+        "parameters": [
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The original bytes",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/documents/{document_id}/export": {
+      "get": {
+        "tags": [
+          "documents"
+        ],
+        "summary": "Download the document's export manifest: chunks, locations and vectors",
+        "operationId": "exportDocument",
+        "parameters": [
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/documents/{document_id}/reindex": {
+      "post": {
+        "tags": [
+          "documents"
+        ],
+        "summary": "Extract and index the stored file again, as a new revision",
+        "operationId": "reindexDocument",
+        "parameters": [
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentOut"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/api/entities": {
       "get": {
         "tags": [
@@ -3867,6 +4257,39 @@
           }
         }
       },
+      "ChunkRef": {
+        "type": "object",
+        "description": "Where one chunk sits in its document.",
+        "required": [
+          "chunk_id",
+          "part",
+          "char_start",
+          "char_end",
+          "has_embedding"
+        ],
+        "properties": {
+          "char_end": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "char_start": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Character offsets of the chunk in the extracted text, end exclusive."
+          },
+          "chunk_id": {
+            "type": "string",
+            "description": "The chunk's record id for `get` (also its vector's reference)."
+          },
+          "has_embedding": {
+            "type": "boolean"
+          },
+          "part": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
       "CloneOut": {
         "type": "object",
         "required": [
@@ -4151,6 +4574,169 @@
         "properties": {
           "deleted": {
             "type": "boolean"
+          }
+        }
+      },
+      "DocumentDeleted": {
+        "type": "object",
+        "required": [
+          "deleted",
+          "chunks",
+          "memories"
+        ],
+        "properties": {
+          "chunks": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Chunks removed from retrieval, and memories that had been extracted from them."
+          },
+          "deleted": {
+            "type": "boolean"
+          },
+          "memories": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "DocumentDetail": {
+        "type": "object",
+        "required": [
+          "document",
+          "text",
+          "text_truncated",
+          "chunks"
+        ],
+        "properties": {
+          "chunks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChunkRef"
+            }
+          },
+          "document": {
+            "$ref": "#/components/schemas/DocumentOut"
+          },
+          "text": {
+            "type": "string",
+            "description": "The extracted text of the current revision (up to `max_chars`; `text_truncated` says when cut)."
+          },
+          "text_truncated": {
+            "type": "boolean"
+          }
+        }
+      },
+      "DocumentList": {
+        "type": "object",
+        "required": [
+          "results",
+          "total",
+          "has_more",
+          "storage",
+          "max_bytes",
+          "media_types"
+        ],
+        "properties": {
+          "has_more": {
+            "type": "boolean"
+          },
+          "max_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The largest upload accepted, in bytes."
+          },
+          "media_types": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Accepted media types."
+          },
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DocumentOut"
+            }
+          },
+          "storage": {
+            "type": "boolean",
+            "description": "Whether this server stores documents at all (`EUNOMIA_DOCUMENTS_BACKEND` is set)."
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "DocumentOut": {
+        "type": "object",
+        "description": "One document as callers see it.",
+        "required": [
+          "id",
+          "filename",
+          "media_type",
+          "size_bytes",
+          "sha256",
+          "revision",
+          "status",
+          "chunk_count",
+          "created_at",
+          "updated_at",
+          "download_url"
+        ],
+        "properties": {
+          "chunk_count": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "download_url": {
+            "type": "string",
+            "description": "Authenticated `GET` for the original bytes (same credentials as this call)."
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why indexing failed. Absent otherwise (a tool result with an `error` key reads as a failed call)."
+          },
+          "filename": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "indexed_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "media_type": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Bumped by a re-upload or a re-index; chunks name the revision they came from."
+          },
+          "sha256": {
+            "type": "string",
+            "description": "SHA-256 of the original bytes, hex."
+          },
+          "size_bytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "status": {
+            "type": "string",
+            "description": "`indexing`, `ready` or `failed` (`deleted` only while a deletion's cleanup is unfinished)."
+          },
+          "updated_at": {
+            "type": "string"
           }
         }
       },

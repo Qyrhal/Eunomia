@@ -1,0 +1,31 @@
+---
+source: tests/golden_tools.rs
+expression: stable
+---
+{
+  "document": {
+    "id": "document:<id18>",
+    "filename": "anvil-budget.md",
+    "media_type": "text/markdown",
+    "size_bytes": 50,
+    "sha256": "<hash>",
+    "revision": 1,
+    "status": "ready",
+    "chunk_count": 1,
+    "created_at": "<ts>",
+    "updated_at": "<ts>",
+    "indexed_at": "<ts>",
+    "download_url": "/api/documents/document:<id18>/download"
+  },
+  "text": "# Anvil budget\n\nThe anvil budget doubles in March.",
+  "text_truncated": false,
+  "chunks": [
+    {
+      "chunk_id": "documents:document.chunk:<id18>:1:0",
+      "part": 0,
+      "char_start": 0,
+      "char_end": 50,
+      "has_embedding": false
+    }
+  ]
+}

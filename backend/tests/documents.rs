@@ -92,6 +92,7 @@ async fn upload_index_retrieve_download_export_delete() {
     let (status, doc) = upload_http(&app, "project-notes.md", Some("text/markdown"), text.as_bytes()).await;
     assert_eq!(status, StatusCode::OK, "{doc}");
     assert_eq!(doc["status"], "indexing");
+    assert!(doc.get("error").is_none() && doc.get("code").is_none(), "a success must not read as a failed tool call: {doc}");
     assert_eq!(doc["sha256"], sha(text.as_bytes()));
     assert_eq!(doc["size_bytes"], text.len());
     let id = doc["id"].as_str().unwrap().to_string();
@@ -280,6 +281,7 @@ async fn a_new_revision_retires_the_old_chunks() {
 
     let v2 = app.tool("document_upload", json!({"filename": "plan.md", "text": "Version two mentions the yak pasture instead.", "document_id": id})).await;
     assert_eq!(v2["id"], id, "{v2}");
+    assert!(v2.get("code").is_none(), "{v2}");
     assert_eq!(v2["revision"], 2);
     let got = settled(&app, &id).await;
     assert_eq!(got["document"]["status"], "ready");

@@ -1,0 +1,9 @@
+---
+source: tests/golden_tools.rs
+expression: stable
+---
+{
+  "deleted": true,
+  "chunks": 1,
+  "memories": 0
+}

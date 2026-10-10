@@ -204,6 +204,8 @@ pub struct DocumentOut {
     pub revision: i64,
     /// `indexing`, `ready` or `failed` (`deleted` only while a deletion's cleanup is unfinished).
     pub status: String,
+    /// Why indexing failed. Absent otherwise (a tool result with an `error` key reads as a failed call).
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
     pub chunk_count: i64,
     pub created_at: String,
@@ -243,6 +245,12 @@ pub struct DocumentList {
     pub results: Vec<DocumentOut>,
     pub total: i64,
     pub has_more: bool,
+    /// Whether this server stores documents at all (`EUNOMIA_DOCUMENTS_BACKEND` is set).
+    pub storage: bool,
+    /// The largest upload accepted, in bytes.
+    pub max_bytes: i64,
+    /// Accepted media types.
+    pub media_types: Vec<String>,
 }
 
 /// Where one chunk sits in its document.
@@ -331,7 +339,14 @@ pub async fn list(state: &OrgState, owner: &RecordId, limit: i64, offset: i64) -
     let total = res.take::<Vec<Count>>(0)?.first().map_or(0, |c| c.count);
     let results: Vec<DocumentOut> = rows.iter().map(DocumentOut::from).collect();
     let has_more = offset + (results.len() as i64) < total;
-    Ok(DocumentList { results, total, has_more })
+    Ok(DocumentList {
+        results,
+        total,
+        has_more,
+        storage: !state.settings.documents_backend.is_empty(),
+        max_bytes: state.settings.documents_max_bytes as i64,
+        media_types: MEDIA_TYPES.iter().map(|t| t.to_string()).collect(),
+    })
 }
 
 #[derive(serde::Deserialize, SurrealValue)]

@@ -1,0 +1,46 @@
+---
+source: tests/golden_tools.rs
+expression: stable
+---
+{
+  "format": "eunomia.document-export",
+  "version": 1,
+  "document": {
+    "id": "document:<id18>",
+    "filename": "anvil-budget.md",
+    "media_type": "text/markdown",
+    "size_bytes": 50,
+    "sha256": "<hash>",
+    "revision": 1,
+    "status": "ready",
+    "chunk_count": 1,
+    "created_at": "<ts>",
+    "updated_at": "<ts>",
+    "indexed_at": "<ts>",
+    "download_url": "/api/documents/document:<id18>/download"
+  },
+  "embedding": {
+    "dimension": 1536,
+    "provider": "https://api.openai.com/v1",
+    "model": "text-embedding-3-small",
+    "provenance": "the owner's current embedding settings; stored vectors do not record which model made them",
+    "chunks_embedded": 0,
+    "chunks_missing": 1
+  },
+  "vectors_included": false,
+  "chunks": [
+    {
+      "chunk_id": "documents:document.chunk:<id18>:1:0",
+      "part": 0,
+      "char_start": 0,
+      "char_end": 50,
+      "text": "# Anvil budget\n\nThe anvil budget doubles in March.",
+      "embedding_state": "missing"
+    }
+  ],
+  "vectors_url": {
+    "method": "GET",
+    "path": "/api/documents/document:<id18>/export",
+    "url": "http://localhost:8001/api/documents/document:<id18>/export"
+  }
+}

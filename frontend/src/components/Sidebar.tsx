@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { BookOpen, Brain, FolderGit2, LayoutDashboard, LogOut, Menu, MessageSquare, Plug, Search, Settings, Share2, Vault, X } from "lucide-react";
+import { BookOpen, Brain, FileText, FolderGit2, LayoutDashboard, LogOut, Menu, MessageSquare, Plug, Search, Settings, Share2, Vault, X } from "lucide-react";
 import EunomiaMark from "./EunomiaMark";
 import ThemeToggle from "./ThemeToggle";
 import Tooltip, { TooltipGroup } from "./bits/Tooltip";
@@ -20,6 +20,7 @@ const STATIC_NAV = [
   { href: "/entities", label: "Entities", icon: Share2 },
   { href: "/code", label: "Code", icon: FolderGit2 },
   { href: "/vaults", label: "Vaults", icon: Vault },
+  { href: "/documents", label: "Documents", icon: FileText },
   { href: "/skill", label: "Memory skill", icon: Brain },
   { href: "/connectors", label: "Connectors", icon: Plug },
   { href: "/docs", label: "Docs", icon: BookOpen },

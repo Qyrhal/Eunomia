@@ -36,6 +36,7 @@ pub fn router() -> Router<AppState> {
 pub struct Doc;
 
 #[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 struct ListQuery {
     /// At most 200, default 50.
     #[serde(default)]
@@ -60,6 +61,7 @@ async fn list_documents(State(state): State<AppState>, user: User, Query(q): Que
 }
 
 #[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 struct UploadQuery {
     /// The file's name (shown, and used for the download); its extension decides the type when the
     /// body's Content-Type is missing or generic.
@@ -95,6 +97,7 @@ async fn upload_document(State(state): State<AppState>, user: User, Query(q): Qu
 }
 
 #[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 struct GetQuery {
     /// How much of the extracted text to return, default 100000 characters.
     #[serde(default)]

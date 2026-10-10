@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { BookOpen, Building2, MapPin, CornerDownLeft, FileText, FolderGit2, LayoutDashboard, MessageSquare, Plug, Search, Settings, Share2, User, Vault } from "lucide-react";
-import type { EntityKind } from "@/lib/types";
+import { documentHref, type EntityKind } from "@/lib/types";
 import { useSources } from "@/lib/queries/sources";
 import { usePaletteSearch } from "@/lib/queries/tools";
 
@@ -26,6 +26,7 @@ const STATIC_ITEMS: { label: string; href: string; icon: IconType }[] = [
   { label: "Entities", href: "/entities", icon: Share2 },
   { label: "Code", href: "/code", icon: FolderGit2 },
   { label: "Vaults", href: "/vaults", icon: Vault },
+  { label: "Documents", href: "/documents", icon: FileText },
   { label: "Connectors", href: "/connectors", icon: Plug },
   { label: "Docs", href: "/docs", icon: BookOpen },
   { label: "Settings", href: "/settings", icon: Settings },
@@ -103,10 +104,13 @@ function Palette({ onClose }: { onClose: () => void }) {
   const recordItems: Item[] = (searching ? recordHits : []).map((h) => ({
     key: `record:${h.id}`,
     label: h.title || h.snippet,
-    sub: h.source,
+    sub: h.document ? h.document.filename : h.source,
     icon: FileText,
     go: () => {
-      if (h.url) {
+      // a passage of an uploaded document opens that document at the passage
+      if (h.document) {
+        router.push(documentHref(h.document));
+      } else if (h.url) {
         window.open(h.url, "_blank", "noopener,noreferrer");
       } else {
         router.push(`/connectors/${h.source}`);

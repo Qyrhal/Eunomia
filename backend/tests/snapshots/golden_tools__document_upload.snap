@@ -1,0 +1,18 @@
+---
+source: tests/golden_tools.rs
+expression: stable
+---
+{
+  "id": "document:<id18>",
+  "filename": "anvil-budget.md",
+  "media_type": "text/markdown",
+  "size_bytes": 50,
+  "sha256": "<hash>",
+  "revision": 1,
+  "status": "indexing",
+  "chunk_count": 0,
+  "created_at": "<ts>",
+  "updated_at": "<ts>",
+  "indexed_at": null,
+  "download_url": "/api/documents/document:<id18>/download"
+}
