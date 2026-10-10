@@ -1,7 +1,7 @@
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { test, expect, request as pwRequest, type APIRequestContext } from "@playwright/test";
-import { uniqueEmail } from "./helpers";
+import { uniqueEmail, MOCK_BIND, mockBase } from "./helpers";
 
 // Model-provider security against a live stack, with local mock
 // OpenAI-compatible endpoints that record every request they receive.
@@ -68,8 +68,8 @@ async function startMock(port = 0, vector = 0.01): Promise<Mock> {
       res.end(JSON.stringify(reply.body ?? {}));
     });
   });
-  await new Promise<void>((resolve) => server.listen(port, "127.0.0.1", resolve));
-  mock.url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1`;
+  await new Promise<void>((resolve) => server.listen(port, MOCK_BIND, resolve));
+  mock.url = `${mockBase((server.address() as AddressInfo).port)}/v1`;
   mock.close = () => new Promise((resolve) => server.close(() => resolve()));
   return mock;
 }

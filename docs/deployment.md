@@ -26,8 +26,7 @@ Turn it on in any of three ways:
   issued (usually under a minute), then *Active*. Problems (a port already in
   use, DNS not pointing here yet) show up there. **Disable** stops it.
 - **The installer**: `--domain eunomia.example.com --acme-email you@example.com`.
-  These flags are documented but not implemented yet: the installer is hosted off-repo
-  and needs its update first. Until then use Settings or the by-hand route below.
+  It writes the same `.env` values as the by-hand route below.
 - **By hand**: add to `.env`, then `docker compose up -d`:
 
   ```bash

@@ -199,6 +199,7 @@ if [ -z "$REL" ]; then echo "SKIP case B: tag v1.2.2 not available"; else
   printf '%s\n' "$REL" > "$W/docker-compose.yml"
   check "case B: the released compose file has no backup service" bash -c "! docker compose config --services | grep -qx backup"
   check "case B: the released compose file pins surrealdb:v2.3" bash -c "docker compose config --images | grep -qx 'surrealdb/surrealdb:v2.3'"
+  docker pull -q surrealdb/surrealdb:v2.3 >/dev/null   # `--pull never`: the released pin, not otherwise fetched
   docker compose up -d --wait --pull never surrealdb backend >/dev/null || { echo "case B stack did not start"; FAIL=$((FAIL + 1)); }
   OLD23=surrealdb/surrealdb:v2.3
   printf 'DEFINE TABLE person SCHEMALESS;\nCREATE person:a SET name = "a";\nCREATE person:b SET name = "b";\nCREATE person:c SET name = "c";\n' | sq "$OLD23" >/dev/null

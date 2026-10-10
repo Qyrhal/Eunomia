@@ -1,7 +1,7 @@
 import { test, expect, request as pwRequest, type APIRequestContext } from "@playwright/test";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
-import { uniqueEmail } from "./helpers";
+import { uniqueEmail, MOCK_BIND, mockBase } from "./helpers";
 
 // Memory correctness over the real API/MCP against a live SurrealDB:
 // tombstoned records stay gone (#64), observations follow their evidence
@@ -125,7 +125,7 @@ function startLlm() {
       res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ belief }) } }] }));
     });
   });
-  return new Promise<void>((r) => llm.listen(0, "127.0.0.1", r));
+  return new Promise<void>((r) => llm.listen(0, MOCK_BIND, r));
 }
 
 const observationOf = (entity: Json) => entity.memory.filter((m: Json) => m.type === "observation");
@@ -140,7 +140,7 @@ test.describe.serial("memory correctness", () => {
     userId = (await (await ctx.get("/api/auth/me")).json()).id;
     ownerKey = userId.slice("user:".length).replace(/^⟨|⟩$/g, "");
     await startLlm();
-    const base = `http://127.0.0.1:${(llm.address() as AddressInfo).port}`;
+    const base = mockBase((llm.address() as AddressInfo).port);
     expect((await ctx.patch("/api/settings", { data: { openai_base_url: base } })).ok()).toBeTruthy();
     expect((await ctx.post("/api/sources/demo/sync")).ok()).toBeTruthy();
     const probe = await ok("memory_write", { subject_name: "Probe Person", subject_kind: "person", text: "Probe exists" });

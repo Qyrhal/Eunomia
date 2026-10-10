@@ -114,6 +114,9 @@ jobs:
           echo "::add-mask::$(sed -n 's/^E2E_ADMIN_PASSWORD=//p' "$RUNNER_TEMP/e2e.env")"
           cat "$RUNNER_TEMP/e2e.env" >> "$GITHUB_ENV"
           echo "E2E_SURREAL_HTTP=http://127.0.0.1:8000" >> "$GITHUB_ENV"
+          # in-test mock servers listen on the runner; the backend container reaches them via the host gateway
+          echo "E2E_MOCK_BIND=0.0.0.0" >> "$GITHUB_ENV"
+          echo "E2E_MOCK_HOST=host.docker.internal" >> "$GITHUB_ENV"
 
       - uses: oven-sh/setup-bun@v2
         with:

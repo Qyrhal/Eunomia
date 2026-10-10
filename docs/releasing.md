@@ -21,7 +21,7 @@ Versions: this `foundation` line is `2.0.0` (SurrealDB 3 and a database per org,
 |---|---|
 | `scripts/upgrade-surreal-v3.sh` | the hook (new file) |
 | `scripts/auto-update.sh` | do not copy the whole file: keep the v1 one and add the hook block (the `new_major`/`old_major` check that calls `upgrade-surreal-v3.sh`), the `BACKUP_ENCRYPTION_KEY` generation, and `docker compose pull backend frontend backup`. Its `ENCRYPTION_KEY_LEGACY_EMPTY` and `JWT_SECRET` blocks need the 3.x backend, leave them out |
-| `backend/scripts/backup/Dockerfile`, `backend/scripts/backup/eunomia-backup.sh` | the hook takes its pre-upgrade backup with the NEW compose file's `backup` image and `SURREAL_BIN`; v1.x has no such image |
+| `backend/scripts/backup/Dockerfile`, `backend/scripts/backup/eunomia-backup.sh` | the hook takes its pre-upgrade backup with the NEW compose file's `backup` image and `SURREAL_BIN`; v1.x has no such image. On the bridge the Dockerfile takes the CLI from `surrealdb/surrealdb:v2.3` (its nightly backups run against the 2.x server, which a 3.x CLI cannot talk to), and its restore lets the field definitions a 2.x export repeats overwrite, so a 2.x dump re-imports |
 | `docker-compose.yml` | only add the `backup` service and the `eunomia-backups` volume (copy those two blocks); keep the `surrealdb/surrealdb:v2.x` pin and everything else as in the v1 tag |
 | `.github/workflows/release.yml` | build and publish the `backup` image (matrix `image: [backend, frontend, backup]`, context `./backend/scripts/backup`) |
 | `scripts/tests/auto-update.test.sh`, `scripts/tests/backup.test.sh`, `scripts/tests/upgrade-surreal-v3*.test.sh` | optional, keeps the bridge testable |

@@ -15,7 +15,9 @@ curl -fsSL https://midhunkumar05.github.io/eunomia/install.sh | bash -s -- --yes
 It runs four steps: check the machine (installing anything missing), choose a
 setup, install, and connect.
 Re-running it over an existing install is safe. It updates the checkout,
-leaves `.env` secrets alone, and reconnects agents.
+leaves `.env` secrets alone, and reconnects agents. An install still on
+SurrealDB 2.x has its data moved to SurrealDB 3 first, as **Update now** does
+(see [upgrading-to-surrealdb-3.md](upgrading-to-surrealdb-3.md)).
 
 | Flag | Default | |
 |---|---|---|
@@ -23,8 +25,8 @@ leaves `.env` secrets alone, and reconnects agents.
 | `--ref <ref>` | latest release | tag, branch or `latest` |
 | `--frontend-port <port>` | `3000` | web app |
 | `--backend-port <port>` | `8001` | API + MCP server (bound to `127.0.0.1` only; see [deployment](deployment.md#1-https)) |
-| `--domain <name>` | none (HTTPS off) | **needs the hosted installer update, not available yet.** Serve at `https://<name>` with a free Let's Encrypt certificate; needs DNS pointing here and ports 80/443 open, see [HTTPS](deployment.md#1-https) |
-| `--acme-email <email>` | | **needs the hosted installer update, not available yet.** Email for Let's Encrypt, required with `--domain` |
+| `--domain <name>` | none (HTTPS off) | Serve at `https://<name>` with a free Let's Encrypt certificate; needs DNS pointing here and ports 80/443 open, see [HTTPS](deployment.md#1-https) |
+| `--acme-email <email>` | | Email for Let's Encrypt, required with `--domain` |
 | `--openai-base-url <url>` | `https://api.openai.com/v1` | any OpenAI-compatible endpoint |
 | `--api-key <key>` | none | optional, see [agents](agents.md#do-i-need-an-openai-key) |
 | `--email <email>` | your git email | Eunomia account to create |
@@ -46,7 +48,7 @@ it stops and says what to install instead.
 
 If a port is taken the installer stops before changing anything.
 
-Once the hosted installer supports `--domain` (it does not yet; turn HTTPS on in Settings instead), it waits for `https://<domain>` to answer and connects your
+With `--domain` it waits for `https://<domain>` to answer and connects your
 agents there. If DNS or the firewall isn't ready yet it warns and carries on
 with the local address; Caddy keeps retrying the certificate, and Settings,
 HTTPS shows when it's active.

@@ -1,7 +1,7 @@
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { test, expect } from "@playwright/test";
-import { registerAndOnboard, uniqueEmail } from "./helpers";
+import { registerAndOnboard, uniqueEmail, MOCK_BIND, mockBase } from "./helpers";
 
 // Pocket end to end against one stand-in server playing both Pocket's
 // public API and an OpenAI-compatible model server (reached through
@@ -83,9 +83,9 @@ function mockPocketAndModels(): Promise<{ base: string; chatModels: string[]; em
     });
   });
   return new Promise((resolve) =>
-    server.listen(0, "127.0.0.1", () => {
+    server.listen(0, MOCK_BIND, () => {
       const { port } = server.address() as AddressInfo;
-      resolve({ base: `http://127.0.0.1:${port}`, chatModels, embedded, extractionPrompts, close: () => server.close() });
+      resolve({ base: mockBase(port), chatModels, embedded, extractionPrompts, close: () => server.close() });
     })
   );
 }

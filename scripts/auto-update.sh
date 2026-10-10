@@ -148,9 +148,13 @@ main() {
   # container this runs in would kill the command halfway and leave no
   # updater. A short-lived sibling container does it a few seconds later
   # (a no-op when nothing changed). The repo is at the same path on the host.
+  # The container runs the copy of scripts/updater.sh taken when it started, and compose
+  # only sees the service definition, so a changed updater.sh forces a recreate.
   if [ -f /.dockerenv ] && docker compose config --services 2>/dev/null | grep -qx updater; then
+    local recreate=""
+    git diff --quiet "$prev_ref" HEAD -- scripts/updater.sh 2>/dev/null || recreate=--force-recreate
     docker run -d --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$PWD:$PWD" -w "$PWD" docker:27-cli \
-      sh -c "sleep 5 && docker compose up -d updater" >/dev/null 2>&1
+      sh -c "sleep 5 && docker compose up -d $recreate updater" >/dev/null 2>&1
   fi
 }
 

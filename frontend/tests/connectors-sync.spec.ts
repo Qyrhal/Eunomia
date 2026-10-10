@@ -1,7 +1,7 @@
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { test, expect } from "@playwright/test";
-import { registerAndOnboard, uniqueEmail } from "./helpers";
+import { registerAndOnboard, uniqueEmail, MOCK_BIND, mockBase } from "./helpers";
 
 // The whole connector flow against a stand-in for GitHub's REST API (the
 // backend reaches it through the connector's `config.base_url`, which the
@@ -38,9 +38,9 @@ function mockGitHub(): Promise<{ base: string; close: () => void }> {
     res.end("{}");
   });
   return new Promise((resolve) =>
-    server.listen(0, "127.0.0.1", () => {
+    server.listen(0, MOCK_BIND, () => {
       const { port } = server.address() as AddressInfo;
-      resolve({ base: `http://127.0.0.1:${port}`, close: () => server.close() });
+      resolve({ base: mockBase(port), close: () => server.close() });
     })
   );
 }

@@ -5,3 +5,8 @@ services:
   surrealdb:
     ports:
       - "127.0.0.1:8000:8000"
+  # The Playwright specs run mock providers and model endpoints on the runner; the containerised
+  # backend reaches them through the host gateway (the specs use E2E_MOCK_HOST=host.docker.internal).
+  backend:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
