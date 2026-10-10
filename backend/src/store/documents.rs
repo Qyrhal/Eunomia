@@ -71,7 +71,8 @@ pub const DELETE_CHUNKS: Stmt = Stmt::at(
     "documents.delete_chunks",
     r#"BEGIN TRANSACTION;
         LET $records = (SELECT VALUE id FROM cache_record WHERE owner = $owner AND source = "documents"
-            AND payload.document_id = $document AND payload.revision != $keep AND ($only < 0 OR payload.revision = $only));
+            AND payload.document_id = $document AND payload.revision != $keep AND ($only < 0 OR payload.revision = $only)
+            AND ($below < 0 OR payload.revision < $below));
         LET $mems = (SELECT id, subject FROM memory WHERE source IN $records);
         LET $ids = $mems.id;
         LET $subjects = array::distinct($mems.subject);
