@@ -112,6 +112,16 @@ async fn statements_stay_in_their_database() {
     assert!(crossing_table("SELECT * FROM session WHERE owner = $o", true).is_some());
     assert!(crossing_table("SELECT user.email FROM vault_member", true).is_none(), "a field named like a table is not a table");
     assert!(crossing_table("RELATE $a->relates_to->$b", false).is_some());
+    // forms the old two-word scanner missed
+    assert_eq!(crossing_table("SELECT * FROM memory, session WHERE owner = $o", true).as_deref(), Some("session"), "every item of a FROM list");
+    assert_eq!(crossing_table("DEFINE INDEX i ON user FIELDS email", true).as_deref(), Some("user"), "DEFINE ... ON");
+    assert_eq!(crossing_table("RETURN user:abc.email", true).as_deref(), Some("user"), "a record literal");
+    assert_eq!(crossing_table("SELECT <-membership<-user FROM $o", true).as_deref(), Some("membership"), "an inbound edge");
+    assert_eq!(crossing_table("SELECT * FROM type::thing('job', $k)", true).as_deref(), Some("job"), "type::thing's table");
+    assert_eq!(crossing_table("SELECT * FROM memory WHERE id IN (SELECT VALUE m FROM ONLY session:x)", true).as_deref(), Some("session"), "inside a subquery");
+    // still not tables
+    assert!(crossing_table("CREATE memory SET owner = $o, vault = $v, text = string::lowercase($t)", true).is_none(), "fields and functions");
+    assert!(crossing_table("UPDATE $id SET meta = { user: $u, job: 1 }", true).is_none(), "object keys");
 
     let app = common::TestApp::new().await;
     let tables = |v: Value| -> BTreeSet<String> {
@@ -248,4 +258,16 @@ async fn nearest_ids_is_owner_scoped_and_falls_back_to_an_exact_scan() {
     // Asking for more than owner a has: HNSW is short, the exact scan returns exactly a's live rows, best first.
     let ids = nearest_ids(&orgdb, &a, unit(1), &Default::default(), 10).await.unwrap();
     assert_eq!(ids, ["a1", "a3"]);
+}
+
+/// Editing a memory and staling its subject's observation commit together, like WRITE_FACT and
+/// DELETE_MEMORY: an edit must never leave an observation summarising the old text as fresh.
+#[test]
+fn a_memory_edit_and_its_stale_observation_are_one_transaction() {
+    use eunomia_backend::store::entities::{UPDATE_MEMORY_TEXT, UPDATE_MEMORY_TEXT_TYPE, UPDATE_MEMORY_TYPE, WRITE_FACT};
+    for s in [&UPDATE_MEMORY_TEXT, &UPDATE_MEMORY_TYPE, &UPDATE_MEMORY_TEXT_TYPE, &WRITE_FACT] {
+        let sql = s.sql.trim();
+        assert!(sql.starts_with("BEGIN TRANSACTION;") && sql.ends_with("COMMIT TRANSACTION;"), "{} is not one transaction", s.name);
+        assert!(sql.contains(r#"status = "stale""#), "{} does not stale the observation", s.name);
+    }
 }

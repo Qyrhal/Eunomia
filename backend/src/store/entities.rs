@@ -58,27 +58,34 @@ pub const FIND_RELATION: Stmt = Stmt::new(
 
 pub const DELETE_RECORD: Stmt = Stmt::new("entities.delete_record", "DELETE $id");
 
-pub const UPDATE_MEMORY_TEXT: Stmt = Stmt::new(
+// Edit a memory and, for a raw fact, make its subject's observation stale -- one transaction, like
+// WRITE_FACT and DELETE_MEMORY, so an edit never leaves an observation summarising the old text as
+// fresh. An edited raw fact is current again (no longer superseded); an observation keeps its status.
+pub const UPDATE_MEMORY_TEXT: Stmt = Stmt::at(
     "entities.update_memory_text",
-    // an edited raw fact is current again (no longer superseded); an observation keeps its status
-    "UPDATE $id SET version = version + 1, updated_at = time::now(), text = $text, \
-     status = IF type = \"observation\" THEN status ELSE NONE END RETURN AFTER",
+    r#"BEGIN TRANSACTION;
+        UPDATE $id SET version = version + 1, updated_at = time::now(), text = $text, status = IF type = "observation" THEN status ELSE NONE END RETURN AFTER;
+        IF $raw { UPDATE memory SET status = "stale" WHERE subject = $subject AND type = "observation" };
+        COMMIT TRANSACTION;"#,
+    1, // BEGIN 0, UPDATE 1
 );
-pub const UPDATE_MEMORY_TYPE: Stmt = Stmt::new(
+pub const UPDATE_MEMORY_TYPE: Stmt = Stmt::at(
     "entities.update_memory_type",
-    "UPDATE $id SET version = version + 1, updated_at = time::now(), type = $type RETURN AFTER",
+    r#"BEGIN TRANSACTION;
+        UPDATE $id SET version = version + 1, updated_at = time::now(), type = $type RETURN AFTER;
+        IF $raw { UPDATE memory SET status = "stale" WHERE subject = $subject AND type = "observation" };
+        COMMIT TRANSACTION;"#,
+    1, // BEGIN 0, UPDATE 1
 );
-pub const UPDATE_MEMORY_TEXT_TYPE: Stmt = Stmt::new(
+pub const UPDATE_MEMORY_TEXT_TYPE: Stmt = Stmt::at(
     "entities.update_memory_text_type",
-    "UPDATE $id SET version = version + 1, updated_at = time::now(), text = $text, type = $type, \
-     status = IF $type = \"observation\" THEN status ELSE NONE END RETURN AFTER",
+    r#"BEGIN TRANSACTION;
+        UPDATE $id SET version = version + 1, updated_at = time::now(), text = $text, type = $type, status = IF $type = "observation" THEN status ELSE NONE END RETURN AFTER;
+        IF $raw { UPDATE memory SET status = "stale" WHERE subject = $subject AND type = "observation" };
+        COMMIT TRANSACTION;"#,
+    1, // BEGIN 0, UPDATE 1
 );
 
-
-pub const STALE_OBSERVATIONS: Stmt = Stmt::new(
-    "entities.stale_observations",
-    r#"UPDATE memory SET status = "stale" WHERE subject = $subject AND type = "observation""#,
-);
 
 /// Deleting a memory. A deleted raw fact leaves its subject's observation's lineage and makes the
 /// observation stale (rebuilt from the surviving facts on the next consolidation); an observation
@@ -232,7 +239,6 @@ pub const ALL: &[&Stmt] = &[
     &FIND_RELATION,
     &DELETE_RECORD,
     &DELETE_MEMORY,
-    &STALE_OBSERVATIONS,
     &MERGE_ENTITIES,
     &UPDATE_MEMORY_TEXT,
     &UPDATE_MEMORY_TYPE,

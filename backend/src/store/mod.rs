@@ -216,23 +216,69 @@ pub const TENANT_TABLES: &[&str] = &[
     "file", "symbol", "memory", "relates_to", "chat_thread", "chat_message", "audit_log", "embed_cache", "pocket_recording",
 ];
 
-/// The first table `sql` reads or writes that lives in the other database. Looks only at the word
-/// after FROM, INTO, UPDATE, DELETE, CREATE, UPSERT, TABLE and RELATE's edge, so field names that
-/// happen to equal a table name (`user`, `vault`) do not count.
-// ponytail: a word scanner, not a parser; a table named only inside a subquery after other keywords is missed.
+/// The first table `sql` names that lives in the other database. A table is recognised where
+/// SurrealQL puts one: after FROM, INTO, UPDATE, DELETE, CREATE, UPSERT, RELATE, TABLE, ONLY and ON
+/// (and every item of a comma list that follows), as a record literal (`user:abc`), a graph edge
+/// segment (`->job`, `<-membership`) or the table argument of `type::thing`/`type::record`/
+/// `type::table`. A field that happens to share a table's name (`user.email`, `{ user: $u }`) is
+/// not one.
+// ponytail: a tokenizer, not a parser -- defense in depth; OrgDb/ControlDb typing does the real
+// scoping. A table reached only through a variable or a computed string is not seen.
 pub fn crossing_table(sql: &str, in_org: bool) -> Option<String> {
     let foreign = if in_org { CONTROL_TABLES } else { TENANT_TABLES };
-    let words: Vec<&str> = sql.split(|c: char| c.is_whitespace() || c == ';' || c == '(' || c == ')').filter(|w| !w.is_empty()).collect();
-    let mut hits = words.windows(2).filter_map(|w| {
-        let kw = w[0].to_ascii_uppercase();
-        if !matches!(kw.as_str(), "FROM" | "INTO" | "UPDATE" | "DELETE" | "CREATE" | "UPSERT" | "TABLE" | "ONLY") {
-            return None;
+    let hit = |t: &str| {
+        let t = t.trim_matches(|c| matches!(c, '`' | '"' | '\'' | '?' | '$'));
+        foreign.contains(&t).then(|| t.to_string())
+    };
+    let spaced = sql.replace(',', " , ");
+    let words: Vec<&str> = spaced
+        .split(|c: char| c.is_whitespace() || matches!(c, ';' | '(' | ')' | '{' | '}' | '[' | ']'))
+        .filter(|w| !w.is_empty())
+        .collect();
+    let (mut expect_table, mut in_list) = (false, false);
+    let mut prev = "";
+    for w in &words {
+        let upper = w.to_ascii_uppercase();
+        if *w == "," {
+            expect_table = in_list;
+            continue;
         }
-        let table = w[1].split(':').next().unwrap_or("").trim_matches('`');
-        foreign.contains(&table).then(|| table.to_string())
-    });
-    let edge = words.iter().filter_map(|w| w.split("->").nth(1)).find(|t| foreign.contains(t)).map(String::from);
-    hits.next().or(edge)
+        // `table:key` record literal anywhere (not `fn::name`, not an object key `user:`)
+        if let Some((table, key)) = w.split_once(':')
+            && !key.is_empty()
+            && !key.starts_with(':')
+            && let Some(t) = hit(table)
+        {
+            return Some(t);
+        }
+        // graph edges: every segment after the first
+        if (w.contains("->") || w.contains("<-"))
+            && let Some(t) = w.split("->").flat_map(|p| p.split("<-")).skip(1).find_map(|seg| hit(seg.split(':').next().unwrap_or("")))
+        {
+            return Some(t);
+        }
+        let prev_lc = prev.to_ascii_lowercase();
+        if matches!(prev_lc.as_str(), "type::thing" | "type::record" | "type::table")
+            && let Some(t) = hit(w)
+        {
+            return Some(t);
+        }
+        if expect_table {
+            if let Some(t) = hit(w.split(':').next().unwrap_or("")) {
+                return Some(t);
+            }
+            in_list = true;
+            expect_table = false;
+        } else {
+            in_list = false;
+        }
+        if matches!(upper.as_str(), "FROM" | "INTO" | "UPDATE" | "DELETE" | "CREATE" | "UPSERT" | "RELATE" | "TABLE" | "ONLY" | "ON") {
+            expect_table = true;
+            in_list = false;
+        }
+        prev = w;
+    }
+    None
 }
 
 /// Every static tenant statement, for the `every_query_executes` test.

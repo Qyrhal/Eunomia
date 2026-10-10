@@ -741,22 +741,23 @@ pub async fn update_memory(
         (Some(_), None) => &q::UPDATE_MEMORY_TEXT,
         _ => &q::UPDATE_MEMORY_TYPE,
     };
-    let mut qry = stmt.on(db).bind(("id", memory_id.clone()));
-    if let Some(t) = text {
-        qry = qry.bind(("text", t.to_string()));
-    }
-    if let Some(t) = new_type {
-        qry = qry.bind(("type", t.to_string()));
-    }
-    let mut res = qry.await?;
-    let rows: Vec<MemoryRow> = res.take(0)?;
+    let mut res = with_retry(|| async {
+        let mut qry = stmt
+            .on(db)
+            .bind(("id", memory_id.clone()))
+            .bind(("subject", row.subject.clone()))
+            .bind(("raw", row.mem_type != "observation"));
+        if let Some(t) = text {
+            qry = qry.bind(("text", t.to_string()));
+        }
+        if let Some(t) = new_type {
+            qry = qry.bind(("type", t.to_string()));
+        }
+        qry.await?.check()
+    })
+    .await?;
+    let rows: Vec<MemoryRow> = res.take(stmt.slot)?;
     let updated = rows.into_iter().next().ok_or_else(|| AppError::internal("memory update returned no row"))?;
-
-    if updated.mem_type != "observation" {
-        q::STALE_OBSERVATIONS.on(db)
-            .bind(("subject", updated.subject.clone()))
-            .await?;
-    }
     Ok(Some(memory_out(&updated, None)))
 }
 

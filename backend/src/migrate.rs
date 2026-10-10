@@ -95,7 +95,7 @@ fn checksum(sql: &str) -> String {
 /// Bring an org database to the latest tenant schema, then the base URL field default.
 pub async fn migrate(db: &Db, _settings: &Settings) -> surrealdb::Result<()> {
     locked(db, async {
-        apply(db, MIGRATIONS, u32::MAX).await?;
+        apply(db, Set::Tenant, u32::MAX).await?;
         // Re-applied on every migration pass, outside the ledger: "" means "the server's OPENAI_BASE_URL"
         // (see `embeddings::provider`), so a row never pins a URL the operator may later change.
         let sql = "DEFINE FIELD OVERWRITE openai_base_url ON app_settings TYPE string DEFAULT \"\";";
@@ -106,12 +106,12 @@ pub async fn migrate(db: &Db, _settings: &Settings) -> surrealdb::Result<()> {
 
 /// Bring the control database to the latest control schema.
 pub async fn migrate_control(db: &Db) -> surrealdb::Result<()> {
-    locked(db, apply(db, CONTROL_MIGRATIONS, u32::MAX)).await
+    locked(db, apply(db, Set::Control, u32::MAX)).await
 }
 
 /// Apply pending tenant migrations with `version <= max`. Public for tests that need a half-migrated DB.
 pub async fn apply_up_to(db: &Db, max: u32) -> surrealdb::Result<()> {
-    locked(db, apply(db, MIGRATIONS, max)).await
+    locked(db, apply(db, Set::Tenant, max)).await
 }
 
 const LOCK_DDL: &str = "DEFINE TABLE IF NOT EXISTS _migration_lock SCHEMALESS;";
@@ -159,7 +159,26 @@ async fn locked<T>(db: &Db, f: impl std::future::Future<Output = surrealdb::Resu
     result
 }
 
-async fn apply(db: &Db, set: &[(u32, &str, &str)], max: u32) -> surrealdb::Result<()> {
+/// Which migration set to apply. The set names its migrations, so the tenant-only data pre-steps
+/// can't be run against (or skipped for) the wrong one.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Set {
+    Tenant,
+    Control,
+}
+
+impl Set {
+    fn migrations(self) -> &'static [(u32, &'static str, &'static str)] {
+        match self {
+            Set::Tenant => MIGRATIONS,
+            Set::Control => CONTROL_MIGRATIONS,
+        }
+    }
+}
+
+async fn apply(db: &Db, which: Set, max: u32) -> surrealdb::Result<()> {
+    let set = which.migrations();
+    let tenant = which == Set::Tenant;
     // Two replicas booting together race on everything below; a lost race is a commit conflict or a
     // unique violation on `_migration.version`, and means the other one did the work.
     crate::tx::with_retry(|| async { root(db, "migrate.ledger", LEDGER).await?.check().map(|_| ()) }).await?;
@@ -176,11 +195,11 @@ async fn apply(db: &Db, set: &[(u32, &str, &str)], max: u32) -> surrealdb::Resul
             }
             continue;
         }
-        // a pre-step of the tenant set only: control 0002 is unrelated
-        if (version == 2 || version == 10) && std::ptr::eq(set, MIGRATIONS) {
+        // data pre-steps of the tenant set only (control 0002 and 0010 are unrelated)
+        if tenant && (version == 2 || version == 10) {
             dedupe_entity_names(db).await?;
         }
-        if version == 10 && std::ptr::eq(set, MIGRATIONS) {
+        if tenant && version == 10 {
             backfill_entity_keys(db).await?;
         }
         // DEFINE is allowed inside a transaction, so schema and ledger row commit together.
