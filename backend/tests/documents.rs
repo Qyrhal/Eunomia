@@ -80,7 +80,8 @@ async fn object_exists(app: &TestApp, path: &str) -> bool {
 
 async fn object_path(app: &TestApp, id: &str) -> String {
     let db = app.db().await;
-    let mut res = db.test_raw().query("SELECT VALUE object_path FROM ONLY type::record($id)").bind(("id", id.to_string())).await.unwrap();
+    let rid = eunomia_backend::rid::parse(id).unwrap();
+    let mut res = db.test_raw().query("SELECT VALUE object_path FROM ONLY $id").bind(("id", rid)).await.unwrap();
     res.take::<Option<String>>(0).unwrap().unwrap()
 }
 
