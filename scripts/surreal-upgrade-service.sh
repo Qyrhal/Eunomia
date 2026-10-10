@@ -82,8 +82,11 @@ mkdir -p /eunomia/update-status
 rc="$(cat /tmp/rc 2>/dev/null || echo 1)"
 chown "$owner" /eunomia/.env /eunomia/update-status/upgrade.log 2>/dev/null
 if [ "$rc" -ne 0 ]; then
-  log "ERROR: the move to SurrealDB 3 failed and was rolled back: the old SurrealDB and backend run again on the untouched old volume."
-  log "Fix the cause shown above, then run: docker compose up -d   (or click Update now). Log: update-status/upgrade.log"
+  prev="$(sed -n 's/.*updated \(v[^ ]*\) -> .*/\1/p' /eunomia/update-status/history.log 2>/dev/null | tail -1)"
+  log "ERROR: the move to SurrealDB 3 failed. Your data is untouched on $old, but the app is DOWN until you act."
+  log "To fix the cause shown above and retry: docker compose up -d   (or click Update now)."
+  log "To go back to the release you were on${prev:+ ($prev)}: git checkout ${prev:-<previous tag>} && sed -i 's/^EUNOMIA_IMAGE_TAG=.*/EUNOMIA_IMAGE_TAG=${prev:-<previous tag>}/' .env && docker compose up -d --remove-orphans"
+  log "Log: update-status/upgrade.log"
   exit 1
 fi
 if [ -z "$(envget SURREAL_DATA_VOLUME)" ]; then

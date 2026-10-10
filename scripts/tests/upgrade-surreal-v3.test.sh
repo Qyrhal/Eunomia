@@ -239,13 +239,13 @@ if [ -z "$REL" ]; then echo "SKIP case D: tag v1.2.2 not available"; else
   printf 'JWT_SECRET=x\nENCRYPTION_KEY=y-long-enough-key\nEUNOMIA_IMAGE_TAG=fw-local\n' > "$W/.env"   # v1.2 updaters write no backup key
   printf '%s\n' "$REL" > "$W/docker-compose.yml"
   docker compose up -d --wait --pull never surrealdb backend >/dev/null || { echo "case D stack did not start"; FAIL=$((FAIL + 1)); }
-  printf 'DEFINE TABLE person SCHEMALESS;\nCREATE person:a SET name = "a";\nCREATE person:b SET name = "b";\nDEFINE TABLE memory SCHEMALESS;\nCREATE memory:m1 SET text = "kept";\n' | sq "$OLD23" >/dev/null
+  printf 'DEFINE TABLE person SCHEMALESS;\nCREATE person:a SET name = "a";\nCREATE person:b SET name = "b";\nDEFINE TABLE memory SCHEMALESS;\nCREATE memory:m1 SET text = "kept\\nacross { lines";\nCREATE memory:m2 SET text = "a 2.3 export\\nkeeps raw ] [ newlines";\n' | sq "$OLD23" >/dev/null   # multi-line values: 2.3 exports them raw
   cp "$W/compose.new" "$W/docker-compose.yml"
   docker compose up -d --wait --pull never surrealdb backup backend; rc=$?
   echo "=== case D up exit code $rc ==="
   docker compose logs surreal-upgrade 2>&1 | grep -E 'nothing to do|OK:|ERROR|counts' | sed 's/^/       /'
   check "case D: up succeeds (the one-shot moved the data)" test "$rc" -eq 0
-  check "case D: 3.3 runs with the same rows" test "$(running_image)" = "$NEW_IMG" -a "$(count "$NEW_IMG" person)" = 2 -a "$(count "$NEW_IMG" memory)" = 1
+  check "case D: 3.3 runs with the same rows" test "$(running_image)" = "$NEW_IMG" -a "$(count "$NEW_IMG" person)" = 2 -a "$(count "$NEW_IMG" memory)" = 2
   check "case D: .env records the v3 volume" grep -q '^SURREAL_DATA_VOLUME=eunomia-surreal-data-v3$' "$W/.env"
   check "case D: no one-off server left behind" test -z "$(docker ps -aq --filter name=fw-upgrade-v3oneoff)"
   check "case D: 3.3 runs on the v3 volume" bash -c "docker inspect -f '{{range .Mounts}}{{.Name}} {{end}}' \$(docker compose ps -q surrealdb) | grep -q 'fw-upgrade_eunomia-surreal-data-v3'"
