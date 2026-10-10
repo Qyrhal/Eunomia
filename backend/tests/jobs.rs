@@ -391,18 +391,9 @@ async fn ingest_queues_extraction_and_the_handler_noops_without_a_key() {
 
 // --- spike S3 ---
 
-/// `cargo test --release -- --ignored job_claim_throughput --nocapture`
-/// 50k jobs, 6 workers of 16 slots each, random worker kills (task aborts, no lease release).
-/// Checks: no job lost; a job runs twice only after its first lease expired. Prints claims/sec.
-#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-#[ignore]
-async fn job_claim_throughput() {
-    const JOBS: usize = 50_000;
-    const WORKERS: usize = 6;
-    let lease = Duration::from_secs(3);
-    let state = bare_state().await;
-
-    for chunk in (0..JOBS).collect::<Vec<_>>().chunks(2_500) {
+/// `n` ready jobs of kind `spike` spread over 8 owners, inserted in bulk.
+async fn seed_spike_jobs(state: &AppState, n: usize) {
+    for chunk in (0..n).collect::<Vec<_>>().chunks(2_500) {
         let rows: Vec<Value> = chunk.iter().map(|i| json!({"k": format!("s3-{i}"), "o": format!("user:u{}", i % 8)})).collect();
         state
             .control
@@ -414,26 +405,41 @@ async fn job_claim_throughput() {
             .check()
             .unwrap();
     }
-    assert_eq!(count(&state, "SELECT count() AS n FROM job GROUP ALL").await, JOBS as i64);
+    assert_eq!(count(state, "SELECT count() AS n FROM job GROUP ALL").await, n as i64);
+}
 
-    // (job id, locked_until at claim) per execution, in start order
-    type Execs = Arc<Mutex<Vec<(String, chrono::DateTime<chrono::Utc>)>>>;
-    let execs: Execs = Default::default();
-    let reg = {
+/// (job id, locked_until at claim) per execution, in start order.
+type Execs = Arc<Mutex<Vec<(String, chrono::DateTime<chrono::Utc>)>>>;
+
+/// A `spike` handler that records each execution in `execs`.
+fn spike_registry(execs: Execs) -> Registry {
+    Registry::new().register("spike", move |_s, job: Job| {
         let execs = execs.clone();
-        Registry::new().register("spike", move |_s, job: Job| {
-            let execs = execs.clone();
-            async move {
-                let until = eunomia_backend::sources::base::datetime_to_chrono(job.locked_until.as_ref().unwrap()).unwrap();
-                execs.lock().unwrap().push((job.id.to_string(), until));
-                // most jobs are instant; a few are slow enough for a kill to land mid-job
-                if rand::random::<u8>() < 5 {
-                    tokio::time::sleep(Duration::from_millis(40)).await;
-                }
-                Ok(())
+        async move {
+            let until = eunomia_backend::sources::base::datetime_to_chrono(job.locked_until.as_ref().unwrap()).unwrap();
+            execs.lock().unwrap().push((job.id.to_string(), until));
+            // most jobs are instant; a few are slow enough for a kill to land mid-job
+            if rand::random::<u8>() < 5 {
+                tokio::time::sleep(Duration::from_millis(40)).await;
             }
-        })
-    };
+            Ok(())
+        }
+    })
+}
+
+/// `cargo test --release -- --ignored job_claim_throughput --nocapture`
+/// 50k jobs, 6 workers of 16 slots each, random worker kills (task aborts, no lease release).
+/// Checks: no job lost; a job runs twice only after its first lease expired. Prints claims/sec.
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+#[ignore]
+async fn job_claim_throughput() {
+    const JOBS: usize = 50_000;
+    const WORKERS: usize = 6;
+    let lease = Duration::from_secs(3);
+    let state = bare_state().await;
+    seed_spike_jobs(&state, JOBS).await;
+    let execs: Execs = Default::default();
+    let reg = spike_registry(execs.clone());
     let mk = |i: usize| WorkerConfig { concurrency: 16, lease, poll: Duration::from_millis(50), ..cfg(&format!("s3-{i}")) };
     let (stop, rx) = watch::channel(false);
     let start = Instant::now();
@@ -488,4 +494,102 @@ async fn job_claim_throughput() {
     assert_eq!(by_job.len(), JOBS, "lost jobs");
     assert_eq!(dead, 0);
     assert_eq!(early_dupes, 0, "a job ran twice before its lease expired");
+}
+
+// --- spike S3 across processes ---
+
+const MULTI_PROCS: usize = 4;
+const MULTI_JOBS: usize = 6_000;
+
+/// Exactly-once claims on the deployed topology: `MULTI_PROCS` separate OS processes (this test binary
+/// re-run as `job_claims_across_processes_child`), each with its own connection and one worker loop of
+/// 16 slots, claim from one real server. Nothing in one process can fence another (`tx::lock` is
+/// per-process), so only the server's commit-time conflict check keeps claims exclusive. The lease is
+/// long and nothing is killed, so any job run twice was claimed twice. Asserts: every job ran exactly
+/// once, the server agrees (every row `done` with `attempts = 1`), none dead. Needs a real server:
+/// `TEST_SURREAL_URL=ws://127.0.0.1:8231/rpc cargo test --release --test jobs job_claims_across_processes -- --nocapture`
+/// against `surrealdb/surrealdb:v3.3.1` on RocksDB (docs/testing.md, "Concurrency ceiling"); skips without one.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn job_claims_across_processes() {
+    if std::env::var("TEST_SURREAL_URL").is_err() {
+        eprintln!("job_claims_across_processes skipped: set TEST_SURREAL_URL to a real server (docs/testing.md)");
+        return;
+    }
+    let state = bare_state().await;
+    seed_spike_jobs(&state, MULTI_JOBS).await;
+    let dir = std::env::temp_dir().join(format!("eunomia-claims-{}", uuid::Uuid::new_v4().simple()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut children = Vec::new();
+    for i in 0..MULTI_PROCS {
+        let child = tokio::process::Command::new(std::env::current_exe().unwrap())
+            .args(["job_claims_across_processes_child", "--exact", "--ignored", "--nocapture", "--test-threads=1"])
+            .env("CLAIM_CHILD_NS", &state.settings.surreal_ns)
+            .env("CLAIM_CHILD_DIR", &dir)
+            .env("CLAIM_CHILD_N", i.to_string())
+            .stdout(std::process::Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        children.push(child);
+    }
+    // start them together, once every one is connected
+    let ready = || (0..MULTI_PROCS).all(|i| dir.join(format!("{i}.ready")).exists());
+    wait_for("every child to connect", 120, || async { ready() }).await;
+    let start = Instant::now();
+    std::fs::write(dir.join("go"), "").unwrap();
+    for mut c in children {
+        let status = tokio::time::timeout(Duration::from_secs(600), c.wait()).await.expect("child timed out").unwrap();
+        assert!(status.success(), "a child process failed: {status}");
+    }
+    let elapsed = start.elapsed();
+
+    let mut runs: HashMap<String, u32> = HashMap::new();
+    let mut per_proc = Vec::new();
+    for i in 0..MULTI_PROCS {
+        let text = std::fs::read_to_string(dir.join(format!("{i}.txt"))).unwrap();
+        per_proc.push(text.lines().count());
+        for id in text.lines() {
+            *runs.entry(id.to_string()).or_default() += 1;
+        }
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+    let executions: u32 = runs.values().sum();
+    let twice = runs.values().filter(|n| **n > 1).count();
+    let not_once = count(&state, "SELECT count() AS n FROM job WHERE status != 'done' OR attempts != 1 GROUP ALL").await;
+    let dead = count(&state, "SELECT count() AS n FROM job WHERE status = 'dead' GROUP ALL").await;
+    println!(
+        "S3 multi-process: server={} procs={MULTI_PROCS}x16 jobs={MULTI_JOBS} per_proc={per_proc:?} elapsed={:.1}s executions={executions} \
+         claimed_twice={twice} lost={} rows_not_done_once={not_once} dead={dead} claims_per_sec={:.0}",
+        state.settings.surreal_url,
+        elapsed.as_secs_f64(),
+        MULTI_JOBS - runs.len(),
+        MULTI_JOBS as f64 / elapsed.as_secs_f64(),
+    );
+    assert_eq!(twice, 0, "a job was claimed by two workers");
+    assert_eq!(runs.len(), MULTI_JOBS, "lost jobs");
+    assert_eq!(executions as usize, MULTI_JOBS);
+    assert_eq!((not_once, dead), (0, 0), "the server's view: every job done after exactly one claim");
+    assert!(per_proc.iter().filter(|n| **n > 0).count() > 1, "only one process claimed anything, so nothing raced: {per_proc:?}");
+}
+
+/// One process of `job_claims_across_processes`; does nothing unless that test started it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore]
+async fn job_claims_across_processes_child() {
+    let (Ok(ns), Ok(dir), Ok(n)) = (std::env::var("CLAIM_CHILD_NS"), std::env::var("CLAIM_CHILD_DIR"), std::env::var("CLAIM_CHILD_N")) else { return };
+    let dir = std::path::PathBuf::from(dir);
+    let settings = eunomia_backend::config::Settings { surreal_ns: ns, ..test_settings() };
+    let state = AppState::attach(&settings, common::engine_config()).await.unwrap();
+    std::fs::write(dir.join(format!("{n}.ready")), "").unwrap();
+    wait_for("go", 120, || async { dir.join("go").exists() }).await;
+
+    let execs: Execs = Default::default();
+    let (stop, rx) = watch::channel(false);
+    let config = WorkerConfig { concurrency: 16, lease: Duration::from_secs(120), poll: Duration::from_millis(50), ..cfg(&format!("proc-{n}")) };
+    let worker = tokio::spawn(worker::run(state.clone(), spike_registry(execs.clone()), config, rx));
+    wait_for("the queue to drain", 600, || async { count(&state, "SELECT count() AS n FROM job WHERE status != 'done' GROUP ALL").await == 0 }).await;
+    let _ = stop.send(true);
+    worker.await.unwrap();
+    let ids: String = execs.lock().unwrap().iter().map(|(id, _)| format!("{id}\n")).collect();
+    std::fs::write(dir.join(format!("{n}.txt")), ids).unwrap();
 }

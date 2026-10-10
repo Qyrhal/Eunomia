@@ -3,7 +3,7 @@
 
 use super::ControlStmt;
 
-pub const ALL: &[&ControlStmt] = &[&BY_ORG, &LIST, &ORG_CREATE, &ORG_NAME, &CLAIM, &UPSERT, &SET_STATE, &ORG_COUNT, &MEMBERSHIP_COUNT, &PASS_ALL, &SET_PASS];
+pub const ALL: &[&ControlStmt] = &[&BY_ORG, &LIST, &ORG_CREATE, &ORG_NAME, &CLAIM, &UPSERT, &SET_STATE, &ORG_COUNT, &MEMBERSHIP_COUNT, &PASS_ALL, &PASS_READY, &SET_PASS];
 
 /// Where an org's data lives and how to sign in to it.
 pub const BY_ORG: ControlStmt =
@@ -37,5 +37,8 @@ pub const MEMBERSHIP_COUNT: ControlStmt = ControlStmt::new("tenant.membership_co
 
 /// Every org's encrypted database password (boot-time key rotation only).
 pub const PASS_ALL: ControlStmt = ControlStmt::new("tenant.pass_all", "SELECT id, db_pass_enc FROM tenant");
+
+/// Ready orgs' databases and encrypted passwords (boot-time replacement of passwords stored under the empty key).
+pub const PASS_READY: ControlStmt = ControlStmt::new("tenant.pass_ready", "SELECT id, db, db_pass_enc FROM tenant WHERE status = 'ready'");
 
 pub const SET_PASS: ControlStmt = ControlStmt::new("tenant.set_pass", "UPDATE $id SET db_pass_enc = $db_pass_enc");

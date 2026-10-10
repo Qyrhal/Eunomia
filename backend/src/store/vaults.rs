@@ -20,6 +20,48 @@ pub const CREATE_VAULT: Stmt = Stmt::at(
     3, // BEGIN 0, LET 1, CREATE 2, RETURN 3
 );
 
+/// The target of a clone or merge: `status = "copying"` and no member yet, so nothing reads it until
+/// [`PUBLISH_COPY`].
+pub const STAGE_COPY: Stmt = Stmt::new(
+    "vaults.stage_copy",
+    r#"CREATE vault SET name = $name, kind = $kind, status = "copying" RETURN AFTER"#,
+);
+
+/// A finished copy becomes a vault: the marker goes and the caller becomes its owner, together. Throws
+/// if it is no longer a copy in progress (the stale-copy cleanup removed it).
+pub const PUBLISH_COPY: Stmt = Stmt::new(
+    "vaults.publish_copy",
+    r#"BEGIN TRANSACTION;
+            LET $v = (UPDATE $vault SET status = NONE WHERE status = "copying" RETURN AFTER);
+            IF array::len($v) = 0 { THROW "copy_gone" };
+            CREATE vault_member SET vault = $vault, user = $user, role = "owner";
+            COMMIT TRANSACTION;"#,
+);
+
+/// Everything a copy in progress wrote (relations first, while their ends still name the vault). A
+/// statement per table, so no one transaction has to hold a whole vault; does nothing to a vault that
+/// is not `copying`. [`DISCARD_COPY_VAULT`] runs after it succeeds, so a failure leaves the marker for
+/// the next try.
+pub const DISCARD_COPY_ROWS: Stmt = Stmt::new(
+    "vaults.discard_copy_rows",
+    r#"LET $copying = (SELECT VALUE id FROM $vault WHERE status = "copying");
+            DELETE relates_to WHERE in.vault IN $copying OR out.vault IN $copying;
+            DELETE memory WHERE vault IN $copying;
+            DELETE person WHERE vault IN $copying;
+            DELETE organisation WHERE vault IN $copying;
+            DELETE location WHERE vault IN $copying;
+            DELETE repository WHERE vault IN $copying;
+            DELETE file WHERE vault IN $copying;
+            DELETE symbol WHERE vault IN $copying;"#,
+);
+pub const DISCARD_COPY_VAULT: Stmt = Stmt::new("vaults.discard_copy_vault", r#"DELETE $vault WHERE status = "copying""#);
+
+/// Copies in progress for longer than any copy takes: their process died mid-copy.
+pub const STALE_COPIES: Stmt = Stmt::new(
+    "vaults.stale_copies",
+    r#"SELECT VALUE id FROM vault WHERE status = "copying" AND created_at < time::now() - <duration>$age"#,
+);
+
 pub const MEMBERSHIP_ACTIVE: Stmt = Stmt::new(
     "vaults.membership_active",
     r#"SELECT * FROM vault_member WHERE vault = $vault AND user = $user AND status = "active" LIMIT 1"#,
@@ -140,6 +182,11 @@ pub const COPY_RELATION: Stmt =
 pub const ALL: &[&Stmt] = &[
     &CREATE_PERSONAL,
     &CREATE_VAULT,
+    &STAGE_COPY,
+    &PUBLISH_COPY,
+    &DISCARD_COPY_ROWS,
+    &DISCARD_COPY_VAULT,
+    &STALE_COPIES,
     &MEMBERSHIP_ACTIVE,
     &MEMBERSHIP_ANY,
     &ACCESSIBLE_IDS,

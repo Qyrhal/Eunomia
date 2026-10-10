@@ -13,7 +13,9 @@ cat > "$T/bin/docker" <<SHIM
 #!/bin/sh
 echo "\$@" >> "$T/docker.log"
 case "\$*" in
-  "compose ps -q"*) ;;                                     # nothing running
+  "compose ps -q backend"*) cat "$T/bid" 2>/dev/null ;;    # the backend, when one exists
+  "compose ps -q"*) ;;                                     # nothing else running
+  "compose run --rm --no-deps -T -v"*backup*) [ -f "$T/backup_fails" ] && exit 1 ;;
   "compose config --images") echo surrealdb/surrealdb:v3.3.1 ;;
   "volume ls"*) cat "$T/volume" 2>/dev/null ;;
   "network inspect"*) [ -f "$T/net" ] || exit 1 ;;
@@ -42,6 +44,18 @@ check "down, 2.x cannot open the data: exits 0" test "$rc" -eq 0
 check "down, 2.x cannot open the data: says nothing was changed" grep -q 'Nothing was changed' <<<"$out"
 check "down, 2.x cannot open the data: backend untouched" bash -c "! grep -q 'compose stop backend' '$T/docker.log'"
 check "down, 2.x cannot open the data: scratch container removed" grep -q 'rm -f proj-v2scratch' "$T/docker.log"
+
+# 2.x data, the temp server on the copy comes up (answering as `surrealdb`), then the backup fails: the
+# rollback must remove that temp server BEFORE it restarts the backend, or the backend writes to the copy
+echo true > "$T/scratch_running"; echo bid123 > "$T/bid"; touch "$T/backup_fails"; : > "$T/docker.log"
+out="$(run)"; rc=$?
+check "down, backup fails: exits non-zero" test "$rc" -ne 0
+check "down, backup fails: rolls back" grep -q 'ROLLING BACK' <<<"$out"
+first_rm="$(grep -n 'rm -f proj-v2scratch' "$T/docker.log" | head -1 | cut -d: -f1)"
+backend_start="$(grep -n '^start bid123' "$T/docker.log" | head -1 | cut -d: -f1)"
+check "down, backup fails: the backend is restarted" test -n "$backend_start"
+check "down, backup fails: the temp server is gone before the backend restarts" test -n "$first_rm" -a "${first_rm:-0}" -lt "${backend_start:-0}"
+rm -f "$T/bid" "$T/backup_fails" "$T/scratch_running"
 
 echo SURREAL_DATA_VOLUME=eunomia-surreal-data-v3 > "$T/repo/.env"; : > "$T/docker.log"
 out="$(run)"; rc=$?

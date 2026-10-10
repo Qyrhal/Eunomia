@@ -636,7 +636,7 @@ pub async fn delete(state: &OrgState, owner: &RecordId, id: &str) -> AppResult<D
     personal_vault(db, owner, Action::WriteMemories).await?;
     let doc = load(db, owner, &parse_id(id)?, true).await?;
     q::MARK_DELETED.on(db).bind(("id", doc.id.clone())).bind(("owner", owner.clone())).await?.check()?;
-    let removed = remove_chunks(db, owner, &doc.id, -1, -1).await?;
+    let removed = remove_chunks(db, owner, &doc.id, -1, -1, -1).await?;
     if !state.settings.documents_backend.is_empty() {
         delete_object(db, &doc.object_path).await?;
     }
@@ -646,9 +646,18 @@ pub async fn delete(state: &OrgState, owner: &RecordId, id: &str) -> AppResult<D
 
 /// Chunks of every revision but `keep` (-1: none kept), or of revision `only` alone, with what was
 /// extracted from them.
-async fn remove_chunks(db: &OrgDb, owner: &RecordId, doc: &RecordId, keep: i64, only: i64) -> AppResult<Value> {
+/// Removes `doc`'s chunks: all but revision `keep`, or only revision `only`, or only revisions older
+/// than `below` (each `-1` when unused).
+async fn remove_chunks(db: &OrgDb, owner: &RecordId, doc: &RecordId, keep: i64, only: i64, below: i64) -> AppResult<Value> {
     let mut res = crate::tx::with_retry(|| async {
-        q::DELETE_CHUNKS.on(db).bind(("owner", owner.clone())).bind(("document", doc.to_string())).bind(("keep", keep)).bind(("only", only)).await
+        q::DELETE_CHUNKS
+            .on(db)
+            .bind(("owner", owner.clone()))
+            .bind(("document", doc.to_string()))
+            .bind(("keep", keep))
+            .bind(("only", only))
+            .bind(("below", below))
+            .await
     })
     .await?;
     Ok(res.take::<Option<Value>>(q::DELETE_CHUNKS.slot)?.unwrap_or(Value::Null))
@@ -744,15 +753,22 @@ pub async fn index_job(state: AppState, job: Job) -> Result<(), JobError> {
         Ok((status, error, n)) => (status, error, n, None),
         Err((error, e)) => ("failed", error, 0, Some(e)),
     };
-    // Publish first, then retire: only the revision that is still current removes the others' chunks.
-    // A revision overtaken meanwhile (a re-upload during indexing) removes just its own.
+    // Retire OLDER revisions before publishing this one, so search never holds two revisions at once:
+    // removing older chunks is right whatever happens meanwhile (a newer revision is never touched).
+    if status == "ready" {
+        remove_chunks(&state.db, &owner, &doc.id, -1, -1, doc.revision).await.map_err(finish_err)?;
+    }
     let current = finish(&state, &owner, &doc, status, error, n).await?;
-    let (keep, only) = match (current, status) {
-        (true, "ready") => (doc.revision, -1),
-        (true, _) => (-1, -1),
-        (false, _) => (-1, doc.revision),
+    // Current and failed: nothing of it stays searchable. Overtaken by a newer revision meanwhile
+    // (a re-upload during indexing): only its own chunks go.
+    let remove = match (current, status) {
+        (true, "ready") => None,
+        (true, _) => Some((-1, -1)),
+        (false, _) => Some((-1, doc.revision)),
     };
-    remove_chunks(&state.db, &owner, &doc.id, keep, only).await.map_err(finish_err)?;
+    if let Some((keep, only)) = remove {
+        remove_chunks(&state.db, &owner, &doc.id, keep, only, -1).await.map_err(finish_err)?;
+    }
     match err {
         Some(e) => Err(finish_err(e)),
         None => Ok(()),

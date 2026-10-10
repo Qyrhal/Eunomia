@@ -147,6 +147,9 @@ v3_up() { # v3_up COMPOSE_FILE: a 3.x server on the -v3 volume, reachable as sur
 v3_down() { docker stop -t 60 "$V3CTR" >/dev/null 2>&1; docker rm -f "$V3CTR" >/dev/null 2>&1; }
 rollback() {
   log "ROLLING BACK: the old volume was not modified"
+  # First, before anything is restarted: in the "down" path the temporary 2.x server on the COPY answers
+  # as `surrealdb`, so a backend started now would write to the copy, which is then deleted.
+  cleanup_scratch
   if [ "$phase" -ge 2 ]; then
     if [ -n "$ONESHOT" ]; then
       v3_down
