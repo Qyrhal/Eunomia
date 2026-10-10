@@ -1,0 +1,190 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "How Eunomia fits together",
+    "quality_profile": "showcase"
+  },
+  "components": [
+    {
+      "id": "browser",
+      "type": "external",
+      "label": "Browser",
+      "sublabel": "Dashboard, graphs, chat",
+      "pos": [
+        40,
+        300
+      ],
+      "size": [
+        190,
+        76
+      ]
+    },
+    {
+      "id": "web",
+      "type": "frontend",
+      "label": "Next.js",
+      "sublabel": "Web app \u00b7 :3000",
+      "pos": [
+        300,
+        300
+      ],
+      "size": [
+        190,
+        76
+      ]
+    },
+    {
+      "id": "api",
+      "type": "backend",
+      "label": "Rust / Axum",
+      "sublabel": "API + shared tools \u00b7 :8001",
+      "pos": [
+        610,
+        300
+      ],
+      "size": [
+        190,
+        76
+      ]
+    },
+    {
+      "id": "store",
+      "type": "database",
+      "label": "SurrealDB 2.3",
+      "sublabel": "Records, memories, relations",
+      "pos": [
+        940,
+        300
+      ],
+      "size": [
+        190,
+        76
+      ]
+    },
+    {
+      "id": "agent",
+      "type": "external",
+      "label": "AI agents",
+      "sublabel": "MCP + bearer token",
+      "pos": [
+        610,
+        60
+      ],
+      "size": [
+        190,
+        76
+      ]
+    },
+    {
+      "id": "sources",
+      "type": "external",
+      "label": "Connected apps",
+      "sublabel": "12 source adapters",
+      "pos": [
+        300,
+        550
+      ],
+      "size": [
+        190,
+        76
+      ]
+    },
+    {
+      "id": "sync",
+      "type": "backend",
+      "label": "Sync + ingest",
+      "sublabel": "Map, upsert, enrich",
+      "pos": [
+        610,
+        550
+      ],
+      "size": [
+        190,
+        76
+      ]
+    },
+    {
+      "id": "model",
+      "type": "external",
+      "label": "Model endpoint",
+      "sublabel": "Optional \u00b7 OpenAI-compatible",
+      "pos": [
+        940,
+        550
+      ],
+      "size": [
+        190,
+        76
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "web-access",
+      "from": "browser",
+      "to": "web",
+      "label": "Open app"
+    },
+    {
+      "id": "rest-api",
+      "from": "web",
+      "to": "api",
+      "label": "/api/*"
+    },
+    {
+      "id": "database",
+      "from": "api",
+      "to": "store",
+      "label": "Read / write"
+    },
+    {
+      "id": "mcp-tools",
+      "from": "agent",
+      "to": "api",
+      "label": "/mcp",
+      "labelDy": 24
+    },
+    {
+      "id": "source-fetch",
+      "from": "sources",
+      "to": "sync",
+      "label": "Fetch records"
+    },
+    {
+      "id": "ingest-store",
+      "from": "sync",
+      "to": "api",
+      "label": "Shared state"
+    },
+    {
+      "id": "enrichment",
+      "from": "sync",
+      "to": "model",
+      "label": "Embed / extract"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "One tool registry",
+      "items": [
+        "REST, MCP and in-app chat call the same tools."
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "One database",
+      "items": [
+        "Graph, full-text and vector indexes share SurrealDB."
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Optional model",
+      "items": [
+        "Agent-written memory and text recall work without one."
+      ]
+    }
+  ]
+}
