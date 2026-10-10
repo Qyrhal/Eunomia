@@ -84,10 +84,15 @@ main() {
   else
     echo "EUNOMIA_IMAGE_TAG=$latest" >> .env
   fi
-  # Installs from before nightly backups have no backup key yet.
+  # Installs from before nightly backups have no backup key yet. A running backup service
+  # without one made its own (in its volume): keep using that one, so earlier backups and new
+  # ones share a key.
   if ! grep -q '^BACKUP_ENCRYPTION_KEY=.' .env; then
+    local bkey
+    bkey="$(docker compose exec -T backup cat /backups/.backup-key 2>/dev/null | tr -d '\n')"
+    [[ "$bkey" =~ ^[A-Za-z0-9+/=]{16,}$ ]] || bkey="$(head -c 32 /dev/urandom | base64 | tr -d '\n')"
     sed -i.bak '/^BACKUP_ENCRYPTION_KEY=/d' .env && rm -f .env.bak
-    echo "BACKUP_ENCRYPTION_KEY=$(head -c 32 /dev/urandom | base64 | tr -d '\n')" >> .env
+    echo "BACKUP_ENCRYPTION_KEY=$bkey" >> .env
   fi
   # A release that pins SurrealDB 3.x over 2.x (running, or stopped: the script finds the volume itself) needs its data moved
   # first (export, fresh volume, verify; see docs/upgrading-to-surrealdb-3.md).

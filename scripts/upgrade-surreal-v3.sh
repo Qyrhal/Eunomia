@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Moves a self-hosted Eunomia stack from SurrealDB 2.x to 3.x. Idempotent: it
 # exits 0 when the stack already runs 3.x (or the compose file does not pin 3.x).
-# Called by scripts/auto-update.sh before `docker compose up`, or run by hand
+# Called by scripts/auto-update.sh before `docker compose up`, by the one-shot `surreal-upgrade`
+# compose service (scripts/surreal-upgrade-service.sh) during `docker compose up`, or run by hand
 # from the repo root: bash scripts/upgrade-surreal-v3.sh
 #
 # 3.x cannot read 2.x data and refuses downgrades, so the data is never
@@ -125,14 +126,42 @@ cleanup_scratch() {
   docker rm -f "$SCRATCH_CTR" >/dev/null 2>&1
   docker volume rm "$SCRATCH_VOLUME" "$BIN_VOLUME" >/dev/null 2>&1
 }
+# Under the one-shot surreal-upgrade service (SURREAL_UPGRADE_ONESHOT=1) the `docker compose up`
+# that started it has already created this release's surrealdb container (not started) on the
+# -v3 volume, and will start it when we exit 0: so the import and the check run on one-off
+# containers of the same service (`compose run`, same flags, answering as `surrealdb`), and
+# that container is left alone. It also pins the -v3 volume, which therefore cannot be removed
+# after a failure, only emptied (the service checked it was empty before we started).
+ONESHOT="${SURREAL_UPGRADE_ONESHOT:-}"
+V3CTR="${PROJECT}-v3oneoff"
+v3_up() { # v3_up COMPOSE_FILE: a 3.x server on the -v3 volume, reachable as surrealdb
+  if [ -z "$ONESHOT" ]; then COMPOSE_FILE="$1" compose up -d --wait --no-deps surrealdb >/dev/null; return; fi
+  v3_down
+  COMPOSE_FILE="$1" compose run -d --no-deps --use-aliases --name "$V3CTR" surrealdb >/dev/null || return 1
+  for i in $(seq 1 90); do
+    docker run --rm --network "$NET" "$target_image" isready --endpoint http://surrealdb:8000 >/dev/null 2>&1 && return 0
+    sleep 2
+  done
+  return 1
+}
+v3_down() { docker stop -t 60 "$V3CTR" >/dev/null 2>&1; docker rm -f "$V3CTR" >/dev/null 2>&1; }
 rollback() {
   log "ROLLING BACK: the old volume was not modified"
   if [ "$phase" -ge 2 ]; then
-    compose rm -sf surrealdb >/dev/null 2>&1
-    v3_volume_names | while read -r v; do docker volume rm "$v" >/dev/null 2>&1 && log "removed partial volume $v"; done
-    printf 'services:\n  surrealdb:\n    image: %s\n' "$old_image" > "$T/old-image.yml"
-    unset SURREAL_DATA_VOLUME
-    COMPOSE_FILE="$base_compose:$T/old-image.yml" compose up -d --wait surrealdb >/dev/null 2>&1 \
+    if [ -n "$ONESHOT" ]; then
+      v3_down
+      v3_volume_names | while read -r v; do
+        docker run --rm -v "$v:/d" busybox:1.36 sh -c 'rm -rf /d/* /d/.[!.]* 2>/dev/null; true' && log "emptied partial volume $v"
+      done
+    else
+      compose rm -sf surrealdb >/dev/null 2>&1
+      v3_volume_names | while read -r v; do docker volume rm "$v" >/dev/null 2>&1 && log "removed partial volume $v"; done
+    fi
+    # the old image with the plain entrypoint the 1.x releases ran (not this release's hardened
+    # flags, which the old backend's queries may not pass), on the OLD volume (the default is -v3)
+    printf 'services:\n  surrealdb:\n    image: %s\n    entrypoint: ["/surreal", "start", "--user", "${SURREAL_USER:-root}", "--pass", "${SURREAL_PASS:-root}", "rocksdb:/data/eunomia.db"]\n' "$old_image" > "$T/old-image.yml"
+    export SURREAL_DATA_VOLUME="${OLD_VOLUME#"${PROJECT}_"}"
+    COMPOSE_FILE="$base_compose:$T/old-image.yml" compose up -d --wait --no-deps surrealdb >/dev/null 2>&1 \
       && log "old SurrealDB ($old_image) is running again on the old volume" \
       || log "COULD NOT restart the old SurrealDB. Run: docker compose up -d surrealdb  (with the old image $old_image)"
   fi
@@ -241,11 +270,11 @@ log "2.x counts: $(tr '\n' ' ' <<<"$counts2")"
 # --- 5. swap in 3.x on a new volume and import ---
 docker rm -f "$SCRATCH_CTR" >/dev/null 2>&1
 ENDPOINT=http://surrealdb:8000
-v3_volume_names | while read -r v; do docker volume rm "$v" >/dev/null 2>&1 && log "removed leftover volume $v from an earlier attempt"; done
+[ -n "$ONESHOT" ] || v3_volume_names | while read -r v; do docker volume rm "$v" >/dev/null 2>&1 && log "removed leftover volume $v from an earlier attempt"; done
 export SURREAL_DATA_VOLUME="$V3_VOLUME"
 # docker-compose.import.yml (shipped with this release) drops the timeouts for the import only
 IMPORT_COMPOSE="$base_compose:$PWD/docker-compose.import.yml"
-COMPOSE_FILE="$IMPORT_COMPOSE" compose up -d --wait surrealdb >/dev/null || die "SurrealDB $target_image did not start on the new volume"
+v3_up "$IMPORT_COMPOSE" || die "SurrealDB $target_image did not start on the new volume"
 echo "DEFINE NAMESPACE IF NOT EXISTS \`$NS\`; USE NS \`$NS\`; DEFINE DATABASE IF NOT EXISTS \`$DB\`;" | docker run --rm -i --network "$NET" \
   -e SURREAL_USER -e SURREAL_PASS "$target_image" sql --endpoint "$ENDPOINT" --hide-welcome >/dev/null 2>&1
 log "importing into $target_image (no query timeout; large installs take a while)"
@@ -258,7 +287,7 @@ rc=$?; docker rm "$ic" >/dev/null 2>&1
 [ -z "${UPGRADE_TEST_SQL:-}" ] || echo "$UPGRADE_TEST_SQL" | sqlq "$target_image" >/dev/null
 
 # back to the hardened server (with the timeouts) on the same volume; it is what runs from now on
-compose up -d --wait surrealdb >/dev/null || die "the hardened SurrealDB did not restart on the new volume"
+v3_up "$base_compose" || die "the hardened SurrealDB did not restart on the new volume"
 
 # --- 6. verify ---
 counts3="$(count_tables "$target_image" "${tables[@]}")"
@@ -268,6 +297,8 @@ if $has_ledger; then
   [ -n "$ledger2" ] && [ "$ledger2" = "$(ledger "$target_image")" ] || die "_migration ledger differs between 2.x and 3.x"
 fi
 
+# one-shot: hand the volume to the service's own container, which `up` starts next
+if [ -n "$ONESHOT" ]; then v3_down; fi
 setenv SURREAL_DATA_VOLUME "$V3_VOLUME"
 DONE=1
 log "OK: ${#tables[@]} tables match; SurrealDB $target_image runs on volume $V3_VOLUME (recorded in .env)."

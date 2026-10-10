@@ -111,9 +111,10 @@ See [Quickstart](docs/quickstart.md) for the first run and
 
 ### Upgrading from 1.x
 
-2.0 moves to SurrealDB 3.3 and gives each org its own database. Update to
-the 1.4.2 bridge release first, then to 2.0, with **Update now** in Settings
-(instance admins only). The bridge installs the upgrade hook that 2.0 needs.
+2.0 moves to SurrealDB 3.3 and gives each org its own database. Any 1.x
+install can update straight to 2.0 with **Update now** in Settings (instance
+admins only). Taking the 1.4.2 bridge release first is recommended, not
+required: its updater also puts the old release back if the move fails.
 
 During the update Eunomia takes an encrypted `pre-v3` backup, copies your
 data to a new SurrealDB 3 volume, checks every table's row count, and rolls
@@ -122,9 +123,9 @@ moves the single database into one org, verified the same way; the old
 database is kept until you remove it. The app is offline while this runs;
 plan for about four times your current data volume in free disk.
 
-Keep `ENCRYPTION_KEY`: it now also protects each org's database password. If an
-install skipped the bridge and SurrealDB won't start, run
-`bash scripts/upgrade-surreal-v3.sh` from the install folder. See
+Keep `ENCRYPTION_KEY`: it now also protects each org's database password. If a
+move fails, the reason is in `docker compose logs surreal-upgrade`; fix it and
+run `docker compose up -d` from the install folder to try again. See
 [Upgrading to SurrealDB 3](docs/upgrading-to-surrealdb-3.md) and
 [Org databases and the one-time move](docs/deployment.md#org-databases-and-the-one-time-move).
 

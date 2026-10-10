@@ -31,13 +31,26 @@ out="$(EUNOMIA_DIR="$T/repo" COMPOSE_PROJECT_NAME=proj COMPOSE_FILE=docker-compo
 check "the upgrade completes against the mock" test "$rc" -eq 0
 [ "$rc" -eq 0 ] || echo "$out" | tail -5
 L="$T/docker.log"
-imp="$(grep -n 'COMPOSE_FILE=.*docker-compose.import.yml :: compose up -d --wait surrealdb' "$L" | head -1 | cut -d: -f1)"
+imp="$(grep -n 'COMPOSE_FILE=.*docker-compose.import.yml :: compose up -d --wait --no-deps surrealdb' "$L" | head -1 | cut -d: -f1)"
 import="$(grep -n ' :: create .* import ' "$L" | head -1 | cut -d: -f1)"
-plain="$(grep -n 'COMPOSE_FILE=docker-compose.yml :: compose up -d --wait surrealdb' "$L" | tail -1 | cut -d: -f1)"
+plain="$(grep -n 'COMPOSE_FILE=docker-compose.yml :: compose up -d --wait --no-deps surrealdb' "$L" | tail -1 | cut -d: -f1)"
 check "3.x is started with the import override before the import" test -n "$imp" -a -n "$import" -a "${imp:-9}" -lt "${import:-0}"
 check "the plain hardened compose file is started after the import" test -n "$plain" -a "${plain:-0}" -gt "${import:-9999}"
 check "no override file is layered on the hardened start" bash -c "! tail -n +\$((${plain:-1})) '$L' | head -1 | grep -q import.yml"
 check "the new volume is recorded only after that" grep -q '^SURREAL_DATA_VOLUME=eunomia-surreal-data-v3$' "$T/repo/.env"
+
+# under the one-shot surreal-upgrade service: the same order, on one-off containers of the service,
+# and the container that `docker compose up` created is never replaced (no `compose up` of surrealdb)
+: > "$L"; : > "$T/repo/.env"
+EUNOMIA_DIR="$T/repo" COMPOSE_PROJECT_NAME=proj COMPOSE_FILE=docker-compose.yml SURREAL_UPGRADE_ONESHOT=1 PATH="$T/bin:$PATH" bash "$ROOT/scripts/upgrade-surreal-v3.sh" >/dev/null 2>&1; rc=$?
+check "one-shot: completes" test "$rc" -eq 0
+imp="$(grep -n 'COMPOSE_FILE=.*docker-compose.import.yml :: compose run -d --no-deps --use-aliases --name proj-v3oneoff surrealdb' "$L" | head -1 | cut -d: -f1)"
+import="$(grep -n ' :: create .* import ' "$L" | head -1 | cut -d: -f1)"
+plain="$(grep -n 'COMPOSE_FILE=docker-compose.yml :: compose run -d --no-deps --use-aliases --name proj-v3oneoff surrealdb' "$L" | tail -1 | cut -d: -f1)"
+check "one-shot: import override one-off, import, then hardened one-off" test -n "$imp" -a -n "$import" -a -n "$plain" -a "${imp:-9}" -lt "${import:-0}" -a "${plain:-0}" -gt "${import:-9999}"
+check "one-shot: never runs compose up/rm on surrealdb" bash -c "! grep -qE ':: compose (up|rm) .*surrealdb' '$L'"
+check "one-shot: the one-off is stopped before the volume is recorded" grep -q ':: stop -t 60 proj-v3oneoff' "$L"
+check "one-shot: records the new volume" grep -q '^SURREAL_DATA_VOLUME=eunomia-surreal-data-v3$' "$T/repo/.env"
 
 rm "$T/repo/docker-compose.import.yml"; : > "$L"
 EUNOMIA_DIR="$T/repo" COMPOSE_PROJECT_NAME=proj PATH="$T/bin:$PATH" bash "$ROOT/scripts/upgrade-surreal-v3.sh" >/dev/null 2>&1; rc=$?

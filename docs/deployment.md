@@ -195,8 +195,9 @@ published, **Update now**. A sidebar badge appears when an update is waiting.
 **Check now** asks GitHub immediately instead of waiting for the 10-minute
 check. Only an instance admin (the first user, or an email in `EUNOMIA_ADMIN_EMAILS`) can use **Update now** and **Check now**: the update restarts the stack. After you click, the page shows progress, Eunomia restarts on the new
 release's prebuilt images (a few seconds of downtime, no build), and the page
-reloads itself. Data lives in the `eunomia-surreal-data` volume and isn't
-touched.
+reloads itself. Data lives in the `eunomia-surreal-data-v3` volume (installs
+from before 2.0 keep their old SurrealDB 2.x data on `eunomia-surreal-data`, see
+[upgrading-to-surrealdb-3.md](upgrading-to-surrealdb-3.md)) and isn't touched.
 
 How: the stack includes a small `updater` service (`scripts/updater.sh`) that
 runs `scripts/auto-update.sh` every 20 seconds. It works the same on every
