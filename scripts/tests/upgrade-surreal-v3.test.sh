@@ -50,6 +50,8 @@ cp "$W/compose.old" "$W/docker-compose.yml"
 printf 'JWT_SECRET=x\nENCRYPTION_KEY=y\nBACKUP_ENCRYPTION_KEY=%s\n' "$BACKUP_ENCRYPTION_KEY" > "$W/.env"
 export COMPOSE_FILE="docker-compose.yml:standin.yml"
 docker pull -q busybox:1.36 >/dev/null
+# `--pull never` below: fetch both SurrealDB images up front (a fresh CI runner has neither)
+docker pull -q "$OLD_IMG" >/dev/null && docker pull -q "$NEW_IMG" >/dev/null || { echo "could not pull $OLD_IMG / $NEW_IMG"; exit 1; }
 cd "$W" || exit 1
 docker compose build -q backup >/dev/null || { echo "backup image build failed"; exit 1; }
 docker compose up -d --wait --pull never surrealdb backup backend >/dev/null || { echo "stack did not start"; exit 1; }

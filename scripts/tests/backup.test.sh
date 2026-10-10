@@ -47,7 +47,7 @@ dump_of() { : > "$SHIM_LOG"; sh "$SCRIPT" restore "$1" >/dev/null 2>&1; cat "$SH
 bk now manual >/dev/null
 f="$(ls "$TMP"/backups/manual-*.surql.enc | head -1)"
 check "single-database install writes one file" test -f "$f"
-check "that file holds the database export" sh -c "grep -q 'dump of eunomia' <<< \"\$(sh '$SCRIPT' restore '$f' >/dev/null 2>&1; cat '$SHIM_LOG')\""
+check "that file holds the database export" bash -c "grep -q 'dump of eunomia' <<< \"\$(sh '$SCRIPT' restore '$f' >/dev/null 2>&1; cat '$SHIM_LOG')\""
 check "new files carry the authenticated header" sh -c "head -n1 '$f' | grep -q '^EUNOMIA-BK2 '"
 check "round trip restores the exact dump" sh -c ": > '$SHIM_LOG'; sh '$SCRIPT' restore '$f' && grep -q 'import eunomia: OPTION IMPORT; -- dump of eunomia' '$SHIM_LOG'"
 cp "$f" "$TMP/tampered.surql.enc"; printf 'X' | dd of="$TMP/tampered.surql.enc" bs=1 seek=60 conv=notrunc 2>/dev/null
