@@ -78,6 +78,9 @@ check "the documents folder is archived, encrypted" sh -c "test -f '$d/documents
 rm -rf "$TMP/docs"/*; mkdir -p "$TMP/docs/stale"
 DOCUMENTS_DIR="$TMP/docs" bk restore "$(basename "$d")" --wipe >/dev/null 2>&1
 check "restore --wipe brings the documents back and drops what was not in the backup" sh -c "test \"\$(cat '$TMP/docs/org_x/abc/1/notes.md')\" = 'original bytes' && test ! -e '$TMP/docs/stale'"
+rm -rf "$TMP/docs"
+DOCUMENTS_DIR="$TMP/docs" bk restore "$(basename "$d")" >/dev/null 2>&1
+check "restore creates a missing documents folder (a fresh data volume)" test -f "$TMP/docs/org_x/abc/1/notes.md"
 rm -rf "$TMP/docs"; rm -rf "$TMP/backups"/*; sleep 1
 DOCUMENTS_DIR="$TMP/docs" MOCK_TENANCY=1 bk now manual >/dev/null
 check "no documents folder, no archive" test -z "$(ls "$TMP"/backups/manual-*/documents.tar.enc 2>/dev/null)"

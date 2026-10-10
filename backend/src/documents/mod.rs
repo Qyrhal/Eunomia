@@ -871,7 +871,7 @@ mod tests {
         assert_eq!(bucket_url("file:/documents", db).unwrap(), "file:/documents/org_0123abcd");
         assert_eq!(bucket_url("file:///data/docs/", db).unwrap(), "file:/data/docs/org_0123abcd");
         assert_eq!(bucket_url("s3://my-bucket?region=eu-west-1", db).unwrap(), "s3://my-bucket?region=eu-west-1&prefix=org_0123abcd");
-        assert_eq!(bucket_url("s3+http://minio:9000/docs?prefix=eunomia/", db).unwrap(), "s3+http://minio:9000/docs?prefix=eunomia%2Forg_0123abcd");
+        assert_eq!(bucket_url("s3+http://storage.internal:9000/docs?prefix=eunomia/", db).unwrap(), "s3+http://storage.internal:9000/docs?prefix=eunomia%2Forg_0123abcd");
         assert!(bucket_url("s3://key:secret@host/bucket", db).is_err());
         assert!(bucket_url("s3://bucket?access_key=a&secret_key=b", db).is_err());
         assert!(bucket_url("file:relative", db).is_err() || bucket_url("file:relative", db).unwrap().starts_with("file:/"));

@@ -1,8 +1,7 @@
-//! Uploaded documents end to end against a real in-memory SurrealDB with a file bucket (`memory` by
-//! default; `TEST_DOCUMENTS_BACKEND=s3+http://127.0.0.1:9000/bucket` with `AWS_*` set runs the same
-//! suite against an S3-compatible store, see docs/documents.md): upload -> index job -> search, recall
-//! and get find the passage with its document reference -> download is byte-exact -> export -> delete
-//! removes it from retrieval and storage. Plus validation, isolation, revisions and failures.
+//! Uploaded documents end to end against a real in-memory SurrealDB and its built-in file bucket
+//! (`memory` backend): upload -> index job -> search, recall and get find the passage with its
+//! document reference -> download is byte-exact -> export -> delete removes it from retrieval and
+//! storage. Plus validation, isolation, revisions and failures.
 
 mod common;
 
@@ -379,34 +378,4 @@ async fn storage_off_is_a_clear_error_and_the_rest_works() {
     // and the browser session works the same way as tokens
     let (s, body) = app.http_session("GET", "/api/documents", None).await;
     assert_eq!((s, body["total"].clone()), (StatusCode::OK, json!(0)));
-}
-
-/// Against a real S3-compatible store. Runs only with `TEST_DOCUMENTS_S3` set to a bucket URL such as
-/// `s3+http://127.0.0.1:9000/eunomia-docs?prefix=test` and `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`
-/// in the environment (the database engine reads them, never the URL). See docs/documents.md.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn s3_backend_round_trip() {
-    let Ok(url) = std::env::var("TEST_DOCUMENTS_S3") else {
-        eprintln!("skipped: TEST_DOCUMENTS_S3 is not set");
-        return;
-    };
-    let (app, _stop) = app_with(Settings { embeddings_backend: "stub".into(), documents_backend: url, ..common::test_settings() }).await;
-    let text = "S3 round trip: the walrus ledger balances on Tuesdays.\n".repeat(200);
-    let (s, doc) = upload_http(&app, "ledger.txt", Some("text/plain"), text.as_bytes()).await;
-    assert_eq!(s, StatusCode::OK, "{doc}");
-    let id = doc["id"].as_str().unwrap().to_string();
-    assert_eq!(settled(&app, &id).await["document"]["status"], "ready");
-    let path = object_path(&app, &id).await;
-    assert!(object_exists(&app, &path).await);
-    let (_, _, bytes) = raw(&app, "GET", &format!("/api/documents/{id}/download"), vec![], None, &app.token).await;
-    assert_eq!(sha(&bytes), sha(text.as_bytes()));
-    let (s, pdf) = upload_http(&app, "notes.pdf", Some("application/pdf"), PDF).await;
-    assert_eq!(s, StatusCode::OK);
-    let (_, _, bytes) = raw(&app, "GET", &format!("/api/documents/{}/download", pdf["id"].as_str().unwrap()), vec![], None, &app.token).await;
-    assert_eq!(bytes, PDF);
-    let hits = app.tool("search", json!({"query": "walrus ledger", "mode": "keyword"})).await;
-    assert_eq!(hits["results"][0]["document"]["document_id"], id);
-    let (s, _, _) = raw(&app, "DELETE", &format!("/api/documents/{id}"), vec![], None, &app.token).await;
-    assert_eq!(s, StatusCode::OK);
-    assert!(!object_exists(&app, &path).await);
 }

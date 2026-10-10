@@ -54,8 +54,8 @@ pub fn test_settings() -> Settings {
         update_status_dir: "/nonexistent".into(),
         bind_addr: "127.0.0.1:0".into(),
         public_url: "http://localhost:8001".into(),
-        // the embedded engine's in-process bucket; `TEST_DOCUMENTS_BACKEND` points it elsewhere (an S3 bucket)
-        documents_backend: std::env::var("TEST_DOCUMENTS_BACKEND").unwrap_or_else(|_| "memory".into()),
+        // SurrealDB's built-in file bucket, in memory
+        documents_backend: "memory".into(),
         documents_max_bytes: 256 * 1024,
     }
 }

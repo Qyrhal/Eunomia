@@ -56,65 +56,53 @@ The export manifest has `format: "eunomia.document-export"` and `version: 1`. It
 
 ## Setup
 
-Storage is SurrealDB's file bucket feature. In SurrealDB 3.3 it is **experimental**, so the database server must allow it, and it must also allow the `file` functions:
+Documents are stored in SurrealDB's own built-in **file bucket**: the backend writes and reads them through the database (`DEFINE BUCKET` and file pointers) and never talks to a storage service itself. With `docker-compose.yml` this works out of the box. The files go into a folder inside the database's own data volume, so no extra service or volume is needed.
+
+File buckets are **experimental** in SurrealDB 3.3, so the database server must allow them, and must also allow the `file` functions. `docker-compose.yml` starts it with:
 
 ```
-surreal start ... --allow-experimental=files --allow-funcs=time,string,search,count,array,vector,math,file,type::file ...
+surreal start ... --allow-funcs=time,string,search,count,array,vector,math,file,type::file --allow-experimental=files ...
+SURREAL_BUCKET_FOLDER_ALLOWLIST=/data/documents
 ```
 
-Write `--allow-experimental=files` with the `=`. Without it, the flag takes the next argument (the database path) as a second feature name, and the server refuses to start. The environment variable `SURREAL_CAPS_ALLOW_EXPERIMENTAL=files` does the same.
+Write `--allow-experimental=files` with the `=`. Without it, the flag takes the next argument (the database path) as a second feature name, and the server refuses to start. The environment variable `SURREAL_CAPS_ALLOW_EXPERIMENTAL=files` does the same. SurrealDB 2.x has no file buckets and refuses this flag.
 
 The backend reads two settings:
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `EUNOMIA_DOCUMENTS_BACKEND` | empty (off) outside compose; `file:/documents` in `docker-compose.yml` | Where the database keeps the files: `file:/absolute/path`, `s3://bucket?region=...`, `s3+https://host/bucket`, `s3+http://host:9000/bucket`, `gs://bucket`, `az://container`, or `memory` (tests only, lost on restart). Optional `prefix=` for S3, GCS and Azure. Empty turns documents off: uploads answer `document.storage_unavailable`, and everything else works. |
+| `EUNOMIA_DOCUMENTS_BACKEND` | `file:/data/documents` in `docker-compose.yml`; empty (off) when unset | Where the bucket keeps the files, as SurrealDB's `DEFINE BUCKET ... BACKEND`: `file:/absolute/path` on the database server (inside `SURREAL_BUCKET_FOLDER_ALLOWLIST`), or optionally an S3 URL (below). `memory` keeps them in the server's memory and loses them on restart (tests only). Empty turns documents off: uploads answer `document.storage_unavailable`, and everything else works. |
 | `EUNOMIA_DOCUMENTS_MAX_BYTES` | `26214400` (25 MiB) | The largest upload accepted. |
 
-Eunomia appends each org's database name to the folder or key prefix (`/documents/org_<id>/...`, or `prefix=<yours>/org_<id>`), so orgs never share keys. Every org's bucket is defined when the org is created, and again at every backend start, so a changed setting applies after a restart. A bucket can only be defined by the root user, never by the org's own database user.
+Eunomia appends each org's database name to the folder (`/data/documents/org_<id>/...`) or the S3 key prefix, so orgs never share keys. Every org's bucket is defined when the org is created, and again at every backend start, so a changed setting applies after a restart. Only the root user can define a bucket. The org's own database user cannot.
 
-### The default: a folder on the database server
+The `file:` path is on the **database server**, not the backend. A folder outside the allowlist is refused.
 
-`docker-compose.yml` mounts the volume `eunomia-documents` at `/documents` in the `surrealdb` container. It allows that folder with `SURREAL_BUCKET_FOLDER_ALLOWLIST=/documents` and sets `EUNOMIA_DOCUMENTS_BACKEND=file:/documents`. The path is on the **database server**, not the backend. A file backend outside the allowlist is refused.
+### Optional: an S3 bucket as the backend
 
-### S3, MinIO, Cloudflare R2 and other S3-compatible stores
+SurrealDB 3.3 can also keep a bucket's files in S3 or an S3-compatible store. This is optional configuration of the same built-in bucket: Eunomia does not ship or need an S3 service.
 
-1. Create a private bucket.
-2. Give the **SurrealDB server** credentials in its environment, never in the URL. `DEFINE BUCKET` text is visible to `INFO FOR DB`, so Eunomia refuses a URL with credentials in it. Add to the `surrealdb` service's `environment` in a `docker-compose.override.yml`:
+1. Give the **SurrealDB server** the credentials in its environment, never in the URL. `DEFINE BUCKET` text is visible to `INFO FOR DB`, so Eunomia refuses a URL with credentials in it. For example, in a `docker-compose.override.yml`:
    ```yaml
    services:
      surrealdb:
        environment:
          - AWS_ACCESS_KEY_ID=${DOCS_S3_KEY}
          - AWS_SECRET_ACCESS_KEY=${DOCS_S3_SECRET}
-         - AWS_REGION=us-east-1
+         - AWS_REGION=eu-west-1
    ```
-   Use a key that can only `GetObject`, `PutObject`, `DeleteObject` and `ListBucket` on that one bucket. On AWS an instance or workload role works too: the standard AWS credential chain is used.
-3. Point the backend at the bucket: `EUNOMIA_DOCUMENTS_BACKEND=s3://my-bucket?region=eu-west-1` (AWS), `s3+https://<account>.r2.cloudflarestorage.com/my-bucket?region=auto` (R2), or `s3+http://minio:9000/eunomia-docs` (MinIO in the same compose network). A host in the URL is treated as a custom endpoint with path-style addressing. `s3+http` allows plain HTTP, so use it only on a private network.
-4. Restart: `docker compose up -d`.
+   Use a key that can only `GetObject`, `PutObject`, `DeleteObject` and `ListBucket` on that one bucket. An instance or workload role works too: SurrealDB uses the standard AWS credential chain.
+2. Set `EUNOMIA_DOCUMENTS_BACKEND=s3://my-bucket?region=eu-west-1`. A host in the URL (`s3+https://host/bucket`) is a custom S3-compatible endpoint with path-style addressing. Only `region` and `prefix` are accepted as options.
+3. Restart: `docker compose up -d`.
 
-Downloads go through the backend, which checks the owner every time. There are no pre-signed URLs, so revoking access is immediate, and the bucket needs no CORS rules and no public access.
-
-What has been tested: the embedded engine and a SurrealDB 3.3.1 server (hardened flags as in `docker-compose.yml`) against a MinIO server over `s3+http`, the `file:` backend, and `memory`. AWS S3, R2, Backblaze B2, Wasabi, Google Cloud Storage and Azure use the same SurrealDB code path (the `object_store` library), but Eunomia has not been tested against them. Try an upload and a download before you rely on one.
-
-**Local MinIO for testing.** The `minio` compose profile starts a MinIO container, a community build because the upstream `minio/minio` image is no longer published. It also creates the bucket `eunomia-docs`:
-
-```bash
-# .env
-COMPOSE_PROFILES=minio
-MINIO_ROOT_USER=eunomia-docs
-MINIO_ROOT_PASSWORD=<a long random string>
-EUNOMIA_DOCUMENTS_BACKEND=s3+http://minio:9000/eunomia-docs
-```
-
-Give the `surrealdb` service `AWS_ACCESS_KEY_ID=${MINIO_ROOT_USER}` and `AWS_SECRET_ACCESS_KEY=${MINIO_ROOT_PASSWORD}` with an override file as in step 2, then run `docker compose up -d`. Use it for trying things out. A production store should have its own least-privilege key.
+Downloads always go through the backend, which checks the owner every time. There are no pre-signed URLs, so revoking access is immediate, and the bucket needs no CORS rules and no public access. Eunomia has not been tested against any particular S3 provider. Try an upload and a download before you rely on one.
 
 ## Backups
 
 **A SurrealDB export does not contain the files.** It holds the document records, the passages and their vectors, and the bucket definition, but not the bytes. You need both to restore documents.
 
-- With the default `file:` backend, the nightly `backup` service also writes `documents.tar.enc`: the `/documents` folder, encrypted the same way as the database exports. It is written into the same backup directory. `backend/scripts/restore.sh` restores it into the volume when it is present. Check for it after your first backup.
-- With S3 or another object store, back the bucket up with the provider's own tools: versioning, replication, or `aws s3 sync` / `rclone sync` to a second location. Eunomia does not copy object-store buckets.
+- With the default `file:` backend, the nightly `backup` service also writes `documents.tar.enc`: the documents folder of the data volume, encrypted the same way as the database exports, in the same backup directory. Restoring that backup (`backend/scripts/restore.sh`, or `eunomia-backup restore`) unpacks it back. With `--wipe`, files not in the backup are removed first. Check for `documents.tar.enc` after your first backup.
+- With an S3 backend, back the bucket up with the provider's own tools, such as versioning or replication. Eunomia does not copy S3 buckets.
 
 A database restored without its files lists the documents and finds their passages, but downloads answer `document.storage_unavailable` ("the stored file is missing"). Delete those documents or upload them again.
 

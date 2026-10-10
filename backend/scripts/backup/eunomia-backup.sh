@@ -14,10 +14,11 @@
 # file per database of the namespace (control.surql.enc, org_<uuid>.surql.enc, and the old
 # single database until you remove it). Without it (a pre-tenancy install, the restore drill) a
 # backup is the single file NAME.surql.enc as before.
-# Uploaded documents' files are not in any export: when the documents folder (DOCUMENTS_DIR, default
-# /documents, the `file:` bucket volume) is mounted and not empty, a tenancy backup also holds
+# Uploaded documents' files are not in any export: when the documents folder (DOCUMENTS_DIR: the
+# `file:` bucket folder, /data/documents in the database's data volume, mounted here as
+# /surreal-data/documents by docker-compose.yml) exists and is not empty, a tenancy backup also holds
 # documents.tar.enc (a tar of it, encrypted the same way), and restoring that backup unpacks it back.
-# Documents kept in an S3-compatible bucket are not copied: back that bucket up with its own tools.
+# A bucket whose backend is S3 is not copied: back that bucket up with its own tools.
 set -eu
 
 ENDPOINT="${SURREAL_ENDPOINT:-http://surrealdb:8000}"
@@ -231,7 +232,7 @@ do_restore() {
       restore_one "$file" "$d" "${2:-}"
     done
     if [ -f "$f/documents.tar.enc" ]; then
-      [ -d "$DOCS_DIR" ] && [ -w "$DOCS_DIR" ] || die "$f holds documents but $DOCS_DIR is not mounted writable here"
+      mkdir -p "$DOCS_DIR" 2>/dev/null; [ -w "$DOCS_DIR" ] || die "$f holds documents but $DOCS_DIR is not writable here"
       plain="$(mktemp)"
       decrypt_to "$f/documents.tar.enc" "$plain"
       [ "${2:-}" != "--wipe" ] || find "$DOCS_DIR" -mindepth 1 -delete
