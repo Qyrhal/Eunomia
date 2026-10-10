@@ -156,7 +156,14 @@ async fn only_org(state: &eunomia_backend::state::AppState) -> OrgId {
 async fn the_move_carries_a_2x_export_into_one_org_and_is_a_noop_the_second_time() {
     let (state, old) = state_with_legacy().await;
     // a 1.4 install also has Pocket recordings stored whole (the fixture predates the table)
-    old.query("DEFINE TABLE pocket_recording SCHEMALESS; CREATE pocket_recording:`u:rec1` SET owner = user:u, recording_id = 'rec1', title = 'Standup', transcript = 'Ann: hi';")
+    // ...and, from 1.3, observations carry `obs_subject`, a field 2.0 no longer has (it must be left out,
+    // not make the observation vanish from the move)
+    old.query(
+        "DEFINE TABLE pocket_recording SCHEMALESS; CREATE pocket_recording:`u:rec1` SET owner = user:u, recording_id = 'rec1', title = 'Standup', transcript = 'Ann: hi';
+         DEFINE FIELD obs_subject ON memory VALUE IF type = 'observation' THEN subject ELSE NONE END;
+         LET $m = (SELECT * FROM memory LIMIT 1)[0];
+         CREATE memory:obs1 SET owner = $m.owner, vault = $m.vault, subject = $m.subject, text = 'a belief', type = 'observation', status = 'stale';",
+    )
         .await
         .unwrap()
         .check()
@@ -173,7 +180,7 @@ async fn the_move_carries_a_2x_export_into_one_org_and_is_a_noop_the_second_time
 
     // org data moved, record ids unchanged, and the indexes answer over it
     let db = state.pool.for_org(&org).await.unwrap();
-    for (table, n) in [("memory", 2), ("cache_record", 2), ("person", 1), ("organisation", 1), ("relates_to", 1), ("vault_member", 3), ("pocket_recording", 1)] {
+    for (table, n) in [("memory", 3), ("cache_record", 2), ("person", 1), ("organisation", 1), ("relates_to", 1), ("vault_member", 3), ("pocket_recording", 1)] {
         assert_eq!(count(db.test_raw(), table).await, n, "{table}");
     }
     let owner = eunomia_backend::rid::parse("user:u").unwrap();
@@ -192,12 +199,12 @@ async fn the_move_carries_a_2x_export_into_one_org_and_is_a_noop_the_second_time
 
     // the old database keeps its rows (it was only brought to schema 8 in place)
     assert_eq!(count(&old, "user").await, 3);
-    assert_eq!(count(&old, "memory").await, 2);
+    assert_eq!(count(&old, "memory").await, 3);
 
     // a second run is a no-op: no second org, nothing changes
     run_move(&state).await;
     assert_eq!(only_org(&state).await, org);
-    assert_eq!(count(db.test_raw(), "memory").await, 2);
+    assert_eq!(count(db.test_raw(), "memory").await, 3);
 }
 
 #[tokio::test]

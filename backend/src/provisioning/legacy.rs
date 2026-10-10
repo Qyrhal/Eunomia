@@ -194,8 +194,12 @@ async fn count(db: &crate::db::Db, table: &str) -> AppResult<i64> {
 // ponytail: rows round-trip as SurrealQL values through this process, 100 at a time, and a resumed move rescans
 // from the first id (INSERT IGNORE makes that safe, not fast). Fine for self-host sizes; stream or checkpoint
 // the cursor per table if an install ever has millions of rows.
-/// Copy every row of `table` in id order, `BATCH` at a time.
+/// Copy every row of `table` in id order, `BATCH` at a time. Fields the new (schemafull) table no
+/// longer defines are left out: 3.x refuses a row with an unknown field, and INSERT IGNORE would then
+/// skip the whole row (1.3+ observations carry `obs_subject`, which 2.0 dropped).
 async fn copy_table(src: &crate::db::Db, dst: &crate::db::Db, table: &str, edge: bool) -> AppResult<()> {
+    let keep = defined_fields(dst, table).await?;
+    let mut dropped = std::collections::BTreeSet::new();
     let mut last: Option<RecordId> = None;
     loop {
         let ids: Vec<RecordId> = match &last {
@@ -205,12 +209,40 @@ async fn copy_table(src: &crate::db::Db, dst: &crate::db::Db, table: &str, edge:
         .await?
         .take(0)?;
         let Some(tail) = ids.last().cloned() else { break };
-        let rows: Vec<Value> = root(src, "legacy.rows", "SELECT * FROM $ids").bind(("ids", ids)).await?.take(0)?;
+        let mut rows: Vec<Value> = root(src, "legacy.rows", "SELECT * FROM $ids").bind(("ids", ids)).await?.take(0)?;
+        if let Some(keep) = &keep {
+            for row in rows.iter_mut() {
+                if let Value::Object(o) = row {
+                    o.retain(|k, _| {
+                        let ok = matches!(k.as_str(), "id" | "in" | "out") || keep.contains(k);
+                        if !ok {
+                            dropped.insert(k.clone());
+                        }
+                        ok
+                    });
+                }
+            }
+        }
         let relation = if edge { "RELATION " } else { "" };
         root(dst, "legacy.insert", format!("INSERT {relation}IGNORE INTO {table} $rows RETURN NONE")).bind(("rows", rows)).await?.check()?;
         last = Some(tail);
     }
+    if !dropped.is_empty() {
+        tracing::warn!(table, fields = ?dropped, "data move: left out fields this version no longer has");
+    }
     Ok(())
+}
+
+/// The top-level fields `table` defines in `db`, or None when the table takes any field (not SCHEMAFULL).
+async fn defined_fields(db: &crate::db::Db, table: &str) -> AppResult<Option<std::collections::HashSet<String>>> {
+    let info: Option<serde_json::Value> = root(db, "legacy.info_db", "INFO FOR DB").await?.take(0)?;
+    let def = info.as_ref().and_then(|i| i.pointer(&format!("/tables/{table}"))).and_then(|d| d.as_str()).unwrap_or("");
+    if !def.contains("SCHEMAFULL") {
+        return Ok(None);
+    }
+    let t: Option<serde_json::Value> = root(db, "legacy.info_table", format!("INFO FOR TABLE {table}")).await?.take(0)?;
+    let fields = t.as_ref().and_then(|t| t.get("fields")).and_then(|f| f.as_object());
+    Ok(Some(fields.map(|f| f.keys().map(|k| k.split(['.', '[']).next().unwrap_or(k).to_string()).collect()).unwrap_or_default()))
 }
 
 impl Provisioner {
