@@ -118,30 +118,43 @@ pub async fn apply_up_to(db: &Db, max: u32) -> surrealdb::Result<()> {
 }
 
 const LOCK_DDL: &str = "DEFINE TABLE IF NOT EXISTS _migration_lock SCHEMALESS;";
-/// A lock older than this belongs to a process that died mid-migration; the next one takes it over.
-const LOCK_STALE: &str = "5m";
+/// A lock not refreshed for this long belongs to a process that died mid-migration; the next one takes
+/// it over. The holder refreshes it every fifth of this while its migrations run (see [`locked`]).
+const LOCK_STALE: std::time::Duration = std::time::Duration::from_secs(300);
 
 /// Runs `f` while holding this database's migration lock, so two replicas booting together never run
 /// schema changes in one database at the same time. Racing DDL transactions are not isolated from each
 /// other (one can see a table the other is redefining as missing: "The table 'x' does not exist"),
 /// and the commit-conflict retry below cannot recover from that. The loser waits, then finds every
 /// migration applied. The lock is one row in `_migration_lock`, created atomically (a second
-/// `CREATE` of the same id fails), released when `f` ends and taken over once stale.
-// ponytail: no heartbeat; a migration that runs longer than LOCK_STALE could be run twice concurrently. Refresh `at` from `apply` if one ever does.
+/// `CREATE` of the same id fails) with a random `holder`, released when `f` ends and taken over once
+/// stale.
 async fn locked<T>(db: &Db, f: impl std::future::Future<Output = surrealdb::Result<T>>) -> surrealdb::Result<T> {
+    locked_with(db, LOCK_STALE, f).await
+}
+
+/// [`locked`] with the staleness threshold as a parameter (tests use a short one). While `f` runs, a
+/// heartbeat in the same task moves the lock's `at` forward every `stale / 5`, so a migration that
+/// outlives `stale` is never taken over; it stops with `f`. A holder that crashes stops beating and its
+/// lock goes stale. Heartbeat, release and takeover touch the row only while `holder` is ours, and a
+/// heartbeat that finds the lock gone (taken over after this process stalled past `stale`) fails the
+/// migration rather than let two run at once.
+async fn locked_with<T>(db: &Db, stale: std::time::Duration, f: impl std::future::Future<Output = surrealdb::Result<T>>) -> surrealdb::Result<T> {
     crate::tx::with_retry(|| async { root(db, "migrate.lock_ddl", LOCK_DDL).await?.check().map(|_| ()) }).await?;
+    let me = uuid::Uuid::new_v4().simple().to_string();
+    let stale_ms = format!("{}ms", stale.as_millis());
     let mut waited = 0u32;
     loop {
         let taken = root(
             db,
             "migrate.lock_take",
-            format!(
-                "BEGIN TRANSACTION;
-                 DELETE _migration_lock:run WHERE at < time::now() - {LOCK_STALE};
-                 CREATE _migration_lock:run SET at = time::now();
-                 COMMIT TRANSACTION;"
-            ),
+            "BEGIN TRANSACTION;
+             DELETE _migration_lock:run WHERE at < time::now() - <duration>$stale;
+             CREATE _migration_lock:run SET at = time::now(), holder = $me;
+             COMMIT TRANSACTION;",
         )
+        .bind(("stale", stale_ms.clone()))
+        .bind(("me", me.clone()))
         .await
         .and_then(|r| r.check());
         match taken {
@@ -156,10 +169,36 @@ async fn locked<T>(db: &Db, f: impl std::future::Future<Output = surrealdb::Resu
             Err(e) => return Err(e),
         }
     }
-    let result = f.await;
+    let heartbeat = async {
+        loop {
+            tokio::time::sleep(stale / 5).await;
+            let beat = root(db, "migrate.lock_heartbeat", "UPDATE _migration_lock:run SET at = time::now() WHERE holder = $me RETURN VALUE id")
+                .bind(("me", me.clone()))
+                .await
+                .and_then(|mut r| r.take::<Vec<RecordId>>(0));
+            match beat {
+                Ok(rows) if rows.is_empty() => {
+                    return Err(surrealdb::Error::thrown("the migration lock was taken over while this process held it; stopping".into()));
+                }
+                Ok(_) => {}
+                // a transient failure: the next beat retries, well before the lock can go stale
+                Err(e) => tracing::warn!(error = %e, "could not refresh the migration lock"),
+            }
+        }
+    };
+    let result = tokio::select! {
+        r = f => r,
+        e = heartbeat => e,
+    };
     // best effort: a lock that cannot be released goes stale
-    let _ = root(db, "migrate.lock_release", "DELETE _migration_lock:run").await;
+    let _ = root(db, "migrate.lock_release", "DELETE _migration_lock:run WHERE holder = $me").bind(("me", me)).await;
     result
+}
+
+/// [`locked_with`] for tests, which need a staleness threshold of milliseconds (`tests/migrations.rs`).
+#[cfg(feature = "test-support")]
+pub async fn locked_for_tests<T>(db: &Db, stale: std::time::Duration, f: impl std::future::Future<Output = surrealdb::Result<T>>) -> surrealdb::Result<T> {
+    locked_with(db, stale, f).await
 }
 
 /// Which migration set to apply. The set names its migrations, so the tenant-only data pre-steps
@@ -332,3 +371,4 @@ async fn merge_into(db: &Db, winner: &mut Entity, loser: &Entity) -> surrealdb::
         .check()?;
     Ok(())
 }
+

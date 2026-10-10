@@ -103,10 +103,10 @@ sql_db() { # sql_db DB: statements on stdin, JSON on stdout
   "$SURREAL" sql --endpoint "$ENDPOINT" --user "$USER_" --pass "$PASS_" --ns "$NS" --db "$1" --hide-welcome --json 2>/dev/null
 }
 
-# row_counts DB: prints "<table> <rows>" for every table of DB, asked of the live server BEFORE the export.
-# `INFO FOR DB` lists the tables (names must be plain identifiers, so they are safe to put in a query);
-# one `SELECT count() ... GROUP ALL` per table runs in a single call. Uses only the `count` function
-# family, which the hardened server allows.
+# row_counts DB: prints "<table> <rows>" for every table of DB, asked of the live server (before and
+# after the export, see dump_to). `INFO FOR DB` lists the tables (names must be plain identifiers, so
+# they are safe to put in a query); one `SELECT count() ... GROUP ALL` per table runs in a single call.
+# Uses only the `count` function family, which the hardened server allows.
 row_counts() {
   info="$(echo 'INFO FOR DB;' | sql_db "$1")" || return 1
   echo "$info" | grep -q '"tables"' || return 1
@@ -127,33 +127,70 @@ $counts
 EOF
 }
 
-# verify_dump DUMP COUNTS DB: every table that had rows needs an INSERT under its "TABLE DATA" header.
-# An export cut short by a dying server keeps the schema but loses these, and exits 0 more often than you'd think.
-verify_dump() {
-  bad=""
-  while read -r t c; do
-    [ "$c" -gt 0 ] || continue
-    grep -A3 "^-- TABLE DATA: $t\$" "$1" | grep -q '^INSERT' || bad="$bad $t($c rows)"
-  done <<EOF
-$2
-EOF
-  [ -z "$bad" ] || { log "export of $3 is missing the rows of:$bad" >&2; return 1; }
+# dump_counts DUMP: prints "<table> <rows>" for every "-- TABLE DATA:" section of a `surreal export`:
+# the records at the top level of its `INSERT [ ... ];` / `INSERT RELATION [ ... ];` lines (one
+# statement per line; the export escapes newlines inside strings). Quoted strings and quoted ids
+# ('..', "..", `..`, ⟨..⟩, left to right in one pass) are dropped first, so braces inside values are
+# never counted; a nested
+# object or array is deeper than 1. perl is in every Debian image (perl-base is essential).
+dump_counts() {
+  perl -ne '
+    if (/^-- TABLE DATA: (.*)$/) { $t = $1; $c{$t} += 0; next }
+    next unless defined $t && /^INSERT (RELATION )?\[/;
+    s/\x27(?:[^\x27\\]|\\.)*\x27|"(?:[^"\\]|\\.)*"|`(?:[^`\\]|\\.)*`|\xe2\x9f\xa8(?:\\.|(?!\xe2\x9f\xa9).)*\xe2\x9f\xa9//g;
+    $d = 0;
+    for (/[\[\]{}]/g) { if ($_ eq "{") { $c{$t}++ if $d == 1; $d++ } elsif ($_ eq "[") { $d++ } else { $d-- } }
+    END { print "$_ $c{$_}\n" for sort keys %c }' "$1"
 }
 
-# dump_to DB OUT: count rows, export, check the dump holds them, then encrypt. sh has no pipefail, so the
-# export goes to a private temp file (shredded after) whose exit status, last line and per-table rows are
-# checked, and the server must still answer: a dump that died midway never becomes a backup.
+# verify_dump DUMP BEFORE AFTER DB: every table's rows in the dump must equal the server's count. The
+# server keeps serving while it is exported, so its counts are taken just before and just after the
+# export: a table that did not change in between must match exactly, one written meanwhile must lie
+# between its two counts. An export cut short by a dying server, or missing rows for any other reason,
+# holds fewer (and such an export exits 0 more often than you'd think).
+verify_dump() {
+  got="$(dump_counts "$1")" || { log "could not read the export of $4" >&2; return 1; }
+  bad="$( { echo "$2" | sed 's/^/B /'; echo "$3" | sed 's/^/A /'; echo "$got" | sed 's/^/E /'; } | awk '
+    NF == 3 && $1 == "B" { b[$2] = $3; seen[$2] = 1 }
+    NF == 3 && $1 == "A" { a[$2] = $3; seen[$2] = 1 }
+    NF == 3 && $1 == "E" { e[$2] = $3 }
+    END {
+      for (t in seen) {
+        lo = (t in b) ? b[t] : a[t]; hi = (t in a) ? a[t] : b[t]
+        if (lo + 0 > hi + 0) { x = lo; lo = hi; hi = x }
+        n = e[t] + 0
+        if (n < lo + 0 || n > hi + 0) printf " %s(%s rows counted, %d in the export)", t, (lo == hi ? lo : lo ".." hi), n
+      }
+    }')"
+  [ -z "$bad" ] || { log "export of $4 does not hold the rows the server counted:$bad" >&2; return 1; }
+}
+
+# dump_to DB OUT: count rows, export, count again, check the dump holds exactly the counted rows, then
+# encrypt. sh has no pipefail, so the export goes to a private temp file (shredded after) whose exit
+# status, last line and per-table rows are checked, and the server must still answer: a dump that died
+# midway never becomes a backup. When the counts changed during the export (writes, not a short dump)
+# and the dump falls outside them, it is exported again, at most 3 times in all.
 dump_to() {
-  counts="$(row_counts "$1")" || { log "could not count the rows of $1 before exporting" >&2; return 1; }
-  x="$(mktemp)" || return 1
-  if export_db "$1" > "$x" && tail -c 4096 "$x" | grep -v '^--' | grep . | tail -n 1 | grep -q ';$' \
-     && verify_dump "$x" "$counts" "$1" && "$SURREAL" isready --endpoint "$ENDPOINT" >/dev/null 2>&1; then
-    encrypt_to "$2" < "$x"; rc=$?
-  else
-    rc=1
-  fi
-  shred -u -f "$x" 2>/dev/null || rm -f "$x"
-  return "$rc"
+  attempt=1
+  while :; do
+    before="$(row_counts "$1")" || { log "could not count the rows of $1 before exporting" >&2; return 1; }
+    x="$(mktemp)" || return 1
+    rc=1; again=""
+    if export_db "$1" > "$x" && tail -c 4096 "$x" | grep -v '^--' | grep . | tail -n 1 | grep -q ';$' \
+       && "$SURREAL" isready --endpoint "$ENDPOINT" >/dev/null 2>&1; then
+      if ! after="$(row_counts "$1")"; then
+        log "could not count the rows of $1 after exporting" >&2
+      elif verify_dump "$x" "$before" "$after" "$1"; then
+        encrypt_to "$2" < "$x"; rc=$?
+      elif [ "$before" != "$after" ] && [ "$attempt" -lt 3 ]; then
+        again=1
+      fi
+    fi
+    shred -u -f "$x" 2>/dev/null || rm -f "$x"
+    [ -n "$again" ] || return "$rc"
+    attempt=$((attempt + 1))
+    log "the rows of $1 changed while it was exported; exporting it again (attempt $attempt of 3)" >&2
+  done
 }
 
 do_backup() {

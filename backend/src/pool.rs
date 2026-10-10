@@ -148,10 +148,16 @@ impl OrgDb {
 }
 
 /// HMAC of a fixed label under the encryption key: the control database user's password. Every
-/// process of one install derives the same value, so nothing about it is stored.
+/// process of one install derives the same value, so nothing about it is stored. Only as secret as the
+/// key: boot refuses an empty one (`crypto::require_key`) unless the dev-only opt-in is set.
 pub fn control_password(settings: &Settings) -> String {
-    let mut mac = Hmac::<Sha256>::new_from_slice(settings.encryption_key.as_bytes()).expect("hmac takes any key length");
-    mac.update(b"eunomia/control-db-user");
+    derived_password(&settings.encryption_key, "eunomia/control-db-user")
+}
+
+/// HMAC of `label` under `key`, hex: a database password every process of an install derives alike.
+pub fn derived_password(key: &str, label: &str) -> String {
+    let mut mac = Hmac::<Sha256>::new_from_slice(key.as_bytes()).expect("hmac takes any key length");
+    mac.update(label.as_bytes());
     hex::encode(mac.finalize().into_bytes())
 }
 
