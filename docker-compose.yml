@@ -206,7 +206,7 @@ services:
       - eunomia-backups:/backups
       # the database's data volume, for the uploaded documents in it (/surreal-data/documents): written
       # into each backup as documents.tar.enc and restored from it. Nothing else in it is touched.
-      - ${SURREAL_DATA_VOLUME:-eunomia-surreal-data}:/surreal-data
+      - ${SURREAL_DATA_VOLUME:-eunomia-surreal-data-v3}:/surreal-data
     depends_on:
       surrealdb:
         condition: service_healthy
