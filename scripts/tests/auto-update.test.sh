@@ -17,9 +17,23 @@ cp "$REAL_SCRIPT" "$TMP/src/scripts/auto-update.sh"
   && echo two > compose.yml && git_ commit -qam v1.1 && git tag v1.1.0)
 git clone -q --branch v1.0.0 "file://$TMP/src" "$TMP/repo" 2>/dev/null
 printf 'JWT_SECRET=x\nEUNOMIA_IMAGE_TAG=v1.0.0\n' > "$TMP/repo/.env"
-# the shim answers `compose config --services` from $TMP/services (default: no caddy)
+# Besides logging, the shim answers the queries the SurrealDB 3 hook makes (the compose file's
+# images in $TMP/images, the running surrealdb image in $TMP/running) and the service list
+# ($TMP/services; default: no caddy).
 printf 'surrealdb\nbackend\nfrontend\nupdater\n' > "$TMP/services"
-printf '#!/bin/sh\necho "$@" >> "%s/docker.log"\n[ "$1 $2" = "compose config" ] && cat "%s/services"\nexit 0\n' "$TMP" "$TMP" > "$TMP/bin/docker"; chmod +x "$TMP/bin/docker"
+cat > "$TMP/bin/docker" <<SHIM
+#!/bin/sh
+echo "\$@" >> "$TMP/docker.log"
+case "\$*" in
+  "compose config --images") cat "$TMP/images" 2>/dev/null ;;
+  "compose config --services") cat "$TMP/services" ;;
+  "compose ps -q surrealdb") [ -f "$TMP/running" ] && echo fakecid ;;
+  inspect*) cat "$TMP/running" 2>/dev/null ;;
+  "compose exec -T backup cat /backups/.backup-key") cat "$TMP/volkey" 2>/dev/null ;;
+esac
+exit 0
+SHIM
+chmod +x "$TMP/bin/docker"
 update() { EUNOMIA_DIR="$TMP/repo" PATH="$TMP/bin:$PATH" bash "$TMP/repo/scripts/auto-update.sh"; }
 S="$TMP/repo/update-status"
 
@@ -49,7 +63,10 @@ update
 check "checked out the new release" test "$(cat "$TMP/repo/compose.yml")" = two
 check ".env is pinned to the new release" grep -q '^EUNOMIA_IMAGE_TAG=v1.1.0$' "$TMP/repo/.env"
 check ".env keeps its other settings" grep -q '^JWT_SECRET=x$' "$TMP/repo/.env"
-check "images were pulled" grep -q 'compose pull backend frontend' "$TMP/docker.log"
+check ".env gains a backup key" grep -Eq '^BACKUP_ENCRYPTION_KEY=.{20,}$' "$TMP/repo/.env"
+check "exactly one backup key line" test "$(grep -c '^BACKUP_ENCRYPTION_KEY=' "$TMP/repo/.env")" = 1
+check "images were pulled, the backup image too" grep -q 'compose pull backend frontend backup' "$TMP/docker.log"
+check "no SurrealDB upgrade for a 2.x release" bash -c "! grep -q UPGRADE '$TMP/docker.log'"
 check "stack was restarted" grep -q 'compose up -d' "$TMP/docker.log"
 check "the updater service is left out of the restart" bash -c "! grep -q 'up -d --remove-orphans.*updater' '$TMP/docker.log'"
 check "lock released" test ! -e "$S/.lock"
@@ -90,6 +107,64 @@ check "refuses over local changes" test "$(field error)" != none
 check "error says why" grep -q 'local changes' "$S/status.json"
 check "local edit survives" test "$(cat "$TMP/repo/compose.yml")" = mine
 (cd "$TMP/repo" && git checkout -q compose.yml)
+
+# 4a. a backup service that generated its own key (no key in .env): .env adopts that key
+echo 'VolumeKeyVolumeKeyVolumeKey0123456789abcd=' > "$TMP/volkey"
+sed -i.bak '/^BACKUP_ENCRYPTION_KEY=/d' "$TMP/repo/.env" && rm -f "$TMP/repo/.env.bak"
+(cd "$TMP/src" && echo threeb > compose.yml && git_ commit -qam v1.2.1 && git tag v1.2.1)
+touch "$S/requested"; update
+check "the backup service's own key is adopted" grep -qx 'BACKUP_ENCRYPTION_KEY=VolumeKeyVolumeKeyVolumeKey0123456789abcd=' "$TMP/repo/.env"
+echo 'not a key; rm -rf /' > "$TMP/volkey"
+sed -i.bak '/^BACKUP_ENCRYPTION_KEY=/d' "$TMP/repo/.env" && rm -f "$TMP/repo/.env.bak"
+(cd "$TMP/src" && echo threec > compose.yml && git_ commit -qam v1.2.2 && git tag v1.2.2)
+touch "$S/requested"; update
+check "a malformed volume key is not copied into .env" bash -c "grep -Eq '^BACKUP_ENCRYPTION_KEY=[A-Za-z0-9+/=]{40,}$' '$TMP/repo/.env' && ! grep -q 'rm -rf' '$TMP/repo/.env'"
+rm -f "$TMP/volkey"
+
+# 4b. SurrealDB 3 hook: a release pinning 3.x over a running 2.x runs the upgrade
+# script before pulling, and a failed upgrade leaves the install on the old release
+BK="$(sed -n 's/^BACKUP_ENCRYPTION_KEY=//p' "$TMP/repo/.env")"
+(cd "$TMP/src" && mkdir -p scripts && printf '#!/bin/sh\necho UPGRADE >> "%s/docker.log"\nexit $(cat "%s/upgrade_rc")\n' "$TMP" "$TMP" > scripts/upgrade-surreal-v3.sh \
+  && echo four > compose.yml && echo '      - FRONTEND_TRUST_FORWARDED=${FRONTEND_TRUST_FORWARDED:-}' > docker-compose.yml \
+  && git_ add -A && git_ commit -qm v2.0 && git tag v2.0.0)
+echo BACKEND_PORT=8911 >> "$TMP/repo/.env"
+echo surrealdb/surrealdb:v3.3.1 > "$TMP/images"; echo surrealdb/surrealdb:v2.3 > "$TMP/running"
+echo 1 > "$TMP/upgrade_rc"; : > "$TMP/docker.log"; touch "$S/requested"; update
+check "failed upgrade: ran before anything else" grep -qx UPGRADE "$TMP/docker.log"
+check "failed upgrade: nothing pulled" bash -c "! grep -q 'compose pull' '$TMP/docker.log'"
+check "failed upgrade: checkout put back" test "$(cat "$TMP/repo/compose.yml")" = threec
+check "failed upgrade: .env back on the old release" grep -q '^EUNOMIA_IMAGE_TAG=v1.2.2$' "$TMP/repo/.env"
+check "failed upgrade: status says why" grep -q 'upgrade failed' "$S/status.json"
+check "failed upgrade: no 2.x settings written" bash -c "! grep -q '^PUBLIC_URL=' '$TMP/repo/.env'"
+# same failure on an install whose .env has no EUNOMIA_IMAGE_TAG: the line must not be left behind
+sed -i.bak '/^EUNOMIA_IMAGE_TAG=/d' "$TMP/repo/.env" && rm -f "$TMP/repo/.env.bak"
+echo 1 > "$TMP/upgrade_rc"; : > "$TMP/docker.log"; touch "$S/requested"; update
+check "failed upgrade without a tag in .env: none written back" bash -c "! grep -q '^EUNOMIA_IMAGE_TAG=' '$TMP/repo/.env'"
+echo 0 > "$TMP/upgrade_rc"; : > "$TMP/docker.log"; touch "$S/requested"; update
+check "upgrade runs once, before the pull" bash -c "[ \$(grep -c UPGRADE '$TMP/docker.log') = 1 ] && [ \$(grep -n UPGRADE '$TMP/docker.log' | cut -d: -f1) -lt \$(grep -n 'compose pull' '$TMP/docker.log' | cut -d: -f1) ]"
+check "upgraded release is applied" test "$(cat "$TMP/repo/compose.yml")" = four
+check "upgraded release is pinned in .env" grep -q '^EUNOMIA_IMAGE_TAG=v2.0.0$' "$TMP/repo/.env"
+check "moving to 2.x sets PUBLIC_URL to the API port" grep -qx 'PUBLIC_URL=http://localhost:8911' "$TMP/repo/.env"
+check "no HTTPS: the frontend keeps listening on the network" bash -c "! grep -q '^FRONTEND_BIND=' '$TMP/repo/.env'"
+check "the backup key is kept across updates" test "$(sed -n 's/^BACKUP_ENCRYPTION_KEY=//p' "$TMP/repo/.env")" = "$BK"
+echo surrealdb/surrealdb:v3.3.1 > "$TMP/running"
+(cd "$TMP/src" && echo five > compose.yml && git_ commit -qam v2.0.1 && git tag v2.0.1)
+: > "$TMP/docker.log"; touch "$S/requested"; update
+check "already on 3.x: no upgrade" bash -c "! grep -q UPGRADE '$TMP/docker.log'"
+check "already on 3.x: still updates" test "$(cat "$TMP/repo/compose.yml")" = five
+# 2.x stopped (an install an old updater broke): the script must still be called.
+# It also had HTTPS on: the move to 2.x points PUBLIC_URL at the domain and keeps
+# the frontend on loopback behind Caddy.
+sed -i.bak '/^PUBLIC_URL=/d' "$TMP/repo/.env" && rm -f "$TMP/repo/.env.bak"
+printf 'COMPOSE_PROFILES=https\nEUNOMIA_DOMAIN=eunomia.example.com\n' >> "$TMP/repo/.env"
+(cd "$TMP/src" && echo six > compose.yml && git_ commit -qam v2.0.2 && git tag v2.0.2)
+rm -f "$TMP/running"
+: > "$TMP/docker.log"; touch "$S/requested"; update
+check "surrealdb not running: upgrade script still runs" grep -qx UPGRADE "$TMP/docker.log"
+check "surrealdb not running: release applied after the upgrade" test "$(cat "$TMP/repo/compose.yml")" = six
+check "HTTPS install: PUBLIC_URL is the domain" grep -qx 'PUBLIC_URL=https://eunomia.example.com' "$TMP/repo/.env"
+check "HTTPS install: frontend trusts Caddy and listens on loopback" bash -c "grep -qx 'FRONTEND_TRUST_FORWARDED=1' '$TMP/repo/.env' && grep -qx 'FRONTEND_BIND=127.0.0.1' '$TMP/repo/.env'"
+rm -f "$TMP/images" "$TMP/running"
 
 # 5. GitHub unreachable is reported
 rm -f "$S/status.json"; (cd "$TMP/repo" && git remote set-url origin "file://$TMP/nowhere")

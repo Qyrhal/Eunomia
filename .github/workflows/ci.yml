@@ -124,4 +124,6 @@ jobs:
       - run: CONNECT_JSON=py bash scripts/tests/connect-agents.test.sh
       - run: bash scripts/tests/auto-update.test.sh
       - run: bash scripts/tests/https.test.sh
-      - run: bash -n scripts/auto-update.sh scripts/connect-agents.sh
+      - run: bash scripts/tests/backup.test.sh
+      - run: bash scripts/tests/check-release-order.test.sh
+      - run: bash -n scripts/auto-update.sh scripts/connect-agents.sh scripts/upgrade-surreal-v3.sh
