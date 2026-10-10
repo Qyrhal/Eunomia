@@ -1,6 +1,6 @@
 //! Data export: a single JSON download of the caller's personal vault: entities of every kind with
 //! their memories and relations, plus their chat history. The document's `scope` key says what is in
-//! and what is left out (other vaults, cache records, connectors, settings, audit log). It is built in
+//! and what is left out (other vaults, cache records, connectors, settings, audit log, uploaded documents). It is built in
 //! memory with one query per table.
 
 use surrealdb::types::SurrealValue;
@@ -297,7 +297,7 @@ pub async fn build_export(db: &OrgDb, control: &ControlDb, user: &User) -> AppRe
         "scope": {
             "vault": "personal",
             "tables": tables,
-            "left_out": ["other vaults you belong to (export each separately)", "cache_record (synced source data, re-sync to rebuild)", "connectors and settings", "audit_log"],
+            "left_out": ["other vaults you belong to (export each separately)", "cache_record (synced source data, re-sync to rebuild)", "connectors and settings", "audit_log", "uploaded documents (download each from Documents; their files are not in this export)"],
         },
         "entities": entities_out,
         "chat_history": chat_history,

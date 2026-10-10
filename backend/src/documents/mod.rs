@@ -58,7 +58,7 @@ pub fn bucket_url(base: &str, db: &str) -> Result<String, String> {
     }
     match url.scheme() {
         "file" => {
-            if url.query().is_some() || url.host_str().is_some_and(|h| !h.is_empty()) {
+            if url.query_pairs().next().is_some() || url.host_str().is_some_and(|h| !h.is_empty()) {
                 return Err("a file backend is file:/absolute/path, with no host or options".into());
             }
             let path = url.path().trim_end_matches('/');
