@@ -27,6 +27,13 @@ case "$cmd" in
           # Otherwise 5 rows (or the next line of $SHIM_ROWS), the first with braces and brackets in its values
           # and id, which must not count as rows.
           [ -n "${MOCK_STUB:-}${MOCK_EMPTY:-}" ] && exit 0
+          # MOCK_MULTILINE: a 2.x export, whose strings keep raw newlines (and a comment with a quote):
+          # 5 rows, with brackets, braces and quotes inside multi-line values
+          if [ -n "${MOCK_MULTILINE:-}" ]; then
+            echo "-- the server's own note: don't count this"
+            printf '%s\n' "INSERT [ { id: t:1, text: \"line one" "} { fake ] [ 'quote" "line three\" }, { id: t:2, s: 'a" "{ b }' }," "{ id: t:⟨x" "y⟩ }, { id: t:4, n: [ { deep: 1 } ] }, { id: t:5 } ];"
+            exit 0
+          fi
           n="$(pop "$SHIM_ROWS" || echo 5)"; [ "$n" -gt 0 ] || exit 0; rows="{ id: t:\`a}{\`, nested: { a: [ { b: 1 } ] }, s: 'it''s }, { id: t:9 }', q: \"[{\\\"}\" }"
           i=2; while [ "$i" -le "$n" ]; do rows="$rows, { id: t:$i }"; i=$((i + 1)); done
           echo "INSERT [ $rows ];" ;;
@@ -50,6 +57,14 @@ export PATH="$TMP/bin:$PATH" SHIM_LOG="$TMP/shim.log" SHIM_FAIL="$TMP/shim.fail"
 bk() { sh "$SCRIPT" "$@"; }
 # decrypt a new-format file by restoring it through the script (the shim logs the import)
 dump_of() { : > "$SHIM_LOG"; sh "$SCRIPT" restore "$1" >/dev/null 2>&1; cat "$SHIM_LOG"; }
+
+# 0. a 2.x export whose strings span lines is counted right (190 rows read as 1 broke an upgrade)
+eval "$(sed -n '/^dump_counts() {/,/^}/p' "$SCRIPT")"
+MOCK_MULTILINE=1 surreal export --db eunomia - > "$TMP/multi.surql"
+check "multi-line 2.x export: every row counted" test "$(dump_counts "$TMP/multi.surql")" = "t 5"
+check "multi-line 2.x export: the backup verifies" sh -c "MOCK_MULTILINE=1 sh '$SCRIPT' now ml"
+check "multi-line 2.x export: a missing row is still refused" sh -c "printf '6\\n6\\n' > '$SHIM_COUNTS'; ! MOCK_MULTILINE=1 sh '$SCRIPT' now ml2"
+rm -f "$TMP"/backups/ml*; : > "$SHIM_COUNTS"
 
 # 1. a pre-tenancy install: one file, as before
 bk now manual >/dev/null

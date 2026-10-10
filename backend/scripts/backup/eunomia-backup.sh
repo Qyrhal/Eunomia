@@ -128,18 +128,19 @@ EOF
 }
 
 # dump_counts DUMP: prints "<table> <rows>" for every "-- TABLE DATA:" section of a `surreal export`:
-# the records at the top level of its `INSERT [ ... ];` / `INSERT RELATION [ ... ];` lines (one
-# statement per line; the export escapes newlines inside strings). Quoted strings and quoted ids
-# ('..', "..", `..`, ⟨..⟩, left to right in one pass) are dropped first, so braces inside values are
-# never counted; a nested
-# object or array is deeper than 1. perl is in every Debian image (perl-base is essential).
+# the records at the top level of its `INSERT [ ... ];` / `INSERT RELATION [ ... ];` statements. One
+# global regex walks the file: whole comment lines (`--` at a line start, so quotes in them are inert),
+# whole quoted strings and ids ('..', "..", `..`, ⟨..⟩: skipped, so braces inside values never count,
+# and they may span lines: 2.x exports keep raw newlines inside strings), and the brackets in between.
+# A nested object or array is deeper than 1. perl is in every Debian image (perl-base is essential).
 dump_counts() {
-  perl -ne '
-    if (/^-- TABLE DATA: (.*)$/) { $t = $1; $c{$t} += 0; next }
-    next unless defined $t && /^INSERT (RELATION )?\[/;
-    s/\x27(?:[^\x27\\]|\\.)*\x27|"(?:[^"\\]|\\.)*"|`(?:[^`\\]|\\.)*`|\xe2\x9f\xa8(?:\\.|(?!\xe2\x9f\xa9).)*\xe2\x9f\xa9//g;
-    $d = 0;
-    for (/[\[\]{}]/g) { if ($_ eq "{") { $c{$t}++ if $d == 1; $d++ } elsif ($_ eq "[") { $d++ } else { $d-- } }
+  perl -0777 -ne '
+    my (%c, $t, $d);
+    while (/^(--[^\n]*)|(\x27[^\x27\\]*(?:\\.[^\x27\\]*)*\x27|"[^"\\]*(?:\\.[^"\\]*)*"|`[^`\\]*(?:\\.[^`\\]*)*`|\xe2\x9f\xa8(?:[^\\\xe2]|\\.|\xe2(?!\x9f\xa9))*\xe2\x9f\xa9)|([\[\]{}])/gm) {
+      if (defined $1) { if ($1 =~ /^-- TABLE DATA: (.*)$/) { $t = $1; $c{$t} += 0; $d = 0 } next }
+      next if defined $2 or not defined $t;
+      if ($3 eq "{") { $c{$t}++ if $d == 1; $d++ } elsif ($3 eq "[") { $d++ } else { $d-- }
+    }
     END { print "$_ $c{$_}\n" for sort keys %c }' "$1"
 }
 
