@@ -220,6 +220,41 @@ impl Provisioner {
         Ok(())
     }
 
+    /// Org database passwords stored under the empty ENCRYPTION_KEY were readable by anyone who could
+    /// reach the control database, whose password was then derived from that same empty key. Once a real
+    /// key is set, each such password is replaced, not just re-encrypted: the new one is derived from the
+    /// key and the org's database name, set as the org's database user, then stored under the key. Every
+    /// process derives the same password, so two replicas booting together agree, and a crash between
+    /// the two steps leaves the row under the empty key, so the next boot redoes it. A row already under
+    /// the key is left alone. Returns how many were replaced.
+    pub async fn replace_exposed_db_passwords(&self, control: &ControlDb) -> AppResult<usize> {
+        let key = &self.settings.encryption_key;
+        if key.is_empty() {
+            return Ok(0);
+        }
+        #[derive(serde::Deserialize, SurrealValue)]
+        struct Row {
+            id: surrealdb::types::RecordId,
+            db: String,
+            db_pass_enc: String,
+        }
+        let rows: Vec<Row> = store::tenant::PASS_READY.on(control).await?.take(0)?;
+        let exposed: Vec<Row> =
+            rows.into_iter().filter(|r| crypto::decrypt_exact(key, &r.db_pass_enc).is_err() && crypto::decrypt_exact("", &r.db_pass_enc).is_ok()).collect();
+        if exposed.is_empty() {
+            return Ok(0);
+        }
+        let rt = self.open().await?;
+        for row in &exposed {
+            let pass = pool::derived_password(key, &format!("eunomia/org-db-user/{}", row.db));
+            let s = self.session(&rt, &row.db).await?;
+            root(&s, "provisioning.db_user", format!("DEFINE USER OVERWRITE {DB_USER} ON DATABASE PASSWORD '{pass}' ROLES EDITOR")).await?.check()?;
+            store::tenant::SET_PASS.on(control).bind(("id", row.id.clone())).bind(("db_pass_enc", crypto::encrypt(key, &pass))).await?.check()?;
+        }
+        tracing::warn!(replaced = exposed.len(), "replaced org database passwords that were stored under the empty ENCRYPTION_KEY");
+        Ok(exposed.len())
+    }
+
     /// The org's database name and password: the stored ones if the row exists (a resume, or another
     /// process got there first), otherwise newly generated and stored encrypted before anything else.
     pub(crate) async fn claim_tenant(&self, control: &ControlDb, org: &OrgId, status: &str) -> AppResult<(String, String)> {

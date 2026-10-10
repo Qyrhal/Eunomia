@@ -11,11 +11,12 @@
 //! before keys were encrypted (see [`decrypt_or_plaintext`]).
 //!
 //! An empty key derives the all-zero AES key. The backend refuses to boot on it
-//! (see [`guard_key`]) unless `EUNOMIA_ALLOW_EMPTY_ENCRYPTION_KEY=1` is set or the
-//! install already holds data written that way. An install that ran with an empty
-//! key and then gets a real one sets `ENCRYPTION_KEY_LEGACY_EMPTY=1`: [`decrypt`]
-//! then also tries the zero key, so old values keep working while every new write
-//! uses the real key (see docs/deployment.md, "Rotating ENCRYPTION_KEY").
+//! (see [`require_key`]) unless `EUNOMIA_ALLOW_EMPTY_ENCRYPTION_KEY=1` (dev only) is set.
+//! An install that ran with an empty key and then gets a real one sets
+//! `ENCRYPTION_KEY_LEGACY_EMPTY=1`: [`decrypt`] then also tries the zero key, so old
+//! values keep working while every new write uses the real key, and the org database
+//! passwords stored under the zero key are replaced at boot
+//! (`Provisioner::replace_exposed_db_passwords`; see docs/deployment.md, "Rotating ENCRYPTION_KEY").
 
 use aes_gcm::aead::Aead;
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
@@ -135,7 +136,9 @@ pub fn decrypt_exact(key: &str, value: &str) -> AppResult<String> {
 }
 
 /// With `ENCRYPTION_KEY_LEGACY_EMPTY` on and a real key set, re-encrypt every org database password
-/// that is still under the empty key, so the fallback is no longer needed for them. Idempotent.
+/// that is still under the empty key, so the fallback is no longer needed for them. Idempotent. Only for
+/// a build without the `provisioning` feature, which cannot redefine database users; a default build
+/// replaces those passwords instead (`Provisioner::replace_exposed_db_passwords`).
 pub async fn rotate_tenant_passwords(settings: &crate::config::Settings, control: &crate::pool::ControlDb) -> AppResult<usize> {
     rotate_tenant_passwords_with(settings, control, legacy_empty_fallback()).await
 }
@@ -175,41 +178,44 @@ pub fn empty_key_allowed() -> bool {
     std::env::var("EUNOMIA_ALLOW_EMPTY_ENCRYPTION_KEY").is_ok_and(|v| v == "1")
 }
 
-/// Boot check, run once the control database is up. A real key passes. An empty one is allowed only
-/// when `EUNOMIA_ALLOW_EMPTY_ENCRYPTION_KEY=1` (dev, tests), or when the install already has orgs: they
-/// were provisioned under the empty key, and refusing would lock the owner out of their own data.
-/// That case boots with a loud warning.
-pub async fn guard_key(settings: &crate::config::Settings, control: &crate::pool::ControlDb) -> AppResult<()> {
+/// First boot check, before anything signs in: an empty key is refused unless
+/// `EUNOMIA_ALLOW_EMPTY_ENCRYPTION_KEY=1` (dev, tests). The control database password is derived from
+/// the key and the org database passwords are encrypted under it, so with an empty key every database
+/// credential would be computable by anyone. Installs that ran with an empty key get a real one (and
+/// `ENCRYPTION_KEY_LEGACY_EMPTY=1`) from the updater or the `surreal-upgrade` step before this release's
+/// backend starts; anyone else sets it by hand (docs/deployment.md, "Rotating ENCRYPTION_KEY").
+pub fn require_key(settings: &crate::config::Settings) -> AppResult<()> {
     if !settings.encryption_key.is_empty() {
-        // A short key is weak but still derives a working cipher. A fresh install refuses it; an install
-        // that already holds data written under it must stay reachable, so it boots with a loud error.
-        let Err(why) = validate_key(&settings.encryption_key) else { return Ok(()) };
-        if !has_orgs(control).await? {
-            return Err(AppError::internal(why));
-        }
-        tracing::error!(
-            "{why} This install's data was written under it, so it boots anyway. Move to a strong key with \
-             `openssl rand -base64 32`: values written under the old key stop decrypting, so follow \
-             docs/deployment.md, \"Rotating ENCRYPTION_KEY\"."
-        );
         return Ok(());
     }
     if empty_key_allowed() {
-        tracing::warn!("ENCRYPTION_KEY is empty and EUNOMIA_ALLOW_EMPTY_ENCRYPTION_KEY=1: stored credentials use a public key. Dev only.");
-        return Ok(());
-    }
-    if has_orgs(control).await? {
-        tracing::error!(
-            "ENCRYPTION_KEY is empty: this install's database passwords and connector credentials are protected by a PUBLIC key. \
-             Booting anyway so the data stays reachable. Set ENCRYPTION_KEY (openssl rand -base64 32) together with \
-             ENCRYPTION_KEY_LEGACY_EMPTY=1 to move to a real key; see docs/deployment.md, \"Rotating ENCRYPTION_KEY\"."
-        );
+        tracing::warn!("ENCRYPTION_KEY is empty and EUNOMIA_ALLOW_EMPTY_ENCRYPTION_KEY=1: database passwords and stored credentials use a public key. Dev only.");
         return Ok(());
     }
     Err(AppError::internal(
-        "ENCRYPTION_KEY is not set. Generate one with `openssl rand -base64 32` and put it in .env \
-         (for local development only, EUNOMIA_ALLOW_EMPTY_ENCRYPTION_KEY=1 skips this check).",
+        "ENCRYPTION_KEY is not set. Generate one with `openssl rand -base64 32` and put it in .env; if this install \
+         ever ran without one, also set ENCRYPTION_KEY_LEGACY_EMPTY=1 so values saved under the empty key stay readable \
+         (docs/deployment.md, \"Rotating ENCRYPTION_KEY\"). For local development only, EUNOMIA_ALLOW_EMPTY_ENCRYPTION_KEY=1 skips this check.",
     ))
+}
+
+/// Boot check, run once the control database is up. An empty key is [`require_key`]'s. A short one is
+/// refused on a fresh install; an install that already has orgs keeps booting with a loud error, since
+/// its data was written under that key and refusing would lock the owner out.
+pub async fn guard_key(settings: &crate::config::Settings, control: &crate::pool::ControlDb) -> AppResult<()> {
+    if settings.encryption_key.is_empty() {
+        return require_key(settings);
+    }
+    let Err(why) = validate_key(&settings.encryption_key) else { return Ok(()) };
+    if !has_orgs(control).await? {
+        return Err(AppError::internal(why));
+    }
+    tracing::error!(
+        "{why} This install's data was written under it, so it boots anyway. Move to a strong key with \
+         `openssl rand -base64 32`: values written under the old key stop decrypting, so follow \
+         docs/deployment.md, \"Rotating ENCRYPTION_KEY\"."
+    );
+    Ok(())
 }
 
 async fn has_orgs(control: &crate::pool::ControlDb) -> AppResult<bool> {

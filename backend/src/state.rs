@@ -49,6 +49,8 @@ impl AppState {
     /// Connect, set up the control database (and move a pre-tenancy install's data, see
     /// `provisioning::legacy`), and build the pool. The one boot path for `main`, `replay` and tests.
     pub async fn build(settings: &Settings, config: surrealdb::opt::Config) -> AppResult<AppState> {
+        // before anything derives a database password from the key
+        crate::connectors::crypto::require_key(settings)?;
         let template = crate::db::connect_raw(settings, config).await?;
         let provisioner = Provisioner::connect(&template, settings);
         if let Some(p) = &provisioner {
@@ -60,7 +62,10 @@ impl AppState {
             p.ensure_document_buckets(&control).await;
         }
         crate::connectors::crypto::guard_key(settings, &control).await?;
-        crate::connectors::crypto::rotate_tenant_passwords(settings, &control).await?;
+        match &provisioner {
+            Some(p) => p.replace_exposed_db_passwords(&control).await?,
+            None => crate::connectors::crypto::rotate_tenant_passwords(settings, &control).await?,
+        };
         let pool = Pool::new(template, control.clone(), settings);
         Ok(AppState(Arc::new(AppStateInner { control, pool, provisioner, settings: settings.clone(), fail_throttle: Default::default(), ready_cache: Default::default() })))
     }
@@ -68,6 +73,7 @@ impl AppState {
     /// Connect to an install that is already set up, without provisioning or moving anything
     /// (`eunomia replay` reads a live database and must not change it).
     pub async fn attach(settings: &Settings, config: surrealdb::opt::Config) -> AppResult<AppState> {
+        crate::connectors::crypto::require_key(settings)?;
         let template = crate::db::connect_raw(settings, config).await?;
         let control = crate::pool::connect_control(&template, settings).await?;
         let pool = Pool::new(template, control.clone(), settings);
