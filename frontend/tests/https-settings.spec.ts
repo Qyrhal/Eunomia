@@ -33,7 +33,7 @@ test("a member who is not an admin is told only an admin can change it", async (
   await page.getByLabel("Domain").fill("eunomia.example.com");
   await page.getByLabel("Email for Let's Encrypt").fill("me@example.com");
   await page.getByRole("button", { name: "Enable HTTPS" }).click();
-  await expect(page.getByText(/Only an instance admin/)).toBeVisible();
+  await expect(page.getByText("Only an instance admin can change this server's HTTPS settings.")).toBeVisible();
   expect(fs.existsSync(requestFile())).toBe(false);
 });
 
