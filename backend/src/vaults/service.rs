@@ -591,6 +591,62 @@ async fn fold_into_existing_memory(db: &OrgDb, subject: &RecordId, mem: &MemoryR
     Ok(!same.is_empty())
 }
 
+/// Test-only: when set to n > 0, the n-th memory `copy_into` is about to write fails instead (then it
+/// is 0 again), to prove a failed clone or merge leaves nothing behind.
+#[cfg(feature = "test-support")]
+pub static FAIL_COPY_AT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// A copy in progress older than this is one whose process died; [`discard_stale_copies`] removes it.
+const STALE_COPY_AGE: &str = "1h";
+
+/// The new vault a clone or merge copies into: no one can see it until [`publish_or_discard`].
+async fn stage_copy(db: &OrgDb, name: &str, kind: &str) -> AppResult<VaultFullRow> {
+    let rows: Vec<VaultFullRow> = with_retry(|| async {
+        store::vaults::STAGE_COPY.on(db).bind(("name", name.to_string())).bind(("kind", kind.to_string())).await?.take(0)
+    })
+    .await?;
+    rows.into_iter().next().ok_or_else(|| AppError::internal("vault insert returned no row"))
+}
+
+/// The end of a clone or merge into the staged `vault`: when the copy succeeded, it becomes a vault
+/// `user_id` owns, in one transaction; when that or the copy failed, the partial vault is deleted, so
+/// a failure leaves no target behind (if even the delete fails, the scheduler retries it).
+async fn publish_or_discard<T>(db: &OrgDb, user_id: &RecordId, vault: &RecordId, copied: AppResult<T>) -> AppResult<T> {
+    let out = match copied {
+        Ok(v) => with_retry(|| async {
+            store::vaults::PUBLISH_COPY.on(db).bind(("vault", vault.clone())).bind(("user", user_id.clone())).await?.check()
+        })
+        .await
+        .map(|_| v)
+        .map_err(AppError::from),
+        Err(e) => Err(e),
+    };
+    if out.is_err()
+        && let Err(e) = discard_copy(db, vault).await
+    {
+        tracing::warn!(vault = %vault.to_string(), error = %e.message, "deleting a failed vault copy failed; the scheduler retries");
+    }
+    out
+}
+
+/// Deletes a copy in progress and everything it wrote; a vault that is not one is left alone.
+async fn discard_copy(db: &OrgDb, vault: &RecordId) -> AppResult<()> {
+    with_retry(|| async { store::vaults::DISCARD_COPY_ROWS.on(db).bind(("vault", vault.clone())).await?.check() }).await?;
+    with_retry(|| async { store::vaults::DISCARD_COPY_VAULT.on(db).bind(("vault", vault.clone())).await?.check() }).await?;
+    Ok(())
+}
+
+/// Deletes the clone and merge targets a crash left half-copied. Run by the scheduler (its first pass
+/// after a start, then periodically). Returns how many it removed.
+pub async fn discard_stale_copies(db: &OrgDb) -> AppResult<usize> {
+    let mut res = store::vaults::STALE_COPIES.on(db).bind(("age", STALE_COPY_AGE)).await?;
+    let stale: Vec<RecordId> = res.take(0)?;
+    for vault in &stale {
+        discard_copy(db, vault).await?;
+    }
+    Ok(stale.len())
+}
+
 /// Copies every entity, memory and relation of `src` into `dest` (both
 /// already accessible to `user_id`); returns how many entities of `src` landed
 /// in `dest`. With `merge_duplicates`, entities that share a kind and
@@ -654,6 +710,10 @@ async fn copy_into(db: &OrgDb, user_id: &RecordId, src: &RecordId, dest: &Record
         for mem in memories {
             if merge_duplicates && fold_into_existing_memory(db, &new_id, &mem).await? {
                 continue;
+            }
+            #[cfg(feature = "test-support")]
+            if FAIL_COPY_AT.load(std::sync::atomic::Ordering::SeqCst) > 0 && FAIL_COPY_AT.fetch_sub(1, std::sync::atomic::Ordering::SeqCst) == 1 {
+                return Err(AppError::internal("injected vault copy failure"));
             }
             store::vaults::COPY_MEMORY.on(db)
             .bind(("owner", user_id.clone()))
@@ -730,10 +790,11 @@ pub async fn clone_vault(
         Some(n) => n.to_string(),
         None => free_name(db, user_id, format!("{} (copy)", source.name)).await?,
     };
-    let clone = create_vault(db, user_id, &clone_name, kind).await?;
-    let clone_rid: RecordId = crate::rid::parse(&clone.id).map_err(|_| AppError::internal("clone vault id did not round-trip"))?;
-
-    let copied = copy_into(db, user_id, vault_id, &clone_rid, false).await?;
+    let clone_name = check_name(db, user_id, &clone_name, None).await?;
+    let staged = stage_copy(db, &clone_name, kind).await?;
+    let copied = copy_into(db, user_id, vault_id, &staged.id, false).await;
+    let copied = publish_or_discard(db, user_id, &staged.id, copied).await?;
+    let clone: VaultOut = staged.into();
 
     Ok(CloneOut {
         id: clone.id,
@@ -783,21 +844,27 @@ pub async fn merge_vaults(
         Some(n) => n.to_string(),
         None => free_name(db, user_id, format!("{} + {}", va.name, vb.name)).await?,
     };
-    let merged = create_vault(db, user_id, &merged_name, kind).await?;
-    let dest: RecordId = crate::rid::parse(&merged.id).map_err(|_| AppError::internal("merged vault id did not round-trip"))?;
+    let merged_name = check_name(db, user_id, &merged_name, None).await?;
+    let staged = stage_copy(db, &merged_name, kind).await?;
+    let dest = staged.id.clone();
 
-    copy_into(db, user_id, a, &dest, true).await?;
-    copy_into(db, user_id, b, &dest, true).await?;
-
-    let mut entities = 0;
-    for entity_kind in ENTITY_KINDS {
-        // dynamic: table name varies over the six entity kinds
-        let mut res = store::dynamic(db, "vaults.count_entities", format!("SELECT count() FROM {entity_kind} WHERE vault = $vault GROUP ALL"))
-            .bind(("vault", dest.clone()))
-            .await?;
-        let rows: Vec<CountRow> = res.take(0)?;
-        entities += rows.first().map(|r| r.count).unwrap_or(0) as usize;
+    let copied = async {
+        copy_into(db, user_id, a, &dest, true).await?;
+        copy_into(db, user_id, b, &dest, true).await?;
+        let mut entities = 0;
+        for entity_kind in ENTITY_KINDS {
+            // dynamic: table name varies over the six entity kinds
+            let mut res = store::dynamic(db, "vaults.count_entities", format!("SELECT count() FROM {entity_kind} WHERE vault = $vault GROUP ALL"))
+                .bind(("vault", dest.clone()))
+                .await?;
+            let rows: Vec<CountRow> = res.take(0)?;
+            entities += rows.first().map(|r| r.count).unwrap_or(0) as usize;
+        }
+        AppResult::Ok(entities)
     }
+    .await;
+    let entities = publish_or_discard(db, user_id, &dest, copied).await?;
+    let merged: VaultOut = staged.into();
     Ok(MergeOut {
         id: merged.id,
         name: merged.name,

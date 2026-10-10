@@ -187,8 +187,23 @@ async fn reconcile_links(db: &OrgDb, owner: &RecordId, record_rid: &RecordId, li
     Ok(())
 }
 
+/// Whether the record's stored sync links are exactly `links_spec`.
+async fn links_unchanged(db: &OrgDb, owner: &RecordId, record_rid: &RecordId, links_spec: &[LinkSpec]) -> AppResult<bool> {
+    #[derive(Deserialize, SurrealValue)]
+    struct LinkRow {
+        rel: String,
+        out: RecordId,
+    }
+    let stored: Vec<LinkRow> = store::cache::SYNC_LINKS_OF.on(db).bind(("id", record_rid.clone())).await?.take(0)?;
+    let stored: std::collections::HashSet<(String, String)> = stored.into_iter().map(|l| (l.out.to_string(), l.rel)).collect();
+    let wanted: std::collections::HashSet<(String, String)> =
+        links_spec.iter().map(|l| (rid(owner, &l.target).to_string(), l.rel.clone())).collect();
+    Ok(stored == wanted)
+}
+
 /// Insert or update one envelope, scoped to `owner`. Returns `(record,
-/// changed)`.
+/// changed)`; `changed` is about the record's content only (it drives embedding and extraction), so a
+/// replay that changes only `links` reconciles them and still reports unchanged.
 pub async fn upsert(db: &OrgDb, owner: &RecordId, env: &Envelope) -> AppResult<(CacheRecord, bool)> {
     let record_rid = rid(owner, &env.id);
     let h = hash_envelope(env);
@@ -197,6 +212,10 @@ pub async fn upsert(db: &OrgDb, owner: &RecordId, env: &Envelope) -> AppResult<(
     if let Some(existing) = existing
         && existing.content_hash == h && !existing.deleted {
             store::cache::TOUCH_INGESTED.on(db).bind(("id", record_rid.clone())).await?;
+            // links are not in the content hash (a re-categorised transaction changes only them)
+            if !links_unchanged(db, owner, &record_rid, &env.links).await? {
+                reconcile_links(db, owner, &record_rid, &env.links).await?;
+            }
             let mut rec = row_to_record(existing);
             rec.ingested_at = Some(Datetime::from(chrono::Utc::now()));
             return Ok((rec, false));
