@@ -39,7 +39,7 @@ pub(super) fn register_all(registry: &mut HashMap<&'static str, ToolSpec>) {
                 "kind": {"type": "string", "enum": KINDS},
                 "limit": {"type": "integer"},
                 "offset": {"type": "integer"},
-                "vault_id": {"type": "string", "description": "search this vault instead of your personal one (a vault id or its name, e.g. \"Acme\")"},
+                "vault_id": {"type": "string", "description": "search just this vault (a vault id or its name, e.g. \"Acme\"); omit to search your personal vault and every org vault you belong to"},
             },
             "required": ["query"],
         }),

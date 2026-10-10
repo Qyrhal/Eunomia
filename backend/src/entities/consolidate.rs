@@ -18,6 +18,8 @@
 //! has since been corrected or deleted. Recall leaves stale observations out.
 //! This module only ever sets `status="fresh"` again, once consolidation has
 //! caught up; without a model it changes nothing.
+//! New facts are first checked against earlier ones (`supersede`); a fact
+//! they make untrue is marked superseded and left out of the rebuild.
 //!
 //! Best-effort throughout, same safety pattern as `extract.rs`: never fails
 //! the caller, no-ops in stub-backend mode.
@@ -218,8 +220,18 @@ pub async fn consolidate_subject(
         .and_then(|e| e.source_memories.as_ref())
         .map(|ids| ids.iter().map(|r| r.to_string()).collect())
         .unwrap_or_default();
-    let raw: Vec<(String, String)> = raw_rows.iter().map(|r| (r.id.to_string(), r.text.clone())).collect();
-    let existing_plan = existing.as_ref().map(|e| (e.text.as_str(), &seen, e.status.as_deref() == Some("stale")));
+    // Facts new since the last consolidation may make earlier ones untrue:
+    // those drop out, and the belief is rebuilt without them.
+    let new_ids: Vec<RecordId> = raw_rows.iter().filter(|r| !seen.contains(&r.id.to_string())).map(|r| r.id.clone()).collect();
+    let superseded: HashSet<String> =
+        super::supersede::check(db, settings, owner, subject_id, &new_ids).await.iter().map(|r| r.to_string()).collect();
+    let raw: Vec<(String, String)> = raw_rows
+        .iter()
+        .filter(|r| !superseded.contains(&r.id.to_string()))
+        .map(|r| (r.id.to_string(), r.text.clone()))
+        .collect();
+    let existing_plan =
+        existing.as_ref().map(|e| (e.text.as_str(), &seen, e.status.as_deref() == Some("stale") || !superseded.is_empty()));
     let Some((facts, current_belief, lineage)) = plan(&raw, existing_plan) else { return Ok(None) };
 
     if settings.embeddings_backend == "stub" {

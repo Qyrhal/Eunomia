@@ -12,8 +12,8 @@ expression: stable
   "memory": [
     {
       "id": "memory:<id8>",
-      "owner": "user:<id3>",
-      "vault": "vault:<id4>",
+      "owner": "user:<id4>",
+      "vault": "vault:<id2>",
       "subject": "person:<id1>",
       "text": "Alice is a tea drinker at Acme",
       "source": null,
@@ -28,8 +28,8 @@ expression: stable
     },
     {
       "id": "memory:<id5>",
-      "owner": "user:<id3>",
-      "vault": "vault:<id4>",
+      "owner": "user:<id4>",
+      "vault": "vault:<id2>",
       "subject": "person:<id1>",
       "text": "Alice works at Acme",
       "source": null,
@@ -43,9 +43,9 @@ expression: stable
       "owner_email": "tester@example.com"
     },
     {
-      "id": "memory:<id2>",
-      "owner": "user:<id3>",
-      "vault": "vault:<id4>",
+      "id": "memory:<id3>",
+      "owner": "user:<id4>",
+      "vault": "vault:<id2>",
       "subject": "person:<id1>",
       "text": "Alice likes green tea",
       "source": null,

@@ -5,7 +5,7 @@ expression: stable
 {
   "results": [
     {
-      "id": "vault:<id4>",
+      "id": "vault:<id2>",
       "name": "Personal",
       "kind": "personal",
       "created_at": "<ts>",

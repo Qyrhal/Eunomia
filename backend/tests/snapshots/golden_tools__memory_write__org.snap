@@ -8,12 +8,13 @@ expression: stable
     "kind": "organisation",
     "name": "Acme",
     "aliases": [],
-    "summary": ""
+    "summary": "",
+    "vault": "vault:<id2>"
   },
   "memory": {
     "id": "memory:<id7>",
-    "owner": "user:<id3>",
-    "vault": "vault:<id4>",
+    "owner": "user:<id4>",
+    "vault": "vault:<id2>",
     "subject": "organisation:<id6>",
     "text": "Acme builds anvils",
     "source": null,

@@ -7,5 +7,6 @@ expression: stable
   "kind": "repository",
   "name": "eunomia",
   "aliases": [],
-  "summary": "memory layer"
+  "summary": "memory layer",
+  "vault": "vault:<id2>"
 }

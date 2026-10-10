@@ -8,12 +8,13 @@ expression: stable
     "kind": "person",
     "name": "Alice",
     "aliases": [],
-    "summary": ""
+    "summary": "",
+    "vault": "vault:<id2>"
   },
   "memory": {
-    "id": "memory:<id2>",
-    "owner": "user:<id3>",
-    "vault": "vault:<id4>",
+    "id": "memory:<id3>",
+    "owner": "user:<id4>",
+    "vault": "vault:<id2>",
     "subject": "person:<id1>",
     "text": "Alice likes green tea",
     "source": null,

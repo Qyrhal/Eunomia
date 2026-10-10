@@ -63,9 +63,9 @@ const NAME_WORDS: usize = 6;
 const MAX_NAME_WORDS: usize = 64;
 
 // recency boost floor/ceiling; see `boost` below.
-const RECENCY_FLOOR: f64 = 0.7;
+const RECENCY_FLOOR: f64 = 0.5;
 const RECENCY_WINDOW_DAYS: f64 = 365.0;
-const RECENCY_SPAN: f64 = 0.3;
+const RECENCY_SPAN: f64 = 0.5;
 // proof boost: +5% per extra arm that surfaced the same item.
 const PROOF_STEP: f64 = 0.05;
 
@@ -83,9 +83,14 @@ pub struct RecallItem {
     pub kind: &'static str,
     pub text: String,
     pub source: Option<String>,
+    /// A record's date, or when a memory was last written or edited.
     pub occurred_at: Option<String>,
+    /// 0..1, relative to the best hit of this recall.
     pub score: f64,
     pub arms_hit: usize,
+    /// The vault the hit came from (its id), and that vault's name.
+    pub vault: String,
+    pub vault_name: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -374,7 +379,8 @@ struct Hydrated {
 /// Every candidate key's content, in two queries (records, memories) whatever the candidate count.
 /// Authorization is re-checked here: records must be the caller's own and live, memories must be in
 /// `vault`. A stale observation (its facts changed since it was consolidated) is left out: it is not
-/// a current fact; the raw facts it summarised are still recalled.
+/// a current fact; the raw facts it summarised are still recalled. So is a superseded fact (a later
+/// fact contradicted it; see `entities::supersede`).
 async fn hydrate(db: &OrgDb, owner: &RecordId, vault: &RecordId, keys: &[&String]) -> AppResult<HashMap<String, Hydrated>> {
     let mut out = HashMap::new();
     let record_ids: Vec<String> = keys.iter().filter_map(|k| k.strip_prefix("cache_record:")).map(str::to_string).collect();
@@ -408,6 +414,9 @@ async fn hydrate(db: &OrgDb, owner: &RecordId, vault: &RecordId, keys: &[&String
         #[surreal(default)]
         source: Option<RecordId>,
         created_at: Datetime,
+        #[serde(default)]
+        #[surreal(default)]
+        updated_at: Option<Datetime>,
         #[serde(rename = "type", default = "default_memory_type")]
         #[surreal(rename = "type", default = "default_memory_type")]
         mem_type: String,
@@ -425,7 +434,7 @@ async fn hydrate(db: &OrgDb, owner: &RecordId, vault: &RecordId, keys: &[&String
                 kind: "memory",
                 text: row.text,
                 source: row.source.map(|s| cs::literal(&s)),
-                occurred_at: Some(to_chrono(row.created_at)),
+                occurred_at: Some(to_chrono(row.updated_at.unwrap_or(row.created_at))),
                 mem_type: row.mem_type,
             },
         );
@@ -505,6 +514,10 @@ async fn arm(
     }
 }
 
+/// Recall in `vault_id`, or -- when it's omitted -- in the caller's personal
+/// vault and every org vault they belong to (facts kept in an org vault must
+/// not look absent to a caller that forgot to pass it). Each hit names its vault; scores are scaled so
+/// the best hit is 1.
 #[allow(clippy::too_many_arguments)]
 pub async fn recall(
     db: &OrgDb,
@@ -519,14 +532,58 @@ pub async fn recall(
 ) -> AppResult<Vec<RecallItem>> {
     let time_range = validate(query, time_range, limit, max_tokens)?;
     let pool = limit.saturating_mul(4).max(40);
-    let started = std::time::Instant::now();
 
-    let default_vault = vaults_service::default_vault_id(db, owner).await?;
-    let vault = match vault_id {
-        Some(v) => crate::authz::authorize(db, owner, crate::authz::Action::ReadMemories, v).await?.vault().clone(),
-        None => default_vault.clone(),
-    };
-    let personal = vault == vaults_service::personal_vault_id(db, owner).await?;
+    let mut vaults = Vec::new();
+    match vault_id {
+        Some(v) => vaults.push(v.clone()),
+        None => vaults.extend(vaults_service::default_read_vault_ids(db, owner).await?),
+    }
+    for v in vaults.iter_mut() {
+        *v = crate::authz::authorize(db, owner, crate::authz::Action::ReadMemories, v).await?.vault().clone();
+    }
+    let personal_vault = vaults_service::personal_vault_id(db, owner).await?;
+    let names: HashMap<String, String> =
+        vaults_service::list_my_vaults(db, owner).await?.into_iter().map(|v| (v.id, v.name)).collect();
+
+    let mut scored = Vec::new();
+    for vault in &vaults {
+        let mut hits = recall_in(db, settings, owner, query, time_range.clone(), pool, types, vault, *vault == personal_vault).await?;
+        let (id, name) = (vault.to_string(), names.get(&vault.to_string()).cloned().unwrap_or_default());
+        for h in &mut hits {
+            (h.vault, h.vault_name) = (id.clone(), name.clone());
+        }
+        scored.extend(hits);
+    }
+
+    scored.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal).then_with(|| a.id.cmp(&b.id)));
+    scored.truncate(limit);
+    let top = scored.first().map(|i| i.score).unwrap_or(1.0);
+    for item in &mut scored {
+        item.score = (item.score / top * 1000.0).round() / 1000.0;
+    }
+
+    Ok(match max_tokens {
+        Some(budget) => fit_budget(scored, budget),
+        None => scored,
+    })
+}
+
+/// One vault's ranked hits (raw scores, unsorted). The caller's own synced records are searched only
+/// alongside their personal vault (`personal`).
+#[allow(clippy::too_many_arguments)]
+async fn recall_in(
+    db: &OrgDb,
+    settings: &Settings,
+    owner: &RecordId,
+    query: &str,
+    time_range: Option<(Datetime, Datetime)>,
+    pool: usize,
+    types: Option<&[MemoryType]>,
+    vault: &RecordId,
+    personal: bool,
+) -> AppResult<Vec<RecallItem>> {
+    let started = std::time::Instant::now();
+    let vault = vault.clone();
     let no_filter = cs::RecordFilter::default();
     let record_keys = |ids: Vec<String>| ids.into_iter().map(|i| format!("cache_record:{i}")).collect::<Vec<_>>();
 
@@ -598,16 +655,11 @@ pub async fn recall(
             occurred_at: item.occurred_at.map(|d| d.to_rfc3339()),
             score: base_score * b,
             arms_hit,
+            vault: String::new(),
+            vault_name: String::new(),
         });
     }
-
-    scored.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal).then_with(|| a.id.cmp(&b.id)));
-    scored.truncate(limit);
-
-    Ok(match max_tokens {
-        Some(budget) => fit_budget(scored, budget),
-        None => scored,
-    })
+    Ok(scored)
 }
 
 /// Fits ranked items into a token budget (~4 chars/token). Each item is
@@ -673,7 +725,7 @@ mod tests {
     }
 
     fn item(text: &str) -> RecallItem {
-        RecallItem { id: "m".into(), kind: "memory", text: text.into(), source: None, occurred_at: None, score: 1.0, arms_hit: 1 }
+        RecallItem { id: "m".into(), kind: "memory", text: text.into(), source: None, occurred_at: None, score: 1.0, arms_hit: 1, vault: String::new(), vault_name: String::new() }
     }
 
     #[test]

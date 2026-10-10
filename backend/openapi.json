@@ -4241,7 +4241,8 @@
           "kind",
           "name",
           "aliases",
-          "summary"
+          "summary",
+          "vault"
         ],
         "properties": {
           "aliases": {
@@ -4260,6 +4261,9 @@
             "type": "string"
           },
           "summary": {
+            "type": "string"
+          },
+          "vault": {
             "type": "string"
           }
         }

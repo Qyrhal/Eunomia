@@ -11,16 +11,20 @@ expression: stable
       "source": null,
       "occurred_at": "<ts>",
       "score": "<unstable>",
-      "arms_hit": 1
+      "arms_hit": 1,
+      "vault": "vault:<id2>",
+      "vault_name": "Personal"
     },
     {
-      "id": "memory:<id2>",
+      "id": "memory:<id3>",
       "kind": "memory",
       "text": "Alice likes green tea",
       "source": null,
       "occurred_at": "<ts>",
       "score": "<unstable>",
-      "arms_hit": 1
+      "arms_hit": 1,
+      "vault": "vault:<id2>",
+      "vault_name": "Personal"
     }
   ]
 }

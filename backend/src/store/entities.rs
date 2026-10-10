@@ -60,7 +60,9 @@ pub const DELETE_RECORD: Stmt = Stmt::new("entities.delete_record", "DELETE $id"
 
 pub const UPDATE_MEMORY_TEXT: Stmt = Stmt::new(
     "entities.update_memory_text",
-    "UPDATE $id SET version = version + 1, updated_at = time::now(), text = $text RETURN AFTER",
+    // an edited raw fact is current again (no longer superseded); an observation keeps its status
+    "UPDATE $id SET version = version + 1, updated_at = time::now(), text = $text, \
+     status = IF type = \"observation\" THEN status ELSE NONE END RETURN AFTER",
 );
 pub const UPDATE_MEMORY_TYPE: Stmt = Stmt::new(
     "entities.update_memory_type",
@@ -68,7 +70,8 @@ pub const UPDATE_MEMORY_TYPE: Stmt = Stmt::new(
 );
 pub const UPDATE_MEMORY_TEXT_TYPE: Stmt = Stmt::new(
     "entities.update_memory_text_type",
-    "UPDATE $id SET version = version + 1, updated_at = time::now(), text = $text, type = $type RETURN AFTER",
+    "UPDATE $id SET version = version + 1, updated_at = time::now(), text = $text, type = $type, \
+     status = IF $type = \"observation\" THEN status ELSE NONE END RETURN AFTER",
 );
 
 
@@ -173,9 +176,24 @@ pub const SET_SUMMARY: Stmt = Stmt::new(
 );
 
 // consolidate.rs
+/// A subject's latest live raw facts, newest first, dated by their last write (supersede).
+pub const LIVE_FACTS: Stmt = Stmt::new(
+    "entities.live_facts",
+    r#"SELECT id, text, updated_at ?? created_at AS at FROM memory WHERE subject = $subject
+       AND type IN ["world","experience"] AND status != "superseded" ORDER BY at DESC LIMIT $limit"#,
+);
+/// Marks facts superseded and makes the subject's observation stale.
+pub const MARK_SUPERSEDED: Stmt = Stmt::new(
+    "entities.mark_superseded",
+    r#"UPDATE $ids SET status = "superseded";
+       UPDATE memory SET status = "stale" WHERE subject = $subject AND type = "observation";"#,
+);
+/// Subjects in `$vault` with a fact whose text matches `$q` (full-text).
+pub const SUBJECTS_MENTIONING: Stmt =
+    Stmt::new("entities.subjects_mentioning", "SELECT VALUE subject FROM memory WHERE vault = $vault AND text @@ $q LIMIT 200");
 pub const RAW_MEMORIES: Stmt = Stmt::new(
     "entities.raw_memories",
-    r#"SELECT * FROM memory WHERE subject = $id AND type IN ["world","experience"] ORDER BY created_at"#,
+    r#"SELECT * FROM memory WHERE subject = $id AND type IN ["world","experience"] AND status != "superseded" ORDER BY created_at"#,
 );
 pub const OBSERVATION_OF: Stmt = Stmt::new(
     "entities.observation_of",
@@ -226,6 +244,9 @@ pub const ALL: &[&Stmt] = &[
     &EDGES_AMONG,
     &SET_SUMMARY,
     &RAW_MEMORIES,
+    &SUBJECTS_MENTIONING,
+    &LIVE_FACTS,
+    &MARK_SUPERSEDED,
     &OBSERVATION_OF,
     &CONSOLIDATE_CREATE,
     &CONSOLIDATE_UPDATE,
@@ -269,6 +290,18 @@ pub fn find_by_key<'a>(db: &'a OrgDb, table: &str) -> Q<'a> {
             "SELECT * FROM {table} WHERE vault = $vault AND name_key = $needle LIMIT 1; \
              SELECT * FROM {table} WITH INDEX {table}_alias_keys_idx WHERE alias_keys CONTAINS $needle AND vault = $vault \
              ORDER BY created_at LIMIT 1;"
+        ),
+    )
+}
+
+/// Other `table` entities in `$vault` (not `$id`) whose name or an alias shares one of `$words`.
+pub fn sharing_a_word<'a>(db: &'a OrgDb, table: &str) -> Q<'a> {
+    dynamic(
+        db,
+        "entities.sharing_a_word",
+        format!(
+            "SELECT * FROM {table} WHERE vault = $vault AND id != $id \
+             AND (string::words(name_key) CONTAINSANY $words OR alias_keys CONTAINSANY $words) LIMIT 5"
         ),
     )
 }

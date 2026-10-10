@@ -113,7 +113,8 @@ async fn extract_record(state: AppState, job: Job) -> Result<(), JobError> {
     if rec.deleted {
         return Ok(());
     }
-    let record = extract::ExtractRecord { id: rec.id, title: rec.title, body_text: rec.body_text };
+    let occurred_at = rec.occurred_at.as_ref().and_then(crate::sources::base::datetime_to_chrono).map(|d| d.to_rfc3339());
+    let record = extract::ExtractRecord { id: rec.id, title: rec.title, body_text: rec.body_text, occurred_at };
     for subject in extract::extract_entities(db, &state.settings, &job.owner, &record).await {
         if let Ok(subject) = crate::rid::parse(&subject) {
             super::enqueue_lossy(&state.control, super::leader::consolidate_job(state.db.org(), &job.owner, &subject)).await;

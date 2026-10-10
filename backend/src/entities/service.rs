@@ -89,6 +89,7 @@ pub struct EntityOut {
     pub name: String,
     pub aliases: Vec<String>,
     pub summary: String,
+    pub vault: String,
 }
 
 fn entity_out(kind: &str, row: &EntityRow) -> EntityOut {
@@ -98,6 +99,7 @@ fn entity_out(kind: &str, row: &EntityRow) -> EntityOut {
         name: row.name.clone(),
         aliases: row.aliases.clone(),
         summary: row.summary.clone(),
+        vault: row.vault.to_string(),
     }
 }
 
@@ -278,6 +280,14 @@ pub struct GraphOut {
 pub struct WriteMemoryOut {
     pub entity: EntityOut,
     pub memory: MemoryOut,
+    /// Earlier facts about the subject this one made no longer true (now
+    /// left out of recall). Filled in by the `memory_write` tool.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub superseded: Vec<String>,
+    /// When the write created a new entity: existing ones of the same kind
+    /// whose name shares a word with it -- candidates for `entity_merge`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub possible_duplicates: Vec<EntityOut>,
 }
 
 // ---------------------------------------------------------------------------
@@ -375,6 +385,29 @@ pub async fn upsert_entity(
     aliases: Option<Vec<String>>,
     vault_id: Option<&RecordId>,
 ) -> AppResult<EntityOut> {
+    Ok(upsert_entity_created(db, owner, kind, name, aliases, vault_id).await?.0)
+}
+
+/// `"Jane Doe (Acme/JD)"` -> `("Jane Doe", ["Acme", "JD"])`: a name with a
+/// parenthesised suffix of aliases/affiliations.
+fn split_decorated(name: &str) -> Option<(&str, Vec<String>)> {
+    let (base, extra) = name.strip_suffix(')')?.rsplit_once('(')?;
+    let base = base.trim();
+    let extra: Vec<String> = extra.split(['/', ',', ';']).map(str::trim).filter(|a| !a.is_empty()).map(String::from).collect();
+    (!base.is_empty() && !extra.is_empty()).then_some((base, extra))
+}
+
+/// [`upsert_entity`], plus whether the entity was created just now. A
+/// decorated name (see [`split_decorated`]) whose base name already exists
+/// resolves to that entity, the suffix parts becoming aliases.
+pub async fn upsert_entity_created(
+    db: &OrgDb,
+    owner: &RecordId,
+    kind: &str,
+    name: &str,
+    aliases: Option<Vec<String>>,
+    vault_id: Option<&RecordId>,
+) -> AppResult<(EntityOut, bool)> {
     let table = kind_table(kind)?;
     let vault = resolve_vault(db, owner, vault_id, Action::WriteMemories).await?;
     let aliases = aliases.unwrap_or_default();
@@ -384,21 +417,30 @@ pub async fn upsert_entity(
     }
     let needle = name.to_lowercase();
 
+    // A decorated name ("Jane Doe (Acme/JD)") whose base name already exists resolves to it, the
+    // suffix parts becoming aliases.
+    let decorated = split_decorated(name);
     // Read-then-write: a concurrent upsert of the same name (in any case) loses on the
     // `(vault, name_key)` unique index, and the retry's re-read finds the winner. Both lookups are
     // index reads (`name_key`, `alias_keys`), however large the vault.
-    let row = with_retry_dup(|| async {
-        let mut res = q::find_by_key(db, table)
-            .bind(("vault", vault.clone()))
-            .bind(("needle", needle.clone()))
-            .await?
-            .check()?;
-        let by_name: Vec<EntityRow> = res.take(0)?;
-        let by_alias: Vec<EntityRow> = res.take(1)?;
+    let (row, created) = with_retry_dup(|| async {
+        let mut found = None;
+        let mut aliases = aliases.clone();
+        let needles = std::iter::once((needle.clone(), None)).chain(decorated.as_ref().map(|(base, extra)| (base.to_lowercase(), Some(extra))));
+        for (key, extra) in needles {
+            let mut res = q::find_by_key(db, table).bind(("vault", vault.clone())).bind(("needle", key)).await?.check()?;
+            let by_name: Vec<EntityRow> = res.take(0)?;
+            let by_alias: Vec<EntityRow> = res.take(1)?;
+            if let Some(row) = by_name.into_iter().chain(by_alias).next() {
+                aliases.extend(extra.into_iter().flatten().cloned());
+                found = Some(row);
+                break;
+            }
+        }
 
-        if let Some(row) = by_name.into_iter().chain(by_alias).next() {
+        if let Some(row) = found {
             if aliases.iter().all(|a| row.aliases.contains(a)) {
-                return Ok(row);
+                return Ok((row, false));
             }
             // array::union is atomic, so two alias merges cannot lose each other's update.
             let mut updated = q::MERGE_ALIASES
@@ -408,7 +450,7 @@ pub async fn upsert_entity(
                 .await?
                 .check()?;
             let rows: Vec<EntityRow> = updated.take(0)?;
-            return Ok(rows.into_iter().next().unwrap_or(row));
+            return Ok((rows.into_iter().next().unwrap_or(row), false));
         }
 
         let mut created = q::create_entity(db, table)
@@ -419,10 +461,39 @@ pub async fn upsert_entity(
             .await?
             .check()?;
         let rows: Vec<EntityRow> = created.take(0)?;
-        rows.into_iter().next().ok_or_else(|| surrealdb::Error::query("entity insert returned no row".into(), None))
+        let row = rows.into_iter().next().ok_or_else(|| surrealdb::Error::query("entity insert returned no row".into(), None))?;
+        Ok((row, true))
     })
     .await?;
-    Ok(entity_out(table, &row))
+    Ok((entity_out(table, &row), created))
+}
+
+/// Other `kind` entities in the entity's vault whose name or an alias shares a word (3+ letters) with
+/// its name -- likely the same thing under another name ("Dave" / "David Smith" share nothing;
+/// "David" / "David Smith" do).
+pub async fn possible_duplicates(db: &OrgDb, entity: &EntityOut) -> AppResult<Vec<EntityOut>> {
+    let table = kind_table(&entity.kind)?;
+    let words: Vec<String> =
+        entity.name.to_lowercase().split(|c: char| !c.is_alphanumeric()).filter(|w| w.chars().count() >= 3).map(String::from).collect();
+    if words.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut res = q::sharing_a_word(db, table)
+        .bind(("vault", crate::rid::parse(&entity.vault).map_err(|_| AppError::internal("vault id did not round-trip"))?))
+        .bind(("id", crate::rid::parse(&entity.id).map_err(|_| AppError::internal("entity id did not round-trip"))?))
+        .bind(("words", words))
+        .await?
+        .check()?;
+    let rows: Vec<EntityRow> = res.take(0)?;
+    Ok(rows.iter().map(|r| entity_out(table, r)).collect())
+}
+
+/// Ids of the entities in `vault` with a fact whose text matches `query` (full-text, so a handle or
+/// username only ever written in a fact is found).
+pub async fn subjects_mentioning(db: &OrgDb, vault: &RecordId, query: &str) -> AppResult<HashSet<String>> {
+    let mut res = q::SUBJECTS_MENTIONING.on(db).bind(("vault", vault.clone())).bind(("q", query.to_string())).await?.check()?;
+    let ids: Vec<RecordId> = res.take(0)?;
+    Ok(ids.iter().map(|r| r.to_string()).collect())
 }
 
 /// `source_record_id` is optional -- an automatic extraction path always ties
@@ -517,11 +588,12 @@ pub async fn write_memory(
     mem_type: &str,
     vault_id: Option<&RecordId>,
 ) -> AppResult<WriteMemoryOut> {
-    let entity = upsert_entity(db, owner, subject_kind, subject_name, None, vault_id).await?;
+    let (entity, created) = upsert_entity_created(db, owner, subject_kind, subject_name, None, vault_id).await?;
     let entity_rid: RecordId =
         crate::rid::parse(&entity.id).map_err(|_| AppError::internal("entity id did not round-trip"))?;
     let memory = add_memory(db, owner, &entity_rid, text, source_record_id, mem_type).await?;
-    Ok(WriteMemoryOut { entity, memory })
+    let possible_duplicates = if created { possible_duplicates(db, &entity).await? } else { Vec::new() };
+    Ok(WriteMemoryOut { entity, memory, superseded: Vec::new(), possible_duplicates })
 }
 
 /// RELATE two entities, idempotent on the (in, out, label) unique index -- a
@@ -1061,6 +1133,15 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn decorated_names_split_into_base_and_aliases() {
+        assert_eq!(split_decorated("Jane Doe (Acme/JD)"), Some(("Jane Doe", vec!["Acme".into(), "JD".into()])));
+        assert_eq!(split_decorated("Jane Doe(Acme, JD; jd2)").unwrap().1, vec!["Acme", "JD", "jd2"]);
+        assert_eq!(split_decorated("Jane Doe"), None);
+        assert_eq!(split_decorated("(Acme)"), None);
+        assert_eq!(split_decorated("Jane Doe ()"), None);
+    }
 
     #[test]
     fn kinds_match_schema_union() {

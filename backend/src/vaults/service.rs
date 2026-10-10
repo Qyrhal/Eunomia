@@ -268,6 +268,24 @@ pub async fn personal_vault_id(db: &OrgDb, user_id: &RecordId) -> AppResult<Reco
     })
 }
 
+/// What reads search when no `vault_id` is given: `user_id`'s personal vault (first) plus every org
+/// vault they're an active member of -- not other people's personal vaults they've joined, which stay
+/// opt-in. A vault-restricted credential reads only its vault.
+pub async fn default_read_vault_ids(db: &OrgDb, user_id: &RecordId) -> AppResult<Vec<RecordId>> {
+    if authz::restricted_vault()?.is_some() {
+        return Ok(vec![default_vault_id(db, user_id).await?]);
+    }
+    #[derive(Deserialize, SurrealValue)]
+    struct Row {
+        vault: RecordId,
+    }
+    let mut res = store::vaults::ORG_IDS.on(db).bind(("user", user_id.clone())).await?;
+    let rows: Vec<Row> = res.take(0)?;
+    let mut out = vec![personal_vault_id(db, user_id).await?];
+    out.extend(rows.into_iter().map(|r| r.vault));
+    Ok(out)
+}
+
 pub async fn list_my_vaults(db: &OrgDb, user_id: &RecordId) -> AppResult<Vec<VaultWithRole>> {
     #[derive(Deserialize, SurrealValue)]
     struct Row {

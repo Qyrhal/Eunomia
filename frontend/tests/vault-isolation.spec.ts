@@ -148,8 +148,15 @@ test.describe.serial("vault isolation", () => {
     expect(text(await bob.ok("entities_search", { query: "Zed" }))).not.toContain(ids.aliceZed);
   });
 
-  test("personal recall does not include the user's other vaults", async () => {
-    expect(text(await alice.ok("recall", { query: "Quinn Teammate mango" }))).not.toContain("SHAREDFACT");
+  test("recall without a vault covers the user's org vaults, labelled; a named vault narrows it", async () => {
+    const all = await alice.ok("recall", { query: "Quinn Teammate mango" });
+    const shared = all.results.find((i: Json) => i.text.includes("SHAREDFACT"));
+    expect(shared, "org-vault facts are found without vault_id").toBeTruthy();
+    expect(shared.vault).toBe(ids.shared);
+    expect(shared.vault_name).toBe("Shared");
+    expect(Math.max(...all.results.map((i: Json) => i.score))).toBe(1);
+    expect(text(await alice.ok("recall", { query: "Quinn Teammate mango", vault_id: ids.alicePersonal }))).not.toContain("SHAREDFACT");
+    expect(text(await alice.ok("entities_search", { query: "Quinn" }))).toContain(ids.quinn);
   });
 
   // -- cross-vault reads -----------------------------------------------------

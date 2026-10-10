@@ -10,5 +10,6 @@ expression: stable
     "Al",
     "Alicia"
   ],
-  "summary": "Tea person"
+  "summary": "Tea person",
+  "vault": "vault:<id2>"
 }

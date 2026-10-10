@@ -209,6 +209,7 @@ export type EntityOut = {
     kind: string;
     name: string;
     summary: string;
+    vault: string;
 };
 
 export type EntityUpdate = {

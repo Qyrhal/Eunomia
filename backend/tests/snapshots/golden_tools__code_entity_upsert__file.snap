@@ -7,5 +7,6 @@ expression: stable
   "kind": "file",
   "name": "main.rs",
   "aliases": [],
-  "summary": ""
+  "summary": "",
+  "vault": "vault:<id2>"
 }

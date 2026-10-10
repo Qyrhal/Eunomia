@@ -9,7 +9,8 @@ expression: stable
       "kind": "person",
       "name": "Alice",
       "aliases": [],
-      "summary": ""
+      "summary": "",
+      "vault": "vault:<id2>"
     }
   ],
   "total": 1,

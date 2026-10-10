@@ -3,9 +3,9 @@ source: tests/golden_tools.rs
 expression: stable
 ---
 {
-  "id": "memory:<id2>",
-  "owner": "user:<id3>",
-  "vault": "vault:<id4>",
+  "id": "memory:<id3>",
+  "owner": "user:<id4>",
+  "vault": "vault:<id2>",
   "subject": "person:<id1>",
   "text": "Alice likes oolong tea",
   "source": null,

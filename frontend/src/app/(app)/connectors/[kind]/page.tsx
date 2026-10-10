@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, use, useState } from "react";
+import { Fragment, use, useRef, useState } from "react";
 import Link from "next/link";
 import { ChevronRight, ExternalLink, Search, Settings2, Trash2, X } from "lucide-react";
 import type { ConnectorKind, SourceRow, ToolHit } from "@/lib/types";
@@ -197,17 +197,26 @@ function health(row: SourceRow): { tone: string; text: string } {
   return { tone: "var(--good)", text: "Healthy" };
 }
 
-/** "Delete all data": a button that opens a confirm step saying what goes; the second press deletes. */
+/** "Delete all data" in a modal with two confirmations: what goes, then type the connector's name. */
 function DeleteData({ row, kind }: { row: SourceRow; kind: ConnectorKind }) {
   const del = useDeleteConnectorData();
-  const [confirm, setConfirm] = useState(false);
+  const dialog = useRef<HTMLDialogElement>(null);
+  const [step, setStep] = useState<1 | 2>(1);
+  const [typed, setTyped] = useState("");
   const [error, setError] = useState<Failure | null>(null);
+
+  function open() {
+    setStep(1);
+    setTyped("");
+    setError(null);
+    dialog.current?.showModal();
+  }
 
   async function run() {
     setError(null);
     try {
       await del.mutateAsync(kind);
-      setConfirm(false);
+      dialog.current?.close();
     } catch (e) {
       setError(failure(e, `Could not delete the ${row.label} data. Try again.`));
     }
@@ -218,29 +227,49 @@ function DeleteData({ row, kind }: { row: SourceRow; kind: ConnectorKind }) {
       <h2 id="delete-data-heading" className="section-title">
         Data
       </h2>
-      {confirm ? (
-        <div className="flex flex-col gap-2 rounded-[7px] p-3" style={{ background: "var(--critical-soft)" }} role="alertdialog" aria-label={`Delete all ${row.label} data`}>
-          <p className="text-[12.5px]" style={{ color: "var(--ink)" }}>
+      <button type="button" onClick={open} className="btn btn-danger btn-sm self-start">
+        <Trash2 size={14} strokeWidth={1.75} aria-hidden />
+        Delete all {row.label} data
+      </button>
+      <dialog
+        ref={dialog}
+        aria-labelledby="delete-data-title"
+        className="panel pop-in m-auto w-[calc(100%-32px)] max-w-md p-5 backdrop:bg-black/40"
+        style={{ color: "var(--ink)" }}
+      >
+        <h3 id="delete-data-title" className="text-[15px] font-medium mb-2">
+          {step === 1 ? `Delete all ${row.label} data?` : "Are you sure?"}
+        </h3>
+        {step === 1 ? (
+          <p className="text-[12.5px] mb-4" style={{ color: "var(--ink-dim)" }}>
             This permanently deletes the {row.record_count.toLocaleString()} {row.label} records Eunomia has synced, their links, and every fact and
-            relation extracted from them. The connection itself stays, so later syncs bring in new data only. This can&apos;t be undone.
+            relation extracted from them. The connection itself stays, so later syncs bring in new data only.
           </p>
-          <div className="flex justify-end gap-1.5">
-            <button type="button" onClick={() => setConfirm(false)} className="btn btn-ghost btn-sm">
-              Cancel
+        ) : (
+          <label className="text-[12.5px] flex flex-col gap-1.5 mb-4" style={{ color: "var(--ink-dim)" }}>
+            <span>
+              Type <span className="font-mono" style={{ color: "var(--ink)" }}>{row.label}</span> to confirm. This can&apos;t be undone.
+            </span>
+            <input autoFocus className="field h-8 px-2.5 text-[13px] font-mono" value={typed} onChange={(e) => setTyped(e.target.value)} />
+          </label>
+        )}
+        {error && <ErrorLine error={error} />}
+        <div className="flex justify-end gap-1.5 mt-2">
+          <button type="button" onClick={() => dialog.current?.close()} className="btn btn-ghost btn-sm">
+            Cancel
+          </button>
+          {step === 1 ? (
+            <button type="button" onClick={() => setStep(2)} className="btn btn-danger btn-sm">
+              Continue
             </button>
-            <button type="button" onClick={run} disabled={del.isPending} className="btn btn-danger btn-sm">
+          ) : (
+            <button type="button" onClick={run} disabled={typed !== row.label || del.isPending} className="btn btn-danger btn-sm">
               <Trash2 size={14} strokeWidth={1.75} aria-hidden />
               {del.isPending ? "Deleting…" : "Delete everything"}
             </button>
-          </div>
+          )}
         </div>
-      ) : (
-        <button type="button" onClick={() => setConfirm(true)} className="btn btn-danger btn-sm self-start">
-          <Trash2 size={14} strokeWidth={1.75} aria-hidden />
-          Delete all {row.label} data
-        </button>
-      )}
-      {error && <ErrorLine error={error} />}
+      </dialog>
     </section>
   );
 }

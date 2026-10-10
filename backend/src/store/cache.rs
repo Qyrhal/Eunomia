@@ -48,8 +48,8 @@ pub const RECORDS_BY_IDS: Stmt =
 /// since it was consolidated, so it is not a current fact; the raw facts are still recalled).
 pub const MEMORIES_FOR_RECALL: Stmt = Stmt::new(
     "cache.memories_for_recall",
-    "SELECT id, text, source, created_at, type FROM $ids WHERE vault = $vault \
-     AND !(type = \"observation\" AND status = \"stale\")",
+    "SELECT id, text, source, created_at, updated_at, type FROM $ids WHERE vault = $vault \
+     AND !(type = \"observation\" AND status = \"stale\") AND status != \"superseded\"",
 );
 
 /// Each source's live linked records in either direction, one traversal for the whole batch (recall's

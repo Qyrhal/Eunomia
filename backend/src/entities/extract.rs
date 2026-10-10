@@ -46,6 +46,8 @@ pub struct ExtractRecord {
     pub id: String,
     pub title: String,
     pub body_text: String,
+    /// When the record happened (RFC 3339), so time-sensitive facts carry it.
+    pub occurred_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -82,13 +84,30 @@ struct ExtractionData {
 const KIND_MAP: [(&str, &str); 3] =
     [("people", "person"), ("organisations", "organisation"), ("locations", "location")];
 
-fn build_prompt(text: &str) -> String {
+fn build_prompt(text: &str, date: Option<&str>) -> String {
+    let dated = match date {
+        Some(d) => format!("The text is dated {d}. Write time-sensitive facts (plans, statuses, who was where) with that date, e.g. \"On {d}, ...\".\n"),
+        None => String::new(),
+    };
     format!(
-        "Extract entities and relations mentioned in the text below. Return strict JSON, no prose, with this exact shape:\n\n\
+        "Extract entities: the people, organisations and locations the text below talks about -- in a conversation or meeting \
+transcript, that is the speakers and everyone and everything they mention -- and how they relate. Return strict JSON, \
+no prose, with this exact shape:\n\n\
 {{\n  \"people\": [{{\"name\": str, \"aliases\": [str], \"facts\": [str]}}],\n  \"organisations\": [{{\"name\": str, \"aliases\": [str], \"facts\": [str]}}],\n  \"locations\": [{{\"name\": str, \"aliases\": [str], \"facts\": [str]}}],\n  \"relations\": [{{\"from\": str, \"from_kind\": \"person|organisation|location\", \"to\": str, \"to_kind\": \"person|organisation|location\", \"label\": str}}]\n}}\n\n\
-Only include entities actually mentioned in the text. Omit a section/field entirely if nothing was found for it, rather than inventing filler.\n\n\
+Only include entities actually mentioned in the text. Do not create an entity for the document, message, meeting or \
+recording itself, and skip placeholder names such as \"Unknown\" or \"Speaker 2\". Each fact is a self-contained \
+sentence that names its subject. Omit a section/field entirely if nothing was found for it, rather than inventing filler.\n\
+{dated}\n\
 Text:\n{text}\n"
     )
+}
+
+/// A speaker label rather than a name ("Unknown", "Speaker 2", "SPEAKER_01").
+fn is_placeholder(name: &str) -> bool {
+    let n = name.trim().to_lowercase().replace('_', " ");
+    let rest = n.strip_prefix("speaker").map(str::trim);
+    matches!(n.as_str(), "unknown" | "unknown speaker" | "speaker" | "narrator" | "me" | "you")
+        || rest.is_some_and(|r| r.len() <= 3 && r.chars().all(|c| c.is_ascii_alphanumeric()))
 }
 
 /// Whether extraction should even attempt an LLM call -- short bodies and
@@ -123,13 +142,13 @@ pub(super) async fn app_settings_row(db: &OrgDb, owner: &RecordId) -> AppResult<
     }
 }
 
-async fn call_llm(db: &OrgDb, settings: &Settings, owner: &RecordId, text: &str) -> AppResult<ExtractionData> {
+async fn call_llm(db: &OrgDb, settings: &Settings, owner: &RecordId, text: &str, date: Option<&str>) -> AppResult<ExtractionData> {
     let p = provider::resolve(db, settings, owner).await?;
 
     let body = json!({
         "model": provider::chat_model(&p).await,
         "response_format": {"type": "json_object"},
-        "messages": [{"role": "user", "content": build_prompt(text)}],
+        "messages": [{"role": "user", "content": build_prompt(text, date)}],
     });
 
     let resp = p
@@ -189,7 +208,7 @@ async fn apply_extraction(
     for (section, items) in sections {
         let kind = KIND_MAP.iter().find(|(s, _)| *s == section).map(|(_, k)| *k).unwrap();
         for item in items {
-            let Some(name) = item.name.as_deref().map(str::trim).filter(|n| !n.is_empty()) else { continue };
+            let Some(name) = item.name.as_deref().map(str::trim).filter(|n| !n.is_empty() && !is_placeholder(n)) else { continue };
             let (entry_id, _) = ensure(db, owner, &mut entity_ids, name, kind, Some(item.aliases.clone())).await?;
             for fact in &item.facts {
                 if fact.is_empty() {
@@ -203,7 +222,7 @@ async fn apply_extraction(
 
     for rel in &data.relations {
         let (Some(from_name), Some(to_name)) =
-            (rel.from.as_deref().map(str::trim).filter(|n| !n.is_empty()), rel.to.as_deref().map(str::trim).filter(|n| !n.is_empty()))
+            (rel.from.as_deref().map(str::trim).filter(|n| !n.is_empty() && !is_placeholder(n)), rel.to.as_deref().map(str::trim).filter(|n| !n.is_empty() && !is_placeholder(n)))
         else {
             continue;
         };
@@ -234,7 +253,8 @@ pub async fn extract_entities(db: &OrgDb, settings: &Settings, owner: &RecordId,
     let title = record.title.trim();
     let text = if title.is_empty() { body.to_string() } else { format!("{title}\n{body}") };
 
-    let data = match call_llm(db, settings, owner, &text).await {
+    let date = record.occurred_at.as_deref().map(|d| d.get(..10).unwrap_or(d));
+    let data = match call_llm(db, settings, owner, &text, date).await {
         Ok(d) => d,
         Err(e) => {
             tracing::warn!("entity extraction LLM call failed for {}: {}", record.id, e.message);
@@ -283,8 +303,11 @@ mod tests {
 
     #[test]
     fn build_prompt_embeds_text_and_shape() {
-        let prompt = build_prompt("Alice works at Acme.");
+        let prompt = build_prompt("Alice works at Acme.", Some("2026-10-02"));
         assert!(prompt.contains("Alice works at Acme."));
+        assert!(prompt.contains("On 2026-10-02, ..."));
+        assert!(prompt.contains("Do not create an entity for the document, message, meeting"));
+        assert!(!build_prompt("x", None).contains("dated"));
         assert!(prompt.contains("\"people\""));
         assert!(prompt.contains("\"relations\""));
     }
@@ -313,6 +336,16 @@ mod tests {
         assert!(data.organisations.is_empty());
         assert!(data.locations.is_empty());
         assert!(data.relations.is_empty());
+    }
+
+    #[test]
+    fn speaker_labels_are_not_people() {
+        for p in ["Unknown", "Speaker 2", "SPEAKER_01", "speaker A", "unknown speaker"] {
+            assert!(is_placeholder(p), "{p}");
+        }
+        for n in ["Ada Lovelace", "Speakerman Industries", "Unknown Pleasures Ltd"] {
+            assert!(!is_placeholder(n), "{n}");
+        }
     }
 
     #[test]

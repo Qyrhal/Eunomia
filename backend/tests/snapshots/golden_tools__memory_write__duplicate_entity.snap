@@ -8,12 +8,13 @@ expression: stable
     "kind": "person",
     "name": "Alicia",
     "aliases": [],
-    "summary": ""
+    "summary": "",
+    "vault": "vault:<id2>"
   },
   "memory": {
     "id": "memory:<id13>",
-    "owner": "user:<id3>",
-    "vault": "vault:<id4>",
+    "owner": "user:<id4>",
+    "vault": "vault:<id2>",
     "subject": "person:<id12>",
     "text": "Alicia is the same person",
     "source": null,

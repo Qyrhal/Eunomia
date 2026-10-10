@@ -54,7 +54,7 @@ pub(super) fn register_all(registry: &mut HashMap<&'static str, ToolSpec>) {
                     "items": {"type": "string", "enum": ["world", "experience", "observation"]},
                     "description": "filter memory-sourced results by memory.type",
                 },
-                "vault_id": {"type": "string", "description": "recall from this vault instead of your personal one (a vault id or its name, e.g. \"Acme\")"},
+                "vault_id": {"type": "string", "description": "recall from just this vault (a vault id or its name, e.g. \"Acme\"); omit to search your personal vault and every org vault you belong to"},
             },
             "required": ["query"],
         }),
@@ -103,7 +103,7 @@ pub(super) fn register_all(registry: &mut HashMap<&'static str, ToolSpec>) {
             "type": "object",
             "properties": {
                 "query": {"type": "string"},
-                "vault_id": {"type": "string", "description": "reflect over this vault instead of your personal one (a vault id or its name, e.g. \"Acme\")"},
+                "vault_id": {"type": "string", "description": "reflect over just this vault (a vault id or its name, e.g. \"Acme\"); omit to use your personal vault and every org vault you belong to"},
                 "limit": {"type": "integer", "description": "how many recalled memories to consider"},
             },
             "required": ["query"],
@@ -166,6 +166,7 @@ pub(super) fn register_all(registry: &mut HashMap<&'static str, ToolSpec>) {
                 };
                 let result = entities_tools::memory_write(
                     &state.db,
+                    &state.settings,
                     owner,
                     &a.subject_name,
                     &a.subject_kind,

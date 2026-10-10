@@ -9,5 +9,6 @@ expression: stable
   "aliases": [
     "Al"
   ],
-  "summary": "Tea person"
+  "summary": "Tea person",
+  "vault": "vault:<id2>"
 }
