@@ -12,6 +12,8 @@ check() { local d="$1"; shift; if "$@" >/dev/null 2>&1; then PASS=$((PASS + 1));
 mkdir -p "$TMP/bin" "$TMP/backups" "$TMP/tmpd"; export TMPDIR="$TMP/tmpd"
 cat > "$TMP/bin/surreal" <<'SHIM'
 #!/bin/sh
+# pop FILE: the first line of FILE (removed), or fail when it is empty: per-call answers queued by a test
+pop() { [ -s "$1" ] || return 1; head -n1 "$1"; sed -i.bak 1d "$1" && rm -f "$1.bak"; }
 cmd="$1"; shift
 db=""; file=""
 while [ $# -gt 0 ]; do case "$1" in --db) db="$2"; shift ;; --ns|--endpoint|--user|--pass|--log) shift ;; --*) ;; *) file="$1" ;; esac; shift; done
@@ -21,14 +23,20 @@ case "$cmd" in
             [ "$SHIM_MODE" = truncate ] && exit 0; exit 1; fi
           echo "OPTION IMPORT; -- dump of $db -- padding padding padding padding padding padding padding padding;"
           echo "DEFINE TABLE t TYPE ANY SCHEMALESS PERMISSIONS NONE;"; echo "-- TABLE DATA: t"; echo "-- ------"; echo
-          # MOCK_STUB: schema only, as after a server that died mid-export; MOCK_EMPTY: a database with no rows
-          [ -n "${MOCK_STUB:-}${MOCK_EMPTY:-}" ] || echo "INSERT [ { id: t:1 } ];" ;;
+          # MOCK_STUB: schema only, as after a server that died mid-export; MOCK_EMPTY: a database with no rows.
+          # Otherwise 5 rows (or the next line of $SHIM_ROWS), the first with braces and brackets in its values
+          # and id, which must not count as rows.
+          [ -n "${MOCK_STUB:-}${MOCK_EMPTY:-}" ] && exit 0
+          n="$(pop "$SHIM_ROWS" || echo 5)"; [ "$n" -gt 0 ] || exit 0; rows="{ id: t:\`a}{\`, nested: { a: [ { b: 1 } ] }, s: 'it''s }, { id: t:9 }', q: \"[{\\\"}\" }"
+          i=2; while [ "$i" -le "$n" ]; do rows="$rows, { id: t:$i }"; i=$((i + 1)); done
+          echo "INSERT [ $rows ];" ;;
   isready) [ -z "${MOCK_DEAD:-}" ] ;;
   import) echo "import $db: $(cat "$file")" >> "$SHIM_LOG" ;;
   sql) in="$(cat)"; echo "sql: $in" >> "$SHIM_LOG"
        case "$in" in
          "INFO FOR DB;") echo '[{"tables":{"t":"DEFINE TABLE t TYPE ANY SCHEMALESS PERMISSIONS NONE"}}]' ;;
-         *"SELECT count() FROM"*) [ -n "${MOCK_EMPTY:-}" ] && echo '[[{"count":0}]]' || echo '[[{"count":5}]]' ;;
+         *"SELECT count() FROM"*) c="$(pop "$SHIM_COUNTS")" || { [ -n "${MOCK_EMPTY:-}" ] && c=0 || c=5; }
+            echo "[[{\"count\":$c}]]" ;;
          "INFO FOR NS;") [ -z "${MOCK_INFO_FAIL:-}" ] || { echo "connection refused" >&2; exit 1; }
             [ -z "${MOCK_INFO_GARBAGE:-}" ] || { echo '[{"error":"namespace does not exist"}]'; exit 0; }
             if [ -n "${MOCK_TENANCY:-}" ]; then
@@ -38,7 +46,7 @@ case "$cmd" in
 esac
 SHIM
 chmod +x "$TMP/bin/surreal"
-export PATH="$TMP/bin:$PATH" SHIM_LOG="$TMP/shim.log" SHIM_FAIL="$TMP/shim.fail" BACKUP_DIR="$TMP/backups" BACKUP_ENCRYPTION_KEY=testkey SURREAL_NS=eunomia SURREAL_DB=eunomia
+export PATH="$TMP/bin:$PATH" SHIM_LOG="$TMP/shim.log" SHIM_FAIL="$TMP/shim.fail" SHIM_ROWS="$TMP/shim.rows" SHIM_COUNTS="$TMP/shim.counts" BACKUP_DIR="$TMP/backups" BACKUP_ENCRYPTION_KEY=testkey SURREAL_NS=eunomia SURREAL_DB=eunomia
 bk() { sh "$SCRIPT" "$@"; }
 # decrypt a new-format file by restoring it through the script (the shim logs the import)
 dump_of() { : > "$SHIM_LOG"; sh "$SCRIPT" restore "$1" >/dev/null 2>&1; cat "$SHIM_LOG"; }
@@ -113,11 +121,11 @@ check "no plaintext temp dump is left behind" test -z "$(ls -A "$TMP/tmpd")"
 rm -rf "$TMP/backups"/*; echo control > "$SHIM_FAIL"; SHIM_MODE=die MOCK_TENANCY=1 bk now manual >/dev/null 2>&1
 check "a tenancy backup failing on one database leaves no directory" test -z "$(ls "$TMP/backups")"
 
-# 5a. a backup must prove it holds the data: the server counts rows first, the dump must contain them
+# 5a. a backup must prove it holds the data: the server counts rows around the export, the dump must contain them
 rm -rf "$TMP/backups"/*
 MOCK_STUB=1 bk now manual >"$TMP/stub.out" 2>&1; rc=$?
 check "a schema-only export while the server reports rows is refused" test "$rc" -ne 0 -a -z "$(ls "$TMP/backups" | grep -v '^\.backup-key$')"
-check "the refusal says which table lost its rows" grep -q 'missing the rows of: t(5 rows)' "$TMP/stub.out"
+check "the refusal says which table lost its rows" grep -q 'does not hold the rows the server counted: t(5 rows counted, 0 in the export)' "$TMP/stub.out"
 MOCK_TENANCY=1 MOCK_STUB=1 bk now manual >/dev/null 2>&1; rc=$?
 check "a tenancy backup with a stub database leaves no directory" test "$rc" -ne 0 -a -z "$(ls "$TMP/backups" | grep -v '^\.backup-key$')"
 MOCK_DEAD=1 bk now manual >/dev/null 2>&1; rc=$?
@@ -126,7 +134,28 @@ MOCK_EMPTY=1 MOCK_STUB=1 bk now manual >/dev/null 2>&1; rc=$?
 check "a database with no rows is a valid backup" test "$rc" -eq 0 -a -n "$(ls "$TMP"/backups/manual-*.surql.enc 2>/dev/null)"
 rm -rf "$TMP/backups"/*; sleep 1
 bk now manual >/dev/null 2>&1; rc=$?
-check "a normal export with rows is accepted" test "$rc" -eq 0 -a -n "$(ls "$TMP"/backups/manual-*.surql.enc 2>/dev/null)"
+check "a normal export with rows is accepted (braces inside values and ids are not rows)" test "$rc" -eq 0 -a -n "$(ls "$TMP"/backups/manual-*.surql.enc 2>/dev/null)"
+
+# 5c. presence is not enough: the dump must hold as many rows as the server counted, per table
+rm -rf "$TMP/backups"/*
+echo 4 > "$SHIM_ROWS"; bk now manual >"$TMP/short.out" 2>&1; rc=$?
+check "an export holding fewer rows than the server counted is refused" test "$rc" -ne 0 -a -z "$(ls "$TMP/backups" | grep -v '^\.backup-key$')"
+check "the refusal gives both numbers" grep -q 't(5 rows counted, 4 in the export)' "$TMP/short.out"
+echo 6 > "$SHIM_ROWS"; bk now manual >/dev/null 2>&1; rc=$?
+check "an export holding more rows than the server counted is refused" test "$rc" -ne 0 -a -z "$(ls "$TMP/backups" | grep -v '^\.backup-key$')"
+printf '4\n5\n' > "$SHIM_ROWS"; bk now manual >"$TMP/stable.out" 2>&1; rc=$?
+check "with the counts unchanged around the export, a short dump is not retried" sh -c "test $rc -ne 0 && ! grep -q 'exporting it again' '$TMP/stable.out'"
+: > "$SHIM_ROWS"
+# rows written while the export runs: the counts are taken before and after it
+printf '5\n7\n' > "$SHIM_COUNTS"; echo 6 > "$SHIM_ROWS"; bk now manual >/dev/null 2>&1; rc=$?
+check "rows written during the export: a dump between the two counts is accepted" test "$rc" -eq 0 -a -n "$(ls "$TMP"/backups/manual-*.surql.enc 2>/dev/null)"
+rm -rf "$TMP/backups"/*; sleep 1
+printf '5\n7\n7\n7\n' > "$SHIM_COUNTS"; printf '4\n7\n' > "$SHIM_ROWS"; bk now manual >"$TMP/retry.out" 2>&1; rc=$?
+check "a dump outside counts that moved is exported again, and kept once it matches" sh -c "test $rc -eq 0 && grep -q 'exporting it again (attempt 2 of 3)' '$TMP/retry.out' && ls '$TMP'/backups/manual-*.surql.enc"
+rm -rf "$TMP/backups"/*
+printf '1\n2\n3\n4\n5\n6\n' > "$SHIM_COUNTS"; printf '0\n0\n0\n' > "$SHIM_ROWS"; bk now manual >"$TMP/moving.out" 2>&1; rc=$?
+check "a database that keeps changing gives up after 3 exports, writing nothing" sh -c "test $rc -ne 0 && grep -q 'attempt 3 of 3' '$TMP/moving.out' && ! grep -q 'attempt 4' '$TMP/moving.out' && test -z \"\$(ls '$TMP/backups' | grep -v '^\.backup-key$')\""
+: > "$SHIM_COUNTS"; : > "$SHIM_ROWS"
 
 # 5b. a failing INFO FOR NS is an error, never a quiet fallback to the stale single database
 rm -rf "$TMP/backups"/*
