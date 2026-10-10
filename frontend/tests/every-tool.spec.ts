@@ -34,7 +34,7 @@ test("every MCP tool works end to end", async ({ request, baseURL }) => {
   };
 
   // docs
-  expect((await ok("docs")).docs.length).toBeGreaterThanOrEqual(6); // quickstart … connectors
+  expect((await ok("docs")).docs.length).toBeGreaterThanOrEqual(6); // quickstart ... connectors
   expect((await ok("docs", { topic: "concepts" })).markdown).toContain("# Concepts");
   expect((await call("docs", { topic: "nope" })).isError).toBe(true);
 

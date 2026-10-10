@@ -11,14 +11,17 @@
 //! otherwise a local hashed bag-of-words vector -- no key, no network, still
 //! puts texts that share words near each other.
 
+use surrealdb::types::SurrealValue;
 use std::collections::HashSet;
 
 use serde::{Deserialize, Serialize};
-use surrealdb::RecordId;
+use surrealdb::types::RecordId;
+use crate::rid::RecordIdExt;
 
 use crate::cache::search as cs;
 use crate::config::Settings;
-use crate::db::Db;
+use crate::pool::OrgDb;
+use crate::store;
 use crate::embeddings::service as embeddings;
 use crate::error::AppResult;
 use crate::vaults::service as vaults_service;
@@ -27,7 +30,7 @@ use crate::vaults::service as vaults_service;
 const MAX_PER_LAYER: usize = 1500;
 const LEXICAL_DIM: usize = 512;
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct CloudPoint {
     pub id: String,
     pub vault: String,
@@ -39,7 +42,7 @@ pub struct CloudPoint {
     pub z: f32,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct Cloud {
     /// "semantic" (model embeddings) or "lexical" (hashed words, no model)
     pub space: &'static str,
@@ -141,17 +144,19 @@ fn label(text: &str) -> String {
     }
 }
 
-async fn layer_items(db: &Db, owner: &RecordId, vault: &RecordId, personal: bool) -> AppResult<Vec<Item>> {
-    #[derive(Deserialize)]
+async fn layer_items(db: &OrgDb, owner: &RecordId, vault: &RecordId, personal: bool) -> AppResult<Vec<Item>> {
+    #[derive(Deserialize, SurrealValue)]
     struct Mem {
         id: RecordId,
         #[serde(default)]
+        #[surreal(default)]
         text: String,
         #[serde(rename = "type", default)]
+        #[surreal(rename = "type", default)]
         mem_type: String,
     }
-    let mut res = db
-        .query("SELECT id, text, type FROM memory WHERE vault = $vault LIMIT $limit")
+    let mut res = store::cache::MEMORY_FOR_EMBED
+        .on(db)
         .bind(("vault", vault.clone()))
         .bind(("limit", MAX_PER_LAYER as i64))
         .await?;
@@ -163,18 +168,21 @@ async fn layer_items(db: &Db, owner: &RecordId, vault: &RecordId, personal: bool
         .collect();
 
     if personal && items.len() < MAX_PER_LAYER {
-        #[derive(Deserialize)]
+        #[derive(Deserialize, SurrealValue)]
         struct Rec {
             id: RecordId,
             #[serde(default)]
+            #[surreal(default)]
             title: String,
             #[serde(default)]
+            #[surreal(default)]
             body_text: String,
             #[serde(default)]
+            #[surreal(default)]
             embedding: Option<Vec<f32>>,
         }
-        let mut res = db
-            .query("SELECT id, title, body_text, embedding FROM cache_record WHERE owner = $owner AND deleted = false LIMIT $limit")
+        let mut res = store::cache::RECORDS_FOR_EMBED
+            .on(db)
             .bind(("owner", owner.clone()))
             .bind(("limit", (MAX_PER_LAYER - items.len()) as i64))
             .await?;
@@ -192,17 +200,19 @@ async fn layer_items(db: &Db, owner: &RecordId, vault: &RecordId, personal: bool
 
 /// The cloud for `vault_ids` (default: the caller's personal vault). Every
 /// vault must be one the caller belongs to.
-pub async fn cloud(db: &Db, settings: &Settings, owner: &RecordId, vault_ids: &[RecordId]) -> AppResult<Cloud> {
-    let personal = vaults_service::default_vault_id(db, owner).await?;
-    let vaults: Vec<RecordId> = if vault_ids.is_empty() { vec![personal.clone()] } else { vault_ids.to_vec() };
+pub async fn cloud(db: &OrgDb, settings: &Settings, owner: &RecordId, vault_ids: &[RecordId]) -> AppResult<Cloud> {
+    let personal = vaults_service::personal_vault_id(db, owner).await?;
+    let vaults: Vec<RecordId> =
+        if vault_ids.is_empty() { vec![vaults_service::default_vault_id(db, owner).await?] } else { vault_ids.to_vec() };
 
     let mut items = Vec::new();
+    #[allow(clippy::mutable_key_type)] // RecordId hashes by value; the interior mutability is never touched
     let mut seen = HashSet::new();
     for v in &vaults {
         if !seen.insert(v.clone()) {
             continue;
         }
-        vaults_service::require_membership(db, owner, v).await?;
+        crate::authz::authorize(db, owner, crate::authz::Action::ReadMemories, v).await?;
         items.extend(layer_items(db, owner, v, *v == personal).await?);
     }
 

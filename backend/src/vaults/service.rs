@@ -8,35 +8,38 @@
 //! so admin rights only ever come from creating a vault or being promoted by
 //! an existing owner -- no separate "who can invite" check needed.
 //!
-//! Ported from `vaults/service.py`. Callers resolve a path/user-supplied
-//! vault id into a `RecordId` before calling in (see `routers/vaults.rs`),
-//! unlike the Python version's `_as_rid` which accepted either -- everything
-//! here already deals in `RecordId`.
+//! Callers resolve a path/user-supplied vault id into a `RecordId` before
+//! calling in (see `routers/vaults.rs`); everything here deals in `RecordId`.
 
+use surrealdb::types::SurrealValue;
 use std::collections::{HashMap, HashSet};
 
-use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
-use surrealdb::{Datetime, RecordId};
+use surrealdb::types::{Datetime, RecordId};
+use crate::rid::RecordIdExt;
 
-use crate::db::Db;
-use crate::error::{AppError, AppResult};
+use crate::authz::{self, Action};
+use crate::pool::{ControlDb, OrgDb};
+use crate::error::{AppError, AppResult, ErrorCode};
+use crate::store;
+use crate::tx::{with_retry, with_retry_dup};
 
-/// Entity tables a vault's data can live in -- mirrors `entities/service.py`'s
-/// `KINDS` tuple and `db.rs`'s `memory.subject` record union.
+/// Entity tables a vault's data can live in -- the same set as `entities::service::KINDS` and `db.rs`'s `memory.subject` record union.
 const ENTITY_KINDS: [&str; 6] = ["person", "organisation", "location", "repository", "file", "symbol"];
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, SurrealValue)]
 struct VaultRow {
     id: RecordId,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, SurrealValue)]
 struct VaultFullRow {
     id: RecordId,
     #[serde(default)]
+    #[surreal(default)]
     name: String,
     #[serde(default = "default_kind")]
+    #[surreal(default = "default_kind")]
     kind: String,
     created_at: Option<Datetime>,
 }
@@ -51,69 +54,75 @@ impl From<VaultFullRow> for VaultOut {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct VaultOut {
     pub id: String,
     pub name: String,
     pub kind: String,
+    #[schema(value_type = Option<String>)]
     pub created_at: Option<Datetime>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct VaultWithRole {
     pub id: String,
     pub name: String,
     pub kind: String,
+    #[schema(value_type = Option<String>)]
     pub created_at: Option<Datetime>,
     pub role: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct InviteOut {
     pub vault_id: String,
     pub user_email: String,
     pub role: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct MemberOut {
     pub email: String,
     pub role: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct InvitationOut {
     pub vault_id: String,
     pub vault_name: String,
     pub vault_kind: String,
     pub role: String,
+    #[schema(value_type = Option<String>)]
     pub created_at: Option<Datetime>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct CloneOut {
     pub id: String,
     pub name: String,
     pub kind: String,
+    #[schema(value_type = Option<String>)]
     pub created_at: Option<Datetime>,
     pub entities_copied: usize,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, SurrealValue)]
 struct MembershipRow {
     id: RecordId,
     #[serde(default)]
+    #[surreal(default)]
     role: String,
     #[serde(default)]
+    #[surreal(default)]
     status: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, SurrealValue)]
 struct EmailLookupRow {
     id: RecordId,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, SurrealValue)]
 struct CountRow {
     count: i64,
 }
@@ -121,47 +130,84 @@ struct CountRow {
 /// Called once, at registration. Every user has exactly one `kind="personal"`
 /// vault -- it's never shared by anyone else joining it as an owner-less
 /// member, only ever by the user inviting others into it.
-pub async fn create_personal_vault(db: &Db, user_id: &RecordId) -> AppResult<RecordId> {
-    let mut res = db
-        .query("CREATE vault SET name = $name, kind = \"personal\" RETURN AFTER")
-        .bind(("name", "Personal"))
-        .await?;
-    let rows: Vec<VaultRow> = res.take(0)?;
-    let vault = rows.into_iter().next().ok_or_else(|| {
-        crate::error::AppError::internal("vault insert returned no row")
-    })?;
-
-    db.query("CREATE vault_member SET vault = $vault, user = $user, role = \"owner\"")
-        .bind(("vault", vault.id.clone()))
+pub async fn create_personal_vault(db: &OrgDb, user_id: &RecordId) -> AppResult<RecordId> {
+    // Deterministic id: a second personal vault for the same user collides on
+    // the key, so "one personal vault per user" holds even under a race.
+    let vault_id = RecordId::from_table_key("vault", crate::tx::stable_key('p', &user_id.to_string()));
+    with_retry_dup(|| async {
+        store::vaults::CREATE_PERSONAL.on(db)
+        .bind(("vault", vault_id.clone()))
         .bind(("user", user_id.clone()))
-        .await?;
+        .await?
+        .check()
+    })
+    .await?;
+    Ok(vault_id)
+}
 
-    Ok(vault.id)
+const MAX_VAULT_NAME: usize = 80;
+
+/// A vault name must be non-empty once trimmed, at most 80 characters, and unique
+/// (case-insensitively) among the vaults the caller belongs to: that is the set a
+/// by-name lookup or a dropdown searches, so per membership set (not per owner)
+/// is what keeps them unambiguous. `except` is the vault being renamed.
+/// ponytail: check-then-write, two simultaneous creates of one name can both pass.
+async fn check_name(db: &OrgDb, user_id: &RecordId, name: &str, except: Option<&RecordId>) -> AppResult<String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(AppError::bad_request("vault name can't be empty"));
+    }
+    if name.chars().count() > MAX_VAULT_NAME {
+        return Err(AppError::bad_request(format!("vault name can't be longer than {MAX_VAULT_NAME} characters")));
+    }
+    if taken(db, user_id, name, except).await? {
+        return Err(AppError::coded(ErrorCode::VaultNameTaken, format!("you already have a vault named {name:?}: pick another name")));
+    }
+    Ok(name.to_string())
+}
+
+async fn taken(db: &OrgDb, user_id: &RecordId, name: &str, except: Option<&RecordId>) -> AppResult<bool> {
+    let want = name.to_lowercase();
+    let mine = list_my_vaults(db, user_id).await?;
+    Ok(mine.iter().any(|v| v.name.to_lowercase() == want && except.is_none_or(|e| e.to_string() != v.id)))
+}
+
+/// "base", or "base 2", "base 3", ... for a clone or merge named by default.
+async fn free_name(db: &OrgDb, user_id: &RecordId, base: String) -> AppResult<String> {
+    let mut name = base.clone();
+    for n in 2.. {
+        if !taken(db, user_id, &name, None).await? {
+            break;
+        }
+        name = format!("{base} {n}");
+    }
+    Ok(name)
 }
 
 /// Create a new vault (org, or an extra personal-style one -- a user can have
 /// several, per the product ask); creator becomes its owner.
-pub async fn create_vault(db: &Db, user_id: &RecordId, name: &str, kind: &str) -> AppResult<VaultOut> {
-    let mut res = db
-        .query("CREATE vault SET name = $name, kind = $kind RETURN AFTER")
-        .bind(("name", name.to_string()))
-        .bind(("kind", kind.to_string()))
-        .await?;
-    let rows: Vec<VaultFullRow> = res.take(0)?;
-    let vault = rows.into_iter().next().ok_or_else(|| AppError::internal("vault insert returned no row"))?;
-
-    db.query("CREATE vault_member SET vault = $vault, user = $user, role = \"owner\"")
-        .bind(("vault", vault.id.clone()))
-        .bind(("user", user_id.clone()))
-        .await?;
-
+pub async fn create_vault(db: &OrgDb, user_id: &RecordId, name: &str, kind: &str) -> AppResult<VaultOut> {
+    authz::require_unrestricted()?;
+    let name = &check_name(db, user_id, name, None).await?;
+    let vault = with_retry(|| async {
+        let mut res = store::vaults::CREATE_VAULT
+            .on(db)
+            .bind(("name", name.to_string()))
+            .bind(("kind", kind.to_string()))
+            .bind(("user", user_id.clone()))
+            .await?
+            .check()?;
+        let rows: Vec<VaultFullRow> = res.take(store::vaults::CREATE_VAULT.slot)?;
+        Ok(rows.into_iter().next())
+    })
+    .await?
+    .ok_or_else(|| AppError::internal("vault insert returned no row"))?;
     Ok(vault.into())
 }
 
 /// Active membership only -- a pending invite isn't membership yet.
-async fn membership(db: &Db, vault_id: &RecordId, user_id: &RecordId) -> AppResult<Option<MembershipRow>> {
-    let mut res = db
-        .query("SELECT * FROM vault_member WHERE vault = $vault AND user = $user AND status = \"active\" LIMIT 1")
+async fn membership(db: &OrgDb, vault_id: &RecordId, user_id: &RecordId) -> AppResult<Option<MembershipRow>> {
+    let mut res = store::vaults::MEMBERSHIP_ACTIVE.on(db)
         .bind(("vault", vault_id.clone()))
         .bind(("user", user_id.clone()))
         .await?;
@@ -171,9 +217,8 @@ async fn membership(db: &Db, vault_id: &RecordId, user_id: &RecordId) -> AppResu
 
 /// Any `vault_member` row regardless of status -- used only where a pending
 /// invite also needs to count (duplicate-invite checks, accept/decline).
-async fn membership_any_status(db: &Db, vault_id: &RecordId, user_id: &RecordId) -> AppResult<Option<MembershipRow>> {
-    let mut res = db
-        .query("SELECT * FROM vault_member WHERE vault = $vault AND user = $user LIMIT 1")
+async fn membership_any_status(db: &OrgDb, vault_id: &RecordId, user_id: &RecordId) -> AppResult<Option<MembershipRow>> {
+    let mut res = store::vaults::MEMBERSHIP_ANY.on(db)
         .bind(("vault", vault_id.clone()))
         .bind(("user", user_id.clone()))
         .await?;
@@ -183,90 +228,78 @@ async fn membership_any_status(db: &Db, vault_id: &RecordId, user_id: &RecordId)
 
 /// Every vault `user_id` belongs to (any role) -- the read/write scope passed
 /// to entity/recall lookups.
-pub async fn accessible_vault_ids(db: &Db, user_id: &RecordId) -> AppResult<Vec<RecordId>> {
-    #[derive(Deserialize)]
+pub async fn accessible_vault_ids(db: &OrgDb, user_id: &RecordId) -> AppResult<Vec<RecordId>> {
+    #[derive(Deserialize, SurrealValue)]
     struct Row {
         vault: RecordId,
     }
-    let mut res = db
-        .query("SELECT vault FROM vault_member WHERE user = $user AND status = \"active\"")
+    let mut res = store::vaults::ACCESSIBLE_IDS.on(db)
         .bind(("user", user_id.clone()))
         .await?;
     let rows: Vec<Row> = res.take(0)?;
-    Ok(rows.into_iter().map(|r| r.vault).collect())
+    let only = authz::restricted_vault()?;
+    Ok(rows.into_iter().map(|r| r.vault).filter(|v| only.as_ref().is_none_or(|o| o == v)).collect())
 }
 
 /// `user_id`'s personal vault -- the implicit scope for any tool call that
 /// doesn't pass `vault_id`, so existing single-user callers need no changes.
-/// Kind alone is ambiguous (joining someone else's personal vault, or making
-/// another `personal` one, adds more), so it's the oldest membership: the
-/// vault registration created.
-pub async fn default_vault_id(db: &Db, user_id: &RecordId) -> AppResult<RecordId> {
-    #[derive(Deserialize)]
+pub async fn default_vault_id(db: &OrgDb, user_id: &RecordId) -> AppResult<RecordId> {
+    // a vault-restricted token's default scope is its vault, not the personal one
+    if let Some(only) = authz::restricted_vault()? {
+        authz::ensure_member(db, user_id, &only).await?;
+        return Ok(only);
+    }
+    personal_vault_id(db, user_id).await
+}
+
+/// The user's own personal vault, whatever the credential is restricted to. The
+/// only vault that also draws on the user's synced source records.
+pub async fn personal_vault_id(db: &OrgDb, user_id: &RecordId) -> AppResult<RecordId> {
+    #[derive(Deserialize, SurrealValue)]
     struct Row {
         vault: RecordId,
     }
-    let mut res = db
-        .query(
-            "SELECT vault, created_at FROM vault_member WHERE user = $user AND status = \"active\" \
-             AND vault.kind = \"personal\" ORDER BY created_at ASC LIMIT 1",
-        )
+    let mut res = store::vaults::DEFAULT_ID.on(db)
         .bind(("user", user_id.clone()))
         .await?;
     let rows: Vec<Row> = res.take(0)?;
     rows.into_iter().next().map(|r| r.vault).ok_or_else(|| {
-        AppError::internal(format!("user {user_id} has no personal vault -- registration should have created one"))
+        AppError::internal(format!("user {} has no personal vault -- registration should have created one", user_id.to_string()))
     })
 }
 
-/// What reads search when no `vault_id` is given: `user_id`'s personal vault
-/// (first) plus every org vault they're an active member of -- not other
-/// people's personal vaults they've joined, which stay opt-in.
-pub async fn default_read_vault_ids(db: &Db, user_id: &RecordId) -> AppResult<Vec<RecordId>> {
-    #[derive(Deserialize)]
+/// What reads search when no `vault_id` is given: `user_id`'s personal vault (first) plus every org
+/// vault they're an active member of -- not other people's personal vaults they've joined, which stay
+/// opt-in. A vault-restricted credential reads only its vault.
+pub async fn default_read_vault_ids(db: &OrgDb, user_id: &RecordId) -> AppResult<Vec<RecordId>> {
+    if authz::restricted_vault()?.is_some() {
+        return Ok(vec![default_vault_id(db, user_id).await?]);
+    }
+    #[derive(Deserialize, SurrealValue)]
     struct Row {
         vault: RecordId,
     }
-    let mut res = db
-        .query("SELECT vault, created_at FROM vault_member WHERE user = $user AND status = \"active\" AND vault.kind = \"org\" ORDER BY created_at")
-        .bind(("user", user_id.clone()))
-        .await?;
+    let mut res = store::vaults::ORG_IDS.on(db).bind(("user", user_id.clone())).await?;
     let rows: Vec<Row> = res.take(0)?;
-    let mut out = vec![default_vault_id(db, user_id).await?];
+    let mut out = vec![personal_vault_id(db, user_id).await?];
     out.extend(rows.into_iter().map(|r| r.vault));
     Ok(out)
 }
 
-/// Raises (403) if `user_id` isn't a member of `vault_id`. Used by every
-/// entity/memory read or write that takes an explicit `vault_id`.
-pub async fn require_membership(db: &Db, user_id: &RecordId, vault_id: &RecordId) -> AppResult<()> {
-    if membership(db, vault_id, user_id).await?.is_none() {
-        return Err(AppError::new(StatusCode::FORBIDDEN, format!("not a member of vault {vault_id}")));
-    }
-    Ok(())
-}
-
-pub async fn require_owner(db: &Db, user_id: &RecordId, vault_id: &RecordId) -> AppResult<()> {
-    let m = membership(db, vault_id, user_id).await?;
-    match m {
-        Some(m) if m.role == "owner" => Ok(()),
-        _ => Err(AppError::new(StatusCode::FORBIDDEN, format!("must be an owner of vault {vault_id}"))),
-    }
-}
-
-pub async fn list_my_vaults(db: &Db, user_id: &RecordId) -> AppResult<Vec<VaultWithRole>> {
-    #[derive(Deserialize)]
+pub async fn list_my_vaults(db: &OrgDb, user_id: &RecordId) -> AppResult<Vec<VaultWithRole>> {
+    #[derive(Deserialize, SurrealValue)]
     struct Row {
         vault: VaultFullRow,
         role: String,
     }
-    let mut res = db
-        .query("SELECT vault.* AS vault, role FROM vault_member WHERE user = $user AND status = \"active\"")
+    let mut res = store::vaults::LIST_MINE.on(db)
         .bind(("user", user_id.clone()))
         .await?;
     let rows: Vec<Row> = res.take(0)?;
+    let only = authz::restricted_vault()?;
     Ok(rows
         .into_iter()
+        .filter(|r| only.as_ref().is_none_or(|o| o == &r.vault.id))
         .map(|r| {
             let v: VaultOut = r.vault.into();
             VaultWithRole { id: v.id, name: v.name, kind: v.kind, created_at: v.created_at, role: r.role }
@@ -274,10 +307,10 @@ pub async fn list_my_vaults(db: &Db, user_id: &RecordId) -> AppResult<Vec<VaultW
         .collect())
 }
 
-pub async fn rename_vault(db: &Db, user_id: &RecordId, vault_id: &RecordId, name: &str) -> AppResult<VaultOut> {
-    require_owner(db, user_id, vault_id).await?;
-    let mut res = db
-        .query("UPDATE $id SET name = $name RETURN AFTER")
+pub async fn rename_vault(db: &OrgDb, user_id: &RecordId, vault_id: &RecordId, name: &str) -> AppResult<VaultOut> {
+    authz::authorize(db, user_id, Action::Rename, vault_id).await?;
+    let name = &check_name(db, user_id, name, Some(vault_id)).await?;
+    let mut res = store::vaults::RENAME.on(db)
         .bind(("id", vault_id.clone()))
         .bind(("name", name.to_string()))
         .await?;
@@ -290,79 +323,112 @@ pub async fn rename_vault(db: &Db, user_id: &RecordId, vault_id: &RecordId, name
 /// rows already in the vault in place (orphaned-but-inaccessible, same
 /// accepted tradeoff as the rest of this codebase's delete paths -- add a
 /// cascade if dangling vault data ever becomes a real problem).
-pub async fn delete_vault(db: &Db, user_id: &RecordId, vault_id: &RecordId) -> AppResult<()> {
-    require_owner(db, user_id, vault_id).await?;
-    db.query("DELETE vault_member WHERE vault = $vault").bind(("vault", vault_id.clone())).await?;
-    db.query("DELETE $id").bind(("id", vault_id.clone())).await?;
+pub async fn delete_vault(db: &OrgDb, user_id: &RecordId, vault_id: &RecordId) -> AppResult<()> {
+    authz::authorize(db, user_id, Action::Delete, vault_id).await?;
+    with_retry(|| async {
+        store::vaults::DELETE_VAULT.on(db)
+            .bind(("vault", vault_id.clone()))
+            .await?
+            .check()
+    })
+    .await?;
     Ok(())
 }
 
 /// Add `email` to `vault_id`. Caller must already be an owner (so admin
 /// rights only ever trace back to "created it" or "an existing owner
 /// promoted me" -- never self-granted).
+/// The user with `email`, if they belong to this org: an invitee outside it is "no such user", so an
+/// email cannot be probed across orgs.
+async fn user_in_org(db: &OrgDb, control: &ControlDb, email: &str) -> AppResult<Option<RecordId>> {
+    let mut res = store::control::EMAIL_IN_ORG
+        .on(control)
+        .bind(("email", crate::models_user::normalize_email(email)))
+        .bind(("org", db.org().record()))
+        .await?;
+    let rows: Vec<EmailLookupRow> = res.take(0)?;
+    Ok(rows.into_iter().next().map(|r| r.id))
+}
+
 pub async fn invite_member(
-    db: &Db,
+    db: &OrgDb,
+    control: &ControlDb,
     user_id: &RecordId,
     vault_id: &RecordId,
     email: &str,
     role: &str,
 ) -> AppResult<InviteOut> {
-    require_owner(db, user_id, vault_id).await?;
+    authz::authorize(db, user_id, Action::Invite, vault_id).await?;
 
-    let mut res = db
-        .query("SELECT id FROM user WHERE string::lowercase(email) = $email LIMIT 1")
-        .bind(("email", crate::models_user::normalize_email(email)))
-        .await?;
-    let rows: Vec<EmailLookupRow> = res.take(0)?;
-    let invitee = rows.into_iter().next().ok_or_else(|| AppError::bad_request(format!("no user with email '{email}'")))?.id;
+    let invitee = user_in_org(db, control, email)
+        .await?
+        .ok_or_else(|| AppError::bad_request(format!("no user with email '{email}'")))?;
 
     if membership_any_status(db, vault_id, &invitee).await?.is_some() {
         return Err(AppError::bad_request(format!("{email} is already a member or has a pending invite")));
     }
 
-    let mut res = db
-        .query("CREATE vault_member SET vault = $vault, user = $user, role = $role, status = \"pending\" RETURN AFTER")
+    let mut res = store::vaults::INVITE.on(db)
         .bind(("vault", vault_id.clone()))
         .bind(("user", invitee))
         .bind(("role", role.to_string()))
-        .await?;
+        .await?
+        .check()
+        .map_err(|e| {
+            // lost the race against a concurrent invite of the same user
+            if e.to_string().contains("already contains") {
+                AppError::bad_request(format!("{email} is already a member or has a pending invite"))
+            } else {
+                e.into()
+            }
+        })?;
     let rows: Vec<MembershipRow> = res.take(0)?;
     let member = rows.into_iter().next().ok_or_else(|| AppError::internal("vault_member insert returned no row"))?;
 
     Ok(InviteOut { vault_id: vault_id.to_string(), user_email: email.to_string(), role: member.role })
 }
 
-pub async fn list_members(db: &Db, user_id: &RecordId, vault_id: &RecordId) -> AppResult<Vec<MemberOut>> {
-    require_membership(db, user_id, vault_id).await?;
-    #[derive(Deserialize)]
+pub async fn list_members(db: &OrgDb, control: &ControlDb, user_id: &RecordId, vault_id: &RecordId) -> AppResult<Vec<MemberOut>> {
+    authz::authorize(db, user_id, Action::ListMembers, vault_id).await?;
+    #[derive(Deserialize, SurrealValue)]
     struct Row {
-        email: String,
+        user: RecordId,
         role: String,
     }
-    let mut res = db
-        .query("SELECT user.email AS email, role FROM vault_member WHERE vault = $vault AND status = \"active\"")
+    #[derive(Deserialize, SurrealValue)]
+    struct Email {
+        id: RecordId,
+        email: String,
+    }
+    let mut res = store::vaults::LIST_MEMBERS.on(db)
         .bind(("vault", vault_id.clone()))
         .await?;
     let rows: Vec<Row> = res.take(0)?;
-    Ok(rows.into_iter().map(|r| MemberOut { email: r.email, role: r.role }).collect())
+    let mut res = store::entities::EMAILS_FOR.on(control).bind(("ids", rows.iter().map(|r| r.user.clone()).collect::<Vec<_>>())).await?;
+    let emails: Vec<Email> = res.take(0)?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|r| emails.iter().find(|e| e.id == r.user).map(|e| MemberOut { email: e.email.clone(), role: r.role }))
+        .collect())
 }
 
 /// Pending invitations for `user_id` across every vault -- what the vaults
 /// page's invitations panel renders to accept/decline.
-pub async fn list_my_invitations(db: &Db, user_id: &RecordId) -> AppResult<Vec<InvitationOut>> {
-    #[derive(Deserialize)]
+pub async fn list_my_invitations(db: &OrgDb, user_id: &RecordId) -> AppResult<Vec<InvitationOut>> {
+    #[derive(Deserialize, SurrealValue)]
     struct Row {
         vault: VaultFullRow,
         role: String,
         created_at: Option<Datetime>,
     }
-    let mut res = db
-        .query("SELECT vault.* AS vault, role, created_at FROM vault_member WHERE user = $user AND status = \"pending\"")
+    let mut res = store::vaults::LIST_INVITATIONS.on(db)
         .bind(("user", user_id.clone()))
         .await?;
     let rows: Vec<Row> = res.take(0)?;
+    let only = authz::restricted_vault()?;
     Ok(rows
         .into_iter()
+        .filter(|r| only.as_ref().is_none_or(|o| o == &r.vault.id))
         .map(|r| InvitationOut {
             vault_id: r.vault.id.to_string(),
             vault_name: r.vault.name,
@@ -375,86 +441,94 @@ pub async fn list_my_invitations(db: &Db, user_id: &RecordId) -> AppResult<Vec<I
 
 /// Accept a pending invitation into `vault_id`. Only the invitee can accept
 /// their own invite.
-pub async fn accept_invitation(db: &Db, user_id: &RecordId, vault_id: &RecordId) -> AppResult<VaultWithRole> {
+pub async fn accept_invitation(db: &OrgDb, user_id: &RecordId, vault_id: &RecordId) -> AppResult<VaultWithRole> {
+    authz::check_vault(vault_id)?;
     let m = membership_any_status(db, vault_id, user_id)
         .await?
         .filter(|m| m.status == "pending")
         .ok_or_else(|| AppError::bad_request("no pending invitation for this vault"))?;
 
-    db.query("UPDATE $id SET status = \"active\"").bind(("id", m.id)).await?;
-
-    let mut res = db
-        .query("SELECT * FROM $id")
-        .bind(("id", vault_id.clone()))
-        .await?;
-    let rows: Vec<VaultFullRow> = res.take(0)?;
-    let vault = rows.into_iter().next().ok_or_else(|| AppError::internal("vault lookup returned no row"))?;
+    // Guarded flip plus the vault read in one transaction: a double accept, or
+    // an accept racing a decline/withdraw, activates at most once.
+    let mut res = with_retry(|| async {
+        store::vaults::ACCEPT_INVITATION.on(db)
+        .bind(("id", m.id.clone()))
+        .bind(("vault", vault_id.clone()))
+        .await?
+        .check()
+    })
+    .await?;
+    let rows: Vec<VaultFullRow> = res.take(store::vaults::ACCEPT_INVITATION.slot)?;
+    let vault = rows.into_iter().next().ok_or_else(|| AppError::bad_request("no pending invitation for this vault"))?;
     let v: VaultOut = vault.into();
     Ok(VaultWithRole { id: v.id, name: v.name, kind: v.kind, created_at: v.created_at, role: m.role })
 }
 
 /// Decline (delete) a pending invitation into `vault_id`.
-pub async fn decline_invitation(db: &Db, user_id: &RecordId, vault_id: &RecordId) -> AppResult<()> {
+pub async fn decline_invitation(db: &OrgDb, user_id: &RecordId, vault_id: &RecordId) -> AppResult<()> {
+    authz::check_vault(vault_id)?;
     let m = membership_any_status(db, vault_id, user_id)
         .await?
         .filter(|m| m.status == "pending")
         .ok_or_else(|| AppError::bad_request("no pending invitation for this vault"))?;
 
-    db.query("DELETE $id").bind(("id", m.id)).await?;
+    store::vaults::DELETE_RECORD.on(db).bind(("id", m.id)).await?;
     Ok(())
 }
 
 /// Owner-only. Refuses to remove the last owner, so a vault can't be left
 /// admin-less.
-pub async fn remove_member(db: &Db, user_id: &RecordId, vault_id: &RecordId, email: &str) -> AppResult<()> {
-    require_owner(db, user_id, vault_id).await?;
+pub async fn remove_member(db: &OrgDb, control: &ControlDb, user_id: &RecordId, vault_id: &RecordId, email: &str) -> AppResult<()> {
+    authz::authorize(db, user_id, Action::ManageMembers, vault_id).await?;
 
-    let mut res = db
-        .query("SELECT id FROM user WHERE string::lowercase(email) = $email LIMIT 1")
-        .bind(("email", crate::models_user::normalize_email(email)))
-        .await?;
-    let rows: Vec<EmailLookupRow> = res.take(0)?;
-    let target_id = rows.into_iter().next().ok_or_else(|| AppError::bad_request(format!("no user with email '{email}'")))?.id;
+    let target_id = user_in_org(db, control, email).await?.ok_or_else(|| AppError::bad_request(format!("no user with email '{email}'")))?;
 
     // any status: this also withdraws a pending invitation
     let target_membership = membership_any_status(db, vault_id, &target_id)
         .await?
         .ok_or_else(|| AppError::bad_request(format!("{email} is not a member or invitee")))?;
 
-    if target_membership.role == "owner" && target_membership.status == "active" {
-        let mut res = db
-            .query("SELECT count() FROM vault_member WHERE vault = $vault AND role = \"owner\" AND status = \"active\" GROUP ALL")
-            .bind(("vault", vault_id.clone()))
-            .await?;
-        let rows: Vec<CountRow> = res.take(0)?;
-        let owners = rows.first().map(|r| r.count).unwrap_or(0);
-        if owners <= 1 {
-            return Err(AppError::bad_request("cannot remove the last owner"));
-        }
-    }
-
-    db.query("DELETE $id").bind(("id", target_membership.id)).await?;
+    // Owner count check and delete in one transaction, so two concurrent
+    // removals cannot each see a second owner and strand the vault.
+    with_retry(|| async {
+        store::vaults::REMOVE_MEMBER.on(db)
+        .bind(("vault", vault_id.clone()))
+        .bind(("is_owner", target_membership.role == "owner"))
+        .bind(("id", target_membership.id.clone()))
+        .await?
+        .check()
+    })
+    .await
+    .map_err(|e| {
+        if e.to_string().contains("last_owner") { AppError::bad_request("cannot remove the last owner") } else { e.into() }
+    })?;
     Ok(())
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, SurrealValue)]
 struct EntityRow {
     id: RecordId,
     #[serde(default)]
+    #[surreal(default)]
     name: String,
     #[serde(default)]
+    #[surreal(default)]
     aliases: Vec<String>,
     #[serde(default)]
+    #[surreal(default)]
     summary: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, SurrealValue)]
 struct MemoryRow {
     #[serde(default)]
+    #[surreal(default)]
     text: String,
     #[serde(rename = "type", default = "default_memory_type")]
+    #[surreal(rename = "type", default = "default_memory_type")]
     mem_type: String,
     #[serde(default)]
+    #[surreal(default)]
     source: Option<RecordId>,
 }
 
@@ -462,18 +536,20 @@ fn default_memory_type() -> String {
     "world".to_string()
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, SurrealValue)]
 struct RelationRow {
     #[serde(rename = "out")]
+    #[surreal(rename = "out")]
     other: RecordId,
     #[serde(default)]
+    #[surreal(default)]
     label: String,
 }
 
 /// Looks an entity up in `vault` by case-insensitive name (merge matching).
-async fn find_by_name(db: &Db, kind: &str, vault: &RecordId, name: &str) -> AppResult<Option<EntityRow>> {
-    let mut res = db
-        .query(format!("SELECT * FROM {kind} WHERE vault = $vault AND string::lowercase(name) = $name LIMIT 1"))
+async fn find_by_name(db: &OrgDb, kind: &str, vault: &RecordId, name: &str) -> AppResult<Option<EntityRow>> {
+    // dynamic: table name varies over the six entity kinds
+    let mut res = store::dynamic(db, "vaults.find_by_name", format!("SELECT * FROM {kind} WHERE vault = $vault AND string::lowercase(name) = $name LIMIT 1"))
         .bind(("vault", vault.clone()))
         .bind(("name", name.to_lowercase()))
         .await?;
@@ -484,30 +560,29 @@ async fn find_by_name(db: &Db, kind: &str, vault: &RecordId, name: &str) -> AppR
 /// Merge rule for one incoming memory against what `subject` already has:
 /// an identical fact is skipped, and a second observation is appended to the
 /// existing one (one observation per subject). Returns true if handled.
-async fn fold_into_existing_memory(db: &Db, subject: &RecordId, mem: &MemoryRow) -> AppResult<bool> {
-    #[derive(Deserialize)]
+async fn fold_into_existing_memory(db: &OrgDb, subject: &RecordId, mem: &MemoryRow) -> AppResult<bool> {
+    #[derive(Deserialize, SurrealValue)]
     struct Existing {
         id: RecordId,
         #[serde(default)]
+        #[surreal(default)]
         text: String,
     }
     if mem.mem_type == "observation" {
-        let mut res = db
-            .query(r#"SELECT id, text FROM memory WHERE subject = $s AND type = "observation" LIMIT 1"#)
+        let mut res = store::vaults::OBSERVATION_OF.on(db)
             .bind(("s", subject.clone()))
             .await?;
         let existing: Vec<Existing> = res.take(0)?;
         let Some(existing) = existing.into_iter().next() else { return Ok(false) };
         if existing.text != mem.text {
-            db.query("UPDATE $id SET text = $text, version = version + 1, status = \"stale\", updated_at = time::now()")
+            store::vaults::APPEND_OBSERVATION.on(db)
                 .bind(("id", existing.id))
                 .bind(("text", format!("{}\n\n{}", existing.text, mem.text)))
                 .await?;
         }
         return Ok(true);
     }
-    let mut res = db
-        .query("SELECT id FROM memory WHERE subject = $s AND type = $type AND text = $text LIMIT 1")
+    let mut res = store::vaults::SAME_MEMORY.on(db)
         .bind(("s", subject.clone()))
         .bind(("type", mem.mem_type.clone()))
         .bind(("text", mem.text.clone()))
@@ -521,17 +596,18 @@ async fn fold_into_existing_memory(db: &Db, subject: &RecordId, mem: &MemoryRow)
 /// in `dest`. With `merge_duplicates`, entities that share a kind and
 /// (case-insensitive) name with one already in `dest` are folded into it
 /// instead of duplicated.
-async fn copy_into(db: &Db, user_id: &RecordId, src: &RecordId, dest: &RecordId, merge_duplicates: bool) -> AppResult<usize> {
+async fn copy_into(db: &OrgDb, user_id: &RecordId, src: &RecordId, dest: &RecordId, merge_duplicates: bool) -> AppResult<usize> {
+    #[allow(clippy::mutable_key_type)] // RecordId hashes by value; the interior mutability is never touched
     let mut id_map: HashMap<RecordId, RecordId> = HashMap::new();
     for entity_kind in ENTITY_KINDS {
-        let mut res = db
-            .query(format!("SELECT * FROM {entity_kind} WHERE vault = $vault"))
+        // dynamic: table name varies over the six entity kinds
+        let mut res = store::dynamic(db, "vaults.entities_in_vault", format!("SELECT * FROM {entity_kind} WHERE vault = $vault"))
             .bind(("vault", src.clone()))
             .await?;
         let rows: Vec<EntityRow> = res.take(0)?;
         for row in rows {
-            if merge_duplicates {
-                if let Some(existing) = find_by_name(db, entity_kind, dest, &row.name).await? {
+            if merge_duplicates
+                && let Some(existing) = find_by_name(db, entity_kind, dest, &row.name).await? {
                     let mut aliases = existing.aliases.clone();
                     for alias in row.aliases.iter().cloned() {
                         if !aliases.iter().any(|a| a.eq_ignore_ascii_case(&alias)) {
@@ -539,7 +615,7 @@ async fn copy_into(db: &Db, user_id: &RecordId, src: &RecordId, dest: &RecordId,
                         }
                     }
                     let summary = if existing.summary.is_empty() { row.summary.clone() } else { existing.summary.clone() };
-                    db.query("UPDATE $id SET aliases = $aliases, summary = $summary, updated_at = time::now()")
+                    store::vaults::MERGE_ENTITY_INTO.on(db)
                         .bind(("id", existing.id.clone()))
                         .bind(("aliases", aliases))
                         .bind(("summary", summary))
@@ -547,12 +623,15 @@ async fn copy_into(db: &Db, user_id: &RecordId, src: &RecordId, dest: &RecordId,
                     id_map.insert(row.id, existing.id);
                     continue;
                 }
-            }
-            let mut created = db
-                .query(format!(
+            // dynamic: table name varies over the six entity kinds
+            let mut created = store::dynamic(
+                db,
+                "vaults.copy_entity",
+                format!(
                     "CREATE {entity_kind} SET owner = $owner, vault = $vault, name = $name, \
                      aliases = $aliases, summary = $summary RETURN AFTER"
-                ))
+                ),
+            )
                 .bind(("owner", user_id.clone()))
                 .bind(("vault", dest.clone()))
                 .bind(("name", row.name))
@@ -567,8 +646,7 @@ async fn copy_into(db: &Db, user_id: &RecordId, src: &RecordId, dest: &RecordId,
     }
 
     for (old_id, new_id) in id_map.clone() {
-        let mut res = db
-            .query("SELECT * FROM memory WHERE subject = $id AND vault = $vault")
+        let mut res = store::vaults::MEMORIES_OF.on(db)
             .bind(("id", old_id))
             .bind(("vault", src.clone()))
             .await?;
@@ -577,10 +655,7 @@ async fn copy_into(db: &Db, user_id: &RecordId, src: &RecordId, dest: &RecordId,
             if merge_duplicates && fold_into_existing_memory(db, &new_id, &mem).await? {
                 continue;
             }
-            db.query(
-                "CREATE memory SET owner = $owner, vault = $vault, subject = $subject, text = $text, \
-                 type = $type, source = $source RETURN AFTER",
-            )
+            store::vaults::COPY_MEMORY.on(db)
             .bind(("owner", user_id.clone()))
             .bind(("vault", dest.clone()))
             .bind(("subject", new_id.clone()))
@@ -591,9 +666,10 @@ async fn copy_into(db: &Db, user_id: &RecordId, src: &RecordId, dest: &RecordId,
         }
     }
 
+    #[allow(clippy::mutable_key_type)] // RecordId hashes by value; the interior mutability is never touched
     let mut seen_edges: HashSet<(RecordId, RecordId, String)> = HashSet::new();
     for (old_id, new_id) in id_map.clone() {
-        let mut res = db.query("SELECT * FROM relates_to WHERE in = $id").bind(("id", old_id.clone())).await?;
+        let mut res = store::vaults::RELATIONS_FROM.on(db).bind(("id", old_id.clone())).await?;
         let edges: Vec<RelationRow> = res.take(0)?;
         for edge in edges {
             let Some(other_new) = id_map.get(&edge.other) else { continue };
@@ -603,8 +679,7 @@ async fn copy_into(db: &Db, user_id: &RecordId, src: &RecordId, dest: &RecordId,
             }
             seen_edges.insert(key);
             if merge_duplicates {
-                let mut res = db
-                    .query("SELECT id FROM relates_to WHERE in = $in AND out = $out AND label = $label LIMIT 1")
+                let mut res = store::vaults::SAME_RELATION.on(db)
                     .bind(("in", new_id.clone()))
                     .bind(("out", other_new.clone()))
                     .bind(("label", edge.label.clone()))
@@ -614,7 +689,7 @@ async fn copy_into(db: &Db, user_id: &RecordId, src: &RecordId, dest: &RecordId,
                     continue;
                 }
             }
-            db.query("RELATE $in->relates_to->$out SET label = $label, owner = $owner")
+            store::vaults::COPY_RELATION.on(db)
                 .bind(("in", new_id.clone()))
                 .bind(("out", other_new.clone()))
                 .bind(("label", edge.label))
@@ -639,20 +714,24 @@ async fn copy_into(db: &Db, user_id: &RecordId, src: &RecordId, dest: &RecordId,
 /// other endpoint isn't in the cloned vault (e.g. it points cross-vault at
 /// something `user_id` can't read) is skipped rather than left dangling.
 pub async fn clone_vault(
-    db: &Db,
+    db: &OrgDb,
     user_id: &RecordId,
     vault_id: &RecordId,
     name: Option<&str>,
     kind: &str,
 ) -> AppResult<CloneOut> {
-    require_membership(db, user_id, vault_id).await?;
+    authz::authorize(db, user_id, Action::Clone, vault_id).await?;
+    authz::require_unrestricted()?;
 
-    let source: Option<VaultFullRow> = db.select(vault_id.clone()).await?;
-    let source = source.ok_or_else(|| AppError::bad_request(format!("vault not found: {vault_id}")))?;
+    let source: Option<VaultFullRow> = store::get(db, vault_id).await?;
+    let source = source.ok_or_else(|| AppError::coded(crate::error::ErrorCode::VaultNotFound, format!("vault not found: {}", vault_id.to_string())))?;
 
-    let clone_name = name.map(str::to_string).unwrap_or_else(|| format!("{} (copy)", source.name));
+    let clone_name = match name {
+        Some(n) => n.to_string(),
+        None => free_name(db, user_id, format!("{} (copy)", source.name)).await?,
+    };
     let clone = create_vault(db, user_id, &clone_name, kind).await?;
-    let clone_rid: RecordId = clone.id.parse().map_err(|_| AppError::internal("clone vault id did not round-trip"))?;
+    let clone_rid: RecordId = crate::rid::parse(&clone.id).map_err(|_| AppError::internal("clone vault id did not round-trip"))?;
 
     let copied = copy_into(db, user_id, vault_id, &clone_rid, false).await?;
 
@@ -665,11 +744,12 @@ pub async fn clone_vault(
     })
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct MergeOut {
     pub id: String,
     pub name: String,
     pub kind: String,
+    #[schema(value_type = Option<String>)]
     pub created_at: Option<Datetime>,
     /// Entities in the merged vault (duplicates across the two sources count once).
     pub entities: usize,
@@ -682,7 +762,7 @@ pub struct MergeOut {
 /// exists in both (aliases unioned, identical facts kept once, relations
 /// deduplicated, a second observation appended to the first).
 pub async fn merge_vaults(
-    db: &Db,
+    db: &OrgDb,
     user_id: &RecordId,
     a: &RecordId,
     b: &RecordId,
@@ -692,23 +772,27 @@ pub async fn merge_vaults(
     if a == b {
         return Err(AppError::bad_request("pick two different vaults to merge"));
     }
-    require_membership(db, user_id, a).await?;
-    require_membership(db, user_id, b).await?;
-    let (va, vb): (Option<VaultFullRow>, Option<VaultFullRow>) = (db.select(a.clone()).await?, db.select(b.clone()).await?);
-    let va = va.ok_or_else(|| AppError::bad_request(format!("vault not found: {a}")))?;
-    let vb = vb.ok_or_else(|| AppError::bad_request(format!("vault not found: {b}")))?;
+    authz::authorize(db, user_id, Action::Merge, a).await?;
+    authz::authorize(db, user_id, Action::Merge, b).await?;
+    authz::require_unrestricted()?;
+    let (va, vb): (Option<VaultFullRow>, Option<VaultFullRow>) = (store::get(db, a).await?, store::get(db, b).await?);
+    let va = va.ok_or_else(|| AppError::coded(crate::error::ErrorCode::VaultNotFound, format!("vault not found: {}", a.to_string())))?;
+    let vb = vb.ok_or_else(|| AppError::coded(crate::error::ErrorCode::VaultNotFound, format!("vault not found: {}", b.to_string())))?;
 
-    let merged_name = name.map(str::to_string).unwrap_or_else(|| format!("{} + {}", va.name, vb.name));
+    let merged_name = match name {
+        Some(n) => n.to_string(),
+        None => free_name(db, user_id, format!("{} + {}", va.name, vb.name)).await?,
+    };
     let merged = create_vault(db, user_id, &merged_name, kind).await?;
-    let dest: RecordId = merged.id.parse().map_err(|_| AppError::internal("merged vault id did not round-trip"))?;
+    let dest: RecordId = crate::rid::parse(&merged.id).map_err(|_| AppError::internal("merged vault id did not round-trip"))?;
 
     copy_into(db, user_id, a, &dest, true).await?;
     copy_into(db, user_id, b, &dest, true).await?;
 
     let mut entities = 0;
     for entity_kind in ENTITY_KINDS {
-        let mut res = db
-            .query(format!("SELECT count() FROM {entity_kind} WHERE vault = $vault GROUP ALL"))
+        // dynamic: table name varies over the six entity kinds
+        let mut res = store::dynamic(db, "vaults.count_entities", format!("SELECT count() FROM {entity_kind} WHERE vault = $vault GROUP ALL"))
             .bind(("vault", dest.clone()))
             .await?;
         let rows: Vec<CountRow> = res.take(0)?;
@@ -727,31 +811,32 @@ pub async fn merge_vaults(
 /// Any member can leave their own membership, except the last owner of a
 /// vault that still has other members (would strand them admin-less --
 /// delete the vault instead if that's the intent).
-pub async fn leave_vault(db: &Db, user_id: &RecordId, vault_id: &RecordId) -> AppResult<()> {
+pub async fn leave_vault(db: &OrgDb, user_id: &RecordId, vault_id: &RecordId) -> AppResult<()> {
+    match authz::authorize(db, user_id, Action::Leave, vault_id).await {
+        Ok(_) => {}
+        // not a member: nothing to leave
+        Err(e) if e.code == crate::error::ErrorCode::VaultForbidden => return Ok(()),
+        Err(e) => return Err(e),
+    }
     let Some(m) = membership(db, vault_id, user_id).await? else { return Ok(()) };
 
-    if m.role == "owner" {
-        let mut res = db
-            .query("SELECT count() FROM vault_member WHERE vault = $vault AND user != $user GROUP ALL")
-            .bind(("vault", vault_id.clone()))
-            .bind(("user", user_id.clone()))
-            .await?;
-        let others_rows: Vec<CountRow> = res.take(0)?;
-        let others = others_rows.first().map(|r| r.count).unwrap_or(0);
-
-        let mut res = db
-            .query("SELECT count() FROM vault_member WHERE vault = $vault AND role = \"owner\" AND status = \"active\" GROUP ALL")
-            .bind(("vault", vault_id.clone()))
-            .await?;
-        let owners_rows: Vec<CountRow> = res.take(0)?;
-        let owners = owners_rows.first().map(|r| r.count).unwrap_or(0);
-
-        if owners <= 1 && others > 0 {
-            return Err(AppError::bad_request("you are the last owner -- promote someone else first"));
+    with_retry(|| async {
+        store::vaults::LEAVE.on(db)
+        .bind(("vault", vault_id.clone()))
+        .bind(("user", user_id.clone()))
+        .bind(("is_owner", m.role == "owner"))
+        .bind(("id", m.id.clone()))
+        .await?
+        .check()
+    })
+    .await
+    .map_err(|e| {
+        if e.to_string().contains("last_owner") {
+            AppError::bad_request("you are the last owner -- promote someone else first")
+        } else {
+            e.into()
         }
-    }
-
-    db.query("DELETE $id").bind(("id", m.id)).await?;
+    })?;
     Ok(())
 }
 
@@ -762,7 +847,7 @@ mod vault_tests {
     #[test]
     fn vault_out_from_full_row_carries_fields() {
         let row = VaultFullRow {
-            id: "vault:abc".parse().unwrap(),
+            id: crate::rid::parse("vault:abc").unwrap(),
             name: "Personal".to_string(),
             kind: "personal".to_string(),
             created_at: None,

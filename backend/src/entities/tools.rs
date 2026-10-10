@@ -1,23 +1,17 @@
 //! Entity-memory tool functions -- the business logic behind the
 //! `entities_*`/`memory_*`/`entity_*`/`code_*`/`consolidate_observations`
-//! tools that `tools/registry.py` registers for MCP use on the Python side.
+//! tools the registry exposes for MCP use.
 //!
-//! This port keeps only the actual logic: find-or-create/search/merge/
-//! delete/consolidate. The MCP registration glue (`register_tool(name,
-//! json_schema, fn)` and the `@safe` exception-to-`{"error": ...}` wrapper)
-//! is skipped -- there's no MCP tool registry in this Rust codebase yet, and
-//! every function here already returns `AppResult<T>` the same way the rest
-//! of the service layer does (`error.rs`'s `AppError` already renders as
-//! `{"detail": message}`, playing the same role `@safe`'s `{"error": ...}`
-//! did on the Python side). Wiring these into an MCP registry, if/when one
-//! exists in Rust, is future work.
+//! This module keeps only the logic: find-or-create/search/merge/
+//! delete/consolidate. Registration and the error-to-`{"error": ...}` wrapper
+//! live in `tools::registry`; every function here returns `AppResult<T>`.
 //!
-//! Ported from `entities/tools.py`.
 
-use surrealdb::RecordId;
+use surrealdb::types::RecordId;
+use crate::rid::RecordIdExt;
 
 use crate::config::Settings;
-use crate::db::Db;
+use crate::pool::{ControlDb, OrgDb};
 use crate::error::AppResult;
 
 use super::{consolidate, service};
@@ -33,7 +27,7 @@ fn matches_search(name: &str, aliases: &[String], needle: &str) -> bool {
 }
 
 pub async fn entities_search(
-    db: &Db,
+    db: &OrgDb,
     owner: &RecordId,
     query: &str,
     kind: Option<&str>,
@@ -69,21 +63,22 @@ pub async fn entities_search(
     Ok(service::ListEntitiesOut { results: sliced, total, has_more })
 }
 
-pub async fn entities_get(db: &Db, owner: &RecordId, id: &RecordId) -> AppResult<Option<service::EntityDetail>> {
-    service::get_entity(db, owner, id).await
+pub async fn entities_get(db: &OrgDb, control: &ControlDb, owner: &RecordId, id: &RecordId) -> AppResult<Option<service::EntityDetail>> {
+    service::get_entity(db, control, owner, id).await
 }
 
 pub async fn entities_graph(
-    db: &Db,
+    db: &OrgDb,
+    control: &ControlDb,
     owner: &RecordId,
     kinds: Option<&[String]>,
     vault_id: Option<&RecordId>,
 ) -> AppResult<service::GraphOut> {
-    service::graph(db, owner, kinds, vault_id).await
+    service::graph(db, control, owner, kinds, vault_id).await
 }
 
 pub async fn code_entity_upsert(
-    db: &Db,
+    db: &OrgDb,
     owner: &RecordId,
     kind: &str,
     name: &str,
@@ -98,7 +93,7 @@ pub async fn code_entity_upsert(
 /// implementation, just exposed directly as a tool (unlike `add_relation`,
 /// which is otherwise only called internally).
 pub async fn code_relate(
-    db: &Db,
+    db: &OrgDb,
     owner: &RecordId,
     from_id: &RecordId,
     to_id: &RecordId,
@@ -112,7 +107,7 @@ pub async fn code_relate(
 /// subject it makes no longer true (see `supersede`).
 #[allow(clippy::too_many_arguments)]
 pub async fn memory_write(
-    db: &Db,
+    db: &OrgDb,
     settings: &Settings,
     owner: &RecordId,
     subject_name: &str,
@@ -124,15 +119,15 @@ pub async fn memory_write(
 ) -> AppResult<service::WriteMemoryOut> {
     let mut out = service::write_memory(db, owner, subject_name, subject_kind, text, source_record_id, mem_type, vault_id).await?;
     if out.memory.mem_type != "observation" {
-        let subject: RecordId = out.entity.id.parse().map_err(|_| crate::error::AppError::internal("entity id did not round-trip"))?;
-        let new: RecordId = out.memory.id.parse().map_err(|_| crate::error::AppError::internal("memory id did not round-trip"))?;
+        let subject = crate::rid::parse(&out.entity.id).map_err(|_| crate::error::AppError::internal("entity id did not round-trip"))?;
+        let new = crate::rid::parse(&out.memory.id).map_err(|_| crate::error::AppError::internal("memory id did not round-trip"))?;
         out.superseded = super::supersede::check(db, settings, owner, &subject, &[new]).await.iter().map(|r| r.to_string()).collect();
     }
     Ok(out)
 }
 
 pub async fn memory_update(
-    db: &Db,
+    db: &OrgDb,
     owner: &RecordId,
     memory_id: &RecordId,
     text: Option<&str>,
@@ -142,7 +137,7 @@ pub async fn memory_update(
 }
 
 pub async fn entity_update(
-    db: &Db,
+    db: &OrgDb,
     owner: &RecordId,
     entity_id: &RecordId,
     name: Option<&str>,
@@ -152,16 +147,16 @@ pub async fn entity_update(
     service::update_entity(db, owner, entity_id, name, aliases, summary).await
 }
 
-pub async fn memory_delete(db: &Db, owner: &RecordId, memory_id: &RecordId) -> AppResult<bool> {
+pub async fn memory_delete(db: &OrgDb, owner: &RecordId, memory_id: &RecordId) -> AppResult<bool> {
     service::delete_memory(db, owner, memory_id).await
 }
 
-pub async fn entity_delete(db: &Db, owner: &RecordId, entity_id: &RecordId) -> AppResult<bool> {
+pub async fn entity_delete(db: &OrgDb, owner: &RecordId, entity_id: &RecordId) -> AppResult<bool> {
     service::delete_entity(db, owner, entity_id).await
 }
 
 pub async fn entity_merge(
-    db: &Db,
+    db: &OrgDb,
     owner: &RecordId,
     winner_id: &RecordId,
     loser_id: &RecordId,
@@ -185,7 +180,7 @@ entity with `entities_get`, then record the updated belief with `memory_write` (
 /// given), or every entity for `owner` that has new unconsolidated raw facts
 /// (omitted).
 pub async fn consolidate_observations(
-    db: &Db,
+    db: &OrgDb,
     settings: &Settings,
     owner: &RecordId,
     subject_id: Option<&RecordId>,
@@ -206,7 +201,7 @@ pub async fn consolidate_observations(
     let mut out = ConsolidateOut::default();
     let all = service::list_entities(db, owner, None, None, None, 0).await?;
     for entity in all.results {
-        let sid: RecordId = match entity.id.parse() {
+        let sid: RecordId = match crate::rid::parse(&entity.id) {
             Ok(id) => id,
             Err(_) => {
                 out.errors.push(format!("{}: invalid entity id", entity.id));

@@ -1,0 +1,10 @@
+Generate one landscape image (16:10, about 1600x1000) and save it as PNG to .impeccable/mocks/decision/model-pick.png (path relative to the current directory). Do not edit any other files.
+
+Image: a high-fidelity desktop web app screenshot, dark mode, for "Eunomia", a shared long-term memory layer for a team's AI agents. San Francisco dev-tool craft level, like Linear, Vercel and Raycast.
+Layout:
+- Slim left sidebar (#141516) with logo mark and "Eunomia", nav: Dashboard (selected), Chat, Entities, Code, Vaults, Memory skill, Connectors, Docs, Settings, small keyboard shortcut hints on the right of each item.
+- Main area #08090a. Header "Dashboard" with a prominent command bar "Search memory or run a command  ⌘K".
+- Stat strip: "Memories 12,480", "Entities 1,932", "Sources healthy 3/4", "Last sync 4m ago" in tabular numbers.
+- A dense list "Recent memories" with rows: status dot, fact text like "Prefers Bun over npm for frontend work", entity chip "Qyrhal/Eunomia", vault "Team", age "2m", and a kbd hint on the hovered row.
+- A "Sources" list: Up Bank, HeyPocket, GitHub, each with a sync health dot and record count.
+Near-monochrome greys, one violet accent #5e6ad2 only on selection and primary button. Thin 1px borders, 6-8px radii, subtle top light gradient on the header only. One sharp grotesk, mono for numbers. Calm, fast, precise.

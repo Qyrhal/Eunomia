@@ -1,0 +1,1236 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-08T11:38:28.000Z",
+  "title": "Design System: Eunomia",
+  "extensions": {
+    "colorMeta": {
+      "canvas": {
+        "role": "neutral",
+        "displayName": "Graphite Canvas",
+        "theme": "dark",
+        "cssVar": "--canvas",
+        "canonical": "#0b0c0e",
+        "oklch": "oklch(15.4% 0.005 264.4)",
+        "tonalRamp": [
+          "oklch(15% 0.005 264.4)",
+          "oklch(26.4% 0.005 264.4)",
+          "oklch(37.9% 0.005 264.4)",
+          "oklch(49.3% 0.005 264.4)",
+          "oklch(60.7% 0.005 264.4)",
+          "oklch(72.1% 0.005 264.4)",
+          "oklch(83.6% 0.005 264.4)",
+          "oklch(95% 0.005 264.4)"
+        ]
+      },
+      "surface": {
+        "role": "neutral",
+        "displayName": "Panel Graphite",
+        "theme": "dark",
+        "cssVar": "--surface",
+        "canonical": "#121316",
+        "oklch": "oklch(18.7% 0.006 271.1)",
+        "tonalRamp": [
+          "oklch(15% 0.006 271.1)",
+          "oklch(26.4% 0.006 271.1)",
+          "oklch(37.9% 0.006 271.1)",
+          "oklch(49.3% 0.006 271.1)",
+          "oklch(60.7% 0.006 271.1)",
+          "oklch(72.1% 0.006 271.1)",
+          "oklch(83.6% 0.006 271.1)",
+          "oklch(95% 0.006 271.1)"
+        ]
+      },
+      "surface-raised": {
+        "role": "neutral",
+        "displayName": "Raised Graphite",
+        "theme": "dark",
+        "cssVar": "--surface-raised",
+        "canonical": "#1a1b1f",
+        "oklch": "oklch(22.3% 0.008 274.6)",
+        "tonalRamp": [
+          "oklch(15% 0.008 274.6)",
+          "oklch(26.4% 0.008 274.6)",
+          "oklch(37.9% 0.008 274.6)",
+          "oklch(49.3% 0.008 274.6)",
+          "oklch(60.7% 0.008 274.6)",
+          "oklch(72.1% 0.008 274.6)",
+          "oklch(83.6% 0.008 274.6)",
+          "oklch(95% 0.008 274.6)"
+        ]
+      },
+      "surface-hover": {
+        "role": "neutral",
+        "displayName": "Hover Graphite",
+        "theme": "dark",
+        "cssVar": "--surface-hover",
+        "canonical": "#212328",
+        "oklch": "oklch(25.6% 0.01 268.3)",
+        "tonalRamp": [
+          "oklch(15% 0.01 268.3)",
+          "oklch(26.4% 0.01 268.3)",
+          "oklch(37.9% 0.01 268.3)",
+          "oklch(49.3% 0.01 268.3)",
+          "oklch(60.7% 0.01 268.3)",
+          "oklch(72.1% 0.01 268.3)",
+          "oklch(83.6% 0.01 268.3)",
+          "oklch(95% 0.01 268.3)"
+        ]
+      },
+      "ink": {
+        "role": "neutral",
+        "displayName": "Chalk Ink",
+        "theme": "dark",
+        "cssVar": "--ink",
+        "canonical": "#ededef",
+        "oklch": "oklch(94.7% 0.003 286.3)",
+        "tonalRamp": [
+          "oklch(15% 0.003 286.3)",
+          "oklch(26.4% 0.003 286.3)",
+          "oklch(37.9% 0.003 286.3)",
+          "oklch(49.3% 0.003 286.3)",
+          "oklch(60.7% 0.003 286.3)",
+          "oklch(72.1% 0.003 286.3)",
+          "oklch(83.6% 0.003 286.3)",
+          "oklch(95% 0.003 286.3)"
+        ]
+      },
+      "ink-dim": {
+        "role": "neutral",
+        "displayName": "Dim Ink",
+        "theme": "dark",
+        "cssVar": "--ink-dim",
+        "canonical": "#a3a7ae",
+        "oklch": "oklch(72.7% 0.011 261.8)",
+        "tonalRamp": [
+          "oklch(15% 0.011 261.8)",
+          "oklch(26.4% 0.011 261.8)",
+          "oklch(37.9% 0.011 261.8)",
+          "oklch(49.3% 0.011 261.8)",
+          "oklch(60.7% 0.011 261.8)",
+          "oklch(72.1% 0.011 261.8)",
+          "oklch(83.6% 0.011 261.8)",
+          "oklch(95% 0.011 261.8)"
+        ]
+      },
+      "ink-faint": {
+        "role": "neutral",
+        "displayName": "Faint Ink",
+        "theme": "dark",
+        "cssVar": "--ink-faint",
+        "canonical": "#80858e",
+        "oklch": "oklch(61.5% 0.015 262.4)",
+        "tonalRamp": [
+          "oklch(15% 0.015 262.4)",
+          "oklch(26.4% 0.015 262.4)",
+          "oklch(37.9% 0.015 262.4)",
+          "oklch(49.3% 0.015 262.4)",
+          "oklch(60.7% 0.015 262.4)",
+          "oklch(72.1% 0.015 262.4)",
+          "oklch(83.6% 0.015 262.4)",
+          "oklch(95% 0.015 262.4)"
+        ]
+      },
+      "border": {
+        "role": "neutral",
+        "displayName": "border",
+        "theme": "dark",
+        "cssVar": "--border",
+        "canonical": "rgba(237, 237, 239, 0.08)"
+      },
+      "border-strong": {
+        "role": "neutral",
+        "displayName": "border-strong",
+        "theme": "dark",
+        "cssVar": "--border-strong",
+        "canonical": "rgba(237, 237, 239, 0.15)"
+      },
+      "grid-dot": {
+        "role": "neutral",
+        "displayName": "grid-dot",
+        "theme": "dark",
+        "cssVar": "--grid-dot",
+        "canonical": "rgba(237, 237, 239, 0.07)"
+      },
+      "felt-green": {
+        "role": "primary",
+        "displayName": "Felt Green",
+        "theme": "dark",
+        "cssVar": "--accent",
+        "canonical": "#3fa873",
+        "oklch": "oklch(65.7% 0.126 157.9)",
+        "tonalRamp": [
+          "oklch(15% 0.126 157.9)",
+          "oklch(26.4% 0.126 157.9)",
+          "oklch(37.9% 0.126 157.9)",
+          "oklch(49.3% 0.126 157.9)",
+          "oklch(60.7% 0.126 157.9)",
+          "oklch(72.1% 0.126 157.9)",
+          "oklch(83.6% 0.126 157.9)",
+          "oklch(95% 0.126 157.9)"
+        ]
+      },
+      "felt-green-text": {
+        "role": "primary",
+        "displayName": "Felt Green Text",
+        "theme": "dark",
+        "cssVar": "--accent-text",
+        "canonical": "#52bd87",
+        "oklch": "oklch(72.1% 0.128 158.7)",
+        "tonalRamp": [
+          "oklch(15% 0.128 158.7)",
+          "oklch(26.4% 0.128 158.7)",
+          "oklch(37.9% 0.128 158.7)",
+          "oklch(49.3% 0.128 158.7)",
+          "oklch(60.7% 0.128 158.7)",
+          "oklch(72.1% 0.128 158.7)",
+          "oklch(83.6% 0.128 158.7)",
+          "oklch(95% 0.128 158.7)"
+        ]
+      },
+      "felt-green-soft": {
+        "role": "primary",
+        "displayName": "Felt Green Wash",
+        "theme": "dark",
+        "cssVar": "--accent-soft",
+        "canonical": "rgba(63, 168, 115, 0.14)"
+      },
+      "on-accent": {
+        "role": "primary",
+        "displayName": "On Felt",
+        "theme": "dark",
+        "cssVar": "--on-accent",
+        "canonical": "#04140b",
+        "oklch": "oklch(17.3% 0.03 158.5)",
+        "tonalRamp": [
+          "oklch(15% 0.03 158.5)",
+          "oklch(26.4% 0.03 158.5)",
+          "oklch(37.9% 0.03 158.5)",
+          "oklch(49.3% 0.03 158.5)",
+          "oklch(60.7% 0.03 158.5)",
+          "oklch(72.1% 0.03 158.5)",
+          "oklch(83.6% 0.03 158.5)",
+          "oklch(95% 0.03 158.5)"
+        ]
+      },
+      "good": {
+        "role": "status",
+        "displayName": "Good",
+        "theme": "dark",
+        "cssVar": "--good",
+        "canonical": "#3fa873",
+        "oklch": "oklch(65.7% 0.126 157.9)",
+        "tonalRamp": [
+          "oklch(15% 0.126 157.9)",
+          "oklch(26.4% 0.126 157.9)",
+          "oklch(37.9% 0.126 157.9)",
+          "oklch(49.3% 0.126 157.9)",
+          "oklch(60.7% 0.126 157.9)",
+          "oklch(72.1% 0.126 157.9)",
+          "oklch(83.6% 0.126 157.9)",
+          "oklch(95% 0.126 157.9)"
+        ]
+      },
+      "warning": {
+        "role": "status",
+        "displayName": "Warning Ochre",
+        "theme": "dark",
+        "cssVar": "--warning",
+        "canonical": "#d0a651",
+        "oklch": "oklch(74.7% 0.114 83)",
+        "tonalRamp": [
+          "oklch(15% 0.114 83)",
+          "oklch(26.4% 0.114 83)",
+          "oklch(37.9% 0.114 83)",
+          "oklch(49.3% 0.114 83)",
+          "oklch(60.7% 0.114 83)",
+          "oklch(72.1% 0.114 83)",
+          "oklch(83.6% 0.114 83)",
+          "oklch(95% 0.114 83)"
+        ]
+      },
+      "critical": {
+        "role": "status",
+        "displayName": "Critical Brick",
+        "theme": "dark",
+        "cssVar": "--critical",
+        "canonical": "#d4705f",
+        "oklch": "oklch(65.6% 0.129 30.9)",
+        "tonalRamp": [
+          "oklch(15% 0.129 30.9)",
+          "oklch(26.4% 0.129 30.9)",
+          "oklch(37.9% 0.129 30.9)",
+          "oklch(49.3% 0.129 30.9)",
+          "oklch(60.7% 0.129 30.9)",
+          "oklch(72.1% 0.129 30.9)",
+          "oklch(83.6% 0.129 30.9)",
+          "oklch(95% 0.129 30.9)"
+        ]
+      },
+      "critical-soft": {
+        "role": "status",
+        "displayName": "Critical Wash",
+        "theme": "dark",
+        "cssVar": "--critical-soft",
+        "canonical": "rgba(212, 112, 95, 0.12)"
+      },
+      "scrim": {
+        "role": "neutral",
+        "displayName": "scrim",
+        "theme": "dark",
+        "cssVar": "--scrim",
+        "canonical": "rgba(4, 5, 6, 0.6)"
+      },
+      "author-1": {
+        "role": "secondary",
+        "displayName": "Author Coral",
+        "theme": "dark",
+        "cssVar": "--author-1",
+        "canonical": "#f0815e",
+        "oklch": "oklch(72% 0.145 38.2)",
+        "tonalRamp": [
+          "oklch(15% 0.145 38.2)",
+          "oklch(26.4% 0.145 38.2)",
+          "oklch(37.9% 0.145 38.2)",
+          "oklch(49.3% 0.145 38.2)",
+          "oklch(60.7% 0.145 38.2)",
+          "oklch(72.1% 0.145 38.2)",
+          "oklch(83.6% 0.145 38.2)",
+          "oklch(95% 0.145 38.2)"
+        ]
+      },
+      "author-2": {
+        "role": "secondary",
+        "displayName": "Author Sky",
+        "theme": "dark",
+        "cssVar": "--author-2",
+        "canonical": "#5fa6f2",
+        "oklch": "oklch(71.1% 0.133 251.6)",
+        "tonalRamp": [
+          "oklch(15% 0.133 251.6)",
+          "oklch(26.4% 0.133 251.6)",
+          "oklch(37.9% 0.133 251.6)",
+          "oklch(49.3% 0.133 251.6)",
+          "oklch(60.7% 0.133 251.6)",
+          "oklch(72.1% 0.133 251.6)",
+          "oklch(83.6% 0.133 251.6)",
+          "oklch(95% 0.133 251.6)"
+        ]
+      },
+      "author-3": {
+        "role": "secondary",
+        "displayName": "Author Lilac",
+        "theme": "dark",
+        "cssVar": "--author-3",
+        "canonical": "#b48cf0",
+        "oklch": "oklch(71.7% 0.146 301.2)",
+        "tonalRamp": [
+          "oklch(15% 0.146 301.2)",
+          "oklch(26.4% 0.146 301.2)",
+          "oklch(37.9% 0.146 301.2)",
+          "oklch(49.3% 0.146 301.2)",
+          "oklch(60.7% 0.146 301.2)",
+          "oklch(72.1% 0.146 301.2)",
+          "oklch(83.6% 0.146 301.2)",
+          "oklch(95% 0.146 301.2)"
+        ]
+      },
+      "author-4": {
+        "role": "secondary",
+        "displayName": "Author Ochre",
+        "theme": "dark",
+        "cssVar": "--author-4",
+        "canonical": "#e2b04f",
+        "oklch": "oklch(78.5% 0.127 81.5)",
+        "tonalRamp": [
+          "oklch(15% 0.127 81.5)",
+          "oklch(26.4% 0.127 81.5)",
+          "oklch(37.9% 0.127 81.5)",
+          "oklch(49.3% 0.127 81.5)",
+          "oklch(60.7% 0.127 81.5)",
+          "oklch(72.1% 0.127 81.5)",
+          "oklch(83.6% 0.127 81.5)",
+          "oklch(95% 0.127 81.5)"
+        ]
+      },
+      "author-5": {
+        "role": "secondary",
+        "displayName": "Author Rose",
+        "theme": "dark",
+        "cssVar": "--author-5",
+        "canonical": "#e77fa9",
+        "oklch": "oklch(72.3% 0.136 355.4)",
+        "tonalRamp": [
+          "oklch(15% 0.136 355.4)",
+          "oklch(26.4% 0.136 355.4)",
+          "oklch(37.9% 0.136 355.4)",
+          "oklch(49.3% 0.136 355.4)",
+          "oklch(60.7% 0.136 355.4)",
+          "oklch(72.1% 0.136 355.4)",
+          "oklch(83.6% 0.136 355.4)",
+          "oklch(95% 0.136 355.4)"
+        ]
+      },
+      "author-6": {
+        "role": "secondary",
+        "displayName": "Author Teal",
+        "theme": "dark",
+        "cssVar": "--author-6",
+        "canonical": "#4fc1c7",
+        "oklch": "oklch(74.9% 0.102 200)",
+        "tonalRamp": [
+          "oklch(15% 0.102 200)",
+          "oklch(26.4% 0.102 200)",
+          "oklch(37.9% 0.102 200)",
+          "oklch(49.3% 0.102 200)",
+          "oklch(60.7% 0.102 200)",
+          "oklch(72.1% 0.102 200)",
+          "oklch(83.6% 0.102 200)",
+          "oklch(95% 0.102 200)"
+        ]
+      },
+      "on-author": {
+        "role": "secondary",
+        "displayName": "On Author",
+        "theme": "dark",
+        "cssVar": "--on-author",
+        "canonical": "#0b0c0e",
+        "oklch": "oklch(15.4% 0.005 264.4)",
+        "tonalRamp": [
+          "oklch(15% 0.005 264.4)",
+          "oklch(26.4% 0.005 264.4)",
+          "oklch(37.9% 0.005 264.4)",
+          "oklch(49.3% 0.005 264.4)",
+          "oklch(60.7% 0.005 264.4)",
+          "oklch(72.1% 0.005 264.4)",
+          "oklch(83.6% 0.005 264.4)",
+          "oklch(95% 0.005 264.4)"
+        ]
+      },
+      "kind-person": {
+        "role": "tertiary",
+        "displayName": "Kind person",
+        "theme": "dark",
+        "cssVar": "--kind-person",
+        "canonical": "#6f9bc9",
+        "oklch": "oklch(67.6% 0.084 250.2)",
+        "tonalRamp": [
+          "oklch(15% 0.084 250.2)",
+          "oklch(26.4% 0.084 250.2)",
+          "oklch(37.9% 0.084 250.2)",
+          "oklch(49.3% 0.084 250.2)",
+          "oklch(60.7% 0.084 250.2)",
+          "oklch(72.1% 0.084 250.2)",
+          "oklch(83.6% 0.084 250.2)",
+          "oklch(95% 0.084 250.2)"
+        ]
+      },
+      "kind-organisation": {
+        "role": "tertiary",
+        "displayName": "Kind organisation",
+        "theme": "dark",
+        "cssVar": "--kind-organisation",
+        "canonical": "#a692c9",
+        "oklch": "oklch(69.7% 0.082 301)",
+        "tonalRamp": [
+          "oklch(15% 0.082 301)",
+          "oklch(26.4% 0.082 301)",
+          "oklch(37.9% 0.082 301)",
+          "oklch(49.3% 0.082 301)",
+          "oklch(60.7% 0.082 301)",
+          "oklch(72.1% 0.082 301)",
+          "oklch(83.6% 0.082 301)",
+          "oklch(95% 0.082 301)"
+        ]
+      },
+      "kind-location": {
+        "role": "tertiary",
+        "displayName": "Kind location",
+        "theme": "dark",
+        "cssVar": "--kind-location",
+        "canonical": "#c98a5a",
+        "oklch": "oklch(68.6% 0.1 57.4)",
+        "tonalRamp": [
+          "oklch(15% 0.1 57.4)",
+          "oklch(26.4% 0.1 57.4)",
+          "oklch(37.9% 0.1 57.4)",
+          "oklch(49.3% 0.1 57.4)",
+          "oklch(60.7% 0.1 57.4)",
+          "oklch(72.1% 0.1 57.4)",
+          "oklch(83.6% 0.1 57.4)",
+          "oklch(95% 0.1 57.4)"
+        ]
+      },
+      "kind-repository": {
+        "role": "tertiary",
+        "displayName": "Kind repository",
+        "theme": "dark",
+        "cssVar": "--kind-repository",
+        "canonical": "#5a9e8f",
+        "oklch": "oklch(65% 0.073 178)",
+        "tonalRamp": [
+          "oklch(15% 0.073 178)",
+          "oklch(26.4% 0.073 178)",
+          "oklch(37.9% 0.073 178)",
+          "oklch(49.3% 0.073 178)",
+          "oklch(60.7% 0.073 178)",
+          "oklch(72.1% 0.073 178)",
+          "oklch(83.6% 0.073 178)",
+          "oklch(95% 0.073 178)"
+        ]
+      },
+      "kind-file": {
+        "role": "tertiary",
+        "displayName": "Kind file",
+        "theme": "dark",
+        "cssVar": "--kind-file",
+        "canonical": "#9e9150",
+        "oklch": "oklch(65.4% 0.087 98.3)",
+        "tonalRamp": [
+          "oklch(15% 0.087 98.3)",
+          "oklch(26.4% 0.087 98.3)",
+          "oklch(37.9% 0.087 98.3)",
+          "oklch(49.3% 0.087 98.3)",
+          "oklch(60.7% 0.087 98.3)",
+          "oklch(72.1% 0.087 98.3)",
+          "oklch(83.6% 0.087 98.3)",
+          "oklch(95% 0.087 98.3)"
+        ]
+      },
+      "kind-symbol": {
+        "role": "tertiary",
+        "displayName": "Kind symbol",
+        "theme": "dark",
+        "cssVar": "--kind-symbol",
+        "canonical": "#9e5a7a",
+        "oklch": "oklch(55.5% 0.098 351.1)",
+        "tonalRamp": [
+          "oklch(15% 0.098 351.1)",
+          "oklch(26.4% 0.098 351.1)",
+          "oklch(37.9% 0.098 351.1)",
+          "oklch(49.3% 0.098 351.1)",
+          "oklch(60.7% 0.098 351.1)",
+          "oklch(72.1% 0.098 351.1)",
+          "oklch(83.6% 0.098 351.1)",
+          "oklch(95% 0.098 351.1)"
+        ]
+      },
+      "canvas-light": {
+        "role": "neutral",
+        "displayName": "Graphite Canvas (light theme)",
+        "theme": "light",
+        "cssVar": "--canvas",
+        "canonical": "#f5f6f7",
+        "oklch": "oklch(97.3% 0.002 247.8)",
+        "tonalRamp": [
+          "oklch(15% 0.002 247.8)",
+          "oklch(26.4% 0.002 247.8)",
+          "oklch(37.9% 0.002 247.8)",
+          "oklch(49.3% 0.002 247.8)",
+          "oklch(60.7% 0.002 247.8)",
+          "oklch(72.1% 0.002 247.8)",
+          "oklch(83.6% 0.002 247.8)",
+          "oklch(95% 0.002 247.8)"
+        ]
+      },
+      "surface-light": {
+        "role": "neutral",
+        "displayName": "Panel Graphite (light theme)",
+        "theme": "light",
+        "cssVar": "--surface",
+        "canonical": "#ffffff",
+        "oklch": "oklch(100% 0 89.9)",
+        "tonalRamp": [
+          "oklch(15% 0 89.9)",
+          "oklch(26.4% 0 89.9)",
+          "oklch(37.9% 0 89.9)",
+          "oklch(49.3% 0 89.9)",
+          "oklch(60.7% 0 89.9)",
+          "oklch(72.1% 0 89.9)",
+          "oklch(83.6% 0 89.9)",
+          "oklch(95% 0 89.9)"
+        ]
+      },
+      "surface-raised-light": {
+        "role": "neutral",
+        "displayName": "Raised Graphite (light theme)",
+        "theme": "light",
+        "cssVar": "--surface-raised",
+        "canonical": "#f0f1f3",
+        "oklch": "oklch(95.8% 0.003 264.5)",
+        "tonalRamp": [
+          "oklch(15% 0.003 264.5)",
+          "oklch(26.4% 0.003 264.5)",
+          "oklch(37.9% 0.003 264.5)",
+          "oklch(49.3% 0.003 264.5)",
+          "oklch(60.7% 0.003 264.5)",
+          "oklch(72.1% 0.003 264.5)",
+          "oklch(83.6% 0.003 264.5)",
+          "oklch(95% 0.003 264.5)"
+        ]
+      },
+      "surface-hover-light": {
+        "role": "neutral",
+        "displayName": "Hover Graphite (light theme)",
+        "theme": "light",
+        "cssVar": "--surface-hover",
+        "canonical": "#e8e9ec",
+        "oklch": "oklch(93.4% 0.004 271.4)",
+        "tonalRamp": [
+          "oklch(15% 0.004 271.4)",
+          "oklch(26.4% 0.004 271.4)",
+          "oklch(37.9% 0.004 271.4)",
+          "oklch(49.3% 0.004 271.4)",
+          "oklch(60.7% 0.004 271.4)",
+          "oklch(72.1% 0.004 271.4)",
+          "oklch(83.6% 0.004 271.4)",
+          "oklch(95% 0.004 271.4)"
+        ]
+      },
+      "ink-light": {
+        "role": "neutral",
+        "displayName": "Chalk Ink (light theme)",
+        "theme": "light",
+        "cssVar": "--ink",
+        "canonical": "#111214",
+        "oklch": "oklch(18.2% 0.004 264.5)",
+        "tonalRamp": [
+          "oklch(15% 0.004 264.5)",
+          "oklch(26.4% 0.004 264.5)",
+          "oklch(37.9% 0.004 264.5)",
+          "oklch(49.3% 0.004 264.5)",
+          "oklch(60.7% 0.004 264.5)",
+          "oklch(72.1% 0.004 264.5)",
+          "oklch(83.6% 0.004 264.5)",
+          "oklch(95% 0.004 264.5)"
+        ]
+      },
+      "ink-dim-light": {
+        "role": "neutral",
+        "displayName": "Dim Ink (light theme)",
+        "theme": "light",
+        "cssVar": "--ink-dim",
+        "canonical": "#4f545c",
+        "oklch": "oklch(44.4% 0.015 259.8)",
+        "tonalRamp": [
+          "oklch(15% 0.015 259.8)",
+          "oklch(26.4% 0.015 259.8)",
+          "oklch(37.9% 0.015 259.8)",
+          "oklch(49.3% 0.015 259.8)",
+          "oklch(60.7% 0.015 259.8)",
+          "oklch(72.1% 0.015 259.8)",
+          "oklch(83.6% 0.015 259.8)",
+          "oklch(95% 0.015 259.8)"
+        ]
+      },
+      "ink-faint-light": {
+        "role": "neutral",
+        "displayName": "Faint Ink (light theme)",
+        "theme": "light",
+        "cssVar": "--ink-faint",
+        "canonical": "#676c75",
+        "oklch": "oklch(53% 0.015 262.3)",
+        "tonalRamp": [
+          "oklch(15% 0.015 262.3)",
+          "oklch(26.4% 0.015 262.3)",
+          "oklch(37.9% 0.015 262.3)",
+          "oklch(49.3% 0.015 262.3)",
+          "oklch(60.7% 0.015 262.3)",
+          "oklch(72.1% 0.015 262.3)",
+          "oklch(83.6% 0.015 262.3)",
+          "oklch(95% 0.015 262.3)"
+        ]
+      },
+      "border-light": {
+        "role": "neutral",
+        "displayName": "border (light theme)",
+        "theme": "light",
+        "cssVar": "--border",
+        "canonical": "rgba(17, 18, 20, 0.1)"
+      },
+      "border-strong-light": {
+        "role": "neutral",
+        "displayName": "border-strong (light theme)",
+        "theme": "light",
+        "cssVar": "--border-strong",
+        "canonical": "rgba(17, 18, 20, 0.18)"
+      },
+      "felt-green-light": {
+        "role": "primary",
+        "displayName": "Felt Green (light theme)",
+        "theme": "light",
+        "cssVar": "--accent",
+        "canonical": "#2b7d53",
+        "oklch": "oklch(52.8% 0.104 157.3)",
+        "tonalRamp": [
+          "oklch(15% 0.104 157.3)",
+          "oklch(26.4% 0.104 157.3)",
+          "oklch(37.9% 0.104 157.3)",
+          "oklch(49.3% 0.104 157.3)",
+          "oklch(60.7% 0.104 157.3)",
+          "oklch(72.1% 0.104 157.3)",
+          "oklch(83.6% 0.104 157.3)",
+          "oklch(95% 0.104 157.3)"
+        ]
+      },
+      "felt-green-text-light": {
+        "role": "primary",
+        "displayName": "Felt Green Text (light theme)",
+        "theme": "light",
+        "cssVar": "--accent-text",
+        "canonical": "#23744b",
+        "oklch": "oklch(49.9% 0.102 157.1)",
+        "tonalRamp": [
+          "oklch(15% 0.102 157.1)",
+          "oklch(26.4% 0.102 157.1)",
+          "oklch(37.9% 0.102 157.1)",
+          "oklch(49.3% 0.102 157.1)",
+          "oklch(60.7% 0.102 157.1)",
+          "oklch(72.1% 0.102 157.1)",
+          "oklch(83.6% 0.102 157.1)",
+          "oklch(95% 0.102 157.1)"
+        ]
+      },
+      "felt-green-soft-light": {
+        "role": "primary",
+        "displayName": "Felt Green Wash (light theme)",
+        "theme": "light",
+        "cssVar": "--accent-soft",
+        "canonical": "rgba(43, 125, 83, 0.1)"
+      },
+      "on-accent-light": {
+        "role": "primary",
+        "displayName": "On Felt (light theme)",
+        "theme": "light",
+        "cssVar": "--on-accent",
+        "canonical": "#ffffff",
+        "oklch": "oklch(100% 0 89.9)",
+        "tonalRamp": [
+          "oklch(15% 0 89.9)",
+          "oklch(26.4% 0 89.9)",
+          "oklch(37.9% 0 89.9)",
+          "oklch(49.3% 0 89.9)",
+          "oklch(60.7% 0 89.9)",
+          "oklch(72.1% 0 89.9)",
+          "oklch(83.6% 0 89.9)",
+          "oklch(95% 0 89.9)"
+        ]
+      },
+      "warning-light": {
+        "role": "status",
+        "displayName": "Warning Ochre (light theme)",
+        "theme": "light",
+        "cssVar": "--warning",
+        "canonical": "#9a6b12",
+        "oklch": "oklch(56.3% 0.112 76.7)",
+        "tonalRamp": [
+          "oklch(15% 0.112 76.7)",
+          "oklch(26.4% 0.112 76.7)",
+          "oklch(37.9% 0.112 76.7)",
+          "oklch(49.3% 0.112 76.7)",
+          "oklch(60.7% 0.112 76.7)",
+          "oklch(72.1% 0.112 76.7)",
+          "oklch(83.6% 0.112 76.7)",
+          "oklch(95% 0.112 76.7)"
+        ]
+      },
+      "critical-light": {
+        "role": "status",
+        "displayName": "Critical Brick (light theme)",
+        "theme": "light",
+        "cssVar": "--critical",
+        "canonical": "#b4432f",
+        "oklch": "oklch(53.5% 0.151 32.2)",
+        "tonalRamp": [
+          "oklch(15% 0.15 32.2)",
+          "oklch(26.4% 0.15 32.2)",
+          "oklch(37.9% 0.15 32.2)",
+          "oklch(49.3% 0.15 32.2)",
+          "oklch(60.7% 0.15 32.2)",
+          "oklch(72.1% 0.15 32.2)",
+          "oklch(83.6% 0.15 32.2)",
+          "oklch(95% 0.15 32.2)"
+        ]
+      },
+      "critical-soft-light": {
+        "role": "status",
+        "displayName": "Critical Wash (light theme)",
+        "theme": "light",
+        "cssVar": "--critical-soft",
+        "canonical": "rgba(180, 67, 47, 0.08)"
+      },
+      "scrim-light": {
+        "role": "neutral",
+        "displayName": "scrim (light theme)",
+        "theme": "light",
+        "cssVar": "--scrim",
+        "canonical": "rgba(17, 18, 20, 0.28)"
+      },
+      "author-1-light": {
+        "role": "secondary",
+        "displayName": "Author Coral (light theme)",
+        "theme": "light",
+        "cssVar": "--author-1",
+        "canonical": "#e0623c",
+        "oklch": "oklch(64.7% 0.166 37.3)",
+        "tonalRamp": [
+          "oklch(15% 0.15 37.3)",
+          "oklch(26.4% 0.15 37.3)",
+          "oklch(37.9% 0.15 37.3)",
+          "oklch(49.3% 0.15 37.3)",
+          "oklch(60.7% 0.15 37.3)",
+          "oklch(72.1% 0.15 37.3)",
+          "oklch(83.6% 0.15 37.3)",
+          "oklch(95% 0.15 37.3)"
+        ]
+      },
+      "author-2-light": {
+        "role": "secondary",
+        "displayName": "Author Sky (light theme)",
+        "theme": "light",
+        "cssVar": "--author-2",
+        "canonical": "#2f7fd8",
+        "oklch": "oklch(59.3% 0.156 253.9)",
+        "tonalRamp": [
+          "oklch(15% 0.15 253.9)",
+          "oklch(26.4% 0.15 253.9)",
+          "oklch(37.9% 0.15 253.9)",
+          "oklch(49.3% 0.15 253.9)",
+          "oklch(60.7% 0.15 253.9)",
+          "oklch(72.1% 0.15 253.9)",
+          "oklch(83.6% 0.15 253.9)",
+          "oklch(95% 0.15 253.9)"
+        ]
+      },
+      "author-3-light": {
+        "role": "secondary",
+        "displayName": "Author Lilac (light theme)",
+        "theme": "light",
+        "cssVar": "--author-3",
+        "canonical": "#8a5ad8",
+        "oklch": "oklch(58.1% 0.186 297.9)",
+        "tonalRamp": [
+          "oklch(15% 0.15 297.9)",
+          "oklch(26.4% 0.15 297.9)",
+          "oklch(37.9% 0.15 297.9)",
+          "oklch(49.3% 0.15 297.9)",
+          "oklch(60.7% 0.15 297.9)",
+          "oklch(72.1% 0.15 297.9)",
+          "oklch(83.6% 0.15 297.9)",
+          "oklch(95% 0.15 297.9)"
+        ]
+      },
+      "author-4-light": {
+        "role": "secondary",
+        "displayName": "Author Ochre (light theme)",
+        "theme": "light",
+        "cssVar": "--author-4",
+        "canonical": "#c48a14",
+        "oklch": "oklch(67.4% 0.136 77.7)",
+        "tonalRamp": [
+          "oklch(15% 0.136 77.7)",
+          "oklch(26.4% 0.136 77.7)",
+          "oklch(37.9% 0.136 77.7)",
+          "oklch(49.3% 0.136 77.7)",
+          "oklch(60.7% 0.136 77.7)",
+          "oklch(72.1% 0.136 77.7)",
+          "oklch(83.6% 0.136 77.7)",
+          "oklch(95% 0.136 77.7)"
+        ]
+      },
+      "author-5-light": {
+        "role": "secondary",
+        "displayName": "Author Rose (light theme)",
+        "theme": "light",
+        "cssVar": "--author-5",
+        "canonical": "#cf4f84",
+        "oklch": "oklch(61.2% 0.169 357.6)",
+        "tonalRamp": [
+          "oklch(15% 0.15 357.6)",
+          "oklch(26.4% 0.15 357.6)",
+          "oklch(37.9% 0.15 357.6)",
+          "oklch(49.3% 0.15 357.6)",
+          "oklch(60.7% 0.15 357.6)",
+          "oklch(72.1% 0.15 357.6)",
+          "oklch(83.6% 0.15 357.6)",
+          "oklch(95% 0.15 357.6)"
+        ]
+      },
+      "author-6-light": {
+        "role": "secondary",
+        "displayName": "Author Teal (light theme)",
+        "theme": "light",
+        "cssVar": "--author-6",
+        "canonical": "#1f9aa1",
+        "oklch": "oklch(62.7% 0.1 200.9)",
+        "tonalRamp": [
+          "oklch(15% 0.1 200.9)",
+          "oklch(26.4% 0.1 200.9)",
+          "oklch(37.9% 0.1 200.9)",
+          "oklch(49.3% 0.1 200.9)",
+          "oklch(60.7% 0.1 200.9)",
+          "oklch(72.1% 0.1 200.9)",
+          "oklch(83.6% 0.1 200.9)",
+          "oklch(95% 0.1 200.9)"
+        ]
+      },
+      "on-author-light": {
+        "role": "secondary",
+        "displayName": "On Author (light theme)",
+        "theme": "light",
+        "cssVar": "--on-author",
+        "canonical": "#ffffff",
+        "oklch": "oklch(100% 0 89.9)",
+        "tonalRamp": [
+          "oklch(15% 0 89.9)",
+          "oklch(26.4% 0 89.9)",
+          "oklch(37.9% 0 89.9)",
+          "oklch(49.3% 0 89.9)",
+          "oklch(60.7% 0 89.9)",
+          "oklch(72.1% 0 89.9)",
+          "oklch(83.6% 0 89.9)",
+          "oklch(95% 0 89.9)"
+        ]
+      },
+      "grid-dot-light": {
+        "role": "neutral",
+        "displayName": "grid-dot (light theme)",
+        "theme": "light",
+        "cssVar": "--grid-dot",
+        "canonical": "rgba(17, 18, 20, 0.1)"
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Page Title",
+        "purpose": "One per page, top left of the canvas."
+      },
+      "headline": {
+        "displayName": "Pane Heading",
+        "purpose": "Headings inside detail panes and threads."
+      },
+      "title": {
+        "displayName": "Section Title",
+        "purpose": "Section headings inside a page."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Table cells, nav rows, descriptions."
+      },
+      "body-root": {
+        "displayName": "Root Body",
+        "purpose": "Document default size."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Field, column and stat labels; never a kicker."
+      },
+      "stat": {
+        "displayName": "Stat Value",
+        "purpose": "Numeric dashboard stats."
+      },
+      "mono": {
+        "displayName": "Mono",
+        "purpose": "Numbers, ids, code, timestamps."
+      },
+      "tag": {
+        "displayName": "Author Tag",
+        "purpose": "Presence tags."
+      }
+    },
+    "shadows": [
+      {
+        "name": "shadow-panel",
+        "value": "0 0 0 1px var(--border), 0 1px 1px rgba(0, 0, 0, 0.25), 0 12px 32px -12px rgba(0, 0, 0, 0.6)",
+        "light": "0 0 0 1px var(--border), 0 1px 2px rgba(17, 18, 20, 0.04), 0 12px 32px -14px rgba(17, 18, 20, 0.16)",
+        "purpose": "Floating panels: inspector, command palette, onboarding and auth cards."
+      },
+      {
+        "name": "shadow-pop",
+        "value": "0 0 0 1px var(--border-strong), 0 4px 12px -2px rgba(0, 0, 0, 0.4), 0 24px 64px -16px rgba(0, 0, 0, 0.7)",
+        "light": "0 0 0 1px var(--border-strong), 0 4px 12px -2px rgba(17, 18, 20, 0.08), 0 24px 64px -16px rgba(17, 18, 20, 0.25)",
+        "purpose": "Tooltips, menus and popovers above panels."
+      }
+    ],
+    "motion": [
+      {
+        "name": "ease-out",
+        "value": "cubic-bezier(0.23, 1, 0.32, 1)",
+        "purpose": "Entrances, presses, draws, pops."
+      },
+      {
+        "name": "ease-in-out",
+        "value": "cubic-bezier(0.77, 0, 0.175, 1)",
+        "purpose": "Things moving or breathing on screen (login canvas drift and glide, chat thinking line, vault graph moves)."
+      },
+      {
+        "name": "ease-drawer",
+        "value": "cubic-bezier(0.32, 0.72, 0, 1)",
+        "purpose": "Mobile drawer slide."
+      },
+      {
+        "name": "dur-hover",
+        "value": "120ms",
+        "purpose": "Hover colour and border fades; selection handle snap."
+      },
+      {
+        "name": "dur-press",
+        "value": "140ms",
+        "purpose": "Press to scale(0.97); tooltip pop."
+      },
+      {
+        "name": "dur-pop",
+        "value": "180ms",
+        "purpose": "Popover and fade entrances from scale(0.96)."
+      },
+      {
+        "name": "dur-drawer",
+        "value": "260ms",
+        "purpose": "Mobile drawer."
+      },
+      {
+        "name": "theme-wipe",
+        "value": "280ms circle clip-path via View Transitions",
+        "purpose": "Pointer-only theme switch from the toggle."
+      },
+      {
+        "name": "arrival",
+        "value": "200ms fade, 1400ms 16% author wash, 2400ms cursor",
+        "purpose": "New memory rows after a poll, never on first load."
+      },
+      {
+        "name": "bits",
+        "value": "SyncMark draw 200ms, spin 800ms linear; CopyButton check 180ms; DigitRoll 240ms + 30ms stagger; DecryptReveal 480ms max; HoldButton 900ms linear after 150ms delay, release 200ms; Spark 280ms; BlurWords 420ms + 45ms stagger; Tooltip 400ms delay, 300ms warm, 140ms pop",
+        "purpose": "Original implementations inspired by React Bits; reduced motion renders final states."
+      },
+      {
+        "name": "pop-in",
+        "value": "180ms opacity and scale from 0.96 via @starting-style; keyboard-opened surfaces skip it",
+        "purpose": "Select list opened by pointer, minted token panel, any popover. Set transform-origin to the trigger side."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "sm",
+        "value": "640px"
+      },
+      {
+        "name": "md",
+        "value": "768px"
+      },
+      {
+        "name": "lg",
+        "value": "1024px"
+      }
+    ],
+    "layout": {
+      "sidebar": "232px",
+      "drawer": "264px",
+      "mobileBar": "48px",
+      "gridPitch": "20px",
+      "inspector": "320px",
+      "palette": "560px",
+      "hair": "1px (0.5px at 2dppx)",
+      "selectList": "min 160px wide, max 288px tall, z-index 60",
+      "settingsRail": "180px",
+      "settingsPanel": "max-w-3xl",
+      "pageMax": "dashboard 1240px, vaults 72rem, settings and connectors 64rem",
+      "skeletonRadius": "5px"
+    }
+  },
+  "components": [
+    {
+      "name": "Button",
+      "kind": "button",
+      "refersTo": "button",
+      "description": "Default compact button: raised graphite, hairline edge, 0.97 press.",
+      "html": "<button class=\"ds-btn\">Sync now</button>",
+      "css": ".ds-btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:30px;padding:0 12px;border-radius:var(--radius-control);font:500 13px/1 var(--font-sans),system-ui,sans-serif;white-space:nowrap;border:var(--hair) solid var(--border-strong);background:var(--surface-raised);color:var(--ink);cursor:pointer;transition: transform var(--dur-press) var(--ease-out), background-color var(--dur-hover) ease, border-color var(--dur-hover) ease;} .ds-btn:hover{background:var(--surface-hover);} .ds-btn:active{transform:scale(0.97);} .ds-btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}"
+    },
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The one main action per view, felt green.",
+      "html": "<button class=\"ds-btn-primary\">Generate a token</button>",
+      "css": ".ds-btn-primary{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:30px;padding:0 12px;border-radius:var(--radius-control);font:500 13px/1 var(--font-sans),system-ui,sans-serif;white-space:nowrap;border:var(--hair) solid var(--border-strong);background:var(--surface-raised);color:var(--ink);cursor:pointer;transition: transform var(--dur-press) var(--ease-out), background-color var(--dur-hover) ease, border-color var(--dur-hover) ease;background:var(--accent);border-color:transparent;color:var(--on-accent);} .ds-btn-primary:hover{background:color-mix(in oklab, var(--accent) 88%, var(--ink));} .ds-btn-primary:active{transform:scale(0.97);} .ds-btn-primary:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}"
+    },
+    {
+      "name": "Ghost Button",
+      "kind": "button",
+      "refersTo": "button-ghost",
+      "description": "Quiet toolbar and footer action.",
+      "html": "<button class=\"ds-btn-ghost\">Cancel</button>",
+      "css": ".ds-btn-ghost{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:30px;padding:0 12px;border-radius:var(--radius-control);font:500 13px/1 var(--font-sans),system-ui,sans-serif;white-space:nowrap;border:var(--hair) solid var(--border-strong);background:var(--surface-raised);color:var(--ink);cursor:pointer;transition: transform var(--dur-press) var(--ease-out), background-color var(--dur-hover) ease, border-color var(--dur-hover) ease;background:transparent;border-color:transparent;color:var(--ink-dim);} .ds-btn-ghost:hover{color:var(--ink);background:var(--surface-hover);} .ds-btn-ghost:active{transform:scale(0.97);} .ds-btn-ghost:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}"
+    },
+    {
+      "name": "Danger Button",
+      "kind": "button",
+      "refersTo": "button-danger",
+      "description": "Destructive action; HoldButton adds a hold-to-confirm wash.",
+      "html": "<button class=\"ds-btn-danger\"><svg width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.75\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M3 6h18\"/><path d=\"M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6\"/><path d=\"M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2\"/></svg>Delete vault</button>",
+      "css": ".ds-btn-danger{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:30px;padding:0 12px;border-radius:var(--radius-control);font:500 13px/1 var(--font-sans),system-ui,sans-serif;white-space:nowrap;border:var(--hair) solid var(--border-strong);background:var(--surface-raised);color:var(--ink);cursor:pointer;transition: transform var(--dur-press) var(--ease-out), background-color var(--dur-hover) ease, border-color var(--dur-hover) ease;background:transparent;color:var(--critical);} .ds-btn-danger:hover{background:var(--critical-soft);} .ds-btn-danger:active{transform:scale(0.97);} .ds-btn-danger:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}"
+    },
+    {
+      "name": "Field",
+      "kind": "input",
+      "refersTo": "field",
+      "description": "Single-line input; the border turns felt green on focus.",
+      "html": "<input class=\"ds-field\" placeholder=\"http://localhost:3417/mcp\" />",
+      "css": ".ds-field{height:32px;padding:0 12px;background:var(--surface-raised);border:var(--hair) solid var(--border);border-radius:var(--radius-field);color:var(--ink);font:13px var(--font-sans),system-ui,sans-serif;transition:border-color var(--dur-hover) ease, background-color var(--dur-hover) ease;} .ds-field::placeholder{color:var(--ink-faint);} .ds-field:focus{border-color:var(--accent);outline:none;}"
+    },
+    {
+      "name": "Filter Pills",
+      "kind": "chip",
+      "refersTo": "pill",
+      "description": "Multi-select filters go neutral when on; single-choice selection takes the accent.",
+      "html": "<div class=\"ds-pills\"><button class=\"ds-pill\" aria-pressed=\"true\">Person</button><button class=\"ds-pill\" aria-pressed=\"false\">Location</button><button class=\"ds-pill\" aria-selected=\"true\">General</button></div>",
+      "css": ".ds-pills{display:flex;gap:6px;} .ds-pill{display:inline-flex;align-items:center;height:24px;padding:0 9px;border-radius:6px;border:var(--hair) solid var(--border);background:var(--surface-raised);color:var(--ink-dim);font:12px/1 var(--font-sans),system-ui,sans-serif;cursor:pointer;transition:transform var(--dur-press) var(--ease-out), border-color var(--dur-hover) ease, color var(--dur-hover) ease;} .ds-pill:active{transform:scale(0.97);} .ds-pill[aria-pressed=\"true\"]{border-color:var(--border-strong);background:var(--surface-hover);color:var(--ink);} .ds-pill[aria-pressed=\"false\"]{opacity:0.7;} .ds-pill[aria-selected=\"true\"]{border-color:var(--accent);background:var(--accent-soft);color:var(--ink);} .ds-pill:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}"
+    },
+    {
+      "name": "Author Tag",
+      "kind": "custom",
+      "refersTo": "author-tag",
+      "description": "Figma-style multiplayer name tag with an optional cursor glyph; author colours mark authorship only.",
+      "html": "<span class=\"ds-author\"><svg class=\"ds-author-cursor\" width=\"16\" height=\"16\" viewBox=\"0 0 16 16\"><path d=\"M2 1.5 13.5 7 8.3 8.4 6 13.8Z\" fill=\"var(--author-2)\" stroke=\"var(--canvas)\" stroke-width=\"1\" stroke-linejoin=\"round\"/></svg><span class=\"ds-author-tag\" style=\"--author:var(--author-2)\">Claude Code laptop</span></span> <span class=\"ds-author-tag\" style=\"--author:var(--author-3)\">design</span>",
+      "css": ".ds-author{position:relative;display:inline-flex;} .ds-author-cursor{position:absolute;left:-8px;top:-12px;pointer-events:none;} .ds-author-tag{display:inline-flex;align-items:center;height:20px;padding:0 6px;border-radius:4px 4px 4px 1px;background:var(--author, var(--ink-faint));color:var(--on-author);font:500 11.5px/1 var(--font-sans),system-ui,sans-serif;white-space:nowrap;}"
+    },
+    {
+      "name": "Selection Frame Panel",
+      "kind": "card",
+      "refersTo": "panel",
+      "description": "Floating inspector panel wearing the selection frame: accent outline plus four square handles.",
+      "html": "<aside class=\"ds-panel ds-selected\"><div class=\"ds-title\">Shared components live in packages/ui.</div><div class=\"ds-label\">Author</div></aside>",
+      "css": ".ds-panel{background:var(--surface);border-radius:var(--radius-card);box-shadow:var(--shadow-panel);padding:16px;display:flex;flex-direction:column;gap:12px;max-width:320px;} .ds-title{font:600 13px var(--font-sans),system-ui,sans-serif;color:var(--ink);} .ds-label{font-size:12px;color:var(--ink-faint);} .ds-selected{position:relative;outline:1px solid var(--accent);outline-offset:-1px;} .ds-selected::after{content:\"\";position:absolute;inset:-3px;pointer-events:none;background:linear-gradient(var(--accent),var(--accent)) top left/6px 6px no-repeat,linear-gradient(var(--accent),var(--accent)) top right/6px 6px no-repeat,linear-gradient(var(--accent),var(--accent)) bottom left/6px 6px no-repeat,linear-gradient(var(--accent),var(--accent)) bottom right/6px 6px no-repeat;}"
+    },
+    {
+      "name": "Sidebar Navigation",
+      "kind": "nav",
+      "refersTo": "nav-link",
+      "description": "Nav rows: raised fill when active or hovered, active icon in felt green.",
+      "html": "<nav class=\"ds-nav\"><a class=\"ds-nav-link\" data-active href=\"#\"><svg class=\"ds-nav-icon\" width=\"15\" height=\"15\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.75\"><rect x=\"3\" y=\"3\" width=\"7\" height=\"9\" rx=\"1\"/><rect x=\"14\" y=\"3\" width=\"7\" height=\"5\" rx=\"1\"/><rect x=\"14\" y=\"12\" width=\"7\" height=\"9\" rx=\"1\"/><rect x=\"3\" y=\"16\" width=\"7\" height=\"5\" rx=\"1\"/></svg>Dashboard</a><a class=\"ds-nav-link\" href=\"#\"><svg class=\"ds-nav-icon\" width=\"15\" height=\"15\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.75\"><path d=\"M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z\"/></svg>Chat</a></nav>",
+      "css": ".ds-nav{display:flex;flex-direction:column;gap:1px;width:208px;padding:12px;background:var(--surface);} .ds-nav-link{display:flex;align-items:center;gap:10px;height:32px;padding:0 10px;border-radius:7px;font:13px var(--font-sans),system-ui,sans-serif;color:var(--ink-dim);text-decoration:none;transition:background-color var(--dur-hover) ease,color var(--dur-hover) ease;} .ds-nav-link .ds-nav-icon{color:var(--ink-faint);} .ds-nav-link:hover,.ds-nav-link[data-active]{background:var(--surface-raised);color:var(--ink);} .ds-nav-link[data-active]{font-weight:500;} .ds-nav-link[data-active] .ds-nav-icon{color:var(--accent-text);} .ds-nav-link:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}"
+    },
+    {
+      "name": "Data Table",
+      "kind": "custom",
+      "refersTo": "table-cell",
+      "description": "Dense hairline table with tabular numerals and quiet headers.",
+      "html": "<table class=\"ds-table\"><thead><tr><th>Source</th><th>Records</th></tr></thead><tbody><tr><td>Demo data</td><td class=\"ds-mono\">77</td></tr><tr><td>GitHub</td><td class=\"ds-mono\">1,204</td></tr></tbody></table>",
+      "css": ".ds-table{width:100%;border-collapse:collapse;font:13px var(--font-sans),system-ui,sans-serif;color:var(--ink);background:var(--surface);} .ds-table th{height:32px;padding:0 12px;text-align:left;font-weight:500;font-size:12px;color:var(--ink-faint);border-bottom:var(--hair) solid var(--border);} .ds-table td{height:40px;padding:0 12px;border-bottom:var(--hair) solid var(--border);font-variant-numeric:tabular-nums;} .ds-table tr:last-child td{border-bottom:0;} .ds-table tbody tr:hover td{background:var(--surface-raised);} .ds-mono{font-family:var(--font-mono),ui-monospace,monospace;}"
+    },
+    {
+      "name": "Select",
+      "kind": "custom",
+      "refersTo": "select-option",
+      "description": "The only select. A .field trigger with a chevron and a portalled .panel list; 32px options, accent check on the selected one.",
+      "html": "<div class=\"ds-select\"><button class=\"ds-field\">Member <span>v</span></button><ul class=\"ds-list\"><li class=\"ds-opt\" data-active>Member</li><li class=\"ds-opt\">Viewer</li></ul></div>",
+      "css": ".ds-field{display:inline-flex;align-items:center;gap:8px;height:32px;padding:0 8px 0 10px;background:var(--surface-raised);border:var(--hair) solid var(--border);border-radius:var(--radius-field);color:var(--ink);font:13px var(--font-sans),system-ui,sans-serif;} .ds-list{list-style:none;margin:4px 0 0;padding:4px;background:var(--surface);border-radius:var(--radius-card);box-shadow:var(--shadow-pop);width:180px;} .ds-opt{display:flex;align-items:center;min-height:32px;padding:0 8px;border-radius:6px;font-size:13px;color:var(--ink-dim);} .ds-opt[data-active]{background:var(--surface-raised);color:var(--ink);}"
+    },
+    {
+      "name": "Error Line",
+      "kind": "custom",
+      "refersTo": "error-line",
+      "description": "Inline error under the control that failed: critical text on a critical wash, role=alert, says what to do next.",
+      "html": "<p class=\"ds-err\" role=\"alert\">Could not revoke that token. Reload and try again.</p>",
+      "css": ".ds-err{margin:0;padding:8px 12px;border-radius:var(--radius-field);background:var(--critical-soft);color:var(--critical);font:12.5px var(--font-sans),system-ui,sans-serif;}"
+    },
+    {
+      "name": "Skeleton",
+      "kind": "custom",
+      "refersTo": "table-cell",
+      "description": "Loading block shaped like the content, 5px radius, 1.2s linear shimmer between raised and hover surfaces.",
+      "html": "<div class=\"ds-skel\" style=\"width:160px;height:16px\"></div>",
+      "css": ".ds-skel{border-radius:5px;background:linear-gradient(90deg,var(--surface-raised) 0%,var(--surface-hover) 50%,var(--surface-raised) 100%);background-size:200% 100%;animation:ds-skel 1.2s linear infinite;} @keyframes ds-skel{to{background-position:-200% 0}}"
+    },
+    {
+      "name": "Kbd",
+      "kind": "custom",
+      "refersTo": "kbd",
+      "description": "Shortcut glyph: 18px square minimum, strong hairline, mono 11px in faint ink.",
+      "html": "<span class=\"ds-kbd\">⌘K</span>",
+      "css": ".ds-kbd{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;padding:0 4px;border-radius:4px;border:var(--hair) solid var(--border-strong);background:var(--surface);color:var(--ink-faint);font:500 11px var(--font-mono),ui-monospace,monospace;font-feature-settings:normal;line-height:1;}"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Multiplayer Canvas",
+    "overview": "Eunomia is drawn as the shared canvas a team's agents and people write to, in the grammar of Figma and tldraw. A near-black ground (paper-white in the light theme) carries a faint 20px dot grid; on it float hairline panels with small radii, dense tabular data, and Geist type. Every memory says who wrote it through a Figma-style author tag, and the selected thing wears a green outline with four square handles. Dark is the default; `data-theme=\"light\"` on `<html>` flips every token, and a saved light theme is applied before first paint.\n\nDensity is high and quiet. The page is a slim 232px sidebar plus a dot-grid canvas holding one page title, hairline ledgers and tables, and (on the dashboard) a floating inspector for the selected item. Lists of things are tables with hairline rows, not card grids. Colour is rationed into three separate vocabularies that never borrow from each other: one felt-green accent for what you can press or have selected, a six-colour presence palette for authorship, and muted kind and connector hues for categorising entities and sources.\n\nMotion is small, fast and earned. Press feedback, popover entrances and a handful of authored moments (live memory arrival, token decrypt, digit roll, the theme wipe) are gated by frequency, by input device, and by reduced-motion preference. Real text is always in the DOM at its final value from the first frame.",
+    "keyCharacteristics": [
+      "Dot-grid canvas ground, hairline (1px, 0.5px on 2x screens) borders everywhere.",
+      "One accent, felt green, only on pressable or selected things.",
+      "Author tags in a separate presence palette mark who wrote what, and nothing else.",
+      "Figma selection frame: 1px accent outline plus four 6px square handles.",
+      "Dense tables with tabular numerals; mono only for numbers, ids, code and timestamps.",
+      "Motion under 300ms for UI, pointer-only flourishes, nothing on keyboard or high-frequency actions."
+    ],
+    "rules": [
+      {
+        "name": "The Felt Rule",
+        "body": "Felt green appears only on something you can press or something that is selected (primary button, focus ring, selection frame, selected tab, link). Never on headings, decoration, or icons at rest.",
+        "section": "colors"
+      },
+      {
+        "name": "The Presence Rule",
+        "body": "Author colours mark who wrote something and nothing else. Never use them for actions, status or decoration, and never invent an author: if the data has none, show no tag.",
+        "section": "colors"
+      },
+      {
+        "name": "The Quiet Filter Rule",
+        "body": "Multi-select filters that are on (`aria-pressed=\"true\"`) go neutral (raised fill, strong border, full ink), so a row of them never becomes a wall of green. Only single-choice selection (`aria-selected`) takes the accent.",
+        "section": "colors"
+      },
+      {
+        "name": "The Two Theme Rule",
+        "body": "Every colour is a variable with a dark and a light value. Never hard-code black, white or rgba shadows; use `scrim`, `--shadow-panel`, `--shadow-pop`.",
+        "section": "colors"
+      },
+      {
+        "name": "The No Kicker Rule",
+        "body": "Headings carry their own weight. Never set a small label above a heading; `label` is for fields, columns and stats only.",
+        "section": "typography"
+      },
+      {
+        "name": "The Honest Mono Rule",
+        "body": "Mono is for data that must align or be copied exactly (numbers, ids, code, timestamps). Never for prose, labels or decoration.",
+        "section": "typography"
+      },
+      {
+        "name": "The Float Only Rule",
+        "body": "In-flow blocks never cast a shadow; a shadow means the thing floats over the canvas. Never nest a card inside a card.",
+        "section": "elevation & depth"
+      },
+      {
+        "name": "The Licence Rule",
+        "body": "Files in `bits/` are original implementations inspired by React Bits (reactbits.dev). React Bits is MIT plus Commons Clause and Eunomia is MIT, so no React Bits source is copied; each file opens with an \"Inspired by React Bits <Name> (reactbits.dev). Original implementation for Eunomia.\" header, colours come only from globals.css tokens, and no new dependency is added.",
+        "section": "components"
+      },
+      {
+        "name": "The One Moment Rule",
+        "body": "At most one authored motion moment per surface; everything else is press feedback and pop-in entrances under 300ms.",
+        "section": "components"
+      }
+    ],
+    "dos": [
+      "**Do** build from the tokens and classes in `globals.css` (`.ledger`, `.panel`, `.btn`, `.field`, `.pill`, `.data-table`, `.label`, `.page-title`, `.section-title`, `.frame-selected`); add a token rather than a raw hex.",
+      "**Do** show authorship with the author tag and a real author (owner email, source key, or an agent name the API returns).",
+      "**Do** mark the selected item with the selection frame (outline plus four 6px handles), or the outline plus green wash on a table row.",
+      "**Do** put lists of things in dense tables with hairline rows, tabular numerals and columns that hide rather than wrap on small screens.",
+      "**Do** give every pressable thing the 0.97 press over 140ms `--ease-out`, and every floating thing the pop-in from scale 0.96.",
+      "**Do** check every screen in both themes; dark is the default.",
+      "**Do** keep real text in the DOM at its final value from the first frame, and render final states under reduced motion.",
+      "**Do** use lucide-react icons at 14 to 16px with stroke 1.75.",
+      "**Do** reuse `Select`, `CopyButton`, `Tooltip`, `AuthorTag` and the `bits` components before writing a new control; add a prop, not a sibling.",
+      "**Do** show errors as a role=alert line that says what failed and what to do next, with a copyable mono id when one exists; render loading as shaped skeletons and keep empty messages out of the loading state."
+    ],
+    "donts": [
+      "**Don't** put felt green on headings, decoration or idle icons; it means \"press me\" or \"selected\".",
+      "**Don't** use author colours for actions, status or decoration, or invent an author.",
+      "**Don't** set a small label or kicker above a heading.",
+      "**Don't** give in-flow blocks a shadow or nest a card inside a card.",
+      "**Don't** animate keyboard-driven or high-frequency actions (palette, nav, tabs, typing), use `transition: all`, `ease-in`, or scale from 0.",
+      "**Don't** add hover styles outside `(hover: hover) and (pointer: fine)`.",
+      "**Don't** use mono for prose or labels, gradient text, or emoji and unicode glyphs as icons.",
+      "**Don't** copy React Bits source into `bits/`.",
+      "**Don't** use a native `<select>`, `title` as the only tooltip, or a new radius, colour, font or easing; the tokens are the whole vocabulary."
+    ]
+  }
+}

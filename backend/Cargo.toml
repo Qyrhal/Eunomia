@@ -1,22 +1,32 @@
 [package]
 name = "eunomia-backend"
-version = "1.4.1"
-edition = "2021"
+version = "2.0.0"
+edition = "2024"
+
+[features]
+default = ["provisioning"]
+# The only code that may sign in as the SurrealDB root user: creating org databases and their users
+# (src/provisioning/). Enabled by default for the single binary; see docs/architecture/tenancy.md.
+provisioning = []
+# Test-only hooks: the raw client accessor, the isolation-suite layer switches and the mutation hook.
+test-support = []
 
 [dependencies]
-axum = { version = "0.7", features = ["macros"] }
+axum = { version = "0.8", features = ["macros"] }
 tokio = { version = "1", features = ["full"] }
-tower-http = { version = "0.5", features = ["cors"] }
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+tower-http = { version = "0.6", features = ["cors", "limit"] }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-surrealdb = { version = "2", features = ["protocol-ws"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+surrealdb = { version = "=3.3.1", features = ["protocol-ws", "kv-mem"] }
 jsonwebtoken = "9"
 bcrypt = "0.15"
 sha2 = "0.10"
 rand = "0.8"
 chrono = { version = "0.4", features = ["serde"] }
 tracing = "0.1"
-tracing-subscriber = "0.3"
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
 dotenvy = "0.15"
 uuid = { version = "1", features = ["v4", "serde"] }
 async-trait = "0.1"
@@ -28,8 +38,16 @@ hex = "0.4"
 futures = "0.3"
 tokio-stream = "0.1"
 serde_urlencoded = "0.7"
+opentelemetry-otlp = { version = "0.33", default-features = false, features = ["trace", "http-proto", "reqwest-blocking-client", "reqwest-rustls"] }
+tracing-opentelemetry = { version = "0.34", default-features = false }
+opentelemetry = "0.33"
+opentelemetry_sdk = { version = "0.33", default-features = false, features = ["trace"] }
+utoipa = "5"
+url = "2"
 
 [dev-dependencies]
 tokio-test = "0.4"
-tower = { version = "0.5", features = ["util"] }
-http-body-util = "0.1"
+regex = "1"
+insta = { version = "1", features = ["json", "redactions"] }
+jsonschema = { version = "0.58.6", default-features = false }
+eunomia-backend = { path = ".", features = ["test-support"] }

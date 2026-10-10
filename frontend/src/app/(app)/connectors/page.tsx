@@ -1,173 +1,259 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import Link from "next/link";
-import { connectors as connectorsApi, type Connector } from "@/lib/api";
-import { CONNECTOR_META, CONNECTOR_ORDER, connectorStatus } from "@/lib/connectorMeta";
+import { ChevronRight, Search, X } from "lucide-react";
+import type { Connector, SourceRow } from "@/lib/types";
+import { useConnectors } from "@/lib/queries/connectors";
+import { useSources } from "@/lib/queries/sources";
+import { CONNECTOR_META, CONNECTOR_ORDER, ConnectorTile, connectorStatus, kindForSource, relativeTime } from "@/lib/connectorMeta";
+import { isLiveSource, sourceHealth } from "@/lib/sourceState";
+import ErrorLine, { failure } from "@/components/ErrorLine";
+import Tooltip from "@/components/bits/Tooltip";
 
-type View = "mine" | "discover";
 type StatusFilter = "all" | "connected" | "disconnected";
 
+/** One row of the connected table: a connector with credentials, or a source that holds records without one (demo data). */
+type ConnectedRow = {
+  id: string;
+  kind: Connector["kind"] | null;
+  label: string;
+  status: "connected" | "demo";
+  source: SourceRow | undefined;
+  href: string;
+};
+
+const CONNECTED_COLS = "grid-cols-[minmax(0,1fr)_auto] md:grid-cols-[minmax(0,1.4fr)_120px_76px_96px_minmax(0,1fr)_16px]";
+const AVAILABLE_COLS = "grid-cols-[minmax(0,1fr)_auto] md:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)_96px_16px]";
+const ROW_LINK =
+  "grid items-center gap-x-4 px-4 min-h-12 py-2 text-[13px] transition-[background-color,transform] duration-[120ms] ease-[var(--ease-out)] hover:bg-[var(--surface-raised)] active:scale-[0.995] focus-visible:outline-offset-[-2px]";
+
+function matches(q: string, label: string, description = "") {
+  return !q || label.toLowerCase().includes(q) || description.toLowerCase().includes(q);
+}
+
 export default function ConnectorsPage() {
-  const [connectors, setConnectors] = useState<Connector[]>([]);
-  const [loaded, setLoaded] = useState(false);
-  const [view, setView] = useState<View | null>(null);
+  const connectorsQuery = useConnectors();
+  const sourcesQuery = useSources();
+  const connectors = connectorsQuery.data ?? null;
+  // Sources only add sync health; the page still works if that call fails.
+  const sourceRows: SourceRow[] = sourcesQuery.data ?? [];
+  const error = connectorsQuery.isError ? failure(connectorsQuery.error, "Could not load connectors.", " Check the backend is running, then retry.") : null;
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
 
-  useEffect(() => {
-    connectorsApi.list().then((list) => {
-      setConnectors(list);
-      setLoaded(true);
-    });
-  }, []);
+  const load = () => {
+    connectorsQuery.refetch();
+    sourcesQuery.refetch();
+  };
 
-  const byKind = Object.fromEntries(connectors.map((c) => [c.kind, c]));
-  const isConnected = (kind: Connector["kind"]) => connectorStatus(byKind[kind]) === "connected";
-
-  // Default to "My Connectors" once we know the user has at least one
-  // connection; otherwise there's nothing to show there, so land on the
-  // full marketplace instead. Resolved after the initial fetch so we don't
-  // flash the wrong tab.
-  const effectiveView: View = view ?? (loaded && CONNECTOR_ORDER.some(isConnected) ? "mine" : "discover");
-
+  const byKind = Object.fromEntries((connectors ?? []).map((c) => [c.kind, c]));
+  const bySource = Object.fromEntries(sourceRows.map((s) => [s.key, s]));
   const q = query.trim().toLowerCase();
-  let kinds = CONNECTOR_ORDER.filter((kind) => {
-    if (effectiveView === "mine" && !isConnected(kind)) return false;
-    if (q) {
-      const meta = CONNECTOR_META[kind];
-      if (!meta.label.toLowerCase().includes(q) && !meta.description.toLowerCase().includes(q)) return false;
+
+  const connected: ConnectedRow[] = [];
+  const available: Connector["kind"][] = [];
+  for (const kind of CONNECTOR_ORDER) {
+    const meta = CONNECTOR_META[kind];
+    const status = connectorStatus(byKind[kind]);
+    if (status === "disconnected") {
+      available.push(kind);
+      continue;
     }
-    if (effectiveView === "discover" && statusFilter !== "all") {
-      const connected = isConnected(kind);
-      if (statusFilter === "connected" && !connected) return false;
-      if (statusFilter === "disconnected" && connected) return false;
+    connected.push({
+      id: kind,
+      kind,
+      label: meta.label,
+      status,
+      source: meta.sourceKey ? bySource[meta.sourceKey] : undefined,
+      href: meta.sourceKey ? `/connectors/${meta.sourceKey}` : `/connectors/setup/${kind}`,
+    });
+  }
+  // Sources that hold records but belong to no connector (seeded demo data).
+  for (const s of sourceRows) {
+    if (!kindForSource(s.key) && isLiveSource(s)) {
+      connected.push({ id: s.key, kind: null, label: s.label, status: "demo", source: s, href: `/connectors/${s.key}` });
     }
-    return true;
-  });
-  if (effectiveView === "discover") {
-    kinds = [...kinds].sort((a, b) => Number(isConnected(b)) - Number(isConnected(a)));
   }
 
+  const shownConnected = connected.filter((r) => matches(q, r.label, r.kind ? CONNECTOR_META[r.kind].description : ""));
+  const shownAvailable = available.filter((k) => matches(q, CONNECTOR_META[k].label, CONNECTOR_META[k].description));
+  const loading = connectors === null && !error;
+
+  const filters: { value: StatusFilter; label: string; count: number }[] = [
+    { value: "all", label: "All", count: connected.length + available.length },
+    { value: "connected", label: "Connected", count: connected.length },
+    { value: "disconnected", label: "Not connected", count: available.length },
+  ];
+
   return (
-    <div className="max-w-4xl flex flex-col gap-7">
-      <div>
-        <div className="eyebrow mb-2">Connectors</div>
-        <h1 className="font-display text-3xl">Sealed accounts</h1>
-        <p className="text-[13px] mt-2" style={{ color: "var(--ink-dim)" }}>
-          Every credential here is encrypted at rest and only ever used by your own instance —
-          never sent anywhere but the provider it belongs to.
+    <div className="max-w-5xl flex flex-col gap-8">
+      <header className="flex flex-col gap-1.5">
+        <h1 className="page-title">Connectors</h1>
+        <p className="text-[13px] max-w-[62ch]" style={{ color: "var(--ink-dim)" }}>
+          Sources that write records into your memory. Credentials are encrypted at rest and only ever sent to the provider they belong to.
         </p>
-      </div>
+      </header>
 
-      <div className="flex items-center justify-between gap-3 flex-wrap">
-        <div className="flex gap-2">
-          <button
-            type="button"
-            className="pill"
-            aria-pressed={effectiveView === "mine"}
-            onClick={() => setView("mine")}
-          >
-            My Connectors
-          </button>
-          <button
-            type="button"
-            className="pill"
-            aria-pressed={effectiveView === "discover"}
-            onClick={() => setView("discover")}
-          >
-            Discover
-          </button>
-        </div>
-
-        <div className="flex items-center gap-2 flex-wrap">
+      <div className="flex items-center gap-2 flex-wrap">
+        <div className="field flex items-center gap-2 h-8 px-2.5 w-full sm:w-64">
+          <Search size={14} strokeWidth={1.75} color="var(--ink-faint)" aria-hidden />
           <input
             type="text"
-            className="field px-3 py-2 text-[13px]"
-            placeholder="Search connectors…"
+            aria-label="Search connectors"
+            className="flex-1 min-w-0 bg-transparent outline-none text-[13px]"
+            placeholder="Search connectors"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
-          {effectiveView === "discover" && (
-            <div className="flex gap-2">
-              <button type="button" className="pill" aria-pressed={statusFilter === "all"} onClick={() => setStatusFilter("all")}>
-                All
+          {query && (
+            <Tooltip label="Clear search">
+              <button type="button" aria-label="Clear search" className="btn btn-ghost btn-sm -mr-1.5 w-6 px-0" onClick={() => setQuery("")}>
+                <X size={13} strokeWidth={1.75} aria-hidden />
               </button>
-              <button
-                type="button"
-                className="pill"
-                aria-pressed={statusFilter === "connected"}
-                onClick={() => setStatusFilter("connected")}
-              >
-                Connected
-              </button>
-              <button
-                type="button"
-                className="pill"
-                aria-pressed={statusFilter === "disconnected"}
-                onClick={() => setStatusFilter("disconnected")}
-              >
-                Not connected
-              </button>
-            </div>
+            </Tooltip>
           )}
+        </div>
+        <div className="flex gap-1.5" role="group" aria-label="Filter by status">
+          {filters.map((f) => (
+            <button key={f.value} type="button" className="pill" aria-pressed={statusFilter === f.value} onClick={() => setStatusFilter(f.value)}>
+              {f.label}
+              {!loading && (
+                <span className="font-mono text-[11px]" style={{ color: "var(--ink-faint)" }}>
+                  {f.count}
+                </span>
+              )}
+            </button>
+          ))}
         </div>
       </div>
 
-      {kinds.length === 0 ? (
-        <div className="ledger p-10 text-center text-[13px]" style={{ color: "var(--ink-faint)" }}>
-          {effectiveView === "mine"
-            ? "No connectors set up yet — switch to Discover to connect one."
-            : "No connectors match your search."}
+      {error && (
+        <div className="flex items-start gap-3">
+          <div className="flex-1 min-w-0">
+            <ErrorLine error={error} />
+          </div>
+          <button type="button" className="btn btn-sm" onClick={load}>
+            Retry
+          </button>
         </div>
-      ) : (
-      <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-5">
-        {kinds.map((kind) => {
-          const meta = CONNECTOR_META[kind];
-          const status = connectorStatus(byKind[kind]);
-          return (
-            <Link
-              key={kind}
-              href={`/connectors/setup/${kind}`}
-              className="ledger overflow-hidden flex flex-col transition-colors hover:border-[var(--border-strong)]"
-            >
-              <div
-                className="h-24 flex items-center justify-center"
-                style={{
-                  background: `color-mix(in srgb, ${meta.tint} 14%, var(--surface))`,
-                  borderBottom: "1px solid var(--border)",
-                }}
-              >
-                <div
-                  className="w-12 h-12 rounded-xl flex items-center justify-center"
-                  style={{
-                    background: `color-mix(in srgb, ${meta.tint} 22%, var(--surface))`,
-                    border: `1px solid color-mix(in srgb, ${meta.tint} 40%, var(--border))`,
-                    color: meta.tint,
-                  }}
-                >
-                  {meta.icon}
-                </div>
-              </div>
-              <div className="p-5 flex flex-col gap-2 flex-1">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="text-[14px] font-medium">{meta.label}</div>
-                  <span
-                    className="eyebrow shrink-0"
-                    style={{ color: status === "demo" ? "var(--warning)" : status === "connected" ? "var(--good)" : "var(--ink-faint)" }}
-                  >
-                    {status === "demo" ? "Demo data" : status === "connected" ? "Connected" : "Not connected"}
-                  </span>
-                </div>
-                <p className="text-[12.5px]" style={{ color: "var(--ink-dim)" }}>
-                  {meta.description}
-                </p>
-              </div>
-            </Link>
-          );
-        })}
-      </div>
       )}
+
+      {statusFilter !== "disconnected" && (
+        <section className="flex flex-col gap-3" aria-labelledby="connected-heading">
+          <h2 id="connected-heading" className="section-title">
+            Connected
+          </h2>
+          <div className="ledger overflow-hidden">
+            <div className={`hidden md:grid ${CONNECTED_COLS} gap-x-4 px-4 h-8 items-center label border-b`} aria-hidden>
+              <span>Connector</span>
+              <span>Status</span>
+              <span className="text-right">Records</span>
+              <span>Last sync</span>
+              <span>Writes</span>
+              <span />
+            </div>
+            {loading && <SkeletonRows count={2} />}
+            {!loading && shownConnected.length === 0 && (
+              <p className="px-4 py-5 text-[13px]" style={{ color: "var(--ink-dim)" }}>
+                {q ? `No connected source matches "${query.trim()}".` : "Nothing connected yet. Pick a source from the catalogue below to start syncing records."}
+              </p>
+            )}
+            <div className="hairline-rows">
+              {shownConnected.map((r) => {
+                const s = r.source;
+                const fails = s?.sync_status.consecutive_failures ?? 0;
+                const health = sourceHealth(s);
+                return (
+                  <Link key={r.id} href={r.href} className={`${ROW_LINK} ${CONNECTED_COLS}`}>
+                    <span className="flex items-center gap-3 min-w-0">
+                      <ConnectorTile kind={r.kind} />
+                      <span className="font-medium truncate">{r.label}</span>
+                    </span>
+                    <span className="flex items-center gap-2" title={s?.sync_status.last_error || undefined}>
+                      <span className="dot" style={{ background: health.tone }} aria-hidden />
+                      <span>{health.label}</span>
+                    </span>
+                    <span className="hidden md:block font-mono text-right">{s ? s.record_count.toLocaleString() : "n/a"}</span>
+                    <span className="hidden md:block font-mono text-[12px]" style={{ color: fails ? "var(--critical)" : "var(--ink-dim)" }}>
+                      {fails ? `${fails} failed` : s ? relativeTime(s.sync_status.last_ok) : "n/a"}
+                    </span>
+                    <span className="hidden md:block font-mono text-[12px] truncate" style={{ color: "var(--ink-faint)" }}>
+                      {s?.record_types.join(", ") || "Tool calls only"}
+                    </span>
+                    <ChevronRight size={14} strokeWidth={1.75} color="var(--ink-faint)" className="hidden md:block" aria-hidden />
+                  </Link>
+                );
+              })}
+            </div>
+          </div>
+        </section>
+      )}
+
+      {statusFilter !== "connected" && (
+        <section className="flex flex-col gap-3" aria-labelledby="catalogue-heading">
+          <h2 id="catalogue-heading" className="section-title">
+            Catalogue
+          </h2>
+          <div className="ledger overflow-hidden">
+            {loading && <SkeletonRows count={6} />}
+            {!loading && shownAvailable.length === 0 && (
+              <div className="px-4 py-4 text-[13px] flex items-center gap-3" style={{ color: "var(--ink-dim)" }}>
+                {q ? (
+                  <>
+                    No connector matches &ldquo;{query.trim()}&rdquo;.
+                    <button type="button" className="btn btn-sm" onClick={() => setQuery("")}>
+                      Clear search
+                    </button>
+                  </>
+                ) : (
+                  "Every connector is set up."
+                )}
+              </div>
+            )}
+            <div className="hairline-rows">
+              {shownAvailable.map((kind) => {
+                const meta = CONNECTOR_META[kind];
+                const types = meta.sourceKey ? bySource[meta.sourceKey]?.record_types : undefined;
+                return (
+                  <Link key={kind} href={`/connectors/setup/${kind}`} className={`${ROW_LINK} ${AVAILABLE_COLS}`}>
+                    <span className="flex items-center gap-3 min-w-0">
+                      <ConnectorTile kind={kind} />
+                      <span className="min-w-0 flex flex-col">
+                        <span className="font-medium truncate">{meta.label}</span>
+                        <span className="text-[12px] truncate" style={{ color: "var(--ink-dim)" }}>
+                          {meta.description}
+                        </span>
+                      </span>
+                    </span>
+                    <span className="hidden md:block font-mono text-[12px] truncate" style={{ color: "var(--ink-faint)" }}>
+                      {types?.join(", ") || "Tool calls only"}
+                    </span>
+                    <span className="text-[12px] whitespace-nowrap" style={{ color: "var(--ink-faint)" }}>
+                      Not connected
+                    </span>
+                    <ChevronRight size={14} strokeWidth={1.75} color="var(--ink-faint)" className="hidden md:block" aria-hidden />
+                  </Link>
+                );
+              })}
+            </div>
+          </div>
+        </section>
+      )}
+    </div>
+  );
+}
+
+function SkeletonRows({ count }: { count: number }) {
+  return (
+    <div className="hairline-rows" aria-hidden>
+      {Array.from({ length: count }, (_, i) => (
+        <div key={i} className="flex items-center gap-3 px-4 h-12">
+          <span className="skeleton w-7 h-7" />
+          <span className="skeleton h-3 w-32" />
+          <span className="skeleton h-3 w-20 ml-auto" />
+        </div>
+      ))}
     </div>
   );
 }

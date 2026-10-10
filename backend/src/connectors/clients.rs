@@ -5,14 +5,19 @@
 //! `sources::<provider>`; only the Up Bank and PocketAI clients live here too,
 //! because the `/connectors/*` summary endpoints call them directly.
 //!
-//! Every connector's API base URL can be overridden with `config.base_url`
-//! (and the OAuth token endpoint with `config.token_url`) -- the hook the
-//! mock-provider tests use, and how a self-hosted PocketAI points elsewhere.
+//! Every request goes through `llm_net::client`, the same guarded client model calls use: no
+//! redirects, link-local and database addresses refused at connect time (a provider's own "next page"
+//! link included), private ranges refused when `ALLOW_PRIVATE_LLM_URL=0`.
+//!
+//! A connector's API base URL (and the OAuth token endpoint) can be overridden with
+//! `config.base_url` / `config.token_url`, but only when the operator sets
+//! `EUNOMIA_ALLOW_CONNECTOR_BASE_URL=1`: the hook the mock-provider tests use, and how a self-hosted
+//! provider such as GitHub Enterprise or PocketAI points elsewhere.
 
 use std::time::Duration;
 
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, RETRY_AFTER, USER_AGENT};
-use reqwest::{Method, StatusCode};
+use axum::http::{Method, StatusCode};
 use serde_json::{json, Value};
 
 use crate::error::{AppError, AppResult};
@@ -50,6 +55,11 @@ pub fn bearer(token: &str) -> HeaderMap {
     auth_header(&format!("Bearer {token}"))
 }
 
+/// The guarded client for one request (see the module docs). Its error already says why a URL is refused.
+async fn guarded(url: &str) -> AppResult<reqwest::Client> {
+    crate::llm_net::client(url).await.map_err(|e| AppError::new(StatusCode::BAD_GATEWAY, format!("{} is not allowed: {}", host(url), e.message)))
+}
+
 fn host(url: &str) -> &str {
     url.split("://").nth(1).and_then(|rest| rest.split('/').next()).unwrap_or(url)
 }
@@ -61,8 +71,20 @@ fn provider_error(url: &str, status: StatusCode, body: &str) -> AppError {
         500..=599 => " (provider-side error -- retried on the next sync)",
         _ => "",
     };
-    let snippet: String = body.chars().take(200).collect();
+    let snippet: String = reason(body).unwrap_or_else(|| body.chars().take(200).collect());
     AppError::new(StatusCode::BAD_GATEWAY, format!("{} returned HTTP {}{hint}: {}", host(url), status.as_u16(), snippet.trim()))
+}
+
+/// The provider's own words from a JSON error body (`message`, `error.message`, `error`, `detail`, `errors[0].message`), if it has any.
+fn reason(body: &str) -> Option<String> {
+    let v: Value = serde_json::from_str(body).ok()?;
+    let text = |v: &Value| v.as_str().filter(|s| !s.trim().is_empty()).map(str::to_string);
+    let found = text(&v["message"])
+        .or_else(|| text(&v["error"]["message"]))
+        .or_else(|| text(&v["error"]))
+        .or_else(|| text(&v["detail"]))
+        .or_else(|| text(&v["errors"][0]["message"]))?;
+    Some(found.chars().take(200).collect())
 }
 
 fn retry_after(headers: &HeaderMap) -> Option<u64> {
@@ -70,9 +92,9 @@ fn retry_after(headers: &HeaderMap) -> Option<u64> {
 }
 
 /// A per-user `config.base_url` would let any user of a shared server point
-/// the backend at internal addresses (the database, cloud metadata) and read
-/// the replies through sync errors. So it's off unless the operator opts in
-/// with `EUNOMIA_ALLOW_CONNECTOR_BASE_URL=1` (tests, mock providers, or a
+/// the backend at hosts of their choosing (the guard still refuses the database and cloud
+/// metadata, but not every internal service) and read the replies through sync errors. So it's off
+/// unless the operator opts in with `EUNOMIA_ALLOW_CONNECTOR_BASE_URL=1` (tests, mock providers, or a
 /// self-hosted provider such as GitHub Enterprise).
 pub fn base_url_override_allowed() -> bool {
     cfg!(test) || std::env::var("EUNOMIA_ALLOW_CONNECTOR_BASE_URL").is_ok_and(|v| v == "1")
@@ -85,7 +107,6 @@ pub fn base_url_override_allowed() -> bool {
 pub struct Api {
     base: String,
     headers: HeaderMap,
-    http: reqwest::Client,
 }
 
 impl Api {
@@ -100,7 +121,7 @@ impl Api {
             .unwrap_or(default_base);
         // GitHub rejects requests without a User-Agent; harmless elsewhere.
         headers.insert(USER_AGENT, HeaderValue::from_static("eunomia"));
-        Self { base: base.trim_end_matches('/').to_string(), headers, http: reqwest::Client::new() }
+        Self { base: base.trim_end_matches('/').to_string(), headers }
     }
 
     pub fn with_header(mut self, name: &'static str, value: &'static str) -> Self {
@@ -135,7 +156,10 @@ impl Api {
         let url = self.url(path);
         let mut retried = false;
         loop {
-            let mut req = self.http.request(method.clone(), &url).headers(self.headers.clone()).query(query).timeout(TIMEOUT);
+            let http = guarded(&url).await?;
+            let full = if query.is_empty() { reqwest::Url::parse(&url) } else { reqwest::Url::parse_with_params(&url, query) }
+                .map_err(|e| AppError::internal(format!("invalid connector url: {e}")))?;
+            let mut req = http.request(method.clone(), full).headers(self.headers.clone()).timeout(TIMEOUT);
             if let Some(body) = body {
                 req = req.json(body);
             }
@@ -144,12 +168,13 @@ impl Api {
                 .await
                 .map_err(|e| AppError::new(StatusCode::BAD_GATEWAY, format!("could not reach {}: {e}", host(&url))))?;
             let status = resp.status();
-            if status == StatusCode::TOO_MANY_REQUESTS && !retried {
-                if let Some(wait) = retry_after(resp.headers()).filter(|w| *w <= MAX_RETRY_AFTER_SECS) {
-                    retried = true;
-                    tokio::time::sleep(Duration::from_secs(wait)).await;
-                    continue;
-                }
+            if status == StatusCode::TOO_MANY_REQUESTS
+                && !retried
+                && let Some(wait) = retry_after(resp.headers()).filter(|w| *w <= MAX_RETRY_AFTER_SECS)
+            {
+                retried = true;
+                tokio::time::sleep(Duration::from_secs(wait)).await;
+                continue;
             }
             let headers = resp.headers().clone();
             let text = resp.text().await.unwrap_or_default();
@@ -175,8 +200,13 @@ pub async fn refresh_access_token(config: &Value, default_token_url: &str, crede
     let client_id = require(credentials, "client_id")?;
     let client_secret = require(credentials, "client_secret")?;
     let refresh_token = require(credentials, "refresh_token")?;
-    let url = config.get("token_url").and_then(|v| v.as_str()).filter(|s| !s.is_empty()).unwrap_or(default_token_url);
-    let resp = reqwest::Client::new()
+    let url = config
+        .get("token_url")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty() && base_url_override_allowed())
+        .unwrap_or(default_token_url);
+    let resp = guarded(url)
+        .await?
         .post(url)
         .basic_auth(client_id, Some(client_secret))
         .form(&[("grant_type", "refresh_token"), ("refresh_token", refresh_token.as_str())])
@@ -509,6 +539,12 @@ mod tests {
         let e = provider_error("https://api.github.com/issues", StatusCode::UNAUTHORIZED, "{\"message\":\"Bad credentials\"}");
         assert!(e.message.starts_with("api.github.com returned HTTP 401 (check the token"), "{}", e.message);
         assert!(e.message.contains("Bad credentials"));
+        // a JSON body is reduced to the provider's message, not echoed raw
+        assert!(!e.message.contains('{'), "{}", e.message);
+        let plain = provider_error("https://x.test/a", StatusCode::BAD_GATEWAY, "upstream down");
+        assert!(plain.message.ends_with(": upstream down"), "{}", plain.message);
+        let nested = provider_error("https://x.test/a", StatusCode::BAD_REQUEST, "{\"error\":{\"message\":\"bad model\"}}");
+        assert!(nested.message.ends_with(": bad model"), "{}", nested.message);
     }
 
     #[test]

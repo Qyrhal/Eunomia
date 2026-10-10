@@ -1,0 +1,37 @@
+---
+source: tests/golden_tools.rs
+expression: stable
+---
+{
+  "results": [
+    {
+      "id": "demo:up.transaction:t1",
+      "source": "demo",
+      "type": "up.transaction",
+      "title": "Woolworths",
+      "snippet": "Woolworths at Spending",
+      "occurred_at": "<ts>",
+      "url": null
+    },
+    {
+      "id": "demo:up.transaction:t2",
+      "source": "demo",
+      "type": "up.transaction",
+      "title": "Netflix",
+      "snippet": "Netflix at Spending",
+      "occurred_at": "<ts>",
+      "url": null
+    },
+    {
+      "id": "demo:up.transaction:t3",
+      "source": "demo",
+      "type": "up.transaction",
+      "title": "Salary",
+      "snippet": "Salary at Spending",
+      "occurred_at": "<ts>",
+      "url": null
+    }
+  ],
+  "total": 3,
+  "has_more": false
+}

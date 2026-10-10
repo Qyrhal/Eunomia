@@ -137,8 +137,8 @@ mod tests {
         let page1: Vec<Value> = (0..100).map(|i| msg(&(1000 + i).to_string(), "hello")).collect();
         let mock = serve(vec![
             route("GET", "/channels/C1", json!({"id": "C1", "name": "general", "guild_id": "G1", "type": 0})),
-            route("GET", "/channels/C1/messages", json!([msg("1100", "Release notes are up")])).query("after=1099"),
-            route("GET", "/channels/C1/messages", json!(page1)).query("after=999"),
+            route("GET", "/channels/C1/messages", json!([msg("1100", "Release notes are up")])).query_has("after=1099"),
+            route("GET", "/channels/C1/messages", json!(page1)).query_has("after=999"),
         ])
         .await;
 

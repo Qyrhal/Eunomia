@@ -11,6 +11,7 @@
 //! The tool helpers (`finance_summary`, `list_transactions`, `list_accounts`)
 //! read `cache_record` directly.
 
+use surrealdb::types::SurrealValue;
 use async_trait::async_trait;
 use chrono::{Duration, Utc};
 use hmac::{Hmac, Mac};
@@ -21,6 +22,7 @@ use sha2::Sha256;
 
 use crate::connectors::clients::UpBankClient;
 use crate::error::AppResult;
+use crate::store;
 use crate::sources::base::{datetime_to_chrono, envelope, items, rfc3339, s, Conn, Source, SourceCtx, SyncResult, MAX_PAGES};
 
 type HmacSha256 = Hmac<Sha256>;
@@ -86,6 +88,10 @@ impl Source for UpBankSource {
             "categories" => Some(map_category(raw)),
             _ => None,
         }
+    }
+
+    fn has_webhook(&self) -> bool {
+        true
     }
 
     async fn webhook(&self, conn: &Conn, headers: &HeaderMap, body: &[u8]) -> AppResult<Option<Vec<Value>>> {
@@ -191,7 +197,7 @@ fn map_account(raw: &Value) -> Value {
         "up.account",
         s(raw, "/id"),
         display_name,
-        &format!("{display_name} — {}", s(a, "/accountType")),
+        &format!("{display_name} · {}", s(a, "/accountType")),
         rfc3339(s(a, "/createdAt")),
         "",
         json!({
@@ -213,26 +219,29 @@ fn map_category(raw: &Value) -> Value {
 // Tool helpers (read from the cache, not the live API)
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, SurrealValue, Clone)]
 pub(crate) struct CachedRecord {
     #[serde(default)]
+    #[surreal(default)]
     title: String,
     #[serde(default)]
+    #[surreal(default)]
     external_id: String,
     #[serde(default)]
-    occurred_at: Option<surrealdb::Datetime>,
+    #[surreal(default)]
+    occurred_at: Option<surrealdb::types::Datetime>,
     #[serde(default)]
+    #[surreal(default)]
     payload: Value,
 }
 
-fn iso(dt: &Option<surrealdb::Datetime>) -> Option<String> {
+fn iso(dt: &Option<surrealdb::types::Datetime>) -> Option<String> {
     dt.as_ref().and_then(datetime_to_chrono).map(|d| d.to_rfc3339())
 }
 
 async fn cached_by_type(ctx: &SourceCtx<'_>, type_: &str, limit: i64) -> AppResult<Vec<CachedRecord>> {
-    let mut res = ctx
-        .db
-        .query("SELECT title, external_id, occurred_at, payload FROM cache_record WHERE owner = $owner AND type = $type ORDER BY occurred_at DESC LIMIT $limit")
+    let mut res = store::app::SOURCES_UP_BY_TYPE
+        .on(ctx.db)
         .bind(("owner", ctx.owner.clone()))
         .bind(("type", type_.to_string()))
         .bind(("limit", limit))
@@ -261,7 +270,7 @@ pub(crate) fn compute_finance_summary(
 
     let mut txns: Vec<&CachedRecord> =
         txns.iter().filter(|t| iso(&t.occurred_at).map(|o| o.as_str() >= since).unwrap_or(false)).collect();
-    txns.sort_by(|a, b| iso(&b.occurred_at).unwrap_or_default().cmp(&iso(&a.occurred_at).unwrap_or_default()));
+    txns.sort_by_key(|t| std::cmp::Reverse(iso(&t.occurred_at).unwrap_or_default()));
 
     let mut by_cat: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
     let mut by_day: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
@@ -322,8 +331,8 @@ pub async fn list_transactions(ctx: &SourceCtx<'_>, days: i64, category: Option<
     if let Some(category) = category {
         txns.retain(|t| t.payload.get("category").and_then(|v| v.as_str()) == Some(category));
     }
-    txns.sort_by(|a, b| iso(&b.occurred_at).unwrap_or_default().cmp(&iso(&a.occurred_at).unwrap_or_default()));
-    let limit = limit.min(200).max(0) as usize;
+    txns.sort_by_key(|t| std::cmp::Reverse(iso(&t.occurred_at).unwrap_or_default()));
+    let limit = limit.clamp(0, 200) as usize;
     let out: Vec<Value> = txns
         .iter()
         .take(limit)
@@ -383,7 +392,7 @@ mod tests {
                 "balance": {"value": "100.00", "valueInBaseUnits": 10000}},
         });
         let env = map_account(&raw);
-        assert_eq!(env["body_text"], "Spending — TRANSACTIONAL");
+        assert_eq!(env["body_text"], "Spending · TRANSACTIONAL");
         assert_eq!(env["deleted"], false);
     }
 
@@ -474,13 +483,13 @@ mod tests {
     async fn fetch_follows_links_next_and_pulls_accounts_and_categories() {
         let mock = serve(vec![
             route("GET", "/transactions", json!({"data": [txn("t2", "2024-03-02T09:00:00+11:00", "Coles", -1250)], "links": {"prev": null, "next": null}}))
-                .query("page[after]=t1"),
+                .query_has("page[after]=t1"),
             route(
                 "GET",
                 "/transactions",
                 json!({"data": [txn("t1", "2024-03-01T05:08:57+11:00", "Pizza Hut", -5998)], "links": {"prev": null, "next": "{base}/transactions?page[after]=t1&page[size]=100"}}),
             )
-            .query("filter[since]=2024-02-01T00:00:00"),
+            .query_has("filter[since]=2024-02-01T00:00:00"),
             route("GET", "/accounts", json!({"data": [{"type": "accounts", "id": "acc-1", "attributes": {
                 "displayName": "Spending", "accountType": "TRANSACTIONAL", "ownershipType": "INDIVIDUAL",
                 "balance": {"currencyCode": "AUD", "value": "1.00", "valueInBaseUnits": 100}, "createdAt": "2020-01-01T00:00:00+11:00"}}],

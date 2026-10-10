@@ -1,0 +1,12 @@
+---
+source: tests/golden_tools.rs
+expression: stable
+---
+{
+  "id": "repository:<id9>",
+  "kind": "repository",
+  "name": "eunomia",
+  "aliases": [],
+  "summary": "memory layer",
+  "vault": "vault:<id2>"
+}

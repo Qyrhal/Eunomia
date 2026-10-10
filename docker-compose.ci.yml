@@ -1,0 +1,12 @@
+# CI only (the e2e job): publishes SurrealDB's HTTP port on loopback so the Playwright
+# memory-correctness tests can set up SQL fixtures. Never use it on a real install, the base
+# compose file deliberately has no host port for the database.
+services:
+  surrealdb:
+    ports:
+      - "127.0.0.1:8000:8000"
+  # The Playwright specs run mock providers and model endpoints on the runner; the containerised
+  # backend reaches them through the host gateway (the specs use E2E_MOCK_HOST=host.docker.internal).
+  backend:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

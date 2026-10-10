@@ -1,35 +1,32 @@
 //! Cache write + query API. The only module that knows SurrealDB's BM25/MTREE
 //! indexes exist -- this module's external signatures (`upsert`,
-//! `set_embedding`, `search`, `get`, `list`, `links`) are the swap point for
-//! any future backend, same principle as the Python `cache/search.py`.
+//! `set_embedding`, `search`, `get`, `list`, `links`) are the swap point for any future backend.
 //!
-//! Ported from `cache/search.py`.
 
+use surrealdb::types::SurrealValue;
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use surrealdb::{Datetime, RecordId};
+use surrealdb::types::{Datetime, RecordId};
+use crate::rid::RecordIdExt;
 
-use crate::db::Db;
+use crate::pool::OrgDb;
+use crate::store;
 use crate::embeddings::service::DIM;
 use crate::error::{AppError, AppResult};
 
 const RRF_K: f64 = 60.0;
 
-/// One `linked_to` relation to create/keep when upserting a record, mirrors
-/// the `{"target": ..., "rel": ...}` shape of `env["links"]` in the Python
-/// envelope dict.
+/// One `linked_to` relation to create/keep when upserting a record: `{"target": ..., "rel": ...}`.
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct LinkSpec {
     pub target: String,
     pub rel: String,
 }
 
-/// The ingest envelope a mapper produces for one raw source record. Mirrors
-/// the Python `env` dict `cache/search.py::upsert` and `cache/ingest.py`
-/// expect.
+/// The ingest envelope a mapper produces for one raw source record.
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct Envelope {
     pub id: String,
@@ -75,50 +72,63 @@ pub struct CacheRecord {
     pub embedding: Option<Vec<f32>>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, SurrealValue)]
 struct Row {
     id: RecordId,
     #[serde(default)]
+    #[surreal(default)]
     source: String,
     #[serde(rename = "type", default)]
+    #[surreal(rename = "type", default)]
     type_: String,
     #[serde(default)]
+    #[surreal(default)]
     external_id: String,
     #[serde(default)]
+    #[surreal(default)]
     title: String,
     #[serde(default)]
+    #[surreal(default)]
     body_text: String,
     #[serde(default)]
+    #[surreal(default)]
     occurred_at: Option<Datetime>,
     #[serde(default)]
+    #[surreal(default)]
     url: String,
     #[serde(default)]
+    #[surreal(default)]
     payload: Value,
     #[serde(default)]
+    #[surreal(default)]
     content_hash: String,
     #[serde(default)]
+    #[surreal(default)]
     ingested_at: Option<Datetime>,
     #[serde(default)]
+    #[surreal(default)]
     updated_at: Option<Datetime>,
     #[serde(default)]
+    #[surreal(default)]
     deleted: bool,
     #[serde(default)]
+    #[surreal(default)]
     embedding: Option<Vec<f32>>,
 }
 
 /// The owner-id prefix baked into the internal `cache_record` key -- callers
-/// never see or pass it. Mirrors `cache/search.py`'s `_rid`.
+/// never see or pass it.
 pub(crate) fn owner_key(owner: &RecordId) -> String {
-    String::try_from(owner.key().clone()).unwrap_or_else(|_| owner.to_string())
+    crate::rid::key_string(owner.key()).unwrap_or_else(|| owner.to_string())
 }
 
 pub(crate) fn rid(owner: &RecordId, record_id: &str) -> RecordId {
     RecordId::from_table_key("cache_record", format!("{}:{record_id}", owner_key(owner)))
 }
 
-/// The caller-facing record id -- mirrors `cache/search.py`'s `_literal`.
+/// The caller-facing record id.
 pub(crate) fn literal(key: &RecordId) -> String {
-    let raw = String::try_from(key.key().clone()).unwrap_or_default();
+    let raw = crate::rid::key_string(key.key()).unwrap_or_default();
     raw.split_once(':').map(|(_, rest)| rest.to_string()).unwrap_or(raw)
 }
 
@@ -142,13 +152,12 @@ fn row_to_record(row: Row) -> CacheRecord {
 }
 
 /// `json!({...})`'s default `Map` is a `BTreeMap` (no `preserve_order`
-/// feature enabled), so keys come out sorted -- same effect as Python's
-/// `json.dumps(..., sort_keys=True)`. Mirrors `cache/search.py`'s
-/// `_hash_envelope`; the exact byte representation doesn't need to match the
-/// Python backend's hash (this is a from-scratch SurrealDB-backed cache, not
-/// a shared store), only be stable within this implementation for dedup.
+/// feature enabled), so keys come out sorted. The exact bytes only need to be stable within this
+/// implementation, for dedup.
 fn hash_envelope(env: &Envelope) -> String {
-    let occurred_at_str = env.occurred_at.as_ref().map(|d| d.to_string());
+    // Stored hashes come from SurrealDB 2.x, whose `Datetime` displayed as `d'...'`; keep that
+    // text so an upgraded install does not see every record as changed (and re-embed it).
+    let occurred_at_str = env.occurred_at.as_ref().map(|d| format!("d'{d}'"));
     let blob = json!({
         "title": env.title,
         "body_text": env.body_text,
@@ -163,14 +172,13 @@ fn hash_envelope(env: &Envelope) -> String {
     format!("{:x}", hasher.finalize())
 }
 
-async fn reconcile_links(db: &Db, owner: &RecordId, record_rid: &RecordId, links_spec: &[LinkSpec]) -> AppResult<()> {
-    db.query("DELETE linked_to WHERE in = $id AND origin = 'sync'").bind(("id", record_rid.clone())).await?;
+async fn reconcile_links(db: &OrgDb, owner: &RecordId, record_rid: &RecordId, links_spec: &[LinkSpec]) -> AppResult<()> {
+    store::cache::DELETE_SYNC_LINKS.on(db).bind(("id", record_rid.clone())).await?;
     for link in links_spec {
         // (in, out, rel) has a unique index -- an error here means the edge
-        // already exists; idempotent no-op, matching the old
-        // get_or_create-style Python behavior.
-        let _ = db
-            .query("RELATE $in->linked_to->$out SET rel = $rel, origin = 'sync'")
+        // already exists; idempotent no-op.
+        let _ = store::cache::RELATE_SYNC_LINK
+            .on(db)
             .bind(("in", record_rid.clone()))
             .bind(("out", rid(owner, &link.target)))
             .bind(("rel", link.rel.clone()))
@@ -181,43 +189,44 @@ async fn reconcile_links(db: &Db, owner: &RecordId, record_rid: &RecordId, links
 
 /// Insert or update one envelope, scoped to `owner`. Returns `(record,
 /// changed)`.
-pub async fn upsert(db: &Db, owner: &RecordId, env: &Envelope) -> AppResult<(CacheRecord, bool)> {
+pub async fn upsert(db: &OrgDb, owner: &RecordId, env: &Envelope) -> AppResult<(CacheRecord, bool)> {
     let record_rid = rid(owner, &env.id);
     let h = hash_envelope(env);
 
-    let existing: Option<Row> = db.select(record_rid.clone()).await?;
-    if let Some(existing) = existing {
-        if existing.content_hash == h && !existing.deleted {
-            db.query("UPDATE $id SET ingested_at = time::now()").bind(("id", record_rid.clone())).await?;
+    let existing: Option<Row> = store::get(db, &record_rid).await?;
+    if let Some(existing) = existing
+        && existing.content_hash == h && !existing.deleted {
+            store::cache::TOUCH_INGESTED.on(db).bind(("id", record_rid.clone())).await?;
             let mut rec = row_to_record(existing);
             rec.ingested_at = Some(Datetime::from(chrono::Utc::now()));
             return Ok((rec, false));
         }
-    }
 
-    let mut res = db
-        .query(
-            "UPSERT $id SET owner = $owner, source = $source, type = $type, external_id = $external_id, \
-             title = $title, body_text = $body_text, occurred_at = $occurred_at, url = $url, \
-             payload = $payload, content_hash = $content_hash, ingested_at = $ingested_at, \
-             updated_at = $updated_at, deleted = $deleted RETURN AFTER",
-        )
-        .bind(("id", record_rid.clone()))
-        .bind(("owner", owner.clone()))
-        .bind(("source", env.source.clone()))
-        .bind(("type", env.type_.clone()))
-        .bind(("external_id", env.external_id.clone()))
-        .bind(("title", env.title.clone()))
-        .bind(("body_text", env.body_text.clone()))
-        .bind(("occurred_at", env.occurred_at.clone()))
-        .bind(("url", env.url.clone()))
-        .bind(("payload", env.payload.clone()))
-        .bind(("content_hash", h))
-        .bind(("ingested_at", Datetime::from(chrono::Utc::now())))
-        .bind(("updated_at", Datetime::from(chrono::Utc::now())))
-        .bind(("deleted", env.deleted))
-        .await?;
-    let rows: Vec<Row> = res.take(0)?;
+    // Concurrent writers (other syncs, other users) can conflict on the shared indexes; the loser is
+    // rejected as retryable, so retry it.
+    let (now, payload) = (Datetime::from(chrono::Utc::now()), if env.payload.is_null() { json!({}) } else { env.payload.clone() });
+    let rows: Vec<Row> = crate::tx::with_retry(|| async {
+        let mut res = store::cache::UPSERT_RECORD
+            .on(db)
+            .bind(("id", record_rid.clone()))
+            .bind(("owner", owner.clone()))
+            .bind(("source", env.source.clone()))
+            .bind(("type", env.type_.clone()))
+            .bind(("external_id", env.external_id.clone()))
+            .bind(("title", env.title.clone()))
+            .bind(("body_text", env.body_text.clone()))
+            .bind(("occurred_at", env.occurred_at))
+            .bind(("url", env.url.clone()))
+            // 3.x rejects NULL for the `object` field; an envelope without a payload means "none".
+            .bind(("payload", payload.clone()))
+            .bind(("content_hash", h.clone()))
+            .bind(("ingested_at", now))
+            .bind(("updated_at", now))
+            .bind(("deleted", env.deleted))
+            .await?;
+        res.take(0)
+    })
+    .await?;
     let row = rows.into_iter().next().ok_or_else(|| AppError::internal("cache_record upsert returned no row"))?;
     let rec = row_to_record(row);
 
@@ -225,14 +234,20 @@ pub async fn upsert(db: &Db, owner: &RecordId, env: &Envelope) -> AppResult<(Cac
     Ok((rec, true))
 }
 
-pub async fn set_embedding(db: &Db, owner: &RecordId, record_id: &str, vector: Vec<f32>) -> AppResult<()> {
+pub async fn set_embedding(db: &OrgDb, owner: &RecordId, record_id: &str, vector: Vec<f32>) -> AppResult<()> {
     if vector.len() != DIM {
         return Err(AppError::bad_request(format!("embedding dim {} != {DIM}", vector.len())));
     }
-    db.query("UPDATE $id SET embedding = $embedding")
-        .bind(("id", rid(owner, record_id)))
-        .bind(("embedding", vector))
-        .await?;
+    // The embedding index is shared with concurrent syncs; a commit conflict is retryable.
+    crate::tx::with_retry(|| async {
+        store::cache::SET_EMBEDDING
+            .on(db)
+            .bind(("id", rid(owner, record_id)))
+            .bind(("embedding", vector.clone()))
+            .await?
+            .check()
+    })
+    .await?;
     Ok(())
 }
 
@@ -297,26 +312,28 @@ pub(crate) fn parse_datetime(field: &str, s: &str) -> AppResult<chrono::DateTime
     Err(AppError::bad_request(format!("{field}: {s:?} is not an ISO 8601 date or datetime")))
 }
 
+type Utc = chrono::DateTime<chrono::Utc>;
+
 /// A `since`/`until` pair, each optional; a reversed range is an error.
 pub(crate) fn parse_range(
     since: Option<&str>,
     until: Option<&str>,
-) -> AppResult<(Option<chrono::DateTime<chrono::Utc>>, Option<chrono::DateTime<chrono::Utc>>)> {
+) -> AppResult<(Option<Utc>, Option<Utc>)> {
     let since = since.map(|s| parse_datetime("since", s)).transpose()?;
     let until = until.map(|s| parse_datetime("until", s)).transpose()?;
-    if let (Some(a), Some(b)) = (since, until) {
-        if a > b {
-            return Err(AppError::bad_request("since must not be after until"));
-        }
+    if let (Some(a), Some(b)) = (since, until)
+        && a > b
+    {
+        return Err(AppError::bad_request("since must not be after until"));
     }
     Ok((since, until))
 }
 
 /// Source/type/date restrictions, applied inside candidate generation rather
-/// than to an already-truncated candidate list -- so a match in a small
-/// source can't be crowded out by other sources' hits. Bound as a whole
-/// (`.bind(filter)`); [`RecordFilter::sql`] only references the set fields.
-#[derive(Debug, Clone, Default, Serialize)]
+/// than to an already-truncated candidate list, so a match in a small source
+/// can't be crowded out by other sources' hits. [`RecordFilter::sql`] only
+/// references the set fields; [`RecordFilter::bind`] binds them.
+#[derive(Debug, Clone, Default)]
 pub struct RecordFilter {
     pub sources: Option<Vec<String>>,
     pub types: Option<Vec<String>>,
@@ -341,30 +358,48 @@ impl RecordFilter {
         }
         s
     }
+
+    fn bind<'a>(&self, mut q: store::Q<'a>) -> store::Q<'a> {
+        if let Some(v) = &self.sources {
+            q = q.bind(("sources", v.clone()));
+        }
+        if let Some(v) = &self.types {
+            q = q.bind(("types", v.clone()));
+        }
+        if let Some(v) = self.since {
+            q = q.bind(("since", v));
+        }
+        if let Some(v) = self.until {
+            q = q.bind(("until", v));
+        }
+        q
+    }
 }
 
-/// Per search term: the title BM25 index (composite `cache_record_fts_idx`,
-/// whose first field is title; +1 so a title hit beats a body-only one) and
-/// the body_text BM25 index (`cache_record_body_fts_idx` -- SurrealDB only
-/// resolves `@N@` against a composite index's FIRST field, hence the separate
-/// one), both pre-filtered by `filter`; fused by [`rank_term_hits`].
+/// `title` and `body_text` each have their own FULLTEXT index (a two-field index only resolves
+/// the first field). Per search term: the title index (BM25-scored, +1 so a title hit beats a
+/// body-only one) and the body index (its own BM25 score), both pre-filtered by `filter`, every
+/// term's two lookups in one round trip; fused by [`rank_term_hits`].
 pub(crate) async fn keyword_ids(
-    db: &Db,
+    db: &OrgDb,
     owner: &RecordId,
     q: &str,
     filter: &RecordFilter,
     limit: usize,
 ) -> AppResult<Vec<String>> {
-    #[derive(Deserialize)]
+    #[derive(Deserialize, SurrealValue)]
     struct ScoredRow {
         id: RecordId,
         #[serde(default)]
+        #[surreal(default)]
         score: f64,
     }
 
-    // every term's two lookups in one round trip
-    let cond = filter.sql();
     let terms = search_terms(q);
+    if terms.is_empty() {
+        return Ok(Vec::new());
+    }
+    let cond = filter.sql();
     let mut sql = String::new();
     for i in 0..terms.len() {
         sql.push_str(&format!(
@@ -374,10 +409,8 @@ pub(crate) async fn keyword_ids(
              WHERE owner = $owner AND body_text @2@ $t{i} AND deleted = false{cond} ORDER BY score DESC, id LIMIT $limit;"
         ));
     }
-    if terms.is_empty() {
-        return Ok(Vec::new());
-    }
-    let mut query = db.query(sql).bind(filter.clone()).bind(("owner", owner.clone())).bind(("limit", limit as i64));
+    // dynamic: one pair of lookups per term, each with the filters that are set.
+    let mut query = filter.bind(store::dynamic(db, "cache.keyword_ids", sql)).bind(("owner", owner.clone())).bind(("limit", limit as i64));
     for (i, t) in terms.into_iter().enumerate() {
         query = query.bind((format!("t{i}"), t));
     }
@@ -397,12 +430,9 @@ pub(crate) async fn keyword_ids(
     Ok(rank_term_hits(per_term, limit))
 }
 
-/// Mirrors `cache/search.py`'s `_semantic_ids`. The KNN `<|K|>` operator
-/// requires a literal integer -- it cannot be a bound parameter -- so
-/// `limit` is interpolated directly rather than passed as a bind. `filter`
-/// conditions are applied during the KNN search, not after it.
+/// Embed the query, then [`nearest_ids`].
 pub(crate) async fn semantic_ids(
-    db: &Db,
+    db: &OrgDb,
     settings: &crate::config::Settings,
     owner: &RecordId,
     q: &str,
@@ -414,17 +444,46 @@ pub(crate) async fn semantic_ids(
         .into_iter()
         .next()
         .unwrap_or_default();
+    nearest_ids(db, owner, vec, filter, limit).await
+}
 
-    #[derive(Deserialize)]
+/// The `limit` live records of `owner` matching `filter` closest to `vec`, best first. HNSW KNN
+/// (`<|K,EF|>`, both literal integers: they cannot be bound parameters) answers first. The index is
+/// shared by every owner and the owner filter is not part of the ANN walk, so a small owner among big
+/// ones (or a narrow filter) can get fewer than `limit` rows back; then an exact cosine scan over just
+/// this owner's matching records is the answer (it is ground truth, and cheap exactly when the set is small).
+pub async fn nearest_ids(db: &OrgDb, owner: &RecordId, vec: Vec<f32>, filter: &RecordFilter, limit: usize) -> AppResult<Vec<String>> {
+    #[derive(Deserialize, SurrealValue)]
     struct IdRow {
         id: RecordId,
     }
+    let ef = (limit * 2).max(64);
     let query = format!(
-        "SELECT id FROM cache_record WHERE owner = $owner AND embedding <|{}|> $vec AND deleted = false{}",
-        limit as i64,
+        "SELECT id FROM cache_record WHERE owner = $owner AND embedding <|{limit},{ef}|> $vec AND deleted = false{}",
         filter.sql()
     );
-    let mut res = db.query(query).bind(filter.clone()).bind(("owner", owner.clone())).bind(("vec", vec)).await?;
+    // dynamic: the KNN `<|K,EF|>` operator needs literal integers, one SQL text per (K, EF).
+    let mut res = filter
+        .bind(store::dynamic(db, "cache.semantic_ids", query))
+        .bind(("owner", owner.clone()))
+        .bind(("vec", vec.clone()))
+        .await?;
+    let rows: Vec<IdRow> = res.take(0)?;
+    if rows.len() >= limit {
+        return Ok(rows.into_iter().map(|r| literal(&r.id)).collect());
+    }
+    let exact = format!(
+        "SELECT id, vector::similarity::cosine(embedding, $vec) AS sim FROM cache_record \
+         WHERE owner = $owner AND deleted = false AND embedding != NONE{} ORDER BY sim DESC LIMIT $limit",
+        filter.sql()
+    );
+    // dynamic: the exact fallback carries the same optional filters.
+    let mut res = filter
+        .bind(store::dynamic(db, "cache.semantic_exact", exact))
+        .bind(("owner", owner.clone()))
+        .bind(("vec", vec))
+        .bind(("limit", limit as i64))
+        .await?;
     let rows: Vec<IdRow> = res.take(0)?;
     Ok(rows.into_iter().map(|r| literal(&r.id)).collect())
 }
@@ -433,7 +492,6 @@ pub(crate) async fn semantic_ids(
 /// number of ranked lists. Exposed (not just the fused order) so callers
 /// that need the raw fused score to apply further boosts on top -- e.g.
 /// `cache::recall`'s 5-arm pipeline -- don't reimplement this formula.
-/// Mirrors `cache/search.py`'s `_rrf_scores`.
 pub(crate) fn rrf_scores(ranked_lists: &[Vec<String>]) -> HashMap<String, f64> {
     let mut scores: HashMap<String, f64> = HashMap::new();
     for list in ranked_lists {
@@ -461,12 +519,18 @@ pub struct SearchParams {
     pub offset: usize,
 }
 
+impl SearchParams {
+    pub fn new() -> Self {
+        SearchParams { mode: "hybrid".to_string(), limit: 20, offset: 0, ..Default::default() }
+    }
+}
+
 /// One page of records matching `q`, plus whether more exist. Filters are
 /// pushed into every candidate query and candidates are fetched up to
 /// `offset + limit + 1`, so later pages are reachable and `has_more` is
 /// exact for the fused candidate list.
 pub async fn search(
-    db: &Db,
+    db: &OrgDb,
     settings: &crate::config::Settings,
     owner: &RecordId,
     q: &str,
@@ -496,27 +560,22 @@ pub async fn search(
     Ok((get_many(db, owner, &page).await?, has_more))
 }
 
-/// `owner`'s live records for `ids`, in `ids` order -- tombstoned
+/// `owner`'s live records for `ids`, in `ids` order: tombstoned
 /// (`deleted = true`) and missing ids are dropped. One query for any number
 /// of ids; the one read path behind `get`, `search` and recall hydration.
-pub(crate) async fn get_many(db: &Db, owner: &RecordId, ids: &[String]) -> AppResult<Vec<CacheRecord>> {
+pub(crate) async fn get_many(db: &OrgDb, owner: &RecordId, ids: &[String]) -> AppResult<Vec<CacheRecord>> {
     if ids.is_empty() {
         return Ok(Vec::new());
     }
     let rids: Vec<RecordId> = ids.iter().map(|i| rid(owner, i)).collect();
-    let mut res = db
-        .query("SELECT * FROM $ids WHERE owner = $owner AND deleted = false")
-        .bind(("ids", rids))
-        .bind(("owner", owner.clone()))
-        .await?;
+    let mut res = store::cache::RECORDS_BY_IDS.on(db).bind(("ids", rids)).bind(("owner", owner.clone())).await?;
     let rows: Vec<Row> = res.take(0)?;
-    let mut by_id: HashMap<String, CacheRecord> =
-        rows.into_iter().map(row_to_record).map(|r| (r.id.clone(), r)).collect();
+    let mut by_id: HashMap<String, CacheRecord> = rows.into_iter().map(row_to_record).map(|r| (r.id.clone(), r)).collect();
     Ok(ids.iter().filter_map(|i| by_id.remove(i)).collect())
 }
 
 /// One live record; a tombstoned record reads as not found.
-pub async fn get(db: &Db, owner: &RecordId, record_id: &str) -> AppResult<Option<CacheRecord>> {
+pub async fn get(db: &OrgDb, owner: &RecordId, record_id: &str) -> AppResult<Option<CacheRecord>> {
     Ok(get_many(db, owner, &[record_id.to_string()]).await?.pop())
 }
 
@@ -590,7 +649,7 @@ pub fn parse_filters(filters: &serde_json::Map<String, Value>) -> AppResult<Vec<
 /// One page of `owner`'s live records of `type_` matching `filters`, sorted
 /// by `sort` (`-field` for DESC), plus the total match count.
 pub async fn list(
-    db: &Db,
+    db: &OrgDb,
     owner: &RecordId,
     type_: Option<&str>,
     filters: &[Filter],
@@ -617,8 +676,8 @@ pub async fn list(
         "SELECT * FROM cache_record WHERE {where_} ORDER BY {field} {direction} LIMIT $limit START $offset; \
          SELECT count() FROM cache_record WHERE {where_} GROUP ALL"
     );
-    let mut q = db
-        .query(sql)
+    // dynamic: caller-chosen filter fields, operators and sort column.
+    let mut q = store::dynamic(db, "cache.list_records", sql)
         .bind(("owner", owner.clone()))
         .bind(("type", type_.map(str::to_string)))
         .bind(("limit", limit as i64))
@@ -629,7 +688,7 @@ pub async fn list(
     let mut res = q.await?;
     let rows: Vec<Row> = res.take(0)?;
 
-    #[derive(Deserialize)]
+    #[derive(Deserialize, SurrealValue)]
     struct CountRow {
         count: i64,
     }
@@ -644,53 +703,66 @@ pub struct LinkEntry {
     pub target_id: String,
 }
 
-/// A record's links in both directions. Only links between two live records
 /// count: a tombstoned (or never-synced) endpoint hides the link, and a
 /// tombstoned record has no links at all.
-pub async fn links(db: &Db, owner: &RecordId, record_id: &str, rel: Option<&str>) -> AppResult<Vec<LinkEntry>> {
-    #[derive(Deserialize)]
-    struct LinkRow {
+pub async fn links(db: &OrgDb, owner: &RecordId, record_id: &str, rel: Option<&str>) -> AppResult<Vec<LinkEntry>> {
+    let record_rid = rid(owner, record_id);
+    let mut out = Vec::new();
+
+    #[derive(Deserialize, SurrealValue)]
+    struct FwdRow {
         rel: String,
-        other: RecordId,
+        out: RecordId,
+    }
+    #[derive(Deserialize, SurrealValue)]
+    struct BackRow {
+        rel: String,
+        #[serde(rename = "in")]
+        #[surreal(rename = "in")]
+        in_: RecordId,
     }
 
-    let rel_cond = if rel.is_some() { " AND rel = $rel" } else { "" };
-    let sql = format!(
-        "SELECT rel, out AS other FROM linked_to WHERE in = $id AND in.deleted = false AND out.deleted = false{rel_cond}; \
-         SELECT rel, in AS other FROM linked_to WHERE out = $id AND in.deleted = false AND out.deleted = false{rel_cond}"
-    );
-    let mut res = db.query(sql).bind(("id", rid(owner, record_id))).bind(("rel", rel.map(str::to_string))).await?;
-    let fwd: Vec<LinkRow> = res.take(0)?;
-    let back: Vec<LinkRow> = res.take(1)?;
-    Ok(fwd
-        .into_iter()
-        .map(|r| LinkEntry { rel: r.rel, direction: "out", target_id: literal(&r.other) })
-        .chain(back.into_iter().map(|r| LinkEntry { rel: r.rel, direction: "in", target_id: literal(&r.other) }))
-        .collect())
+    let fwd = if rel.is_some() { &store::cache::LINKS_OUT_REL } else { &store::cache::LINKS_OUT };
+    let mut q = fwd.on(db).bind(("id", record_rid.clone()));
+    if let Some(r) = rel {
+        q = q.bind(("rel", r.to_string()));
+    }
+    let fwd: Vec<FwdRow> = q.await?.take(0)?;
+    for row in fwd {
+        out.push(LinkEntry { rel: row.rel, direction: "out", target_id: literal(&row.out) });
+    }
+
+    let back = if rel.is_some() { &store::cache::LINKS_IN_REL } else { &store::cache::LINKS_IN };
+    let mut q = back.on(db).bind(("id", record_rid));
+    if let Some(r) = rel {
+        q = q.bind(("rel", r.to_string()));
+    }
+    let back: Vec<BackRow> = q.await?.take(0)?;
+    for row in back {
+        out.push(LinkEntry { rel: row.rel, direction: "in", target_id: literal(&row.in_) });
+    }
+
+    Ok(out)
 }
 
 /// For each live record among `sources`, its live linked records in either
-/// direction -- one graph-traversal query for the whole batch (recall's graph
-/// arm). Tombstoned sources and targets are skipped.
-pub(crate) async fn live_neighbours(db: &Db, sources: &[RecordId]) -> AppResult<HashMap<RecordId, Vec<RecordId>>> {
+/// direction: one graph-traversal query for the whole batch (recall's graph arm).
+/// Tombstoned sources and targets are skipped.
+pub(crate) async fn live_neighbours(db: &OrgDb, sources: &[RecordId]) -> AppResult<HashMap<RecordId, Vec<RecordId>>> {
     if sources.is_empty() {
         return Ok(HashMap::new());
     }
-    #[derive(Deserialize)]
+    #[derive(Deserialize, SurrealValue)]
     struct NRow {
         id: RecordId,
         #[serde(default)]
+        #[surreal(default)]
         fwd: Vec<RecordId>,
         #[serde(default)]
+        #[surreal(default)]
         back: Vec<RecordId>,
     }
-    let mut res = db
-        .query(
-            "SELECT id, ->linked_to->(cache_record WHERE deleted = false) AS fwd, \
-             <-linked_to<-(cache_record WHERE deleted = false) AS back FROM $ids WHERE deleted = false",
-        )
-        .bind(("ids", sources.to_vec()))
-        .await?;
+    let mut res = store::cache::LIVE_NEIGHBOURS.on(db).bind(("ids", sources.to_vec())).await?;
     let rows: Vec<NRow> = res.take(0)?;
     Ok(rows.into_iter().map(|r| (r.id, r.fwd.into_iter().chain(r.back).collect())).collect())
 }
@@ -736,6 +808,21 @@ mod tests {
             body_text: body.to_string(),
             ..Default::default()
         }
+    }
+
+    /// The expected value was computed from the 2.x text form, so this fails if the hash input
+    /// drifts (datetime format, field order, `serde_json` key order) and would orphan stored hashes.
+    #[test]
+    fn hash_envelope_matches_the_value_stored_by_2x() {
+        let e = Envelope {
+            title: "Woolworths".into(),
+            body_text: "Groceries $42.50".into(),
+            url: "https://x/y".into(),
+            occurred_at: Some("2026-01-05T09:00:00Z".parse().unwrap()),
+            payload: serde_json::from_str(r#"{"zeta":1,"alpha":{"b":2,"a":1}}"#).unwrap(),
+            ..Default::default()
+        };
+        assert_eq!(hash_envelope(&e), "86d1d37b57ed8b728294c14bb1fad628e4c94df7acac2e2836a152f6bf18ac41");
     }
 
     #[test]

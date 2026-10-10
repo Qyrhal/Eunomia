@@ -1,7 +1,7 @@
 # AI agents & MCP
 
 Eunomia is an MCP server (Streamable HTTP) at `http://localhost:8001/mcp`
-(also proxied at `http://localhost:3000/mcp`). It exposes the same tools the
+(also proxied at `http://localhost:3000/mcp`). The backend port listens on this machine only; agents on other machines use the frontend URL, e.g. `https://eunomia.example.com/mcp` (see [deployment](deployment.md#1-https)). It exposes the same tools the
 in-app chat uses. Every call is scoped to the token's user and logged in the
 audit log if it changes anything.
 
@@ -56,6 +56,47 @@ built-in default. It reaches agents three ways:
 
 By hand, for any MCP client: URL `http://localhost:8001/mcp`, header
 `Authorization: Bearer <token>`. Create a token in Settings → API tokens.
+This is the fallback that works with every client.
+
+### Sign in with OAuth (no pasted token)
+
+MCP clients that support OAuth (Claude Code, Cursor, and others following the
+MCP authorization spec, revision 2026-07-28) need only the URL:
+
+```bash
+claude mcp add --transport http eunomia http://localhost:8001/mcp
+```
+
+The client discovers Eunomia's authorization server, opens your browser, and
+shows a consent page: who is asking, where you return to afterwards, and what
+it may do (read memory, write memory, manage vaults, manage sources). Allow
+it and the client holds a 15-minute access token plus a refresh token it
+rotates on its own. Nothing is pasted.
+
+- **Manage apps**: Settings → Connected apps lists every app you approved.
+  Disconnecting one revokes its tokens immediately.
+- **Scopes**: `memory:read`, `memory:write`, `vaults:admin`, `connectors`. A
+  token that only has `memory:read` is refused (HTTP 403, `insufficient_scope`)
+  when it calls a tool that writes. The default request is read plus write.
+- **Bound to this server**: tokens are issued for the MCP URL only, work on
+  `/mcp` only, and are rejected anywhere else.
+- **Public URL**: set `PUBLIC_URL` (default `http://localhost:8001`) to the
+  address clients reach Eunomia at, with no trailing slash. It becomes the
+  token audience and the base of the discovery documents, so set it to
+  `https://eunomia.example.com` when you put Eunomia behind a domain. Behind
+  the frontend on port 3000, use `http://localhost:3000`; `/.well-known/*` and
+  `/oauth/*` are proxied there too. Changing it invalidates existing tokens.
+- **Client registration**: clients identified by an HTTPS metadata URL (Client
+  ID Metadata Documents) work without registering; older clients register
+  through `/oauth/register`. Eunomia fetches metadata documents only from
+  public HTTPS hosts. A self-hosted install with no internet access can still
+  use clients that register dynamically.
+- **Discovery**: `/.well-known/oauth-protected-resource` and
+  `/.well-known/oauth-authorization-server`. An unauthenticated `/mcp` call
+  answers `401` with a `WWW-Authenticate: Bearer resource_metadata="..."`
+  header pointing at the first.
+- **Not supported**: confidential clients (client secrets), the implicit and
+  password grants, `plain` PKCE.
 
 ## Do I need an OpenAI key?
 

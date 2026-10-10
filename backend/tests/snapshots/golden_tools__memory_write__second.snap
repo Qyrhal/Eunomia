@@ -1,0 +1,30 @@
+---
+source: tests/golden_tools.rs
+expression: stable
+---
+{
+  "entity": {
+    "id": "person:<id1>",
+    "kind": "person",
+    "name": "Alice",
+    "aliases": [],
+    "summary": "",
+    "vault": "vault:<id2>"
+  },
+  "memory": {
+    "id": "memory:<id5>",
+    "owner": "user:<id4>",
+    "vault": "vault:<id2>",
+    "subject": "person:<id1>",
+    "text": "Alice works at Acme",
+    "source": null,
+    "created_at": "<ts>",
+    "type": "experience",
+    "proof_count": 1,
+    "status": null,
+    "source_memories": null,
+    "updated_at": "<ts>",
+    "version": 1,
+    "owner_email": null
+  }
+}

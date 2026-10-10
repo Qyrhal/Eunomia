@@ -1,33 +1,30 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import {
-  forceCenter,
-  forceCollide,
-  forceLink,
-  forceManyBody,
-  forceSimulation,
-  type Simulation,
-  type SimulationNodeDatum,
-} from "d3-force";
-import { Maximize2, Minus, Pencil, Plus, RotateCcw, Trash2, X } from "lucide-react";
+import ErrorLine, { failure, type Failure } from "@/components/ErrorLine";
+import Select from "@/components/Select";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import ConfirmButton from "@/components/ConfirmButton";
+import { ArrowLeft, ArrowRight, Pencil, Plus, Trash2, X } from "lucide-react";
+import GraphCanvas, { type CanvasInsets } from "./GraphCanvas";
+import AuthorTag from "./AuthorTag";
+import SyncMark from "./bits/SyncMark";
+import Tooltip, { TooltipGroup } from "./bits/Tooltip";
+import { cssVar, prefersReducedMotion } from "./bits/motion";
 import { Blobatar } from "@blobatar/react";
+import { useQueryClient } from "@tanstack/react-query";
+import type { EntityDetail, EntityGraph as EntityGraphData, EntityKind } from "@/lib/types";
+import { useMe } from "@/lib/queries/auth";
 import {
-  auth,
-  entities,
-  vaults as vaultsApi,
-  type EntityDetail,
-  type EntityGraph as EntityGraphData,
-  type EntityKind,
-  type Vault,
-} from "@/lib/api";
-
-const DEFAULT_WIDTH = 640;
-const DEFAULT_HEIGHT = 420;
-const DRAG_THRESHOLD = 4; // px of movement before a pointerdown counts as a drag, not a click
-const ZOOM_MIN = 0.5;
-const ZOOM_MAX = 2.5;
-const ZOOM_STEP = 0.2;
+  entityDetailQuery,
+  useAddMemory,
+  useAddRelation,
+  useCreateEntity as useCreateEntityMutation,
+  useDeleteEntity,
+  useDeleteMemory,
+  useEntityGraph,
+  useUpdateEntity,
+} from "@/lib/queries/entities";
+import { useVaults } from "@/lib/queries/vaults";
 
 const KIND_COLOR: Record<EntityKind, string> = {
   person: "var(--kind-person)",
@@ -49,106 +46,102 @@ const KIND_LABEL: Record<EntityKind, string> = {
 
 const ALL_KINDS: EntityKind[] = ["person", "organisation", "location", "repository", "file", "symbol"];
 
-type LaidOutNode = SimulationNodeDatum & { id: string; kind: EntityKind; name: string; owner_email: string | null };
-type LaidOutLink = { source: LaidOutNode; target: LaidOutNode; label: string; owner_email: string | null };
-
-const FIT_PADDING = 50;
-
-// zoom/pan that centers and fits `nodeList`'s bounding box into a `w`x`h`
-// viewport -- shared by the auto-fit-on-load effect and the manual "Fit"
-// button, so they can't drift out of sync with each other.
-function computeFit(nodeList: { x?: number; y?: number }[], w: number, h: number): { zoom: number; x: number; y: number } {
-  const pts = nodeList.filter((n): n is { x: number; y: number } => typeof n.x === "number" && typeof n.y === "number");
-  if (pts.length === 0) return { zoom: 1, x: 0, y: 0 };
-  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-  for (const n of pts) {
-    minX = Math.min(minX, n.x);
-    maxX = Math.max(maxX, n.x);
-    minY = Math.min(minY, n.y);
-    maxY = Math.max(maxY, n.y);
-  }
-  const bw = Math.max(maxX - minX, 1);
-  const bh = Math.max(maxY - minY, 1);
-  const zoomFit = Math.min((w - 2 * FIT_PADDING) / bw, (h - 2 * FIT_PADDING) / bh);
-  const zoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, zoomFit));
-  return { zoom, x: w / 2 - (minX + maxX) / 2, y: h / 2 - (minY + maxY) / 2 };
+// Compact age for a timestamp: "now", "4m", "3h", "2d", then a date.
+function age(iso?: string): string | null {
+  if (!iso) return null;
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return null;
+  const s = Math.max(0, (Date.now() - t) / 1000);
+  if (s < 60) return "now";
+  if (s < 3600) return `${Math.floor(s / 60)}m`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h`;
+  if (s < 86400 * 30) return `${Math.floor(s / 86400)}d`;
+  return new Date(t).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
-// "you"/email for whoever wrote a row -- `null` means it predates attribution
-// tracking (relations created before `relates_to.owner` existed).
-function attribution(ownerEmail: string | null, myEmail: string | null): string {
-  if (!ownerEmail) return "unknown";
-  return myEmail && ownerEmail === myEmail ? "you" : ownerEmail;
+// The real author of a row, if attribution was recorded. `null` means it
+// predates attribution tracking, so no tag is shown.
+function Author({ email, me }: { email: string | null; me: string | null }) {
+  if (!email) return null;
+  return <AuthorTag name={email} title={email === me ? `${email} (you)` : email} />;
 }
 
-export default function EntityGraph({ kinds }: { kinds?: EntityKind[] } = {}) {
+const ICON = { size: 14, strokeWidth: 1.75 } as const;
+
+const SPARSE = 3; // fewer nodes than this shows the `guide`
+
+// A memory row that just arrived from "Add memory" settles in from a slight blur, once.
+function blurIn(el: HTMLElement | null) {
+  if (!el || prefersReducedMotion()) return;
+  el.animate([{ opacity: 0, filter: "blur(4px)" }, { opacity: 1, filter: "blur(0)" }], {
+    duration: 200,
+    easing: cssVar("--ease-out") || "ease-out",
+  });
+}
+
+export default function EntityGraph({
+  kinds,
+  header,
+  guide,
+}: {
+  kinds?: EntityKind[];
+  header?: ReactNode;
+  /** one sentence plus one action, shown while the graph is empty or sparse */
+  guide?: ReactNode;
+} = {}) {
   const shownKinds = kinds ?? ALL_KINDS;
-  const [graph, setGraph] = useState<EntityGraphData | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [myEmail, setMyEmail] = useState<string | null>(null);
-  const [myVaults, setMyVaults] = useState<Vault[]>([]);
+  const queryClient = useQueryClient();
   const [vaultId, setVaultId] = useState<string | undefined>(undefined);
+  const graphQuery = useEntityGraph({ kinds, vaultId });
+  const graph: EntityGraphData | null = graphQuery.data ?? null;
+  const error = graphQuery.error && !graph ? failure(graphQuery.error, "Could not load the entity graph.") : null;
+  const myEmail = useMe().data?.email ?? null;
+  const myVaults = useVaults().data ?? [];
+  const createEntityMutation = useCreateEntityMutation();
+  const updateEntityMutation = useUpdateEntity();
+  const deleteEntityMutation = useDeleteEntity();
+  const addMemoryMutation = useAddMemory();
+  const deleteMemoryMutation = useDeleteMemory();
+  const addRelationMutation = useAddRelation();
   const [selected, setSelected] = useState<EntityDetail | null>(null);
-  const [hovered, setHovered] = useState<string | null>(null);
   const [visibleKinds, setVisibleKinds] = useState<Set<EntityKind>>(new Set(shownKinds));
-  const [nodes, setNodes] = useState<LaidOutNode[]>([]);
-  const [view, setView] = useState({ zoom: 1, x: 0, y: 0 });
-  const [dims, setDims] = useState({ w: DEFAULT_WIDTH, h: DEFAULT_HEIGHT });
-  const [panning, setPanning] = useState(false);
-  const [draggingId, setDraggingId] = useState<string | null>(null);
-
   const [showCreate, setShowCreate] = useState(false);
   const [createForm, setCreateForm] = useState({ kind: shownKinds[0], name: "", aliases: "" });
-  const [createError, setCreateError] = useState<string | null>(null);
+  const [createError, setCreateError] = useState<Failure | null>(null);
   const [creating, setCreating] = useState(false);
 
   const [editing, setEditing] = useState(false);
   const [editForm, setEditForm] = useState({ name: "", aliases: "", summary: "" });
   const [memoryText, setMemoryText] = useState("");
   const [relForm, setRelForm] = useState({ to: "", label: "" });
-  const [actionError, setActionError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<Failure | null>(null);
   const [busy, setBusy] = useState(false);
+  // "Add memory" progress: spinner while saving, a drawn check for 1.2s after
+  const [memoryStatus, setMemoryStatus] = useState<"idle" | "running" | "done">("idle");
+  const [freshMemory, setFreshMemory] = useState<string | null>(null);
+  const memoryTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(() => () => clearTimeout(memoryTimer.current), []);
 
-  const svgRef = useRef<SVGSVGElement | null>(null);
-  const wrapRef = useRef<HTMLDivElement | null>(null);
-  const simRef = useRef<Simulation<LaidOutNode, undefined> | null>(null);
-  const draggingRef = useRef<{ id: string; moved: boolean } | null>(null);
-  const panRef = useRef<{ startX: number; startY: number; originX: number; originY: number } | null>(null);
-
-  function zoomBy(factor: number) {
-    setView((v) => ({ ...v, zoom: Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, v.zoom * factor)) }));
-  }
-
-  function resetView() {
-    setView({ zoom: 1, x: 0, y: 0 });
-  }
-
-  function onCanvasWheel(e: React.WheelEvent) {
-    e.preventDefault();
-    zoomBy(e.deltaY < 0 ? 1.1 : 0.9);
-  }
-
-  function onCanvasPointerDown(e: React.PointerEvent<SVGSVGElement>) {
-    if (e.target !== e.currentTarget) return; // a node/link handled its own pointerdown
-    (e.target as SVGSVGElement).setPointerCapture(e.pointerId);
-    panRef.current = { startX: e.clientX, startY: e.clientY, originX: view.x, originY: view.y };
-    setPanning(true);
-  }
-
-  function onCanvasPointerMove(e: React.PointerEvent<SVGSVGElement>) {
-    const pan = panRef.current;
-    if (!pan) return;
-    setView((v) => ({
-      ...v,
-      x: pan.originX + (e.clientX - pan.startX) / v.zoom,
-      y: pan.originY + (e.clientY - pan.startY) / v.zoom,
-    }));
-  }
-
-  function onCanvasPointerUp() {
-    panRef.current = null;
-    setPanning(false);
-  }
+  // px of canvas covered by the floating header/toolbar (top) and, on desktop,
+  // the inspector column (right), so the camera fits nodes into what is left.
+  const chromeRef = useRef<HTMLDivElement>(null);
+  const [insets, setInsets] = useState<CanvasInsets>({ top: 0, right: 0, bottom: 0, left: 0 });
+  useEffect(() => {
+    const el = chromeRef.current;
+    if (!el) return;
+    const measure = () => {
+      const md = window.matchMedia("(min-width: 768px)").matches;
+      setInsets({ top: el.offsetTop + el.offsetHeight, right: md ? 400 : 0, bottom: md ? 48 : 16, left: 0 });
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    window.addEventListener("resize", measure);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [graph]);
 
   function toggleKind(kind: EntityKind) {
     setVisibleKinds((prev) => {
@@ -160,121 +153,15 @@ export default function EntityGraph({ kinds }: { kinds?: EntityKind[] } = {}) {
   }
 
   useEffect(() => {
-    auth
-      .me()
-      .then((me) => setMyEmail(me.email))
-      .catch(() => {});
-    vaultsApi
-      .list()
-      .then((r) => setMyVaults(r.results))
-      .catch(() => setMyVaults([]));
-  }, []);
-
-  useEffect(() => {
-    entities
-      .graph(kinds ? { kinds, vaultId } : { vaultId })
-      .then(setGraph)
-      .catch((e) => setError(e instanceof Error ? e.message : "Could not load the entity graph."));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [vaultId]);
-
-  // Fill whatever height the page gives the canvas, tracked live so the
-  // simulation's center force and the viewBox stay in sync on resize.
-  useEffect(() => {
-    const el = wrapRef.current;
-    if (!el) return;
-    const ro = new ResizeObserver((entries) => {
-      const box = entries[0]?.contentRect;
-      if (!box || box.width < 10 || box.height < 10) return;
-      setDims({ w: Math.round(box.width), h: Math.round(box.height) });
-    });
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
-
-  // Live force simulation: runs continuously (not a one-shot layout) so
-  // dragging a node and releasing it lets physics settle it back in.
-  useEffect(() => {
-    if (!graph) return;
-
-    const simNodes: LaidOutNode[] = graph.nodes.map((n) => ({ ...n }));
-    const byId = new Map(simNodes.map((n) => [n.id, n]));
-    const links: LaidOutLink[] = graph.edges
-      .map((e) => {
-        const source = byId.get(e.source);
-        const target = byId.get(e.target);
-        return source && target ? { source, target, label: e.label, owner_email: e.owner_email } : null;
-      })
-      .filter((l): l is LaidOutLink => l !== null);
-
-    const sim = forceSimulation(simNodes)
-      .force("link", forceLink(links).distance(90).strength(0.5))
-      .force("charge", forceManyBody().strength(-160))
-      .force("center", forceCenter(dims.w / 2, dims.h / 2))
-      .force("collide", forceCollide(26))
-      .on("tick", () => setNodes([...sim.nodes()]))
-      // auto-fit once the layout settles, so a reload/vault-switch never
-      // leaves nodes scattered outside the viewport
-      .on("end", () => setView(computeFit(sim.nodes(), dims.w, dims.h)));
-
-    simRef.current = sim;
-    return () => {
-      sim.stop();
-      simRef.current = null;
+    if (!selected && !showCreate) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      if (showCreate) setShowCreate(false);
+      else if (!editing) setSelected(null);
     };
-    // dims intentionally excluded: resizing re-centers via the effect below
-    // rather than rebuilding the whole simulation (which would reset drag state).
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [graph]);
-
-  // Recenter (without rebuilding) when the canvas size changes.
-  useEffect(() => {
-    simRef.current?.force("center", forceCenter(dims.w / 2, dims.h / 2)).alpha(0.3).restart();
-  }, [dims.w, dims.h]);
-
-  function svgPoint(e: React.PointerEvent): { x: number; y: number } {
-    const svg = svgRef.current;
-    const ctm = svg?.getScreenCTM();
-    if (!svg || !ctm) return { x: 0, y: 0 };
-    const pt = svg.createSVGPoint();
-    pt.x = e.clientX;
-    pt.y = e.clientY;
-    const p = pt.matrixTransform(ctm.inverse());
-    return { x: p.x, y: p.y };
-  }
-
-  function onNodePointerDown(e: React.PointerEvent, n: LaidOutNode) {
-    e.stopPropagation();
-    e.currentTarget.setPointerCapture(e.pointerId);
-    draggingRef.current = { id: n.id, moved: false };
-    setDraggingId(n.id);
-    n.fx = n.x;
-    n.fy = n.y;
-    simRef.current?.alphaTarget(0.3).restart();
-  }
-
-  function onNodePointerMove(e: React.PointerEvent, n: LaidOutNode) {
-    const drag = draggingRef.current;
-    if (!drag || drag.id !== n.id) return;
-    const { x, y } = svgPoint(e);
-    if (!drag.moved && (Math.abs(x - (n.fx ?? x)) > DRAG_THRESHOLD || Math.abs(y - (n.fy ?? y)) > DRAG_THRESHOLD)) {
-      drag.moved = true;
-    }
-    n.fx = x;
-    n.fy = y;
-    setNodes((prev) => [...prev]);
-  }
-
-  function onNodePointerUp(e: React.PointerEvent, n: LaidOutNode) {
-    const drag = draggingRef.current;
-    if (!drag || drag.id !== n.id) return;
-    n.fx = null;
-    n.fy = null;
-    simRef.current?.alphaTarget(0);
-    draggingRef.current = null;
-    setDraggingId(null);
-    if (!drag.moved) selectNode(n.id);
-  }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selected, showCreate, editing]);
 
   async function selectNode(id: string) {
     setEditing(false);
@@ -282,15 +169,12 @@ export default function EntityGraph({ kinds }: { kinds?: EntityKind[] } = {}) {
     setRelForm({ to: "", label: "" });
     setActionError(null);
     try {
-      setSelected(await entities.get(id));
+      const detail = await queryClient.fetchQuery(entityDetailQuery(id));
+      setSelected(detail);
+      return detail;
     } catch {
       setSelected(null);
     }
-  }
-
-  async function refreshGraph() {
-    const g = await entities.graph(kinds ? { kinds, vaultId } : { vaultId }).catch(() => null);
-    if (g) setGraph(g);
   }
 
   async function createEntity(e: React.FormEvent) {
@@ -304,7 +188,7 @@ export default function EntityGraph({ kinds }: { kinds?: EntityKind[] } = {}) {
         .split(",")
         .map((a) => a.trim())
         .filter(Boolean);
-      const created = await entities.create({
+      const created = await createEntityMutation.mutateAsync({
         kind: createForm.kind,
         name,
         aliases: aliases.length ? aliases : undefined,
@@ -312,10 +196,9 @@ export default function EntityGraph({ kinds }: { kinds?: EntityKind[] } = {}) {
       });
       setShowCreate(false);
       setCreateForm({ kind: shownKinds[0], name: "", aliases: "" });
-      await refreshGraph();
       await selectNode(created.id);
     } catch (err) {
-      setCreateError(err instanceof Error ? err.message : "Could not create the entity.");
+      setCreateError(failure(err, "Could not create the entity."));
     } finally {
       setCreating(false);
     }
@@ -338,12 +221,11 @@ export default function EntityGraph({ kinds }: { kinds?: EntityKind[] } = {}) {
         .split(",")
         .map((a) => a.trim())
         .filter(Boolean);
-      await entities.update(selected.id, { name: editForm.name.trim(), aliases, summary: editForm.summary.trim() });
+      await updateEntityMutation.mutateAsync({ id: selected.id, name: editForm.name.trim(), aliases, summary: editForm.summary.trim() });
       setEditing(false);
-      await refreshGraph();
       await selectNode(selected.id);
     } catch (err) {
-      setActionError(err instanceof Error ? err.message : "Could not save changes.");
+      setActionError(failure(err, "Could not save changes."));
     } finally {
       setBusy(false);
     }
@@ -351,15 +233,13 @@ export default function EntityGraph({ kinds }: { kinds?: EntityKind[] } = {}) {
 
   async function deleteSelected() {
     if (!selected) return;
-    if (!window.confirm(`Delete ${selected.name}? This also removes its memory and relations.`)) return;
     setBusy(true);
     setActionError(null);
     try {
-      await entities.delete(selected.id);
+      await deleteEntityMutation.mutateAsync(selected.id);
       setSelected(null);
-      await refreshGraph();
     } catch (err) {
-      setActionError(err instanceof Error ? err.message : "Could not delete this entity.");
+      setActionError(failure(err, "Could not delete this entity."));
       setBusy(false);
     }
   }
@@ -369,12 +249,19 @@ export default function EntityGraph({ kinds }: { kinds?: EntityKind[] } = {}) {
     if (!selected || !memoryText.trim()) return;
     setBusy(true);
     setActionError(null);
+    clearTimeout(memoryTimer.current);
+    setMemoryStatus("running");
+    const before = new Set(selected.memory.map((m) => m.id));
     try {
-      await entities.addMemory(selected.id, { text: memoryText.trim() });
+      await addMemoryMutation.mutateAsync({ id: selected.id, text: memoryText.trim() });
       setMemoryText("");
-      await selectNode(selected.id);
+      const detail = await selectNode(selected.id);
+      setFreshMemory(detail?.memory.find((m) => !before.has(m.id))?.id ?? null);
+      setMemoryStatus("done");
+      memoryTimer.current = setTimeout(() => setMemoryStatus("idle"), 1200);
     } catch (err) {
-      setActionError(err instanceof Error ? err.message : "Could not add that memory.");
+      setMemoryStatus("idle");
+      setActionError(failure(err, "Could not add that memory."));
     } finally {
       setBusy(false);
     }
@@ -382,14 +269,13 @@ export default function EntityGraph({ kinds }: { kinds?: EntityKind[] } = {}) {
 
   async function deleteMemory(memoryId: string) {
     if (!selected) return;
-    if (!window.confirm("Delete this memory?")) return;
     setBusy(true);
     setActionError(null);
     try {
-      await entities.deleteMemory(memoryId);
+      await deleteMemoryMutation.mutateAsync(memoryId);
       await selectNode(selected.id);
     } catch (err) {
-      setActionError(err instanceof Error ? err.message : "Could not delete that memory.");
+      setActionError(failure(err, "Could not delete that memory."));
     } finally {
       setBusy(false);
     }
@@ -401,144 +287,209 @@ export default function EntityGraph({ kinds }: { kinds?: EntityKind[] } = {}) {
     setBusy(true);
     setActionError(null);
     try {
-      await entities.addRelation(selected.id, { to_id: relForm.to, label: relForm.label.trim() });
+      await addRelationMutation.mutateAsync({ id: selected.id, to_id: relForm.to, label: relForm.label.trim() });
       setRelForm({ to: "", label: "" });
-      await refreshGraph();
       await selectNode(selected.id);
     } catch (err) {
-      setActionError(err instanceof Error ? err.message : "Could not add that relation.");
+      setActionError(failure(err, "Could not add that relation."));
     } finally {
       setBusy(false);
     }
   }
 
+  // Everything floats over one full-bleed canvas: header and toolbar top left
+  // at the same page inset as every other route (main's px-4 py-6, md px-10
+  // py-8), inspector top right, zoom bottom right (inside GraphCanvas).
+  const frame = (toolbar: ReactNode, content: ReactNode, inspector?: ReactNode, aside?: ReactNode) => (
+    <div className="absolute inset-0 overflow-hidden">
+      <div className="absolute inset-0">{content}</div>
+      <div
+        ref={chromeRef}
+        // the inspector column is always kept clear, so opening it never reflows the toolbar or moves the camera
+        className="absolute left-0 top-0 right-0 md:right-auto px-4 pt-6 md:px-10 md:pt-8 flex flex-col gap-3 items-start pointer-events-none max-w-full md:max-w-[calc(100%-25rem)] [&>*]:pointer-events-auto"
+      >
+        {header}
+        {toolbar}
+        {aside}
+      </div>
+      {inspector}
+    </div>
+  );
+
   if (error) {
-    return (
-      <div className="ledger p-6 text-[12.5px]" style={{ color: "var(--ink-faint)" }}>
-        Could not load the entity graph: {error}
+    return frame(
+      null,
+      <div className="h-full flex items-center justify-center p-4">
+        <div className="max-w-sm flex flex-col gap-2">
+          <ErrorLine error={error} />
+          <button type="button" className="btn btn-sm self-start" onClick={() => window.location.reload()}>
+            Try again
+          </button>
+        </div>
       </div>
     );
   }
 
   if (!graph) {
-    return (
-      <div className="ledger p-10 text-center text-[12.5px]" style={{ color: "var(--ink-faint)" }}>
-        Loading entity graph…
+    return frame(
+      <div className="panel p-1.5 flex gap-1.5" aria-busy="true" aria-label="Loading entity graph">
+        {[64, 92, 80, 112].map((w) => (
+          <span key={w} className="skeleton h-6" style={{ width: w }} />
+        ))}
+      </div>,
+      <div className="h-full flex items-center justify-center" aria-hidden>
+        <div className="relative w-48 h-48">
+          {[
+            [20, 30],
+            [70, 12],
+            [55, 60],
+            [15, 75],
+            [82, 70],
+          ].map(([x, y]) => (
+            <span key={`${x}${y}`} className="skeleton absolute w-3 h-3 rounded-full" style={{ left: `${x}%`, top: `${y}%`, borderRadius: 999 }} />
+          ))}
+        </div>
       </div>
     );
   }
 
+  const counts = new Map<EntityKind, number>();
+  graph.nodes.forEach((n) => counts.set(n.kind, (counts.get(n.kind) ?? 0) + 1));
+  const nameOf = (id: string) => graph.nodes.find((n) => n.id === id)?.name ?? id;
+
   const createModal = showCreate && (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
-      style={{ background: "rgba(0,0,0,0.45)" }}
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 fade-in"
+      style={{ background: "var(--scrim)" }}
       onClick={() => setShowCreate(false)}
     >
       <form
         onSubmit={createEntity}
         onClick={(e) => e.stopPropagation()}
-        className="ledger p-5 w-full max-w-sm flex flex-col gap-3.5"
+        className="panel pop-in p-5 w-full max-w-sm flex flex-col gap-3.5"
+        style={{ boxShadow: "var(--shadow-pop)" }}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="new-entity-title"
       >
         <div className="flex items-center justify-between">
-          <span className="eyebrow">New entity</span>
-          <button type="button" onClick={() => setShowCreate(false)} aria-label="Close" style={{ color: "var(--ink-faint)" }}>
-            <X size={15} />
+          <h2 id="new-entity-title" className="section-title">
+            New entity
+          </h2>
+          <button type="button" className="btn btn-ghost btn-sm btn-icon w-[26px]" onClick={() => setShowCreate(false)} aria-label="Close">
+            <X {...ICON} />
           </button>
         </div>
-        <label className="text-[12px] flex flex-col gap-1.5" style={{ color: "var(--ink-dim)" }}>
+        <div className="label flex flex-col gap-1.5">
           Kind
-          <select
-            className="field px-3 py-2 text-[13px]"
+          <Select
+            aria-label="Kind"
+            className="h-8 text-[13px] w-full"
             value={createForm.kind}
-            onChange={(e) => setCreateForm((f) => ({ ...f, kind: e.target.value as EntityKind }))}
-          >
-            {shownKinds.map((k) => (
-              <option key={k} value={k}>
-                {KIND_LABEL[k]}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="text-[12px] flex flex-col gap-1.5" style={{ color: "var(--ink-dim)" }}>
+            onChange={(v) => setCreateForm((f) => ({ ...f, kind: v as EntityKind }))}
+            options={shownKinds.map((k) => ({ value: k, label: KIND_LABEL[k] }))}
+          />
+        </div>
+        <label className="label flex flex-col gap-1.5">
           Name
           <input
             autoFocus
-            className="field px-3 py-2 text-[13px]"
+            className="field h-8 px-2.5 text-[13px]"
             value={createForm.name}
             onChange={(e) => setCreateForm((f) => ({ ...f, name: e.target.value }))}
             placeholder="e.g. Jordan Blake"
           />
         </label>
-        <label className="text-[12px] flex flex-col gap-1.5" style={{ color: "var(--ink-dim)" }}>
+        <label className="label flex flex-col gap-1.5">
           Aliases (optional, comma-separated)
           <input
-            className="field px-3 py-2 text-[13px]"
+            className="field h-8 px-2.5 text-[13px]"
             value={createForm.aliases}
             onChange={(e) => setCreateForm((f) => ({ ...f, aliases: e.target.value }))}
             placeholder="e.g. JB, Jordy"
           />
         </label>
-        {createError && (
-          <p className="text-[12px]" style={{ color: "var(--critical)" }}>
-            {createError}
-          </p>
-        )}
-        <button
-          type="submit"
-          disabled={creating || !createForm.name.trim()}
-          className="self-start px-4 py-2 text-[13px] font-medium rounded-xl disabled:opacity-50"
-          style={{ background: "var(--felt)", color: "var(--canvas)" }}
-        >
-          {creating ? "Creating…" : "Create"}
-        </button>
+        {createError && <ErrorLine error={createError} />}
+        <div className="flex justify-end gap-2 pt-1">
+          <button type="button" className="btn btn-ghost" onClick={() => setShowCreate(false)}>
+            Cancel
+          </button>
+          <button type="submit" disabled={creating || !createForm.name.trim()} className="btn btn-primary">
+            {creating ? "Creating…" : "Create"}
+          </button>
+        </div>
       </form>
     </div>
   );
 
   const vaultSwitcher = myVaults.length > 1 && (
-    <select
-      className="field px-2.5 py-1.5 text-[12.5px]"
+    <Select
+      className="h-6 text-[12px] w-36"
       value={vaultId ?? ""}
-      onChange={(e) => {
-        setVaultId(e.target.value || undefined);
+      onChange={(v) => {
+        setVaultId(v || undefined);
         setSelected(null);
       }}
       aria-label="Vault"
-    >
-      {myVaults.map((v) => (
-        <option key={v.id} value={v.kind === "personal" ? "" : v.id}>
-          {v.kind === "personal" ? "Personal" : v.name}
-        </option>
-      ))}
-    </select>
+      options={myVaults.map((v) => ({ value: v.kind === "personal" ? "" : v.id, label: v.kind === "personal" ? "Personal" : v.name }))}
+    />
   );
 
   const toolbar = (
-    <div className="flex items-center justify-between gap-2 flex-wrap">
-      <div className="flex gap-2 flex-wrap items-center">
-        {vaultSwitcher}
+    <div className="panel p-1.5 flex flex-wrap items-center gap-1.5 max-w-full">
+      {vaultSwitcher}
+      {vaultSwitcher && <span className="w-px h-4 shrink-0" style={{ background: "var(--border)" }} aria-hidden />}
+      <div className="flex flex-wrap gap-1 items-center" role="group" aria-label="Entity kinds">
         {shownKinds.map((kind) => {
           const active = visibleKinds.has(kind);
           return (
-            <button
-              key={kind}
-              type="button"
-              className="pill"
-              aria-pressed={active}
-              onClick={() => toggleKind(kind)}
-            >
+            <button key={kind} type="button" className="pill shrink-0" aria-pressed={active} onClick={() => toggleKind(kind)}>
               <span
                 className="w-2 h-2 rounded-full shrink-0"
-                style={{ background: KIND_COLOR[kind], opacity: active ? 1 : 0.4 }}
+                style={{ background: KIND_COLOR[kind], opacity: active ? 1 : 0.35 }}
                 aria-hidden
               />
               {KIND_LABEL[kind]}
+              <span className="font-mono" style={{ color: "var(--ink-faint)" }}>
+                {counts.get(kind) ?? 0}
+              </span>
             </button>
           );
         })}
       </div>
-      <button type="button" className="pill" onClick={() => setShowCreate(true)}>
-        <Plus size={12} />
+      <span className="w-px h-4 shrink-0" style={{ background: "var(--border)" }} aria-hidden />
+      {graph.nodes.length > 0 && (
+        <form
+          className="shrink-0"
+          onSubmit={(e) => {
+            e.preventDefault();
+            const input = e.currentTarget.elements.namedItem("find") as HTMLInputElement;
+            const q = input.value.trim().toLowerCase();
+            const hit = graph.nodes.find((n) => n.name.toLowerCase() === q) ?? graph.nodes.find((n) => n.name.toLowerCase().includes(q));
+            if (q && hit) {
+              setVisibleKinds((prev) => new Set(prev).add(hit.kind));
+              selectNode(hit.id);
+              input.value = "";
+            }
+          }}
+        >
+          <input
+            name="find"
+            list="entity-names"
+            className="field h-6 w-36 px-2 text-[12px]"
+            placeholder="Find entity…"
+            aria-label="Find entity"
+            autoComplete="off"
+          />
+          <datalist id="entity-names">
+            {graph.nodes.map((n) => (
+              <option key={n.id} value={n.name} />
+            ))}
+          </datalist>
+        </form>
+      )}
+      <button type="button" className="btn btn-sm shrink-0" onClick={() => setShowCreate(true)}>
+        <Plus size={13} strokeWidth={1.75} />
         New entity
       </button>
     </div>
@@ -546,380 +497,290 @@ export default function EntityGraph({ kinds }: { kinds?: EntityKind[] } = {}) {
 
   if (graph.nodes.length === 0) {
     return (
-      <div className="flex flex-col gap-3 flex-1 min-h-0">
-        {toolbar}
+      <>
+        {frame(
+          toolbar,
+          <div className="h-full flex items-center justify-center p-6">
+            {guide ? (
+              <div className="flex flex-col items-center gap-3 text-center max-w-xs text-[13px]" style={{ color: "var(--ink-dim)" }}>
+                <p>No entities yet.</p>
+                {guide}
+              </div>
+            ) : (
+              <div className="flex flex-col items-center gap-3 text-center max-w-xs">
+                <p className="text-[13px]" style={{ color: "var(--ink-dim)" }}>
+                  No entities yet. They appear as sources sync and agents write memory, or add one yourself.
+                </p>
+                <button type="button" className="btn btn-primary btn-sm" onClick={() => setShowCreate(true)}>
+                  <Plus size={13} strokeWidth={1.75} />
+                  New entity
+                </button>
+              </div>
+            )}
+          </div>
+        )}
         {createModal}
-        <div className="ledger p-10 text-center text-[13px] flex-1" style={{ color: "var(--ink-faint)" }}>
-          No entities yet — they accumulate automatically as sources sync and get extracted, or add one yourself.
-        </div>
-      </div>
+      </>
     );
   }
 
-  const visibleNodes = nodes.filter((n) => visibleKinds.has(n.kind));
-  // Built from `nodes` (the simulation's own node objects), so link
-  // endpoints move with the nodes on every tick.
-  const nodeById = new Map(visibleNodes.map((n) => [n.id, n]));
-  const visibleLinks = (graph?.edges ?? []).flatMap((e) => {
-    const source = nodeById.get(e.source);
-    const target = nodeById.get(e.target);
-    return source && target ? [{ source, target }] : [];
-  });
+  const lastTouched = selected
+    ? selected.memory.reduce<string | undefined>((a, m) => (m.created_at && (!a || m.created_at > a) ? m.created_at : a), undefined)
+    : undefined;
 
-  return (
-    <div className="flex flex-col gap-3 flex-1 min-h-0">
-      {toolbar}
-      {createModal}
-      <span className="text-[11px] -mt-2" style={{ color: "var(--ink-faint)" }}>
-        Drag to rearrange
-      </span>
-
-      <div className="flex flex-col md:flex-row gap-4 flex-1 min-h-0">
-        <div ref={wrapRef} className="relative flex-1 min-h-0" style={{ minHeight: 420 }}>
-          <svg
-            ref={svgRef}
-            viewBox={`0 0 ${dims.w} ${dims.h}`}
-            width="100%"
-            height="100%"
-            role="img"
-            aria-label="Entity relationship graph"
-            className="ledger"
-            style={{ touchAction: "none", userSelect: "none", WebkitUserSelect: "none", cursor: panning ? "grabbing" : "default" }}
-            onWheel={onCanvasWheel}
-            onPointerDown={onCanvasPointerDown}
-            onPointerMove={onCanvasPointerMove}
-            onPointerUp={onCanvasPointerUp}
-            onPointerCancel={onCanvasPointerUp}
-          >
-          <g transform={`translate(${dims.w / 2},${dims.h / 2}) scale(${view.zoom}) translate(${-dims.w / 2 + view.x},${-dims.h / 2 + view.y})`}>
-          {visibleLinks.map((l, i) => (
-            <line
-              key={i}
-              x1={l.source.x}
-              y1={l.source.y}
-              x2={l.target.x}
-              y2={l.target.y}
-              stroke="var(--border-strong)"
-              strokeWidth={1}
-            />
-          ))}
-          {visibleNodes.map((n) => {
-            const isHovered = hovered === n.id;
-            const isSelected = selected?.id === n.id;
-            const isDragging = draggingId === n.id;
-            const r = isHovered || isSelected || isDragging ? 16 : 14;
-            return (
-              <g
-                key={n.id}
-                transform={`translate(${n.x},${n.y})`}
-                style={{ cursor: isDragging ? "grabbing" : "grab", touchAction: "none" }}
-                onPointerDown={(e) => onNodePointerDown(e, n)}
-                onPointerMove={(e) => onNodePointerMove(e, n)}
-                onPointerUp={(e) => onNodePointerUp(e, n)}
-                onPointerCancel={(e) => onNodePointerUp(e, n)}
-                onMouseEnter={() => setHovered(n.id)}
-                onMouseLeave={() => setHovered((h) => (h === n.id ? null : h))}
-              >
-                <title>{`${n.name} — added by ${attribution(n.owner_email, myEmail)}`}</title>
-                {n.kind === "person" ? (
-                  <>
-                    {(isHovered || isDragging) && (
-                      <circle
-                        r={r + 1}
-                        fill="none"
-                        stroke="var(--felt)"
-                        strokeWidth={2}
-                      />
-                    )}
-                    <foreignObject x={-r} y={-r} width={r * 2} height={r * 2} style={{ overflow: "visible" }}>
-                      <Blobatar name={n.name || n.id} animate="hover" size={r * 2} />
-                    </foreignObject>
-                  </>
-                ) : n.kind === "organisation" ? (
-                  <rect
-                    x={-r * 0.82}
-                    y={-r * 0.82}
-                    width={r * 1.64}
-                    height={r * 1.64}
-                    rx={4}
-                    fill={KIND_COLOR[n.kind]}
-                    stroke={isHovered || isDragging ? "var(--felt)" : "none"}
-                    strokeWidth={isHovered || isDragging ? 2 : 0}
-                    opacity={isSelected || isHovered || isDragging ? 1 : 0.85}
-                  />
-                ) : n.kind === "location" ? (
-                  <path
-                    d={`M0,${-r * 1.15} C${r * 0.75},${-r * 1.15} ${r * 0.95},${-r * 0.2} 0,${r * 1.05}
-                        C${-r * 0.95},${-r * 0.2} ${-r * 0.75},${-r * 1.15} 0,${-r * 1.15} Z`}
-                    fill={KIND_COLOR[n.kind]}
-                    stroke={isHovered || isDragging ? "var(--felt)" : "none"}
-                    strokeWidth={isHovered || isDragging ? 2 : 0}
-                    opacity={isSelected || isHovered || isDragging ? 1 : 0.85}
-                  />
-                ) : n.kind === "repository" ? (
-                  // a larger rounded square -- the "container" of a file/symbol tree.
-                  <rect
-                    x={-r * 0.95}
-                    y={-r * 0.95}
-                    width={r * 1.9}
-                    height={r * 1.9}
-                    rx={6}
-                    fill={KIND_COLOR[n.kind]}
-                    stroke={isHovered || isDragging ? "var(--felt)" : "none"}
-                    strokeWidth={isHovered || isDragging ? 2 : 0}
-                    opacity={isSelected || isHovered || isDragging ? 1 : 0.85}
-                  />
-                ) : n.kind === "file" ? (
-                  // a small plain square -- one level down from a repository.
-                  <rect
-                    x={-r * 0.6}
-                    y={-r * 0.6}
-                    width={r * 1.2}
-                    height={r * 1.2}
-                    rx={1.5}
-                    fill={KIND_COLOR[n.kind]}
-                    stroke={isHovered || isDragging ? "var(--felt)" : "none"}
-                    strokeWidth={isHovered || isDragging ? 2 : 0}
-                    opacity={isSelected || isHovered || isDragging ? 1 : 0.85}
-                  />
-                ) : (
-                  // symbol -- a small diamond, one level down from a file.
-                  <rect
-                    x={-r * 0.62}
-                    y={-r * 0.62}
-                    width={r * 1.24}
-                    height={r * 1.24}
-                    fill={KIND_COLOR[n.kind]}
-                    stroke={isHovered || isDragging ? "var(--felt)" : "none"}
-                    strokeWidth={isHovered || isDragging ? 2 : 0}
-                    opacity={isSelected || isHovered || isDragging ? 1 : 0.85}
-                    transform="rotate(45)"
-                  />
-                )}
-                <text
-                  x={0}
-                  y={24}
-                  textAnchor="middle"
-                  fontSize={10.5}
-                  fontFamily="var(--font-mono), ui-monospace, monospace"
-                  fill={isHovered || isDragging ? "var(--felt)" : "var(--ink-dim)"}
-                >
-                  {n.name.length > 16 ? `${n.name.slice(0, 15)}…` : n.name}
-                </text>
-              </g>
-            );
-          })}
-          </g>
-          </svg>
-
-          <div className="absolute bottom-3 right-3 flex gap-1">
-            <button type="button" className="pill" aria-label="Zoom in" onClick={() => zoomBy(1 + ZOOM_STEP)}>
-              <Plus size={13} />
-            </button>
-            <button type="button" className="pill" aria-label="Zoom out" onClick={() => zoomBy(1 - ZOOM_STEP)}>
-              <Minus size={13} />
-            </button>
-            <button
-              type="button"
-              className="pill"
-              aria-label="Fit to view"
-              title="Fit to view"
-              onClick={() => setView(computeFit(visibleNodes, dims.w, dims.h))}
-            >
-              <Maximize2 size={13} />
-            </button>
-            <button type="button" className="pill" aria-label="Reset view" onClick={resetView}>
-              <RotateCcw size={13} />
-            </button>
+  const inspector = selected && (
+    <aside
+      aria-label={`${selected.name} details`}
+      className="panel frame-selected pop-in absolute z-20 flex flex-col inset-x-2 bottom-2 max-h-[62%] md:inset-x-auto md:bottom-auto md:right-6 md:top-6 md:w-[22rem] md:max-h-[calc(100%-5rem)]"
+      style={{ transformOrigin: "top right", boxShadow: "var(--shadow-pop)" }}
+    >
+      <div className="flex items-start justify-between gap-2 p-4 pb-3">
+        <div className="flex items-center gap-3 min-w-0">
+          {selected.kind === "person" && <Blobatar name={selected.name || selected.id} animate="hover" size={36} background="circle" />}
+          <div className="min-w-0">
+            <h2 className="text-[16px] font-semibold tracking-[-0.015em] truncate">{selected.name}</h2>
+            <span className="text-[12px] inline-flex items-center gap-1.5 mt-0.5" style={{ color: "var(--ink-dim)" }}>
+              <span className="w-2 h-2 rounded-full" style={{ background: KIND_COLOR[selected.kind] }} aria-hidden />
+              {KIND_LABEL[selected.kind]}
+            </span>
           </div>
         </div>
-
-        {selected && (
-          <div
-            className="ledger p-5 w-full md:w-72 shrink-0 flex flex-col gap-4"
-            style={{ maxHeight: dims.h, overflowY: "auto" }}
-          >
-            <div className="flex items-start justify-between gap-2">
-              <div className="flex items-center gap-3 min-w-0">
-                {selected.kind === "person" && (
-                  <Blobatar name={selected.name || selected.id} animate="hover" size={36} background="circle" />
-                )}
-                <div className="min-w-0">
-                  <span className="eyebrow" style={{ color: KIND_COLOR[selected.kind] }}>
-                    {selected.kind}
-                  </span>
-                  <div className="text-[14.5px] font-medium mt-1 truncate">{selected.name}</div>
-                  <div className="text-[11px] mt-0.5" style={{ color: "var(--ink-faint)" }}>
-                    added by {attribution(selected.owner_email, myEmail)}
-                  </div>
-                </div>
-              </div>
-              <div className="flex items-center gap-2 shrink-0">
-                <button onClick={startEditing} aria-label="Edit" style={{ color: "var(--ink-faint)" }}>
-                  <Pencil size={14} />
-                </button>
-                <button onClick={deleteSelected} aria-label="Delete" disabled={busy} style={{ color: "var(--ink-faint)" }}>
-                  <Trash2 size={14} />
-                </button>
-                <button onClick={() => setSelected(null)} aria-label="Close" style={{ color: "var(--ink-faint)" }}>
-                  <X size={15} />
-                </button>
-              </div>
-            </div>
-
-            {actionError && (
-              <p className="text-[12px]" style={{ color: "var(--critical)" }}>
-                {actionError}
-              </p>
-            )}
-
-            {editing ? (
-              <form onSubmit={saveEdit} className="flex flex-col gap-2.5">
-                <label className="text-[11.5px] flex flex-col gap-1" style={{ color: "var(--ink-dim)" }}>
-                  Name
-                  <input
-                    className="field px-2.5 py-1.5 text-[12.5px]"
-                    value={editForm.name}
-                    onChange={(e) => setEditForm((f) => ({ ...f, name: e.target.value }))}
-                  />
-                </label>
-                <label className="text-[11.5px] flex flex-col gap-1" style={{ color: "var(--ink-dim)" }}>
-                  Aliases (comma-separated)
-                  <input
-                    className="field px-2.5 py-1.5 text-[12.5px]"
-                    value={editForm.aliases}
-                    onChange={(e) => setEditForm((f) => ({ ...f, aliases: e.target.value }))}
-                  />
-                </label>
-                <label className="text-[11.5px] flex flex-col gap-1" style={{ color: "var(--ink-dim)" }}>
-                  Summary
-                  <textarea
-                    className="field px-2.5 py-1.5 text-[12.5px]"
-                    rows={3}
-                    value={editForm.summary}
-                    onChange={(e) => setEditForm((f) => ({ ...f, summary: e.target.value }))}
-                  />
-                </label>
-                <div className="flex gap-2">
-                  <button
-                    type="submit"
-                    disabled={busy}
-                    className="px-3 py-1.5 text-[12px] font-medium rounded-lg disabled:opacity-50"
-                    style={{ background: "var(--felt)", color: "var(--canvas)" }}
-                  >
-                    Save
-                  </button>
-                  <button type="button" className="pill" onClick={() => setEditing(false)}>
-                    Cancel
-                  </button>
-                </div>
-              </form>
-            ) : (
-              selected.summary && (
-                <p className="text-[12.5px]" style={{ color: "var(--ink-dim)" }}>
-                  {selected.summary}
-                </p>
-              )
-            )}
-
-            <div>
-              <div className="eyebrow mb-2">Memory</div>
-              {selected.memory.length === 0 && (
-                <p className="text-[12px]" style={{ color: "var(--ink-faint)" }}>
-                  Nothing recorded yet.
-                </p>
-              )}
-              <ul className="hairline-rows">
-                {selected.memory.map((m) => (
-                  <li key={m.id} className="py-2 text-[12.5px] flex items-start justify-between gap-2">
-                    <div>
-                      <span>{m.text}</span>
-                      <div className="text-[10.5px] mt-0.5" style={{ color: "var(--ink-faint)" }}>
-                        added by {attribution(m.owner_email, myEmail)}
-                      </div>
-                    </div>
-                    <button
-                      onClick={() => deleteMemory(m.id)}
-                      aria-label="Delete memory"
-                      disabled={busy}
-                      className="shrink-0"
-                      style={{ color: "var(--ink-faint)" }}
-                    >
-                      <X size={12} />
-                    </button>
-                  </li>
-                ))}
-              </ul>
-              <form onSubmit={submitMemory} className="flex flex-col gap-2 mt-2.5">
-                <textarea
-                  className="field px-2.5 py-1.5 text-[12.5px]"
-                  rows={2}
-                  placeholder="Add a memory about this entity…"
-                  value={memoryText}
-                  onChange={(e) => setMemoryText(e.target.value)}
-                />
-                <button
-                  type="submit"
-                  disabled={busy || !memoryText.trim()}
-                  className="self-start pill disabled:opacity-50"
-                >
-                  Add memory
-                </button>
-              </form>
-            </div>
-
-            <div>
-              <div className="eyebrow mb-2">Relations</div>
-              {selected.relations.length === 0 && (
-                <p className="text-[12px]" style={{ color: "var(--ink-faint)" }}>
-                  No known relations.
-                </p>
-              )}
-              <ul className="hairline-rows">
-                {selected.relations.map((r) => (
-                  <li key={r.id} className="py-2 text-[12px]">
-                    <span className="font-mono" style={{ color: "var(--ink-dim)" }}>
-                      {r.direction === "out" ? `→ ${r.label} → ${r.out}` : `← ${r.label} ← ${r.in}`}
-                    </span>
-                    <div className="text-[10.5px] mt-0.5" style={{ color: "var(--ink-faint)" }}>
-                      added by {attribution(r.owner_email, myEmail)}
-                    </div>
-                  </li>
-                ))}
-              </ul>
-              <form onSubmit={submitRelation} className="flex flex-col gap-2 mt-2.5">
-                <select
-                  className="field px-2.5 py-1.5 text-[12.5px]"
-                  value={relForm.to}
-                  onChange={(e) => setRelForm((f) => ({ ...f, to: e.target.value }))}
-                >
-                  <option value="">Relate to…</option>
-                  {graph.nodes
-                    .filter((n) => n.id !== selected.id)
-                    .map((n) => (
-                      <option key={n.id} value={n.id}>
-                        {KIND_LABEL[n.kind]}: {n.name}
-                      </option>
-                    ))}
-                </select>
-                <input
-                  className="field px-2.5 py-1.5 text-[12.5px]"
-                  placeholder="Relation label, e.g. works_at"
-                  value={relForm.label}
-                  onChange={(e) => setRelForm((f) => ({ ...f, label: e.target.value }))}
-                />
-                <button
-                  type="submit"
-                  disabled={busy || !relForm.to || !relForm.label.trim()}
-                  className="self-start pill disabled:opacity-50"
-                >
-                  Add relation
-                </button>
-              </form>
-            </div>
+        <TooltipGroup>
+          <div className="flex items-center gap-0.5 shrink-0 -mr-1">
+            <Tooltip label="Edit">
+              <button className="btn btn-ghost btn-sm btn-icon w-[26px]" onClick={startEditing} aria-label="Edit">
+                <Pencil {...ICON} />
+              </button>
+            </Tooltip>
+            <Tooltip label="Delete. Also removes its memory and relations">
+              <ConfirmButton label="Delete" confirmLabel="Delete" onConfirm={deleteSelected} disabled={busy} className="btn btn-ghost btn-sm btn-icon w-[26px]">
+                <Trash2 {...ICON} />
+              </ConfirmButton>
+            </Tooltip>
+            <Tooltip label="Close" shortcut="Esc">
+              <button className="btn btn-ghost btn-sm btn-icon w-[26px]" onClick={() => setSelected(null)} aria-label="Close">
+                <X {...ICON} />
+              </button>
+            </Tooltip>
           </div>
-        )}
+        </TooltipGroup>
       </div>
-    </div>
+
+      <div className="overflow-y-auto px-4 pb-4 flex flex-col gap-6">
+        <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-[13px] items-center">
+          <dt className="label">Added by</dt>
+          <dd className="min-w-0">
+            {selected.owner_email ? <Author email={selected.owner_email} me={myEmail} /> : <span style={{ color: "var(--ink-faint)" }}>Not recorded</span>}
+          </dd>
+          <dt className="label">Last memory</dt>
+          <dd className="font-mono text-[12px]" style={{ color: "var(--ink-dim)" }}>
+            {lastTouched ? `${age(lastTouched)} ago`.replace("now ago", "just now") : "None yet"}
+          </dd>
+          {selected.aliases.length > 0 && (
+            <>
+              <dt className="label">Aliases</dt>
+              <dd className="truncate" style={{ color: "var(--ink-dim)" }}>
+                {selected.aliases.join(", ")}
+              </dd>
+            </>
+          )}
+        </dl>
+
+        {actionError && <ErrorLine error={actionError} />}
+
+        {editing ? (
+          <form onSubmit={saveEdit} className="flex flex-col gap-2.5">
+            <label className="label flex flex-col gap-1">
+              Name
+              <input className="field h-8 px-2.5 text-[13px]" value={editForm.name} onChange={(e) => setEditForm((f) => ({ ...f, name: e.target.value }))} />
+            </label>
+            <label className="label flex flex-col gap-1">
+              Aliases (comma-separated)
+              <input className="field h-8 px-2.5 text-[13px]" value={editForm.aliases} onChange={(e) => setEditForm((f) => ({ ...f, aliases: e.target.value }))} />
+            </label>
+            <label className="label flex flex-col gap-1">
+              Summary
+              <textarea
+                className="field px-2.5 py-1.5 text-[13px]"
+                rows={3}
+                value={editForm.summary}
+                onChange={(e) => setEditForm((f) => ({ ...f, summary: e.target.value }))}
+              />
+            </label>
+            <div className="flex gap-2">
+              <button type="submit" disabled={busy} className="btn btn-primary btn-sm">
+                Save
+              </button>
+              <button type="button" className="btn btn-ghost btn-sm" onClick={() => setEditing(false)}>
+                Cancel
+              </button>
+            </div>
+          </form>
+        ) : (
+          selected.summary && (
+            <p className="text-[13px] leading-relaxed -mt-2" style={{ color: "var(--ink-dim)" }}>
+              {selected.summary}
+            </p>
+          )
+        )}
+
+        <section className="flex flex-col gap-2">
+          <h3 className="section-title flex items-baseline gap-2">
+            Memory
+            <span className="font-mono text-[12px] font-normal" style={{ color: "var(--ink-faint)" }}>
+              {selected.memory.length}
+            </span>
+          </h3>
+          {selected.memory.length === 0 ? (
+            <p className="text-[12.5px]" style={{ color: "var(--ink-faint)" }}>
+              Nothing recorded yet. Add the first fact below.
+            </p>
+          ) : (
+            <ul className="hairline-rows">
+              {selected.memory.map((m) => (
+                <li key={m.id} ref={m.id === freshMemory ? blurIn : undefined} className="group py-2.5 flex items-start justify-between gap-2">
+                  <div className="min-w-0 flex flex-col gap-1.5">
+                    <span className="text-[13px] leading-snug">{m.text}</span>
+                    {(m.owner_email || m.created_at) && (
+                      <div className="flex items-center gap-2 min-w-0">
+                        <Author email={m.owner_email} me={myEmail} />
+                        {age(m.created_at) && (
+                          <time className="font-mono text-[11.5px]" style={{ color: "var(--ink-faint)" }} dateTime={m.created_at} title={m.created_at}>
+                            {age(m.created_at)}
+                          </time>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                  <Tooltip label="Delete memory">
+                    <ConfirmButton
+                      label="Delete memory"
+                      confirmLabel="Delete"
+                      onConfirm={() => deleteMemory(m.id)}
+                      disabled={busy}
+                      className="btn btn-ghost btn-sm btn-icon w-[24px] h-[24px] shrink-0 -mr-1"
+                    >
+                      <X size={13} strokeWidth={1.75} />
+                    </ConfirmButton>
+                  </Tooltip>
+                </li>
+              ))}
+            </ul>
+          )}
+          <form onSubmit={submitMemory} className="flex flex-col gap-2">
+            <textarea
+              className="field px-2.5 py-1.5 text-[13px]"
+              rows={2}
+              placeholder="Add a memory about this entity…"
+              value={memoryText}
+              onChange={(e) => setMemoryText(e.target.value)}
+            />
+            <div className="flex items-center gap-2">
+              <button type="submit" disabled={busy || !memoryText.trim()} className="btn btn-sm">
+                Add memory
+              </button>
+              {memoryStatus !== "idle" && (
+                <span style={{ color: "var(--ink-faint)" }}>
+                  <SyncMark status={memoryStatus} />
+                </span>
+              )}
+            </div>
+          </form>
+        </section>
+
+        <section className="flex flex-col gap-2">
+          <h3 className="section-title flex items-baseline gap-2">
+            Relations
+            <span className="font-mono text-[12px] font-normal" style={{ color: "var(--ink-faint)" }}>
+              {selected.relations.length}
+            </span>
+          </h3>
+          {selected.relations.length === 0 ? (
+            <p className="text-[12.5px]" style={{ color: "var(--ink-faint)" }}>
+              No known relations.
+            </p>
+          ) : (
+            <ul className="hairline-rows">
+              {selected.relations.map((r) => {
+                const other = r.direction === "out" ? r.out : r.in;
+                return (
+                  <li key={r.id} className="py-2 flex items-center gap-2 min-w-0">
+                    {r.direction === "out" ? (
+                      <ArrowRight size={13} strokeWidth={1.75} className="shrink-0" style={{ color: "var(--ink-faint)" }} aria-label="outgoing" />
+                    ) : (
+                      <ArrowLeft size={13} strokeWidth={1.75} className="shrink-0" style={{ color: "var(--ink-faint)" }} aria-label="incoming" />
+                    )}
+                    <span className="font-mono text-[11.5px] shrink-0" style={{ color: "var(--ink-faint)" }}>
+                      {r.label}
+                    </span>
+                    <button
+                      type="button"
+                      className="text-[13px] truncate text-left min-w-0 hover:underline"
+                      style={{ color: "var(--accent-text)" }}
+                      onClick={() => selectNode(other)}
+                    >
+                      {nameOf(other)}
+                    </button>
+                    <span className="ml-auto shrink-0">
+                      <Author email={r.owner_email} me={myEmail} />
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+          <form onSubmit={submitRelation} className="flex flex-col gap-2">
+            <Select
+              aria-label="Relate to"
+              placeholder="Relate to…"
+              className="h-8 text-[13px] w-full"
+              value={relForm.to}
+              onChange={(v) => setRelForm((f) => ({ ...f, to: v }))}
+              options={graph.nodes
+                .filter((n) => n.id !== selected.id)
+                .map((n) => ({ value: n.id, label: n.name, hint: KIND_LABEL[n.kind] }))}
+            />
+            <input
+              className="field h-8 px-2.5 text-[13px]"
+              placeholder="Relation label, e.g. works_at"
+              aria-label="Relation label"
+              value={relForm.label}
+              onChange={(e) => setRelForm((f) => ({ ...f, label: e.target.value }))}
+            />
+            <button type="submit" disabled={busy || !relForm.to || !relForm.label.trim()} className="btn btn-sm self-start">
+              Add relation
+            </button>
+          </form>
+        </section>
+      </div>
+    </aside>
+  );
+
+  return (
+    <>
+      {frame(
+        toolbar,
+        <>
+          <GraphCanvas
+            nodes={graph.nodes}
+            edges={graph.edges}
+            kindColor={KIND_COLOR}
+            visibleKinds={visibleKinds}
+            insets={insets}
+            selectedId={selected?.id}
+            onSelect={selectNode}
+            myEmail={myEmail}
+            ariaLabel="Entity relationship graph"
+          />
+        </>,
+        inspector,
+        guide && graph.nodes.length < SPARSE && (
+          <div className="panel px-3 py-2.5 max-w-sm text-[13px] flex flex-col gap-2 items-start" style={{ color: "var(--ink-dim)" }}>
+            {guide}
+          </div>
+        )
+      )}
+      {createModal}
+    </>
   );
 }

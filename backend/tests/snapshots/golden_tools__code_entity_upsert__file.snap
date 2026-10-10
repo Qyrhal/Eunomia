@@ -1,0 +1,12 @@
+---
+source: tests/golden_tools.rs
+expression: stable
+---
+{
+  "id": "file:<id10>",
+  "kind": "file",
+  "name": "main.rs",
+  "aliases": [],
+  "summary": "",
+  "vault": "vault:<id2>"
+}

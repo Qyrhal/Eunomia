@@ -1,42 +1,33 @@
 //! `recall`/`reflect` tool-facing wrappers, owner-scoped.
 //!
-//! Deferred: `cache/tools.py`'s `register_tool(...)` / `@safe` plumbing
-//! (wiring these into the Python backend's MCP tool registry, via
-//! `tools/registry.py` and `tools/generic.py::safe`) is NOT ported here --
-//! it's tool-registration glue, not business logic, and this crate has no
-//! MCP registry to register into yet (`src/tools/registry.rs` exists for
-//! `tools::generic`'s handful of inlined cache queries, but there's no
-//! router/dispatcher wired up for a `recall`/`reflect` tool surface in this
-//! pass). What's ported is the one real piece of logic `tools.py` added on
-//! top of `recall`/`reflect`: coercing a `[since, until]` JSON array into the
+//! The tool registration lives in `tools::registry`. This module holds the logic
+//! on top of `recall`/`reflect`: coercing a `[since, until]` JSON array into the
 //! `(since, until)` tuple `cache::recall::recall` expects, and shaping the
 //! `recall` response as `{"results": [...]}`.
 //!
-//! Ported from `cache/tools.py`.
 
 use serde_json::{json, Value};
-use surrealdb::RecordId;
+use surrealdb::types::RecordId;
 
 use crate::cache::recall::{self, MemoryType};
 use crate::cache::reflect;
 use crate::config::Settings;
-use crate::db::Db;
+use crate::pool::OrgDb;
 use crate::error::{AppError, AppResult};
 
-/// Mirrors `cache/tools.py::recall`'s `time_range = tuple(time_range) if
-/// time_range else None` coercion -- a 2-element `[since, until]` JSON array
-/// in, an `(since, until)` tuple out; any other length is a 400.
+/// Coerces a 2-element `[since, until]` JSON array into a `(since, until)` tuple; any other length
+/// is a 400 rather than a silently ignored range.
 fn time_range_tuple(time_range: Option<&[String]>) -> AppResult<Option<(&str, &str)>> {
     match time_range {
         None => Ok(None),
         Some([since, until]) => Ok(Some((since.as_str(), until.as_str()))),
-        Some(_) => Err(AppError::bad_request("time_range must be [since, until]")),
+        Some(_) => Err(AppError::bad_request("time_range must be exactly two ISO 8601 dates: [since, until]")),
     }
 }
 
 #[allow(clippy::too_many_arguments)]
 pub async fn recall_tool(
-    db: &Db,
+    db: &OrgDb,
     settings: &Settings,
     owner: &RecordId,
     query: &str,
@@ -51,7 +42,7 @@ pub async fn recall_tool(
 }
 
 pub async fn reflect_tool(
-    db: &Db,
+    db: &OrgDb,
     settings: &Settings,
     owner: &RecordId,
     query: &str,

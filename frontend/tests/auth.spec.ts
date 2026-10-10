@@ -5,7 +5,7 @@ test.describe("Auth", () => {
   test("register -> onboarding -> dashboard", async ({ page }) => {
     await registerAndOnboard(page, uniqueEmail("auth"));
     await expect(page).toHaveURL((url) => url.pathname === "/");
-    await expect(page.getByText("What's next", { exact: true })).toBeVisible();
+    await expect(page.getByText("Connected sources", { exact: true })).toBeVisible();
   });
 
   test("an unauthenticated visitor to a protected page is redirected to login or register", async ({ page }) => {

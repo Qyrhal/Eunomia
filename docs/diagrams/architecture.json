@@ -37,8 +37,8 @@
     {
       "id": "api",
       "type": "backend",
-      "label": "Rust / Axum",
-      "sublabel": "API + shared tools \u00b7 :8001",
+      "label": "Rust / Axum API",
+      "sublabel": "Shared tools \u00b7 :8001",
       "pos": [
         610,
         300
@@ -51,8 +51,8 @@
     {
       "id": "store",
       "type": "database",
-      "label": "SurrealDB 2.3",
-      "sublabel": "Records, memories, relations",
+      "label": "SurrealDB 3.3",
+      "sublabel": "Control DB + one DB per org",
       "pos": [
         940,
         300
@@ -66,7 +66,7 @@
       "id": "agent",
       "type": "external",
       "label": "AI agents",
-      "sublabel": "MCP + bearer token",
+      "sublabel": "MCP \u00b7 token or OAuth",
       "pos": [
         610,
         60
@@ -91,10 +91,10 @@
       ]
     },
     {
-      "id": "sync",
+      "id": "worker",
       "type": "backend",
-      "label": "Sync + ingest",
-      "sublabel": "Map, upsert, enrich",
+      "label": "Job workers",
+      "sublabel": "Sync, embed, extract",
       "pos": [
         610,
         550
@@ -133,12 +133,6 @@
       "label": "/api/*"
     },
     {
-      "id": "database",
-      "from": "api",
-      "to": "store",
-      "label": "Read / write"
-    },
-    {
       "id": "mcp-tools",
       "from": "agent",
       "to": "api",
@@ -146,22 +140,29 @@
       "labelDy": 24
     },
     {
+      "id": "database",
+      "from": "api",
+      "to": "store",
+      "label": "Read / write"
+    },
+    {
+      "id": "job-queue",
+      "from": "worker",
+      "to": "store",
+      "label": "Claim jobs, write"
+    },
+    {
       "id": "source-fetch",
       "from": "sources",
-      "to": "sync",
+      "to": "worker",
       "label": "Fetch records"
     },
     {
-      "id": "ingest-store",
-      "from": "sync",
-      "to": "api",
-      "label": "Shared state"
-    },
-    {
       "id": "enrichment",
-      "from": "sync",
+      "from": "worker",
       "to": "model",
-      "label": "Embed / extract"
+      "label": "Embed / extract",
+      "labelDy": 18
     }
   ],
   "cards": [
@@ -174,9 +175,9 @@
     },
     {
       "dot": "emerald",
-      "title": "One database",
+      "title": "A database per org",
       "items": [
-        "Graph, full-text and vector indexes share SurrealDB."
+        "Org data sits behind its own database user; accounts and jobs live in control."
       ]
     },
     {

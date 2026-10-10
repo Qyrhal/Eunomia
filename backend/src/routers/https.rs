@@ -1,8 +1,11 @@
-//! Settings → HTTPS: same marker pattern as `update.rs`. This web-facing
+//! Settings, HTTPS: same marker pattern as `update.rs`. This web-facing
 //! process never touches docker or `.env`: it writes the desired state to
 //! `https.json` in `settings.update_status_dir`, and the `updater` service
 //! (scripts/auto-update.sh) validates it again, starts or removes the `caddy`
 //! service, and reports progress in `https-status.json`.
+//!
+//! Reading the status is open to every signed-in user; changing it restarts
+//! the stack and moves the public address, so it is instance admins only.
 
 use std::path::PathBuf;
 
@@ -11,12 +14,47 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::error::{AppError, AppResult};
 use crate::models_user::User;
 use crate::state::AppState;
+
+/// Documents `GET /https/status`. The handler merges the updater's
+/// `https-status.json`, so everything except `configured` is absent when the
+/// updater is not configured.
+#[derive(Serialize, utoipa::ToSchema)]
+#[allow(dead_code)] // schema only: the handler builds the JSON itself
+struct HttpsStatus {
+    configured: bool,
+    /// `off`, `pending` (waiting for the certificate), `active` or `error`.
+    state: Option<String>,
+    domain: Option<String>,
+    message: Option<String>,
+    checked_at: Option<String>,
+}
+
+/// Body of `POST /https`: turn HTTPS on for a domain, or off.
+#[derive(Deserialize, utoipa::ToSchema)]
+struct HttpsRequest {
+    enabled: bool,
+    /// A public DNS name (eunomia.example.com). Required when enabling.
+    #[serde(default)]
+    domain: String,
+    /// Contact address for Let's Encrypt. Required when enabling.
+    #[serde(default)]
+    email: String,
+}
+
+/// Body of the `POST /https` response.
+#[derive(Serialize, utoipa::ToSchema)]
+#[allow(dead_code)] // schema only: built with json! to keep the wire shape in one place
+struct HttpsAck {
+    configured: bool,
+    /// Present only when the updater is configured.
+    requested: Option<bool>,
+}
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -52,15 +90,6 @@ fn valid_email(email: &str) -> bool {
         && valid_domain(domain)
 }
 
-#[derive(Deserialize)]
-struct HttpsRequest {
-    enabled: bool,
-    #[serde(default)]
-    domain: String,
-    #[serde(default)]
-    email: String,
-}
-
 /// The request as written to `https.json` (one key per line, which the
 /// updater's shell parser relies on), or a 400-worthy message.
 fn request_file(req: &HttpsRequest) -> Result<String, &'static str> {
@@ -88,6 +117,15 @@ fn read_json(path: PathBuf) -> Option<Value> {
 /// `{"configured", "state": off|pending|active|error, "domain", "message",
 /// "checked_at"}`. A request the updater hasn't picked up yet already reads
 /// as its outcome-to-be (pending, or off).
+#[utoipa::path(
+    operation_id = "getHttpsStatus",
+    get,
+    path = "/api/https/status",
+    tag = "https",
+    summary = "HTTPS status",
+    responses((status = 200, body = HttpsStatus), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    security(("cookie" = []), ("bearer" = [])),
+)]
 async fn get_status(State(state): State<AppState>, _user: User) -> AppResult<Json<Value>> {
     let dir = status_dir(&state);
     if !dir.exists() {
@@ -106,11 +144,19 @@ async fn get_status(State(state): State<AppState>, _user: User) -> AppResult<Jso
     Ok(Json(status))
 }
 
-async fn request_https(
-    State(state): State<AppState>,
-    _user: User,
-    Json(req): Json<HttpsRequest>,
-) -> AppResult<Json<Value>> {
+/// Ask the updater to turn HTTPS on (or off). Acted on at its next run (within 20 seconds).
+#[utoipa::path(
+    operation_id = "requestHttps",
+    post,
+    path = "/api/https",
+    tag = "https",
+    summary = "Ask the updater to enable or disable HTTPS",
+    request_body = HttpsRequest,
+    responses((status = 200, body = HttpsAck), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    security(("cookie" = []), ("bearer" = [])),
+)]
+async fn request_https(State(state): State<AppState>, user: User, Json(req): Json<HttpsRequest>) -> AppResult<Json<Value>> {
+    super::update::require_admin(&state, &user, "change this server's HTTPS settings").await?;
     let body = request_file(&req).map_err(AppError::bad_request)?;
     let dir = status_dir(&state);
     if !dir.exists() {
@@ -119,6 +165,10 @@ async fn request_https(
     std::fs::write(dir.join("https.json"), body).map_err(|e| AppError::internal(e.to_string()))?;
     Ok(Json(json!({ "configured": true, "requested": true })))
 }
+
+#[derive(utoipa::OpenApi)]
+#[openapi(paths(get_status, request_https))]
+pub struct Doc;
 
 #[cfg(test)]
 mod tests {

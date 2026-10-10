@@ -1,7 +1,6 @@
 //! LLM entity-extraction pass, intended to run as a later stage of cache
-//! ingestion (the ingest pipeline itself hasn't been ported yet -- this
-//! module is self-contained and takes the ingested record's fields directly,
-//! same shape `cache/ingest.py` would hand it).
+//! ingestion (this
+//! module is self-contained and takes the ingested record's fields directly).
 //!
 //! Pulls person/organisation/location mentions, facts, and relations out of
 //! a cache record's text via an OpenAI chat completion (JSON mode), then
@@ -15,20 +14,24 @@
 //! "no real network calls in tests" -- when set, `extract_entities` is a
 //! no-op (skips straight through, creates nothing).
 //!
-//! Ported from `entities/extract.py`. Which endpoint and key the LLM call
-//! uses comes from `embeddings::provider`, shared by every model caller.
+//! The OpenAI settings lookup (`resolve_openai` below) is inlined here rather than
+//! shared with `connectors::service`.
 
+use surrealdb::types::SurrealValue;
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use serde::Deserialize;
 use serde_json::{json, Value};
-use surrealdb::RecordId;
+use surrealdb::types::RecordId;
+use crate::rid::RecordIdExt;
 
 use crate::config::Settings;
-use crate::db::Db;
+use crate::pool::OrgDb;
+use crate::store;
 use crate::embeddings::provider;
 use crate::error::{AppError, AppResult};
+use crate::store::entities as q;
 
 use super::service;
 
@@ -37,8 +40,7 @@ use super::service;
 const MIN_BODY_LEN: usize = 40;
 
 /// One ingested record's fields relevant to extraction -- mirrors the `id`/
-/// `title`/`body_text` subset of a `cache_record` row that `cache/ingest.py`
-/// passes in on the Python side.
+/// `title`/`body_text` subset of a `cache_record` row.
 #[derive(Debug, Clone)]
 pub struct ExtractRecord {
     pub id: String,
@@ -78,8 +80,7 @@ struct ExtractionData {
     relations: Vec<RelationExtract>,
 }
 
-/// `(section key, memory/entity kind)` pairs -- mirrors `entities/extract.py`'s
-/// `_KIND_MAP`.
+/// `(section key, memory/entity kind)` pairs.
 const KIND_MAP: [(&str, &str); 3] =
     [("people", "person"), ("organisations", "organisation"), ("locations", "location")];
 
@@ -116,35 +117,32 @@ fn should_extract(body: &str, embeddings_backend: &str) -> bool {
     body.trim().len() >= MIN_BODY_LEN && embeddings_backend != "stub"
 }
 
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Deserialize, SurrealValue, Default)]
 pub(super) struct AppSettingsRow {
     #[serde(default)]
+    #[surreal(default)]
     pub observations_mission: String,
 }
 
 /// The `app_settings:<owner_id>` row, creating it with (schema-)defaults if
 /// missing. Used by `consolidate.rs`'s mission lookup.
-pub(super) async fn app_settings_row(db: &Db, owner: &RecordId) -> AppResult<AppSettingsRow> {
+pub(super) async fn app_settings_row(db: &OrgDb, owner: &RecordId) -> AppResult<AppSettingsRow> {
     let rid = RecordId::from_table_key("app_settings", owner.key().clone());
-    let row: Option<AppSettingsRow> = db.select(rid.clone()).await?;
+    let row: Option<AppSettingsRow> = store::get(db, &rid).await?;
     match row {
         Some(r) => Ok(r),
         None => {
             // Relies on the `app_settings` table's own field DEFAULTs (see
-            // `db.rs`'s SCHEMA_STATEMENTS) for everything but `owner`, and
-            // the base URL: "" = the server's (see `embeddings::provider`).
-            let mut res = db
-                .query("UPSERT $id SET owner = $owner, openai_base_url = \"\" RETURN AFTER")
-                .bind(("id", rid))
-                .bind(("owner", owner.clone()))
-                .await?;
+            // `db.rs`'s SCHEMA_STATEMENTS) for everything but `owner`.
+            let mut res =
+                q::UPSERT_APP_SETTINGS.on(db).bind(("id", rid)).bind(("owner", owner.clone())).await?;
             let rows: Vec<AppSettingsRow> = res.take(0)?;
             Ok(rows.into_iter().next().unwrap_or_default())
         }
     }
 }
 
-async fn call_llm(db: &Db, settings: &Settings, owner: &RecordId, text: &str, date: Option<&str>) -> AppResult<ExtractionData> {
+async fn call_llm(db: &OrgDb, settings: &Settings, owner: &RecordId, text: &str, date: Option<&str>) -> AppResult<ExtractionData> {
     let p = provider::resolve(db, settings, owner).await?;
 
     let body = json!({
@@ -153,7 +151,9 @@ async fn call_llm(db: &Db, settings: &Settings, owner: &RecordId, text: &str, da
         "messages": [{"role": "user", "content": build_prompt(text, date)}],
     });
 
-    let resp = provider::client()
+    let resp = p
+        .client()
+        .await?
         .post(p.url("chat/completions"))
         .bearer_auth(p.bearer())
         .json(&body)
@@ -176,7 +176,7 @@ async fn call_llm(db: &Db, settings: &Settings, owner: &RecordId, text: &str, da
 /// strings) that got a new raw `memory` row -- used by the ingest pipeline
 /// to know which entities need re-consolidation.
 async fn apply_extraction(
-    db: &Db,
+    db: &OrgDb,
     owner: &RecordId,
     source_record_id: &str,
     data: &ExtractionData,
@@ -185,7 +185,7 @@ async fn apply_extraction(
     let mut touched: HashSet<String> = HashSet::new();
 
     async fn ensure(
-        db: &Db,
+        db: &OrgDb,
         owner: &RecordId,
         entity_ids: &mut HashMap<String, (RecordId, String)>,
         name: &str,
@@ -197,7 +197,7 @@ async fn apply_extraction(
             return Ok(entry.clone());
         }
         let entity = service::upsert_entity(db, owner, kind, name, aliases, None).await?;
-        let rid: RecordId = entity.id.parse().map_err(|_| AppError::internal("entity id did not round-trip"))?;
+        let rid: RecordId = crate::rid::parse(&entity.id).map_err(|_| AppError::internal("entity id did not round-trip"))?;
         let entry = (rid, kind.to_string());
         entity_ids.insert(key, entry.clone());
         Ok(entry)
@@ -244,7 +244,7 @@ async fn apply_extraction(
 /// fails the caller. Returns the set of subject ids (as strings) that got a
 /// new raw memory (empty on no-op/failure) -- a future ingest pipeline would
 /// use this to batch-trigger `consolidate.rs` per unique subject touched.
-pub async fn extract_entities(db: &Db, settings: &Settings, owner: &RecordId, record: &ExtractRecord) -> HashSet<String> {
+pub async fn extract_entities(db: &OrgDb, settings: &Settings, owner: &RecordId, record: &ExtractRecord) -> HashSet<String> {
     let body = record.body_text.trim();
     if !should_extract(body, &settings.embeddings_backend) {
         return HashSet::new();

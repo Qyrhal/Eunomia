@@ -1,0 +1,21 @@
+---
+source: tests/golden_tools.rs
+expression: stable
+---
+{
+  "nodes": [
+    {
+      "id": "person:<id1>",
+      "kind": "person",
+      "name": "Alice",
+      "owner_email": "tester@example.com"
+    },
+    {
+      "id": "organisation:<id6>",
+      "kind": "organisation",
+      "name": "Acme",
+      "owner_email": "tester@example.com"
+    }
+  ],
+  "edges": []
+}

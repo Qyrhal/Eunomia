@@ -17,7 +17,7 @@
 # Everything runs inside main() so bash has parsed the whole script before
 # `git checkout` replaces this file with the new release's copy.
 #
-# Every run also applies Settings → HTTPS (see https_apply below).
+# Every run also applies Settings, HTTPS (see https_apply below).
 set -uo pipefail
 # cron/launchd start with a bare PATH; appended so an existing PATH still wins
 export PATH="$PATH:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin"
@@ -70,25 +70,73 @@ main() {
     exit 1
   fi
 
+  local prev_ref
+  prev_ref="$(git rev-parse HEAD 2>/dev/null)"
   if ! { git fetch --depth 1 origin tag "$latest" --quiet && git checkout --quiet "$latest"; } 2>"$status_dir/.last-error"; then
     write_status "$status_dir" "$current" "$latest" false "$(cat "$status_dir/.last-error")"
     exit 1
   fi
 
-  set_env EUNOMIA_IMAGE_TAG "$latest"
-  ensure_encryption_key "$status_dir"
+  local had_tag=false
+  if grep -q '^EUNOMIA_IMAGE_TAG=' .env; then
+    had_tag=true
+    sed -i.bak "s#^EUNOMIA_IMAGE_TAG=.*#EUNOMIA_IMAGE_TAG=$latest#" .env && rm -f .env.bak
+  else
+    echo "EUNOMIA_IMAGE_TAG=$latest" >> .env
+  fi
+  # Installs from before nightly backups have no backup key yet.
+  if ! grep -q '^BACKUP_ENCRYPTION_KEY=.' .env; then
+    sed -i.bak '/^BACKUP_ENCRYPTION_KEY=/d' .env && rm -f .env.bak
+    echo "BACKUP_ENCRYPTION_KEY=$(head -c 32 /dev/urandom | base64 | tr -d '\n')" >> .env
+  fi
+  # A release that pins SurrealDB 3.x over 2.x (running, or stopped: the script finds the volume itself) needs its data moved
+  # first (export, fresh volume, verify; see docs/upgrading-to-surrealdb-3.md).
+  # The script rolls itself back on failure, so here we only undo the checkout
+  # to let "Update now" be retried. It can run for a long time: keep the lock fresh.
+  local new_major old_major
+  new_major="$(docker compose config --images 2>/dev/null | sed -n 's#^surrealdb/surrealdb:v\{0,1\}\([0-9][0-9]*\)\..*#\1#p' | head -1)"
+  old_major="$(docker inspect -f '{{.Config.Image}}' "$(docker compose ps -q surrealdb 2>/dev/null | head -1)" 2>/dev/null | sed -n 's#.*:v\{0,1\}\([0-9][0-9]*\)\..*#\1#p')"
+  if [ "$new_major" = 3 ] && [ "$old_major" != 3 ]; then
+    ( while sleep 60; do touch "$status_dir/.lock"; done ) & local keepalive=$!; disown "$keepalive"
+    bash scripts/upgrade-surreal-v3.sh >> "$status_dir/upgrade.log" 2>&1; local rc=$?
+    kill "$keepalive" 2>/dev/null
+    if [ "$rc" -ne 0 ]; then
+      git checkout --quiet "$prev_ref" 2>/dev/null
+      # only write the old tag back if .env had one: "unknown" or a git tag would break the next pull
+      if $had_tag; then sed -i.bak "s#^EUNOMIA_IMAGE_TAG=.*#EUNOMIA_IMAGE_TAG=$current#" .env; else sed -i.bak '/^EUNOMIA_IMAGE_TAG=/d' .env; fi
+      rm -f .env.bak
+      write_status "$status_dir" "$current" "$latest" false "SurrealDB 3 upgrade failed and was rolled back, nothing changed: $(tail -3 "$status_dir/upgrade.log")"
+      exit 1
+    fi
+  fi
+
+  # Installs from before the key was required ran with an empty ENCRYPTION_KEY, so their stored
+  # credentials and org database passwords were written under it. Give them a real key and let the
+  # backend still read the old values (ENCRYPTION_KEY_LEGACY_EMPTY=1); new writes use the new key.
+  # See docs/deployment.md, "Rotating ENCRYPTION_KEY". An existing key is never replaced.
+  # Done only after the SurrealDB upgrade step: a rolled-back update must leave .env able to run the old release.
+  if ! grep -q '^ENCRYPTION_KEY=.' .env; then
+    sed -i.bak -e '/^ENCRYPTION_KEY=/d' -e '/^ENCRYPTION_KEY_LEGACY_EMPTY=/d' .env && rm -f .env.bak
+    echo "ENCRYPTION_KEY=$(head -c 32 /dev/urandom | base64 | tr -d '\n')" >> .env
+    echo "ENCRYPTION_KEY_LEGACY_EMPTY=1" >> .env
+  fi
+
+  if ! grep -q '^JWT_SECRET=.' .env; then
+    sed -i.bak '/^JWT_SECRET=/d' .env && rm -f .env.bak
+    echo "JWT_SECRET=$(head -c 32 /dev/urandom | base64 | tr -d '\n')" >> .env
+  fi
 
   # Everything except the updater itself (recreating it here would kill this
   # run); it is refreshed last, after the status is written.
   local services
   services="$(docker compose config --services 2>/dev/null | grep -vx updater | tr '\n' ' ')"
-  if ! { docker compose pull backend frontend && docker compose up -d --remove-orphans $services; } >/dev/null 2>"$status_dir/.last-error"; then
+  if ! { docker compose pull backend frontend backup && docker compose up -d --remove-orphans $services; } >/dev/null 2>"$status_dir/.last-error"; then
     write_status "$status_dir" "$latest" "$latest" false "restart failed: $(tail -5 "$status_dir/.last-error")"
     exit 1
   fi
 
   # HTTPS on: the new release may ship a changed Caddyfile, which compose
-  # doesn't notice (it's a mounted file) -- reload it, no downtime.
+  # doesn't notice (it's a mounted file), so reload it. No downtime.
   if printf '%s\n' $services | grep -qx caddy; then
     docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile >/dev/null 2>&1 || true
   fi
@@ -100,27 +148,18 @@ main() {
   # container this runs in would kill the command halfway and leave no
   # updater. A short-lived sibling container does it a few seconds later
   # (a no-op when nothing changed). The repo is at the same path on the host.
+  # The container runs the copy of scripts/updater.sh taken when it started, and compose
+  # only sees the service definition, so a changed updater.sh forces a recreate.
   if [ -f /.dockerenv ] && docker compose config --services 2>/dev/null | grep -qx updater; then
+    local recreate=""
+    git diff --quiet "$prev_ref" HEAD -- scripts/updater.sh 2>/dev/null || recreate=--force-recreate
     docker run -d --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$PWD:$PWD" -w "$PWD" docker:27-cli \
-      sh -c "sleep 5 && docker compose up -d updater" >/dev/null 2>&1
+      sh -c "sleep 5 && docker compose up -d $recreate updater" >/dev/null 2>&1
   fi
 }
 
 # set_env <KEY> <value>: replace or append KEY=value in .env. Callers pass
 # validated values only (no '#', '&' or newlines).
-# Since v1.3 the backend refuses to start without an ENCRYPTION_KEY of at
-# least 16 characters (it used to fall back to a known all-zero key). An
-# install that never set one would crash-loop after this update, so give it
-# one first. Credentials saved under the old fallback must be re-entered;
-# the app says so for each one.
-ensure_encryption_key() {
-  local key
-  key="$(sed -n 's/^ENCRYPTION_KEY=//p' .env 2>/dev/null | tail -1)"
-  [ "${#key}" -ge 16 ] && return 0
-  set_env ENCRYPTION_KEY "$(head -c 32 /dev/urandom | base64 | tr -d '\n')"
-  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) generated ENCRYPTION_KEY (none was set; re-enter saved connector credentials and API keys)" >> "$1/history.log"
-}
-
 set_env() {
   if grep -q "^$1=" .env 2>/dev/null; then
     sed -i.bak "s#^$1=.*#$1=$2#" .env && rm -f .env.bak
@@ -129,12 +168,24 @@ set_env() {
   fi
 }
 
-# --- HTTPS (Settings → HTTPS) ----------------------------------------------
+# unset_env <KEY>...: remove the keys from .env.
+unset_env() {
+  local k
+  for k in "$@"; do sed -i.bak "/^$k=/d" .env && rm -f .env.bak; done
+}
+
+# --- HTTPS (Settings, HTTPS) ----------------------------------------------
 # POST /api/https writes update-status/https.json ({"enabled", "domain",
 # "email"}). This validates it again (untrusted input), points .env at the
 # domain, starts or removes the `caddy` service, and reports progress in
 # update-status/https-status.json: off, pending (until the certificate
 # answers), active, or error.
+# Trust model: Caddy proxies to the frontend (never to the backend), so the
+# backend keeps trusting only the frontend (TRUSTED_PROXIES=frontend). Turning
+# HTTPS on makes the frontend believe the X-Forwarded-* headers Caddy sets
+# (FRONTEND_TRUST_FORWARDED=1) and, so nobody can forge them, stops publishing
+# its port on the network (FRONTEND_BIND=127.0.0.1; Caddy reaches it over the
+# compose network). It also points PUBLIC_URL at the domain for OAuth.
 https_apply() {
   local dir="$1" req="$1/https.json" enabled domain email
   if [ -f "$req" ]; then
@@ -143,8 +194,10 @@ https_apply() {
     email="$(json_field email "$req")"
     rm -f "$req"
     if [ "$enabled" != true ]; then
-      sed -i.bak '/^COMPOSE_PROFILES=/d' .env && rm -f .env.bak
-      if docker compose rm -sf caddy >/dev/null 2>"$dir/.https-error"; then
+      domain="$(sed -n 's/^EUNOMIA_DOMAIN=//p' .env | tail -1)"
+      [ "$(sed -n 's/^PUBLIC_URL=//p' .env | tail -1)" = "https://$domain" ] && unset_env PUBLIC_URL
+      unset_env COMPOSE_PROFILES FRONTEND_TRUST_FORWARDED FRONTEND_BIND
+      if docker compose rm -sf caddy >/dev/null 2>"$dir/.https-error" && docker compose up -d backend frontend >/dev/null 2>>"$dir/.https-error"; then
         write_https_status "$dir" off "" ""
       else
         write_https_status "$dir" error "" "could not stop caddy: $(tail -3 "$dir/.https-error")"
@@ -158,7 +211,10 @@ https_apply() {
     set_env EUNOMIA_DOMAIN "$domain"
     set_env EUNOMIA_ACME_EMAIL "$email"
     set_env COMPOSE_PROFILES https
-    if ! docker compose up -d caddy >/dev/null 2>"$dir/.https-error"; then
+    set_env FRONTEND_TRUST_FORWARDED 1
+    set_env FRONTEND_BIND 127.0.0.1
+    set_env PUBLIC_URL "https://$domain"
+    if ! docker compose up -d backend frontend caddy >/dev/null 2>"$dir/.https-error"; then
       write_https_status "$dir" error "$domain" "could not start caddy: $(tail -3 "$dir/.https-error")"
       return
     fi

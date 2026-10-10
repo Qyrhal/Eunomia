@@ -1,6 +1,6 @@
-//! Generic read-only tools over the cache. Ported from `tools/generic.py`;
-//! the queries themselves live in `cache::search` (one read path shared with
-//! recall), this module only validates arguments and shapes the JSON.
+//! Generic read-only tools over the cache. The queries themselves live in
+//! `cache::search` (one read path shared with recall); this module only
+//! validates arguments and shapes the JSON.
 //!
 //! Every lookup is owner-scoped: each `cache_record`'s key is
 //! `"{owner_key}:{record_id}"`, so a record id is never valid across owners.
@@ -11,11 +11,11 @@
 //! opaque handles.
 
 use serde_json::{json, Value};
-use surrealdb::RecordId;
+use surrealdb::types::RecordId;
 
 use crate::cache::search::{self as cs, CacheRecord, RecordFilter, SearchParams};
-use crate::db::Db;
 use crate::error::AppResult;
+use crate::pool::OrgDb;
 
 const SNIPPET_LEN: usize = 200;
 
@@ -39,7 +39,7 @@ fn hit(rec: &CacheRecord) -> Value {
 
 #[allow(clippy::too_many_arguments)]
 pub async fn search(
-    db: &Db,
+    db: &OrgDb,
     settings: &crate::config::Settings,
     owner: &RecordId,
     query: &str,
@@ -69,13 +69,13 @@ pub async fn search(
     Ok(json!({ "results": results, "has_more": has_more }))
 }
 
-pub async fn get(db: &Db, owner: &RecordId, id: &str) -> AppResult<Value> {
+pub async fn get(db: &OrgDb, owner: &RecordId, id: &str) -> AppResult<Value> {
     let Some(rec) = cs::get(db, owner, id).await? else {
         return Ok(json!({ "error": "not found" }));
     };
     let links = cs::links(db, owner, &rec.id, None).await?;
-    // A Pocket recording or transcript chunk: attach the whole stored
-    // recording -- full transcript, summary, action items, tags.
+    // A Pocket recording or transcript chunk: attach the whole stored recording (full transcript,
+    // summary, action items, tags).
     let recording = match rec.source.as_str() {
         "heypocket" => {
             let rid = rec.payload.get("recording_id").and_then(Value::as_str).unwrap_or(&rec.external_id);
@@ -102,7 +102,7 @@ pub async fn get(db: &Db, owner: &RecordId, id: &str) -> AppResult<Value> {
 }
 
 pub async fn list(
-    db: &Db,
+    db: &OrgDb,
     owner: &RecordId,
     type_: Option<&str>,
     filters: Option<&serde_json::Map<String, Value>>,
@@ -122,7 +122,7 @@ pub async fn list(
     Ok(json!({ "results": results, "total": total, "has_more": has_more }))
 }
 
-pub async fn links(db: &Db, owner: &RecordId, id: &str, rel: Option<&str>) -> AppResult<Value> {
+pub async fn links(db: &OrgDb, owner: &RecordId, id: &str, rel: Option<&str>) -> AppResult<Value> {
     Ok(json!({ "links": cs::links(db, owner, id, rel).await? }))
 }
 

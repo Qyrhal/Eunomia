@@ -1,7 +1,7 @@
 import { test, expect, request as pwRequest, type APIRequestContext } from "@playwright/test";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
-import { uniqueEmail } from "./helpers";
+import { uniqueEmail, MOCK_BIND, mockBase } from "./helpers";
 
 // Memory correctness over the real API/MCP against a live SurrealDB:
 // tombstoned records stay gone (#64), observations follow their evidence
@@ -11,21 +11,28 @@ import { uniqueEmail } from "./helpers";
 //
 // Fixtures the public API can't produce (records from several sources, a
 // tombstone, a link, an injected failure) are set up with direct SurrealDB
-// queries; everything asserted goes through the app.
+// queries; everything asserted goes through the app. Org databases are not
+// reachable over HTTP on an in-memory backend, so those tests run only when
+// E2E_SURREAL_HTTP names a SurrealDB endpoint and E2E_SURREAL_NS / E2E_SURREAL_DB
+// the org database (org_<uuid>) holding the new user; otherwise they skip.
+// backend/tests/memory_correctness.rs covers the same scenarios without a server.
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Json = any;
 
-const DB_URL = process.env.E2E_SURREAL_HTTP ?? "http://127.0.0.1:8000";
+const DB_URL = process.env.E2E_SURREAL_HTTP;
 const DB_NS = process.env.E2E_SURREAL_NS ?? "eunomia";
 const DB_DB = process.env.E2E_SURREAL_DB ?? "eunomia";
+const DB_AUTH = Buffer.from(`${process.env.E2E_SURREAL_USER ?? "root"}:${process.env.E2E_SURREAL_PASS ?? "root"}`).toString("base64");
+const NO_SQL = "needs direct SurrealDB access (E2E_SURREAL_HTTP, E2E_SURREAL_NS, E2E_SURREAL_DB)";
 
 async function sql(query: string, attempt = 0): Promise<Json[]> {
+  if (!DB_URL) throw new Error(NO_SQL);
   const res = await fetch(`${DB_URL}/sql`, {
     method: "POST",
     headers: {
       Accept: "application/json",
-      Authorization: `Basic ${Buffer.from("root:root").toString("base64")}`,
+      Authorization: `Basic ${DB_AUTH}`,
       "surreal-ns": DB_NS,
       "surreal-db": DB_DB,
     },
@@ -118,7 +125,7 @@ function startLlm() {
       res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ belief }) } }] }));
     });
   });
-  return new Promise<void>((r) => llm.listen(0, "127.0.0.1", r));
+  return new Promise<void>((r) => llm.listen(0, MOCK_BIND, r));
 }
 
 const observationOf = (entity: Json) => entity.memory.filter((m: Json) => m.type === "observation");
@@ -133,7 +140,7 @@ test.describe.serial("memory correctness", () => {
     userId = (await (await ctx.get("/api/auth/me")).json()).id;
     ownerKey = userId.slice("user:".length).replace(/^⟨|⟩$/g, "");
     await startLlm();
-    const base = `http://127.0.0.1:${(llm.address() as AddressInfo).port}`;
+    const base = mockBase((llm.address() as AddressInfo).port);
     expect((await ctx.patch("/api/settings", { data: { openai_base_url: base } })).ok()).toBeTruthy();
     expect((await ctx.post("/api/sources/demo/sync")).ok()).toBeTruthy();
     const probe = await ok("memory_write", { subject_name: "Probe Person", subject_kind: "person", text: "Probe exists" });
@@ -148,6 +155,7 @@ test.describe.serial("memory correctness", () => {
   // -- #64 tombstones --------------------------------------------------------
 
   test("a tombstoned record is gone from get (REST and MCP), links and recall; others stay", async () => {
+    test.skip(!DB_URL, NO_SQL);
     const page = await ok("list", { type: "up.transaction", limit: 3 });
     const [gone, neighbour, other] = page.results.map((r: Json) => r.id as string);
     const goneBody = (await ok("get", { id: gone })).body_text as string;
@@ -162,7 +170,7 @@ test.describe.serial("memory correctness", () => {
     await sql(`UPDATE ${rec(gone)} SET deleted = true;`);
 
     const mcp = await call("get", { id: gone });
-    expect(mcp.data).toEqual({ error: "not found" });
+    expect(mcp.data.error).toBe("not found");
     const rest = await ctx.post("/api/tools/get", { data: { id: gone } });
     const restBody = await rest.text();
     expect(restBody).toContain("not found");
@@ -280,6 +288,7 @@ test.describe.serial("memory correctness", () => {
   });
 
   test("graph recall on a large vault matches through the name index", async () => {
+    test.skip(!DB_URL, NO_SQL);
     const vault = (await ok("vault_list")).results.find((v: Json) => v.kind === "personal").id;
     await sql(
       `FOR $i IN 0..2000 { CREATE person SET owner = ${userId}, vault = ${vault}, name = "Filler Person " + <string>$i; };`,
@@ -294,6 +303,7 @@ test.describe.serial("memory correctness", () => {
   // -- #69 search filters, paging, payload filters, body index ---------------
 
   test("search pushes filters into candidates, pages exactly and uses the body index", async () => {
+    test.skip(!DB_URL, NO_SQL);
     const statements = [
       ...Array.from({ length: 60 }, (_, i) =>
         recordSql(`fx:crowd:${i}`, { source: "crowd", type: "fx.note", title: `zebrafjord crowd ${i}`, body: "zebrafjord zebrafjord" }),
@@ -322,10 +332,11 @@ test.describe.serial("memory correctness", () => {
 
     // the pinned SurrealDB plans body_text matches on its own BM25 index
     const [plan] = await sql(`SELECT id FROM cache_record WHERE body_text @2@ "zebrafjord" EXPLAIN;`);
-    expect(JSON.stringify(plan)).toContain("cache_record_body_fts_idx");
+    expect(JSON.stringify(plan)).toContain("cache_record_body_fts");
   });
 
   test("dates compare as datetimes and payload filters target the named field", async () => {
+    test.skip(!DB_URL, NO_SQL);
     await sql(
       tx([
         recordSql("fx:d:1", { source: "dated", type: "fx.dated", title: "d1", body: "", occurred_at: "2020-01-01T00:00:00Z", payload: { category: "Groceries", amount: { cents: 500 } } }),
@@ -392,20 +403,22 @@ test.describe.serial("memory correctness", () => {
     await ok("code_relate", { from_id: loser, to_id: friend, label: boom }); // unique to the loser
     await ok("code_relate", { from_id: friend, to_id: loser, label: "mentors" });
 
-    // inject a failure into copying the loser's unique edge
-    await sql(`DEFINE EVENT inject_${boom} ON relates_to WHEN $event = "CREATE" AND $after.label = "${boom}" THEN { THROW "injected edge-copy failure" };`);
-    try {
-      await refused("entity_merge", { winner_id: winner, loser_id: loser });
-    } finally {
-      await sql(`REMOVE EVENT inject_${boom} ON relates_to;`);
+    if (DB_URL) {
+      // inject a failure into copying the loser's unique edge
+      await sql(`DEFINE EVENT inject_${boom} ON relates_to WHEN $event = "CREATE" AND $after.label = "${boom}" THEN { THROW "injected edge-copy failure" };`);
+      try {
+        await refused("entity_merge", { winner_id: winner, loser_id: loser });
+      } finally {
+        await sql(`REMOVE EVENT inject_${boom} ON relates_to;`);
+      }
+      const loserAfter = await ok("entities_get", { id: loser });
+      expect(loserAfter.name).toBe("Mergy Loser");
+      expect(loserAfter.relations.map((r: Json) => r.label).sort()).toEqual([boom, "knows", "mentors"].sort());
+      expect(loserAfter.memory.map((m: Json) => m.text).sort()).toEqual(["Loser belief", "Loser fact"]);
+      const winnerAfter = await ok("entities_get", { id: winner });
+      expect(winnerAfter.memory.map((m: Json) => m.text).sort()).toEqual(["Winner belief", "Winner fact"]);
+      expect(winnerAfter.relations.map((r: Json) => r.label)).toEqual(["knows"]);
     }
-    const loserAfter = await ok("entities_get", { id: loser });
-    expect(loserAfter.name).toBe("Mergy Loser");
-    expect(loserAfter.relations.map((r: Json) => r.label).sort()).toEqual([boom, "knows", "mentors"].sort());
-    expect(loserAfter.memory.map((m: Json) => m.text).sort()).toEqual(["Loser belief", "Loser fact"]);
-    const winnerAfter = await ok("entities_get", { id: winner });
-    expect(winnerAfter.memory.map((m: Json) => m.text).sort()).toEqual(["Winner belief", "Winner fact"]);
-    expect(winnerAfter.relations.map((r: Json) => r.label)).toEqual(["knows"]);
 
     // the real merge
     await ok("entity_merge", { winner_id: winner, loser_id: loser });
@@ -421,12 +434,14 @@ test.describe.serial("memory correctness", () => {
     expect(merged.memory.filter((m: Json) => m.type === "world").map((m: Json) => m.text).sort()).toEqual(["Loser fact", "Winner fact"]);
     const rels = merged.relations.map((r: Json) => `${r.direction}:${r.label}`).sort();
     expect(rels).toEqual([`out:${boom}`, "in:mentors", "out:knows"].sort());
-    const [[edges], [orphans]] = await sql(
-      `SELECT count() FROM relates_to WITH NOINDEX WHERE in = ${loser} OR out = ${loser} GROUP ALL; \
-       SELECT count() FROM memory WITH NOINDEX WHERE subject = ${loser} GROUP ALL;`,
-    );
-    expect(edges?.count ?? 0, "dangling edges").toBe(0);
-    expect(orphans?.count ?? 0, "orphaned memories").toBe(0);
+    if (DB_URL) {
+      const [[edges], [orphans]] = await sql(
+        `SELECT count() FROM relates_to WITH NOINDEX WHERE in = ${loser} OR out = ${loser} GROUP ALL; \
+         SELECT count() FROM memory WITH NOINDEX WHERE subject = ${loser} GROUP ALL;`,
+      );
+      expect(edges?.count ?? 0, "dangling edges").toBe(0);
+      expect(orphans?.count ?? 0, "orphaned memories").toBe(0);
+    }
 
     if (llmMode) {
       await ok("consolidate_observations", { subject_id: winner });

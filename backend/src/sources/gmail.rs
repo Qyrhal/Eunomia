@@ -172,10 +172,10 @@ mod tests {
         let mock = serve(vec![
             route("POST", "/oauth/token", json!({"access_token": "ya29.fresh", "expires_in": 3599, "token_type": "Bearer"})),
             route("GET", "/users/me/messages", json!({"messages": [{"id": "m2", "threadId": "t-m2"}], "resultSizeEstimate": 1}))
-                .query("pageToken=p2"),
+                .query_has("pageToken=p2"),
             route("GET", "/users/me/messages", json!({"messages": [{"id": "m1", "threadId": "t-m1"}], "nextPageToken": "p2"}))
-                .query("q=after:1700000000"),
-            route("GET", "/users/me/messages/m1", json!(message("m1", "1700000100000", "Lunch?"))).query("format=full"),
+                .query_has("q=after:1700000000"),
+            route("GET", "/users/me/messages/m1", json!(message("m1", "1700000100000", "Lunch?"))).query_has("format=full"),
             route("GET", "/users/me/messages/m2", json!(message("m2", "1700000200000", "Re: Lunch?"))),
         ])
         .await;
@@ -216,9 +216,9 @@ mod tests {
         let mut routes = vec![
             route("POST", "/oauth/token", json!({"access_token": "t"})),
             // second run: after the newest message read by the first (m50, minus a second)
-            route("GET", "/users/me/messages", json!({"messages": refs(0..51)})).query("q=after:1700001999"),
-            route("GET", "/users/me/messages", json!({"messages": refs(200..250)})).query("pageToken=p3"),
-            route("GET", "/users/me/messages", json!({"messages": refs(100..200), "nextPageToken": "p3"})).query("pageToken=p2"),
+            route("GET", "/users/me/messages", json!({"messages": refs(0..51)})).query_has("q=after:1700001999"),
+            route("GET", "/users/me/messages", json!({"messages": refs(200..250)})).query_has("pageToken=p3"),
+            route("GET", "/users/me/messages", json!({"messages": refs(100..200), "nextPageToken": "p3"})).query_has("pageToken=p2"),
             route("GET", "/users/me/messages", json!({"messages": refs(0..100), "nextPageToken": "p2"})),
         ];
         for i in 0..250 {

@@ -14,10 +14,11 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use reqwest::header::HeaderMap;
 use serde_json::{json, Value};
-use surrealdb::RecordId;
+use surrealdb::types::RecordId;
 
-use crate::db::Db;
 use crate::error::AppResult;
+use crate::pool::OrgDb;
+use crate::rid::RecordIdExt;
 
 /// Raw records fetched from an origin, plus the opaque cursor to feed back
 /// into the next sync.
@@ -38,7 +39,7 @@ pub struct Conn {
 /// Database handle + owner for the cache-reading helpers some sources expose
 /// (`up_bank::finance_summary`, `heypocket::summary`, ...).
 pub struct SourceCtx<'a> {
-    pub db: &'a Db,
+    pub db: &'a OrgDb,
     pub encryption_key: &'a str,
     pub owner: &'a RecordId,
 }
@@ -82,17 +83,22 @@ pub trait Source: Send + Sync {
     /// One raw origin value -> a cache envelope, or `None` to skip.
     fn map(&self, raw: &Value) -> Option<Value>;
 
-    /// Every envelope for one raw value -- [`Source::map`]'s, unless a source
-    /// splits a record (heypocket chunks long transcripts).
+    /// Every envelope for one raw value: [`Source::map`]'s, unless a source splits a record
+    /// (heypocket chunks long transcripts).
     fn map_many(&self, raw: &Value) -> Vec<Value> {
         self.map(raw).into_iter().collect()
     }
 
-    /// Stores one raw value outside the cache, before it is ingested. A
-    /// failure counts as a failed record, so the sync cursor holds and the
-    /// record is retried. Default: nothing to store.
-    async fn persist(&self, _db: &Db, _owner: &RecordId, _raw: &Value) -> AppResult<()> {
+    /// Stores one raw value outside the cache, before it is ingested (heypocket's own tables). A
+    /// failure counts as a failed record, so the sync cursor holds and the record is retried.
+    async fn persist(&self, _db: &OrgDb, _owner: &RecordId, _raw: &Value) -> AppResult<()> {
         Ok(())
+    }
+
+    /// Whether [`Source::webhook`] does anything. The route answers "ignored" without opening the
+    /// owner's database for a source that has none.
+    fn has_webhook(&self) -> bool {
+        false
     }
 
     /// Verify + translate a provider push into raw records (or `None`).
@@ -165,9 +171,9 @@ pub fn owner_key_str(owner: &RecordId) -> String {
     }
 }
 
-/// Converts a `surrealdb::Datetime` to a `chrono::DateTime<Utc>` by
+/// Converts a `surrealdb::types::Datetime` to a `chrono::DateTime<Utc>` by
 /// round-tripping through its `Serialize` impl (an RFC3339 string).
-pub fn datetime_to_chrono(d: &surrealdb::Datetime) -> Option<DateTime<Utc>> {
+pub fn datetime_to_chrono(d: &surrealdb::types::Datetime) -> Option<DateTime<Utc>> {
     let value = serde_json::to_value(d).ok()?;
     let s = value.as_str()?;
     DateTime::parse_from_rfc3339(s).ok().map(|dt| dt.with_timezone(&Utc))
@@ -179,7 +185,7 @@ mod tests {
 
     #[test]
     fn owner_key_str_strips_table_prefix() {
-        let owner: RecordId = "user:abc123".parse().unwrap();
+        let owner: RecordId = crate::rid::parse("user:abc123").unwrap();
         assert_eq!(owner_key_str(&owner), "abc123");
     }
 
@@ -187,7 +193,7 @@ mod tests {
     fn datetime_to_chrono_round_trips() {
         let now = Utc::now();
         let now = DateTime::parse_from_rfc3339(&now.to_rfc3339()).unwrap().with_timezone(&Utc);
-        let sd: surrealdb::Datetime = now.into();
+        let sd: surrealdb::types::Datetime = now.into();
         assert_eq!(datetime_to_chrono(&sd), Some(now));
     }
 

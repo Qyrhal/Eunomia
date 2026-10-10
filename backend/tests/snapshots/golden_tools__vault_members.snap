@@ -1,0 +1,12 @@
+---
+source: tests/golden_tools.rs
+expression: stable
+---
+{
+  "results": [
+    {
+      "email": "tester@example.com",
+      "role": "owner"
+    }
+  ]
+}

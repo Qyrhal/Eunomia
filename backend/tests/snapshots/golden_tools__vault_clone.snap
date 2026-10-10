@@ -1,0 +1,11 @@
+---
+source: tests/golden_tools.rs
+expression: stable
+---
+{
+  "id": "vault:<id15>",
+  "name": "Team Copy",
+  "kind": "org",
+  "created_at": "<ts>",
+  "entities_copied": 0
+}

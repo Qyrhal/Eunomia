@@ -1,11 +1,25 @@
 "use client";
 
-import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
+import ErrorLine, { failure, type Failure } from "@/components/ErrorLine";
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
-import { AlertTriangle, ArrowRight, Check, Copy, Plug } from "lucide-react";
-import { auth, entities, sources, type SourceRow } from "@/lib/api";
-import SyncStatusCard from "@/components/SyncStatusCard";
-import StatRing from "@/components/StatRing";
+import { AlertTriangle, ArrowRight } from "lucide-react";
+import type { ApiToken } from "@/lib/types";
+import type { EntityDetail, EntityKind, EntityMemory, SourceRow } from "@/lib/types";
+import { useCreateToken, useTokens } from "@/lib/queries/auth";
+import { entityKeys, type EntityList } from "@/lib/queries/entities";
+import { call } from "@/lib/queries/client";
+import { useSources, useSyncSource } from "@/lib/queries/sources";
+import { getEntity, listEntities } from "@/lib/gen";
+import AuthorTag, { authorColor, CursorGlyph } from "@/components/AuthorTag";
+import CopyButton from "@/components/bits/CopyButton";
+import DecryptReveal from "@/components/bits/DecryptReveal";
+import DigitRoll from "@/components/bits/DigitRoll";
+import SyncMark, { type SyncStatus } from "@/components/bits/SyncMark";
+import { prefersReducedMotion } from "@/components/bits/motion";
+import { kindForSource } from "@/lib/connectorMeta";
+import { FAILURE_ALERT_THRESHOLD, isLiveSource, sourceHealth, sourceLabel } from "@/lib/sourceState";
 
 // Same origin as the app: the frontend proxies /mcp to the backend.
 const noSubscribe = () => () => {};
@@ -25,21 +39,47 @@ function mcpConfig(url: string, token: string) {
   );
 }
 
-function CopyField({ value, mono = true }: { value: string; mono?: boolean }) {
-  const [copied, setCopied] = useState(false);
-  async function copy() {
-    await navigator.clipboard.writeText(value).catch(() => {});
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
-  }
+/** Compact age: "now", "4m", "3h", "2d". */
+function age(iso: string | null | undefined): string {
+  if (!iso) return "–";
+  const mins = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
+  if (mins < 1) return "now";
+  if (mins < 60) return `${mins}m`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return `${hours}h`;
+  return `${Math.round(hours / 24)}d`;
+}
+
+function since(iso: string | null): string {
+  if (!iso) return "never";
+  const a = age(iso);
+  return a === "now" ? "just now" : `${a} ago`;
+}
+
+function stamp(iso: string | null | undefined): string {
+  if (!iso) return "–";
+  return new Date(iso).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+}
+
+/** Scroll to the MCP card and put focus on its main action. */
+function focusConnect(e: React.MouseEvent) {
+  const card = document.getElementById("connect");
+  if (!card) return;
+  e.preventDefault();
+  const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  card.scrollIntoView({ behavior: reduce ? "auto" : "smooth", block: "start" });
+  card.querySelector<HTMLElement>(".btn-primary, button")?.focus({ preventScroll: true });
+}
+
+// ---- MCP connect card ----
+
+function CopyField({ value, children }: { value: string; children?: React.ReactNode }) {
   return (
-    <div className="field flex items-center gap-2 px-3 py-2">
-      <code className={`flex-1 min-w-0 truncate text-[12px] ${mono ? "font-mono" : ""}`} style={{ color: "var(--ink-dim)" }}>
-        {value}
+    <div className="field flex items-center gap-2 h-8 pl-2.5 pr-1">
+      <code className="flex-1 min-w-0 truncate text-[12px] font-mono" style={{ color: "var(--ink-dim)" }}>
+        {children ?? value}
       </code>
-      <button onClick={copy} aria-label="Copy" className="shrink-0" style={{ color: "var(--ink-faint)" }}>
-        {copied ? <Check size={13} color="var(--good)" /> : <Copy size={13} />}
-      </button>
+      <CopyButton value={value} className="shrink-0 w-6! h-6!" />
     </div>
   );
 }
@@ -48,58 +88,56 @@ function McpCard() {
   const mcpUrl = useMcpUrl();
   const [token, setToken] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<Failure | null>(null);
+  const createToken = useCreateToken();
 
   async function generate() {
     setBusy(true);
     setError(null);
     try {
-      const res = await auth.tokens.create("MCP");
+      const res = await createToken.mutateAsync({ name: "MCP" });
       setToken(res.token);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not generate a token.");
+      setError(failure(err, "Could not generate a token."));
     } finally {
       setBusy(false);
     }
   }
 
   return (
-    <section className="ledger p-6 flex flex-col gap-4">
-      <div>
-        <div className="eyebrow mb-1">Connect an MCP client</div>
-        <p className="text-[13px]" style={{ color: "var(--ink-dim)" }}>
-          MCP and the web app share the same tools — anything you can do here, an agent connected below can
-          do too.
+    <section id="connect" className="ledger p-4 flex flex-col gap-3.5 scroll-mt-6" aria-labelledby="connect-title">
+      <div className="flex flex-col gap-1">
+        <h2 id="connect-title" className="section-title">Connect an MCP client</h2>
+        <p className="text-[12.5px] leading-relaxed" style={{ color: "var(--ink-dim)" }}>
+          MCP and the web app share the same tools. Anything you can do here, a connected agent can do too.
         </p>
       </div>
 
-      <label className="text-[12px] flex flex-col gap-1.5" style={{ color: "var(--ink-dim)" }}>
+      <label className="label flex flex-col gap-1.5">
         MCP URL
         <CopyField value={mcpUrl} />
       </label>
 
       {!token ? (
-        <button
-          onClick={generate}
-          disabled={busy}
-          className="self-start px-4 py-2 text-[13px] font-medium rounded-xl disabled:opacity-50"
-          style={{ background: "var(--felt)", color: "var(--canvas)" }}
-        >
+        <button onClick={generate} disabled={busy} className="btn btn-primary self-start">
           {busy ? "Generating…" : "Generate a token"}
         </button>
       ) : (
         <>
-          <label className="text-[12px] flex flex-col gap-1.5" style={{ color: "var(--ink-dim)" }}>
-            Personal API token — shown once, store it now
-            <CopyField value={token} />
+          <label className="label flex flex-col gap-1.5">
+            Personal API token, shown once: store it now
+            <CopyField value={token}>
+              {/* The token only, never the command: it decrypts once as it appears. */}
+              <DecryptReveal key={token} text={token} />
+            </CopyField>
           </label>
-          <label className="text-[12px] flex flex-col gap-1.5" style={{ color: "var(--ink-dim)" }}>
+          <label className="label flex flex-col gap-1.5">
             Claude Code
             <CopyField value={claudeCodeCommand(mcpUrl, token)} />
           </label>
-          <label className="text-[12px] flex flex-col gap-1.5" style={{ color: "var(--ink-dim)" }}>
+          <label className="label flex flex-col gap-1.5">
             Other MCP clients (Streamable HTTP)
-            <div className="field px-3 py-2">
+            <div className="field px-2.5 py-2">
               <pre className="text-[11.5px] font-mono whitespace-pre-wrap break-all" style={{ color: "var(--ink-dim)" }}>
                 {mcpConfig(mcpUrl, token)}
               </pre>
@@ -108,83 +146,50 @@ function McpCard() {
         </>
       )}
 
-      <p className="text-[12px]" style={{ color: "var(--ink-faint)" }}>
-        Connect every agent on this machine at once (Claude Code, Codex, Hermes, Cursor, …):{" "}
-        <code className="font-mono">./scripts/connect-agents.sh --email you@… --password …</code> from the install folder.{" "}
-        <Link href="/docs" className="underline">Read the docs</Link>
-      </p>
+      {error && <ErrorLine error={error}>{error.message} Try again, or mint a token in Settings.</ErrorLine>}
 
-      {error && (
-        <p className="text-[12.5px]" style={{ color: "var(--critical)" }}>
-          {error}
+      <div className="flex flex-col gap-1.5 pt-3.5" style={{ borderTop: "var(--hair) solid var(--border)" }}>
+        <p className="text-[12px] leading-relaxed" style={{ color: "var(--ink-faint)" }}>
+          Or connect every agent on this machine at once (Claude Code, Codex, Hermes, Cursor, …) from the install folder.{" "}
+          <Link href="/docs" className="underline" style={{ color: "var(--accent-text)" }}>
+            Read the docs
+          </Link>
         </p>
-      )}
+        <CopyField value="./scripts/connect-agents.sh --email you@… --password …" />
+      </div>
     </section>
   );
 }
 
-function relativeTime(iso: string | null): string {
-  if (!iso) return "never synced";
-  const ms = Date.now() - new Date(iso).getTime();
-  const mins = Math.round(ms / 60000);
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins}m ago`;
-  const hours = Math.round(mins / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.round(hours / 24);
-  return `${days}d ago`;
-}
-
-function StatTile({ label, value, href }: { label: string; value: string; href?: string }) {
-  const content = (
-    <>
-      <div className="eyebrow">{label}</div>
-      <div className="font-display text-2xl" style={{ color: "var(--ink)" }}>
-        {value}
-      </div>
-    </>
-  );
-  if (href) {
-    return (
-      <Link href={href} className="ledger p-5 flex flex-col justify-center gap-1.5">
-        {content}
-      </Link>
-    );
-  }
-  return <div className="ledger p-5 flex flex-col justify-center gap-1.5">{content}</div>;
-}
-
-// A source that's been failing this many syncs in a row has moved past
-// transient backoff (see `sources/scheduler.py`'s `_BACKOFF` table, where
-// index 2 is already a full hour) into "this needs attention".
-const FAILURE_ALERT_THRESHOLD = 3;
+// ---- failure banner ----
 
 function FailureBanner({ rows, dismissed, onDismiss }: { rows: SourceRow[]; dismissed: Set<string>; onDismiss: (key: string) => void }) {
-  const failing = rows.filter((r) => r.connected && r.sync_status.consecutive_failures >= FAILURE_ALERT_THRESHOLD && !dismissed.has(r.key));
+  const failing = rows.filter((r) => isLiveSource(r) && r.sync_status.consecutive_failures >= FAILURE_ALERT_THRESHOLD && !dismissed.has(r.key));
   if (failing.length === 0) return null;
   return (
-    <section className="flex flex-col gap-2.5">
+    <section className="flex flex-col gap-2">
       {failing.map((s) => (
         <div
           key={s.key}
-          className="ledger p-4 flex items-center gap-3"
-          style={{ borderColor: "var(--critical)" }}
+          role="alert"
+          className="flex items-center gap-3 rounded-[10px] px-3.5 py-2.5"
+          style={{ background: "var(--critical-soft)", border: "var(--hair) solid var(--critical)" }}
         >
-          <AlertTriangle size={16} color="var(--critical)" className="shrink-0" />
-          <div className="flex-1">
+          <AlertTriangle size={15} strokeWidth={1.75} color="var(--critical)" className="shrink-0" />
+          <div className="flex-1 min-w-0">
             <div className="text-[13px] font-medium">
-              {s.label} has failed {s.sync_status.consecutive_failures} syncs in a row
+              {sourceLabel(s)} has failed {s.sync_status.consecutive_failures} syncs in a row
             </div>
             {s.sync_status.last_error && (
-              <div className="text-[11.5px] font-mono truncate" style={{ color: "var(--ink-faint)" }}>
+              <div className="text-[11.5px] font-mono truncate" style={{ color: "var(--ink-dim)" }}>
                 {s.sync_status.last_error}
               </div>
             )}
           </div>
-          <Link href="/connectors" className="field px-3 py-1.5 text-[12px] shrink-0" style={{ color: "var(--ink)" }}>
+          <Link href="/connectors" className="btn btn-sm shrink-0">
             Review
           </Link>
-          <button onClick={() => onDismiss(s.key)} className="text-[12px] shrink-0" style={{ color: "var(--ink-faint)" }}>
+          <button onClick={() => onDismiss(s.key)} className="btn btn-ghost btn-sm shrink-0">
             Dismiss
           </button>
         </div>
@@ -193,63 +198,437 @@ function FailureBanner({ rows, dismissed, onDismiss }: { rows: SourceRow[]; dism
   );
 }
 
-export default function DashboardPage() {
-  const [rows, setRows] = useState<SourceRow[] | null>(null);
-  const [entityCount, setEntityCount] = useState<number | null>(null);
-  const [syncingKey, setSyncingKey] = useState<string | null>(null);
-  const [dismissedFailures, setDismissedFailures] = useState<Set<string>>(new Set());
+// ---- live memory ----
+// The entity lives in the inspector, not a table column: graph-palette.spec
+// asserts entity names are absent from the page behind the palette.
 
-  const load = useCallback(() => sources.list().then(setRows).catch(() => setRows([])), []);
+// The API returns more on each memory than lib/api.ts declares; read what is there.
+type Memory = EntityMemory & { type?: string; updated_at?: string };
+type LiveRow = Memory & { entityName: string; entityKind: EntityKind };
+
+// ponytail: no "recent memories" endpoint exists, so this fans out one
+// entities.get per entity on the first page. Ceiling: only memories on the
+// first ENTITY_CAP entities show. Upgrade path: a backend
+// `GET /api/memories?sort=-created_at&limit=n` endpoint.
+const ENTITY_CAP = 24;
+const ROW_LIMIT = 12;
+
+async function loadLiveMemory(): Promise<{ rows: LiveRow[]; total: number }> {
+  const list = (await call(listEntities())) as EntityList;
+  const details = await Promise.all(
+    list.results.slice(0, ENTITY_CAP).map((e) => call(getEntity({ path: { entity_id: e.id } })).catch(() => null) as Promise<EntityDetail | null>),
+  );
+  const rows = details
+    .flatMap((d) => (d ? (d.memory as Memory[]).map((m) => ({ ...m, entityName: d.name, entityKind: d.kind })) : []))
+    .sort((a, b) => (b.created_at ?? "").localeCompare(a.created_at ?? ""))
+    .slice(0, ROW_LIMIT);
+  return { rows, total: list.total };
+}
+
+const authorOf = (m: Memory) => m.owner_email || m.source || null;
+
+// Arrival: rows new since the previous poll fade in under an author-colour wash,
+// and (at most CURSOR_CAP of them) show the author's cursor for a moment.
+const ARRIVAL_MS = 2400;
+const WASH_MS = 1400;
+const CURSOR_CAP = 3;
+
+/** Author tag that can carry the author's cursor glyph at its corner, Figma style, without moving the tag. */
+function RowAuthor({ name, id, cursor }: { name: string; id: string; cursor: boolean }) {
+  return (
+    <span className="relative inline-flex max-w-full">
+      {cursor && (
+        <span data-arrival-cursor={id} className="absolute -left-1.5 -top-2.5 pointer-events-none">
+          <CursorGlyph color={authorColor(name)} size={14} />
+        </span>
+      )}
+      <AuthorTag name={name} />
+    </span>
+  );
+}
+
+function LiveMemory({
+  rows,
+  arrived,
+  selectedId,
+  onSelect,
+}: {
+  rows: LiveRow[] | null;
+  arrived: string[];
+  selectedId: string | null;
+  onSelect: (id: string) => void;
+}) {
+  const body = useRef<HTMLTableSectionElement>(null);
+  // Layout effect: the new rows must start transparent on their first painted frame.
+  useLayoutEffect(() => {
+    const tbody = body.current;
+    if (!tbody || arrived.length === 0) return;
+    const reduced = prefersReducedMotion();
+    const anims: Animation[] = [];
+    for (const id of arrived) {
+      const tr = tbody.querySelector(`[data-memory-id="${id}"]`)?.closest("tr");
+      if (!tr) continue;
+      const author = rows?.find((r) => r.id === id);
+      const name = author ? authorOf(author) : null;
+      // Movement-free, so it stays under reduced motion; only the fade is dropped.
+      if (name)
+        anims.push(
+          tr.animate(
+            [
+              { backgroundColor: `color-mix(in oklab, ${authorColor(name)} 16%, transparent)` },
+              { backgroundColor: `color-mix(in oklab, ${authorColor(name)} 16%, transparent)`, offset: 0.3 },
+              { backgroundColor: "transparent" },
+            ],
+            { duration: WASH_MS, easing: "ease" },
+          ),
+        );
+      if (!reduced) anims.push(tr.animate([{ opacity: 0.001 }, { opacity: 1 }], { duration: 200, easing: "cubic-bezier(0.23, 1, 0.32, 1)" }));
+    }
+    for (const glyph of tbody.querySelectorAll<HTMLElement>("[data-arrival-cursor]"))
+      anims.push(
+        glyph.animate(reduced ? [{ opacity: 1 }, { opacity: 1, offset: 0.92 }, { opacity: 0 }] : [{ opacity: 0 }, { opacity: 1, offset: 0.08 }, { opacity: 1, offset: 0.9 }, { opacity: 0 }], {
+          duration: ARRIVAL_MS,
+          fill: "forwards",
+        }),
+      );
+    return () => anims.forEach((a) => a.cancel());
+    // rows is read for authors only; a new poll always brings a new `arrived`.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [arrived]);
+
+  const cursors = new Set(arrived.slice(0, CURSOR_CAP));
+  return (
+    <section className="ledger" aria-labelledby="live-memory-title">
+      <div className="flex items-center justify-between gap-3 h-11 px-3" style={{ borderBottom: "var(--hair) solid var(--border)" }}>
+        <h2 id="live-memory-title" className="section-title">
+          Live memory
+        </h2>
+        {rows && rows.length > 0 && <span className="label">Latest {rows.length}</span>}
+      </div>
+      {rows === null ? (
+        <div aria-busy="true" aria-label="Loading memories">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <div key={i} className="flex items-center gap-4 h-10 px-3" style={{ borderTop: i ? "var(--hair) solid var(--border)" : undefined }}>
+              <div className="skeleton h-5 w-16" />
+              <div className="skeleton h-3.5 flex-1 max-w-[340px]" />
+              <div className="skeleton h-3.5 w-8 ml-auto" />
+            </div>
+          ))}
+        </div>
+      ) : rows.length === 0 ? (
+        <div className="px-3 py-8 text-[13px] flex flex-wrap items-center gap-x-3 gap-y-2" style={{ color: "var(--ink-dim)" }}>
+          No memories yet. Connect an agent and what it learns lands here, tagged with who wrote it.
+          <a href="#connect" onClick={focusConnect} className="btn btn-sm">
+            Connect an agent <ArrowRight size={12} strokeWidth={1.75} />
+          </a>
+        </div>
+      ) : (
+        <table className="data-table" style={{ tableLayout: "fixed" }}>
+          <thead>
+            <tr>
+              <th className="hidden sm:table-cell" style={{ width: 112 }}>
+                Author
+              </th>
+              <th>Memory</th>
+              <th className="hidden md:table-cell" style={{ width: 160 }}>Entity</th>
+              <th className="hidden sm:table-cell text-right" style={{ width: 56 }}>
+                Age
+              </th>
+            </tr>
+          </thead>
+          <tbody
+            ref={body}
+            onKeyDown={(e) => {
+              // Arrow keys walk the selection; no animation on keyboard moves.
+              if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+              const i = rows.findIndex((r) => r.id === selectedId);
+              const next = rows[Math.min(rows.length - 1, Math.max(0, i + (e.key === "ArrowDown" ? 1 : -1)))];
+              if (!next) return;
+              e.preventDefault();
+              onSelect(next.id);
+              (e.currentTarget.querySelector(`[data-memory-id="${next.id}"]`) as HTMLElement | null)?.focus();
+            }}
+          >
+            {rows.map((m) => {
+              const selected = m.id === selectedId;
+              const author = authorOf(m);
+              return (
+                <tr
+                  key={m.id}
+                  onClick={() => onSelect(m.id)}
+                  // A row outline, not .frame-selected: its ::after would become an extra table cell.
+                  style={selected ? { background: "var(--accent-soft)", outline: "1px solid var(--accent)", outlineOffset: -1 } : undefined}
+                >
+                  <td className="hidden sm:table-cell overflow-hidden">{author && <RowAuthor name={author} id={m.id} cursor={cursors.has(m.id)} />}</td>
+                  <td className="overflow-hidden">
+                    <div className="py-2 sm:py-0 flex flex-col gap-1 min-w-0">
+                      <button
+                        type="button"
+                        aria-pressed={selected}
+                        data-memory-id={m.id}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onSelect(m.id);
+                        }}
+                        className="block w-full truncate text-left"
+                        style={{ color: "var(--ink)" }}
+                        title={m.text}
+                      >
+                        {m.text}
+                      </button>
+                      {/* Below sm the author and age ride under the text so the memory keeps the full width. */}
+                      <span className="sm:hidden flex items-center gap-2 min-w-0">
+                        {author && <RowAuthor name={author} id={m.id} cursor={cursors.has(m.id)} />}
+                        <time dateTime={m.created_at} className="font-mono text-[11.5px]" style={{ color: "var(--ink-faint)" }}>
+                          {age(m.created_at)}
+                        </time>
+                      </span>
+                    </div>
+                  </td>
+                  <td className="hidden md:table-cell overflow-hidden">
+                    <span className="flex items-center gap-1.5 min-w-0 text-[12.5px]" style={{ color: "var(--ink-dim)" }}>
+                      <span className="dot" style={{ background: `var(--kind-${m.entityKind})` }} aria-hidden />
+                      <span className="truncate">{m.entityName}</span>
+                    </span>
+                  </td>
+                  <td className="hidden sm:table-cell text-right font-mono text-[12px]" style={{ color: "var(--ink-faint)" }}>
+                    <time dateTime={m.created_at}>{age(m.created_at)}</time>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+    </section>
+  );
+}
+
+function Inspector({ row }: { row: LiveRow }) {
+  const author = authorOf(row);
+  const mono = (v: string) => <span className="font-mono text-[12px]">{v}</span>;
+  const updated = row.updated_at && row.updated_at.slice(0, 16) !== row.created_at?.slice(0, 16) ? row.updated_at : null;
+  const fields: { label: string; value: React.ReactNode; show?: boolean }[] = [
+    { label: "Author", value: author ? <AuthorTag name={author} /> : <span style={{ color: "var(--ink-faint)" }}>Not recorded</span> },
+    { label: "Entity", value: <span className="truncate">{row.entityName}</span> },
+    { label: "Kind", value: <span className="capitalize">{row.entityKind}</span> },
+    { label: "Type", value: <span className="capitalize">{row.type}</span>, show: Boolean(row.type) },
+    { label: "Written", value: mono(stamp(row.created_at)) },
+    { label: "Updated", value: mono(stamp(updated)), show: Boolean(updated) },
+    { label: "Source", value: mono(row.source ?? ""), show: Boolean(row.source && row.source !== author) },
+  ];
+
+  return (
+    <aside aria-label="Selected memory" className="panel frame-selected p-4 flex flex-col gap-4">
+      {/* Re-keyed per row so the content settles in with a short fade, the panel itself stays put. */}
+      <div key={row.id} className="fade-in flex flex-col gap-4">
+        <h2 className="text-[15px] font-medium leading-snug" style={{ color: "var(--ink)" }}>
+          {row.text}
+        </h2>
+        <dl className="grid gap-y-2.5 gap-x-3 text-[13px]" style={{ gridTemplateColumns: "72px minmax(0, 1fr)" }}>
+          {fields.filter((f) => f.show !== false).map(({ label, value }) => (
+            <div key={label} className="contents">
+              <dt className="label self-center">{label}</dt>
+              <dd className="min-w-0 flex items-center">{value}</dd>
+            </div>
+          ))}
+        </dl>
+      </div>
+      <Link href="/entities" className="btn btn-sm self-start">
+        Open entities <ArrowRight size={12} strokeWidth={1.75} />
+      </Link>
+    </aside>
+  );
+}
+
+// ---- stats + sources ----
+
+/** value is a DigitRoll when it is a number, or plain text ("–", "None", "4m ago"). */
+function Stat({ label, value, href, children }: { label: string; value: React.ReactNode; href?: string; children?: React.ReactNode }) {
+  const numeric = typeof value !== "string" || /\d/.test(value);
+  const body = (
+    <>
+      <span className="label">{label}</span>
+      <span
+        className={`flex items-center gap-2 text-[26px] leading-none tracking-[-0.02em] ${numeric ? "font-mono" : "font-medium"}`}
+        style={{ color: numeric ? "var(--ink)" : "var(--ink-dim)" }}
+      >
+        {children}
+        {value}
+      </span>
+    </>
+  );
+  const cls = "flex flex-col gap-2.5 px-3.5 py-3 min-w-0 bg-[var(--surface)]";
+  return href ? (
+    <Link href={href} className={`${cls} transition-[background-color,transform] duration-150 ease-[var(--ease-out)] hover:bg-[var(--surface-raised)] active:scale-[0.98]`}>
+      {body}
+    </Link>
+  ) : (
+    <div className={cls}>{body}</div>
+  );
+}
+
+// The full catalogue lives on /connectors; the dashboard shows a short list.
+const NOT_CONNECTED_SHOWN = 6;
+const SYNC_HOLD_MS = 1200;
+
+// ---- agents presence ----
+
+const LIVE_WINDOW_MS = 10 * 60_000;
+const AGENTS_SHOWN = 6;
+// Same pattern as age(): read the clock at render, refreshed by the 60s poll.
+const isLive = (iso: string | null) => iso !== null && Date.now() - new Date(iso).getTime() < LIVE_WINDOW_MS;
+
+// An expired token can no longer write; same clock-at-render pattern as isLive.
+const isExpired = (iso: string | null) => iso !== null && new Date(iso).getTime() <= Date.now();
+
+/** Who can write to this memory right now: the user's API tokens, by name, as multiplayer cursors. */
+function Agents({ tokens }: { tokens: ApiToken[] | null | "error" }) {
+  const sorted = Array.isArray(tokens) ? tokens.filter((t) => !isExpired(t.expires_at)).sort((a, b) => (b.last_used_at ?? "").localeCompare(a.last_used_at ?? "")) : [];
+  return (
+    <section aria-labelledby="agents-title" className="flex flex-wrap items-end gap-x-4 gap-y-2 min-h-8">
+      <span id="agents-title" className="label pb-[3px]">
+        Agents
+      </span>
+      {tokens === null ? (
+        <span className="skeleton h-5 w-40" aria-label="Loading agents" />
+      ) : tokens === "error" ? (
+        <span className="text-[12.5px]" style={{ color: "var(--ink-faint)" }}>
+          Could not load agents.
+        </span>
+      ) : sorted.length === 0 ? (
+        <span className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[12.5px]" style={{ color: "var(--ink-dim)" }}>
+          No agent has a token yet.
+          <a href="#connect" onClick={focusConnect} className="btn btn-sm">
+            Connect an agent <ArrowRight size={12} strokeWidth={1.75} />
+          </a>
+        </span>
+      ) : (
+        <ul className="flex flex-wrap items-end gap-x-4 gap-y-2">
+          {sorted.slice(0, AGENTS_SHOWN).map((t) => {
+            const live = isLive(t.last_used_at);
+            return (
+              <li key={t.id} className="flex items-end gap-1.5">
+                <AuthorTag name={t.name} cursor title={`${t.name}: API token, ${t.last_used_at ? `last used ${stamp(t.last_used_at)}` : "never used"}`} />
+                {live ? (
+                  <span className="flex items-center gap-1 text-[11.5px] pb-[3px]" style={{ color: "var(--ink-dim)" }}>
+                    <span className="dot" style={{ background: "var(--good)" }} aria-hidden />
+                    live
+                  </span>
+                ) : t.last_used_at ? (
+                  <time dateTime={t.last_used_at} className="font-mono text-[11.5px] pb-[3px]" style={{ color: "var(--ink-faint)" }}>
+                    {age(t.last_used_at)}
+                  </time>
+                ) : (
+                  <span className="text-[11.5px] pb-[3px]" style={{ color: "var(--ink-faint)" }}>
+                    never used
+                  </span>
+                )}
+              </li>
+            );
+          })}
+          {sorted.length > AGENTS_SHOWN && (
+            <li className="pb-[3px]">
+              <Link href="/settings?tab=tokens" className="text-[12px] underline-offset-2 hover:underline" style={{ color: "var(--accent-text)" }}>
+                +{sorted.length - AGENTS_SHOWN} more
+              </Link>
+            </li>
+          )}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+export default function DashboardPage() {
+  // Live: rows and counts refresh in place on fixed layouts, nothing jumps.
+  const sourcesQuery = useSources({ refetchInterval: 60_000 });
+  const rows = sourcesQuery.data ?? (sourcesQuery.isError ? [] : null);
+  const liveQuery = useQuery({ queryKey: entityKeys.live(), queryFn: loadLiveMemory, refetchInterval: 60_000 });
+  const live = liveQuery.data?.rows ?? (liveQuery.isError ? [] : null);
+  const entityCount = liveQuery.data?.total ?? (liveQuery.isError ? 0 : null);
+  const syncSource = useSyncSource();
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  // One sync mark at a time: running, then done or failed held for SYNC_HOLD_MS.
+  const [syncMark, setSyncMark] = useState<{ key: string; status: SyncStatus } | null>(null);
+  const syncHold = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const [arrived, setArrived] = useState<string[]>([]);
+  const knownIds = useRef<Set<string> | null>(null);
+  const [dismissedFailures, setDismissedFailures] = useState<Set<string>>(new Set());
+  const tokensQuery = useTokens();
+  const tokens: ApiToken[] | null | "error" = tokensQuery.data ?? (tokensQuery.isError ? "error" : null);
+
+  const arrivalTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const liveRows = liveQuery.data?.rows;
   useEffect(() => {
-    load();
-    entities
-      .list()
-      .then((res) => setEntityCount(res.total))
-      .catch(() => setEntityCount(0));
-  }, [load]);
+    if (!liveRows) return;
+    // Never on first load: only rows unseen by an earlier poll count as arrivals.
+    const known = knownIds.current;
+    if (known) {
+      const fresh = liveRows.filter((m) => !known.has(m.id)).map((m) => m.id);
+      if (fresh.length) {
+        setArrived(fresh);
+        clearTimeout(arrivalTimer.current);
+        arrivalTimer.current = setTimeout(() => setArrived([]), ARRIVAL_MS);
+      }
+    }
+    knownIds.current = new Set([...(known ?? []), ...liveRows.map((m) => m.id)]);
+  }, [liveRows]);
+  useEffect(
+    () => () => {
+      clearTimeout(arrivalTimer.current);
+      clearTimeout(syncHold.current);
+    },
+    [],
+  );
 
   async function sync(key: string) {
-    setSyncingKey(key);
+    clearTimeout(syncHold.current);
+    setSyncMark({ key, status: "running" });
+    let status: SyncStatus = "done";
     try {
-      await sources.sync(key);
-      await load();
-    } finally {
-      setSyncingKey(null);
+      await syncSource.mutateAsync(key);
+    } catch {
+      status = "failed";
     }
+    setSyncMark({ key, status });
+    syncHold.current = setTimeout(() => setSyncMark(null), SYNC_HOLD_MS);
   }
 
-  const connected = rows?.filter((r) => r.connected) ?? [];
-  const disconnected = rows?.filter((r) => !r.connected) ?? [];
-  const healthy = connected.filter((r) => r.sync_status.consecutive_failures === 0 && r.sync_status.last_ok).length;
-  const total = rows?.length ?? 0;
+  const connected = rows?.filter(isLiveSource) ?? [];
+  const disconnected = rows?.filter((r) => !isLiveSource(r)) ?? [];
+  const healthy = connected.filter((r) => sourceHealth(r).label === "Healthy").length;
   const totalRecords = rows?.reduce((sum, r) => sum + r.record_count, 0) ?? 0;
   const lastSyncs = connected.map((r) => r.sync_status.last_ok).filter((d): d is string => Boolean(d));
   const lastSync = lastSyncs.length ? lastSyncs.sort().at(-1)! : null;
+  const selected = live?.find((m) => m.id === selectedId) ?? live?.[0] ?? null;
 
   return (
-    <div className="flex flex-col gap-10 max-w-5xl">
-      <section className="grid gap-5 sm:[grid-template-columns:auto_1fr]">
-        <div className="ledger flex items-center justify-center p-6">
-          <StatRing
-            size={132}
-            strokeWidth={11}
-            value={healthy}
-            max={total}
-            color="var(--felt)"
-            valueLabel={rows ? `${healthy}/${total}` : "–"}
-            label="sources healthy"
-            ariaLabel={`${healthy} of ${total} sources syncing cleanly`}
-          />
-        </div>
-        <div className="grid sm:grid-cols-3 gap-4">
-          <StatTile label="Total records" value={rows ? totalRecords.toLocaleString() : "–"} />
-          <StatTile
-            label="Entities tracked"
-            value={entityCount !== null ? entityCount.toLocaleString() : "–"}
-            href="/entities"
-          />
-          <StatTile label="Last sync" value={relativeTime(lastSync)} />
-        </div>
+    <div className="flex flex-col gap-6 max-w-[1240px]">
+      <header className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <h1 className="page-title">Dashboard</h1>
+        <Agents tokens={tokens} />
+      </header>
+
+      {sourcesQuery.isError && <ErrorLine error={failure(sourcesQuery.error, "Could not load your sources.")} />}
+      {liveQuery.isError && <ErrorLine error={failure(liveQuery.error, "Could not load recent memory.")} />}
+
+      <section
+        aria-label="Summary"
+        className="grid grid-cols-2 lg:grid-cols-4 overflow-hidden rounded-[10px]"
+        style={{ gap: "var(--hair)", background: "var(--border)", border: "var(--hair) solid var(--border)" }}
+      >
+        <Stat label="Entities" value={entityCount !== null ? <DigitRoll value={entityCount} /> : "–"} href="/entities" />
+        <Stat label="Records" value={rows ? <DigitRoll value={totalRecords} /> : "–"} />
+        <Stat
+          label="Sources healthy"
+          value={!rows ? "–" : connected.length ? <DigitRoll value={healthy} format={(v) => `${v}/${connected.length}`} /> : "None"}
+        >
+          {rows && connected.length > 0 && (
+            <span className="dot" aria-hidden style={{ background: healthy === connected.length ? "var(--good)" : "var(--warning)" }} />
+          )}
+        </Stat>
+        <Stat label="Last sync" value={lastSync ? since(lastSync) : "Never"} />
       </section>
 
       {rows && (
@@ -260,54 +639,120 @@ export default function DashboardPage() {
         />
       )}
 
-      <McpCard />
-
-      <section className="flex flex-col gap-4">
-        <div className="eyebrow">What&apos;s next</div>
-        {rows === null && (
-          <p className="text-[13px]" style={{ color: "var(--ink-faint)" }}>
-            Loading…
-          </p>
-        )}
-        {rows !== null && connected.length === 0 && (
-          <p className="text-[13px]" style={{ color: "var(--ink-faint)" }}>
-            Nothing connected yet — see &ldquo;what&apos;s not&rdquo; below.
-          </p>
-        )}
-        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {connected.map((s) => (
-            <SyncStatusCard key={s.key} source={s} onSync={() => sync(s.key)} syncing={syncingKey === s.key} />
-          ))}
+      {/* Mobile order: live memory, inspector + connect, then sources. */}
+      <div className="grid gap-x-6 gap-y-8 lg:grid-cols-[minmax(0,1fr)_320px] items-start">
+        <div className="min-w-0 lg:col-start-1 lg:row-start-1">
+          <LiveMemory rows={live} arrived={arrived} selectedId={selected?.id ?? null} onSelect={setSelectedId} />
         </div>
-      </section>
 
-      {disconnected.length > 0 && (
-        <section className="flex flex-col gap-4">
-          <div className="eyebrow">What&apos;s not</div>
-          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {disconnected.map((s) => (
-              <div key={s.key} className="ledger p-5 flex flex-col gap-4">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: "var(--surface-raised)", color: "var(--ink-dim)" }}>
-                    <Plug size={14} />
-                  </div>
-                  <div className="text-[13.5px] font-medium">{s.label}</div>
-                </div>
-                <div className="flex flex-wrap gap-1.5">
-                  {s.record_types.map((rt) => (
-                    <span key={rt} className="pill">
-                      {rt}
-                    </span>
-                  ))}
-                </div>
-                <Link href="/connectors" className="self-start field px-3 py-1.5 text-[12px] flex items-center gap-1.5" style={{ color: "var(--ink)" }}>
-                  Connect <ArrowRight size={12} />
-                </Link>
+        <div className="flex flex-col gap-6 min-w-0 lg:col-start-2 lg:row-start-1 lg:row-span-2 lg:sticky lg:top-8">
+          {selected && <Inspector row={selected} />}
+          <McpCard />
+        </div>
+
+        <div className="flex flex-col gap-8 min-w-0 lg:col-start-1 lg:row-start-2">
+          <section className="flex flex-col gap-3" aria-labelledby="connected-sources">
+            <h2 id="connected-sources" className="section-title">
+              Connected sources
+            </h2>
+            {rows === null ? (
+              <div className="ledger p-3 flex flex-col gap-3" aria-busy="true">
+                <div className="skeleton h-4 w-1/2" />
+                <div className="skeleton h-4 w-1/3" />
               </div>
-            ))}
-          </div>
-        </section>
-      )}
+            ) : connected.length === 0 ? (
+              <p className="text-[13px]" style={{ color: "var(--ink-dim)" }}>
+                Nothing connected yet. Pick one under &ldquo;Add a source&rdquo; below.
+              </p>
+            ) : (
+              <div className="ledger overflow-x-auto relative">
+                {/* relative: keeps the sr-only labels inside the scroll box, or they widen the page on mobile. */}
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Source</th>
+                      <th className="text-right">Records</th>
+                      <th className="hidden sm:table-cell">Last sync</th>
+                      <th style={{ width: 1 }}>
+                        <span className="sr-only">Actions</span>
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {connected.map((s) => {
+                      const st = s.sync_status;
+                      const mark = syncMark?.key === s.key ? syncMark.status : "idle";
+                      const busy = mark === "running";
+                      const health = sourceHealth(s);
+                      return (
+                        <tr key={s.key}>
+                          <td>
+                            <div className="flex items-center gap-2 min-w-0">
+                              <span className="dot" title={health.label} style={{ background: health.tone }} />
+                              <span className="sr-only">{health.label}:</span>
+                              <span className="font-medium truncate">{sourceLabel(s)}</span>
+                              <AuthorTag name={s.key} />
+                            </div>
+                          </td>
+                          <td className="text-right font-mono text-[12.5px]">
+                            <DigitRoll value={s.record_count} />
+                          </td>
+                          <td className="hidden sm:table-cell text-[12.5px] whitespace-nowrap">
+                            <span className="font-mono" style={{ color: "var(--ink-dim)" }}>
+                              {since(st.last_ok)}
+                            </span>
+                            {st.consecutive_failures > 0 && <span style={{ color: "var(--critical)" }}> · {st.consecutive_failures} failed</span>}
+                          </td>
+                          <td className="text-right">
+                            <button onClick={() => sync(s.key)} disabled={busy} className="btn btn-sm">
+                              <SyncMark status={mark} size={12} />
+                              {busy ? "Syncing…" : "Sync now"}
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+
+          {disconnected.length > 0 && (
+            <section className="flex flex-col gap-3" aria-labelledby="add-source">
+              <h2 id="add-source" className="section-title">
+                Add a source
+              </h2>
+              <ul className="ledger hairline-rows">
+                {disconnected.slice(0, NOT_CONNECTED_SHOWN).map((s) => {
+                  const kind = kindForSource(s.key);
+                  return (
+                    <li key={s.key} className="flex items-center gap-3 min-h-11 px-3 py-2">
+                      <span className="dot" aria-hidden style={{ background: "var(--border-strong)" }} />
+                      <div className="flex-1 min-w-0 flex flex-col sm:flex-row sm:items-center gap-x-3 gap-y-0.5">
+                        <span className="text-[13px] font-medium truncate">{sourceLabel(s)}</span>
+                        <span className="text-[12px] font-mono truncate" style={{ color: "var(--ink-faint)" }}>
+                          {s.record_types.join(", ")}
+                        </span>
+                      </div>
+                      <Link href={kind ? `/connectors/setup/${kind}` : "/connectors"} className="btn btn-sm shrink-0">
+                        Connect <ArrowRight size={12} strokeWidth={1.75} />
+                      </Link>
+                    </li>
+                  );
+                })}
+                {disconnected.length > NOT_CONNECTED_SHOWN && (
+                  <li className="flex items-center min-h-11 px-3">
+                    <Link href="/connectors" className="text-[13px] inline-flex items-center gap-1.5 underline-offset-2 hover:underline" style={{ color: "var(--accent-text)" }}>
+                      See all {disconnected.length} in Connectors <ArrowRight size={12} strokeWidth={1.75} />
+                    </Link>
+                  </li>
+                )}
+              </ul>
+            </section>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

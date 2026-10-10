@@ -1,0 +1,32 @@
+---
+source: tests/golden_tools.rs
+expression: stable
+---
+{
+  "docs": [
+    {
+      "topic": "quickstart",
+      "title": "Quickstart"
+    },
+    {
+      "topic": "installation",
+      "title": "Installation"
+    },
+    {
+      "topic": "agents",
+      "title": "AI agents & MCP"
+    },
+    {
+      "topic": "concepts",
+      "title": "Concepts"
+    },
+    {
+      "topic": "connectors",
+      "title": "Connectors"
+    },
+    {
+      "topic": "deployment",
+      "title": "Deployment"
+    }
+  ]
+}

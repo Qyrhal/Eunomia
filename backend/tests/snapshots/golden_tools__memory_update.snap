@@ -1,0 +1,20 @@
+---
+source: tests/golden_tools.rs
+expression: stable
+---
+{
+  "id": "memory:<id3>",
+  "owner": "user:<id4>",
+  "vault": "vault:<id2>",
+  "subject": "person:<id1>",
+  "text": "Alice likes oolong tea",
+  "source": null,
+  "created_at": "<ts>",
+  "type": "world",
+  "proof_count": 1,
+  "status": null,
+  "source_memories": null,
+  "updated_at": "<ts>",
+  "version": 2,
+  "owner_email": null
+}

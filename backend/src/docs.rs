@@ -18,7 +18,7 @@ pub const DOCS: &[Doc] = &[
 ];
 
 /// The built-in memory skill (`docs/eunomia-skill.md`): SKILL.md frontmatter
-/// + instructions telling an agent when to recall and what to remember. Users
+/// and instructions telling an agent when to recall and what to remember. Users
 /// can override it per account (Settings → Memory skill).
 pub const DEFAULT_SKILL: &str = include_str!("../../docs/eunomia-skill.md");
 

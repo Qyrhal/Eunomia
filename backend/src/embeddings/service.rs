@@ -18,21 +18,22 @@
 //! HMAC(ENCRYPTION_KEY, spec + text), where the [`EmbedSpec`] is the
 //! provider origin, model and dimension -- so two providers never share a
 //! vector for the same text.
-//!
-//! Ported from `embeddings/service.py`.
 
+use surrealdb::types::SurrealValue;
 use std::collections::HashMap;
 
 use hmac::{Hmac, Mac};
 use serde::Deserialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
-use surrealdb::RecordId;
+use surrealdb::types::RecordId;
 
 use super::provider::{self, Provider};
 use crate::config::Settings;
-use crate::db::Db;
 use crate::error::{AppError, AppResult};
+use crate::pool::OrgDb;
+use crate::rid::RecordIdExt;
+use crate::store;
 
 pub const DIM: usize = 1536;
 const BATCH: usize = 64;
@@ -42,8 +43,7 @@ const OPENAI_MODELS: &[&str] = &["text-embedding-3-small", "text-embedding-ada-0
 
 type HmacSha256 = Hmac<Sha256>;
 
-/// HMAC-SHA256(key, s), hex-encoded. Mirrors `embeddings/service.py`'s
-/// `_hmac` (`hmac.new(key, s.encode(), hashlib.sha256).hexdigest()`).
+/// HMAC-SHA256(key, s), hex-encoded.
 fn hmac_hex(key: &str, s: &str) -> String {
     let mut mac = HmacSha256::new_from_slice(key.as_bytes()).expect("HMAC accepts a key of any length");
     mac.update(s.as_bytes());
@@ -140,10 +140,9 @@ fn order_response(data: Vec<EmbeddingDatum>, n: usize) -> Result<Vec<Vec<f32>>, 
 }
 
 /// Calls `{base_url}/embeddings`, batched `BATCH` at a time. Every batch is
-/// validated before anything is returned. Mirrors `embeddings/service.py`'s
-/// `_embed_openai`.
+/// validated before anything is returned.
 async fn embed_openai(texts: &[String], p: &Provider, model: &str) -> AppResult<Vec<Vec<f32>>> {
-    let client = provider::client();
+    let client = p.client().await?;
     let url = p.url("embeddings");
 
     let mut out = Vec::with_capacity(texts.len());
@@ -179,14 +178,14 @@ pub fn dim() -> usize {
 /// semantic arm of search/recall is skipped and the connected MCP agent is
 /// the model: keyword + graph + temporal retrieval still work, and the agent
 /// does any synthesis itself.
-pub async fn available(db: &Db, settings: &Settings, owner: &RecordId) -> bool {
+pub async fn available(db: &OrgDb, settings: &Settings, owner: &RecordId) -> bool {
     if settings.embeddings_backend != "openai" {
         return true; // "stub": hermetic tests
     }
     match provider::resolve(db, settings, owner).await {
         Ok(p) => p.configured(),
         Err(e) => {
-            tracing::warn!("model provider unavailable for {owner}: {}", e.message);
+            tracing::warn!("model provider unavailable for {}: {}", owner.to_string(), e.message);
             false
         }
     }
@@ -194,11 +193,11 @@ pub async fn available(db: &Db, settings: &Settings, owner: &RecordId) -> bool {
 
 /// Whether the server can run its own chat completions for `owner`
 /// (reflect / observation consolidation); if not, the MCP agent does it.
-pub async fn chat_available(db: &Db, settings: &Settings, owner: &RecordId) -> bool {
+pub async fn chat_available(db: &OrgDb, settings: &Settings, owner: &RecordId) -> bool {
     settings.embeddings_backend == "openai" && available(db, settings, owner).await
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, SurrealValue)]
 struct EmbedCacheRow {
     text_hmac: String,
     vector: Vec<f32>,
@@ -209,9 +208,8 @@ struct EmbedCacheRow {
 /// whole response validated.
 ///
 /// `owner`, if given, resolves that user's provider and model; owner-less
-/// call sites use the server's provider. Mirrors `embeddings/service.py`'s
-/// `embed`.
-pub async fn embed(db: &Db, settings: &Settings, texts: &[String], owner: Option<&RecordId>) -> AppResult<Vec<Vec<f32>>> {
+/// call sites use the server's provider.
+pub async fn embed(db: &OrgDb, settings: &Settings, texts: &[String], owner: Option<&RecordId>) -> AppResult<Vec<Vec<f32>>> {
     if texts.is_empty() {
         return Ok(Vec::new());
     }
@@ -229,10 +227,7 @@ pub async fn embed(db: &Db, settings: &Settings, texts: &[String], owner: Option
     };
     let keys: Vec<String> = texts.iter().map(|t| spec.cache_key(&settings.encryption_key, t)).collect();
 
-    let mut res = db
-        .query("SELECT text_hmac, vector FROM embed_cache WHERE text_hmac IN $keys")
-        .bind(("keys", keys.clone()))
-        .await?;
+    let mut res = store::cache::EMBED_CACHE_GET.on(db).bind(("keys", keys.clone())).await?;
     let rows: Vec<EmbedCacheRow> = res.take(0)?;
     let mut cached: HashMap<String, Vec<f32>> = rows.into_iter().map(|r| (r.text_hmac, r.vector)).collect();
 
@@ -244,9 +239,10 @@ pub async fn embed(db: &Db, settings: &Settings, texts: &[String], owner: Option
             None => embed_stub(&fresh_texts),
         };
 
-        for (i, v) in missing_idx.into_iter().zip(vecs.into_iter()) {
+        for (i, v) in missing_idx.into_iter().zip(vecs) {
             let k = keys[i].clone();
-            db.query("UPSERT $id SET text_hmac = $hmac, vector = $vector")
+            store::cache::EMBED_CACHE_PUT
+                .on(db)
                 .bind(("id", RecordId::from_table_key("embed_cache", k.clone())))
                 .bind(("hmac", k.clone()))
                 .bind(("vector", v.clone()))

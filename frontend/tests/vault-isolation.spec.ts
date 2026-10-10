@@ -1,7 +1,7 @@
 import { test, expect, request as pwRequest, type APIRequestContext } from "@playwright/test";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
-import { uniqueEmail } from "./helpers";
+import { uniqueEmail, MOCK_BIND, mockBase } from "./helpers";
 
 // Vault segregation, attacked over the real API/MCP with several users:
 //   alice   - owns her personal vault and the "Shared" vault
@@ -89,7 +89,7 @@ test.describe.serial("vault isolation", () => {
         }
       });
     });
-    await new Promise<void>((r) => llm.listen(0, "127.0.0.1", r));
+    await new Promise<void>((r) => llm.listen(0, MOCK_BIND, r));
 
     [alice, bob, carol, pat, mallory] = await Promise.all(
       ["alice", "bob", "carol", "pat", "mallory"].map((p) => newUser(baseURL, `iso-${p}`)),
@@ -242,7 +242,7 @@ test.describe.serial("vault isolation", () => {
   });
 
   test("an outsider can't hijack consolidation to send someone else's facts to their own model", async () => {
-    expect((await mallory.ctx.patch("/api/settings", { data: { openai_base_url: `http://127.0.0.1:${(llm.address() as AddressInfo).port}` } })).ok()).toBeTruthy();
+    expect((await mallory.ctx.patch("/api/settings", { data: { openai_base_url: mockBase((llm.address() as AddressInfo).port) } })).ok()).toBeTruthy();
     const out = await mallory.ok("consolidate_observations", { subject_id: ids.aliceZed });
     expect(out.consolidated ?? []).toEqual([]);
     expect(llmPrompts.join("\n")).not.toContain("ALICESECRET");
@@ -319,7 +319,9 @@ test.describe.serial("vault isolation", () => {
 
   test("a memory id is not an entity id", async () => {
     expect((await bob.call("entities_get", { id: ids.quinnMemory })).data.error).toBeTruthy();
-    expect((await bob.ok("entity_delete", { entity_id: ids.quinnMemory })).deleted).toBe(false);
+    // foundation refuses outright (main answered deleted:false); either way the memory survives
+    await bob.denied("entity_delete", { entity_id: ids.quinnMemory });
+    expect((await alice.ok("entities_get", { id: ids.quinn })).memory.length).toBe(1);
   });
 
   // -- synced records (owner-scoped) -----------------------------------------

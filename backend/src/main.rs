@@ -1,74 +1,69 @@
-use std::sync::Arc;
-
-use axum::http::{header, HeaderValue, Method};
-use tower_http::cors::CorsLayer;
+use std::time::Duration;
 
 use eunomia_backend::config::Settings;
-use eunomia_backend::db;
-use eunomia_backend::routers;
-use eunomia_backend::state::{AppState, AppStateInner};
+use eunomia_backend::jobs::{self, Role, WorkerConfig};
+use eunomia_backend::state::AppState;
+use tokio::sync::watch;
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt::init();
-
     let settings = Settings::load();
-    // No fallback key: credentials encrypted under a public one aren't protected.
-    if let Err(e) = eunomia_backend::connectors::crypto::validate_key(&settings.encryption_key) {
-        eprintln!("error: {e}");
-        std::process::exit(1);
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(String::as_str) == Some("replay") {
+        std::process::exit(eunomia_backend::replay::cli(&args[1..], &settings).await);
     }
-    let conn = db::connect(&settings).await.expect("failed to connect to SurrealDB");
-    db::ensure_schema(&conn, &settings).await.expect("failed to apply schema");
+    let _otel = eunomia_backend::telemetry::init(&settings.log_level);
+    let role = Role::from_env();
+    let signup_open = matches!(std::env::var("SIGNUP").unwrap_or_default().trim().to_ascii_lowercase().as_str(), "" | "open");
+    if signup_open && eunomia_backend::llm_net::allow_private_llm_url() {
+        tracing::warn!("SIGNUP=open and ALLOW_PRIVATE_LLM_URL=1 together: anyone who can reach this server can sign up and point it at private addresses. Set SIGNUP=invite or ALLOW_PRIVATE_LLM_URL=0; see docs/deployment.md.");
+    }
+    let state = match AppState::build(&settings, surrealdb::opt::Config::new()).await {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!("failed to set up the databases: {}", e.source.as_deref().unwrap_or(&e.message));
+            std::process::exit(1);
+        }
+    };
 
-    let state = AppState(Arc::new(AppStateInner { db: conn, settings: settings.clone() }));
+    let (stop, stopped) = watch::channel(false);
+    let mut background = Vec::new();
+    let cfg = WorkerConfig::from_env();
+    if role.runs_jobs() {
+        background.push(tokio::spawn(jobs::worker::run(state.clone(), jobs::handlers::registry(), cfg.clone(), stopped.clone())));
+        background.push(tokio::spawn(jobs::leader::run(state.clone(), cfg.clone(), stopped.clone())));
+    }
 
-    let _scheduler_handles = eunomia_backend::sources::scheduler::spawn(state.clone()).await;
+    if role.serves_http() {
+        let app = eunomia_backend::app(state);
+        let listener = tokio::net::TcpListener::bind(&settings.bind_addr).await.expect("failed to bind BIND_ADDR");
+        tracing::info!(?role, "listening on {}", listener.local_addr().unwrap());
+        axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>()).with_graceful_shutdown(shutdown_signal()).await.unwrap();
+    } else {
+        tracing::info!(?role, worker = %cfg.id, "worker running (no HTTP)");
+        shutdown_signal().await;
+    }
 
-    let allowed_origins: Vec<HeaderValue> = settings
-        .cors_allowed_origins
-        .split(',')
-        .map(str::trim)
-        .filter(|o| !o.is_empty())
-        .filter_map(|o| o.parse().ok())
-        .collect();
-
-    let cors = CorsLayer::new()
-        .allow_origin(allowed_origins)
-        .allow_credentials(true)
-        .allow_methods([Method::GET, Method::POST, Method::PATCH, Method::PUT, Method::DELETE])
-        .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION]);
-
-    let api = axum::Router::new()
-        .merge(routers::auth::router())
-        .merge(routers::chat::router())
-        .merge(routers::settings::router())
-        .merge(routers::audit::router())
-        .merge(routers::export::router())
-        .merge(routers::update::router())
-        .merge(routers::https::router())
-        .merge(routers::vaults::router())
-        .merge(routers::connectors::router())
-        .merge(routers::connectors::snapshot_router())
-        .merge(routers::entities::router())
-        .merge(routers::tools::router())
-        .merge(routers::sources::router())
-        .merge(routers::sources::webhook_router());
-
-    let app = axum::Router::new()
-        .route("/healthz", axum::routing::get(healthz))
-        .merge(routers::mcp::router())
-        .nest("/api", api)
-        .layer(cors)
-        .with_state(state);
-
-    // PORT: lets several dev/test backends run side by side; containers keep 8001
-    let port = std::env::var("PORT").unwrap_or_else(|_| "8001".to_string());
-    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}")).await.unwrap();
-    tracing::info!("listening on {}", listener.local_addr().unwrap());
-    axum::serve(listener, app).await.unwrap();
+    // Tell the job loops to finish or release their leases, and give them the grace period.
+    let _ = stop.send(true);
+    let _ = tokio::time::timeout(cfg.grace + Duration::from_secs(5), futures::future::join_all(background)).await;
 }
 
-async fn healthz() -> axum::Json<serde_json::Value> {
-    axum::Json(serde_json::json!({ "status": "ok" }))
+/// Resolves on SIGTERM (docker stop) or Ctrl-C.
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+    #[cfg(unix)]
+    let term = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut s) => {
+                s.recv().await;
+            }
+            Err(_) => std::future::pending::<()>().await,
+        }
+    };
+    #[cfg(not(unix))]
+    let term = std::future::pending::<()>();
+    tokio::select! { _ = ctrl_c => {}, _ = term => {} }
 }

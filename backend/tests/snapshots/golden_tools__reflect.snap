@@ -1,0 +1,37 @@
+---
+source: tests/golden_tools.rs
+expression: stable
+---
+{
+  "answer": null,
+  "mode": "recall_only",
+  "note": null,
+  "instructions": "Eunomia has no model configured, so you answer. Use ONLY the numbered memories below, cite them by index like [1], and say so plainly if they don't contain enough to answer.",
+  "question": "tea",
+  "memories": [
+    {
+      "id": "memory:<id8>",
+      "kind": "memory",
+      "text": "Alice is a tea drinker at Acme",
+      "source": null,
+      "occurred_at": "<ts>",
+      "score": "<unstable>",
+      "arms_hit": 1,
+      "vault": "vault:<id2>",
+      "vault_name": "Personal",
+      "index": "<unstable>"
+    },
+    {
+      "id": "memory:<id3>",
+      "kind": "memory",
+      "text": "Alice likes green tea",
+      "source": null,
+      "occurred_at": "<ts>",
+      "score": "<unstable>",
+      "arms_hit": 1,
+      "vault": "vault:<id2>",
+      "vault_name": "Personal",
+      "index": "<unstable>"
+    }
+  ]
+}

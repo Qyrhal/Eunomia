@@ -1,4 +1,4 @@
-//! Where a model request goes and which key it carries -- the one resolver
+//! Where a model request goes and which key it carries: the one resolver
 //! behind settings' model list, embeddings, chat, reflect, entity
 //! extraction and observation consolidation.
 //!
@@ -8,18 +8,19 @@
 //!   - a user's own key goes to the base URL they configured;
 //!   - a user-chosen base URL without a key of their own gets no key.
 //!
-//! [`client`] never follows redirects, so a 3xx can't forward the
-//! `Authorization` header to a host this policy didn't pick.
+//! Every call goes through [`Provider::client`] (`llm_net::client`), which
+//! applies the address rules and never follows redirects, so a 3xx can't
+//! forward the `Authorization` header to a host this policy didn't pick.
 
-use reqwest::redirect::Policy;
-use reqwest::Url;
 use serde::Deserialize;
-use surrealdb::RecordId;
+use surrealdb::types::{RecordId, SurrealValue};
 
 use crate::config::Settings;
 use crate::connectors::crypto;
-use crate::db::Db;
 use crate::error::AppResult;
+use crate::pool::OrgDb;
+use crate::rid::RecordIdExt;
+use crate::store;
 
 pub const OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 
@@ -29,8 +30,7 @@ pub struct Provider {
     pub api_key: String,
     /// The user's `embedding_model` setting ("" = default).
     pub embedding_model: String,
-    /// The user's `chat_model` setting, else OPENAI_CHAT_MODEL ("" = auto,
-    /// see [`chat_model`]).
+    /// The user's `chat_model` setting, else OPENAI_CHAT_MODEL ("" = auto, see [`chat_model`]).
     pub chat_model: String,
 }
 
@@ -48,16 +48,16 @@ impl Provider {
     pub fn bearer(&self) -> &str {
         if self.api_key.is_empty() { "not-needed" } else { &self.api_key }
     }
-}
 
-/// HTTP client for model providers: no redirects (see module docs).
-pub fn client() -> reqwest::Client {
-    reqwest::Client::builder().redirect(Policy::none()).build().expect("static reqwest config")
+    /// The guarded HTTP client for this provider's base URL.
+    pub async fn client(&self) -> AppResult<reqwest::Client> {
+        crate::llm_net::client(&self.base_url).await
+    }
 }
 
 /// Same endpoint, ignoring a trailing slash and host case.
 pub fn same_url(a: &str, b: &str) -> bool {
-    match (Url::parse(a.trim_end_matches('/')), Url::parse(b.trim_end_matches('/'))) {
+    match (url::Url::parse(a.trim_end_matches('/')), url::Url::parse(b.trim_end_matches('/'))) {
         (Ok(a), Ok(b)) => a == b,
         _ => false,
     }
@@ -68,7 +68,7 @@ pub fn effective_base_url<'a>(server_base: &'a str, user_base: &'a str) -> &'a s
     if user_base.trim().is_empty() { server_base } else { user_base.trim() }
 }
 
-/// `(base_url, api_key)` -- the credential-binding rule from the module docs.
+/// `(base_url, api_key)`: the credential-binding rule from the module docs.
 fn pick(server_base: &str, server_key: Option<&str>, user_base: &str, user_key: &str) -> (String, String) {
     let base = effective_base_url(server_base, user_base).to_string();
     if !user_key.is_empty() {
@@ -86,22 +86,26 @@ pub fn server(settings: &Settings) -> Provider {
     Provider { base_url, api_key, embedding_model: String::new(), chat_model: settings.openai_chat_model.clone() }
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, SurrealValue)]
 struct Row {
     #[serde(default)]
+    #[surreal(default)]
     openai_base_url: String,
     #[serde(default)]
+    #[surreal(default)]
     openai_api_key_encrypted: String,
     #[serde(default)]
+    #[surreal(default)]
     embedding_model: String,
     #[serde(default)]
+    #[surreal(default)]
     chat_model: String,
 }
 
-/// `owner`'s provider. A stored key that can't be decrypted is an error --
+/// `owner`'s provider. A stored key that can't be decrypted is an error,
 /// never sent anywhere.
-pub async fn resolve(db: &Db, settings: &Settings, owner: &RecordId) -> AppResult<Provider> {
-    let row: Option<Row> = db.select(RecordId::from_table_key("app_settings", owner.key().clone())).await?;
+pub async fn resolve(db: &OrgDb, settings: &Settings, owner: &RecordId) -> AppResult<Provider> {
+    let row: Option<Row> = store::get(db, &RecordId::from_table_key("app_settings", owner.key().clone())).await?;
     let row = row.unwrap_or_default();
     let user_key = crypto::decrypt_or_plaintext(&settings.encryption_key, &row.openai_api_key_encrypted)?;
     let (base_url, api_key) =
@@ -112,10 +116,9 @@ pub async fn resolve(db: &Db, settings: &Settings, owner: &RecordId) -> AppResul
 
 pub const DEFAULT_CHAT_MODEL: &str = "gpt-4o-mini";
 
-/// The chat model to ask `p` for: the configured one; else `gpt-4o-mini` on
-/// api.openai.com; else the first chat model the endpoint itself lists, so a
-/// self-hosted server (Ollama, vLLM, LM Studio, ...) uses what it has.
-/// Listings are cached per endpoint for 10 minutes.
+/// The chat model to ask `p` for: the configured one; else `gpt-4o-mini` on api.openai.com; else the
+/// first chat model the endpoint itself lists, so a self-hosted server (Ollama, vLLM, LM Studio, ...)
+/// uses what it has. Listings are cached per endpoint for 10 minutes.
 pub async fn chat_model(p: &Provider) -> String {
     use std::collections::HashMap;
     use std::sync::{Mutex, OnceLock};
@@ -129,13 +132,16 @@ pub async fn chat_model(p: &Provider) -> String {
         return DEFAULT_CHAT_MODEL.to_string();
     }
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    if let Some((at, model)) = cache.lock().unwrap().get(&p.base_url) {
-        if at.elapsed() < Duration::from_secs(600) {
-            return model.clone();
-        }
+    if let Some((at, model)) = cache.lock().unwrap().get(&p.base_url)
+        && at.elapsed() < Duration::from_secs(600)
+    {
+        return model.clone();
     }
     let listed = async {
-        let v: serde_json::Value = client()
+        let v: serde_json::Value = p
+            .client()
+            .await
+            .ok()?
             .get(p.url("models"))
             .bearer_auth(p.bearer())
             .timeout(Duration::from_secs(10))
@@ -224,30 +230,5 @@ mod tests {
         assert!(!p(OPENAI_BASE_URL, "").configured());
         assert!(p(OPENAI_BASE_URL, "sk-abc").configured());
         assert!(p("http://localhost:11434/v1", "").configured());
-    }
-
-    #[tokio::test]
-    async fn the_client_does_not_follow_redirects() {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move {
-            // answer every connection with a redirect to the same server; a
-            // client that followed it would make a second request
-            let mut hits = 0;
-            loop {
-                let (mut sock, _) = listener.accept().await.unwrap();
-                hits += 1;
-                let mut buf = [0u8; 4096];
-                let _ = sock.read(&mut buf).await;
-                let resp = format!(
-                    "HTTP/1.1 307 Temporary Redirect\r\nLocation: http://{addr}/elsewhere\r\nX-Hits: {hits}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-                );
-                let _ = sock.write_all(resp.as_bytes()).await;
-            }
-        });
-        let resp = client().get(format!("http://{addr}/v1/models")).bearer_auth("sk-user").send().await.unwrap();
-        assert_eq!(resp.status(), 307);
-        assert_eq!(resp.headers()["x-hits"], "1");
     }
 }

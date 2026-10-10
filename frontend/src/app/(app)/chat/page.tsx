@@ -1,37 +1,234 @@
 "use client";
 
+import ErrorLine, { failure, type Failure } from "@/components/ErrorLine";
+import Select from "@/components/Select";
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { ArrowUp, Plus, Trash2 } from "lucide-react";
+import { AlertCircle, ArrowUp, Square, ChevronRight, CornerDownLeft, RotateCcw, Plus, Trash2, Wrench } from "lucide-react";
 import Markdown from "@/components/Markdown";
-import { chat, type ChatMessage, type ChatThread } from "@/lib/api";
+import AuthorTag from "@/components/AuthorTag";
+import SyncMark from "@/components/bits/SyncMark";
+import Tooltip, { TooltipGroup } from "@/components/bits/Tooltip";
+import { useQueryClient } from "@tanstack/react-query";
+import { ApiError, chat } from "@/lib/api";
+import type { ChatMessage, ChatThread } from "@/lib/types";
+import { useMe } from "@/lib/queries/auth";
+import { useSettings } from "@/lib/queries/settings";
+import { chatKeys, historyQuery, threadsQuery, useCreateThread, useDeleteThread, useThreads } from "@/lib/queries/chat";
 
-function Bubble({ message }: { message: ChatMessage }) {
-  const isUser = message.role === "user";
-  if (message.role === "tool") {
-    return (
-      <div className="self-start max-w-[75%] px-3.5 py-2 rounded-xl text-[12px] font-mono" style={{ background: "var(--surface)", color: "var(--ink-faint)", border: "1px solid var(--border)" }}>
-        {message.content}
+// The built-in agent, labelled by the name its system prompt gives it.
+const ASSISTANT = "Eunomia";
+
+const EXAMPLES = [
+  "What do you remember about me?",
+  "Who is in my entity graph so far?",
+  "Remember that I prefer Bun over npm for frontend work.",
+  "Search my synced records for anything from last week.",
+];
+
+type ToolStep = { name: string; args: string; result?: string; running?: boolean };
+
+// A rendered turn: one person's message, or everything the assistant did
+// between two of them (tool calls, their results, and the reply text).
+type Turn =
+  | { kind: "user"; content: string; at?: string }
+  | { kind: "assistant"; content: string; steps: ToolStep[]; at?: string };
+
+function toTurns(messages: ChatMessage[]): Turn[] {
+  const turns: Turn[] = [];
+  const pending: ToolStep[] = [];
+  for (const m of messages) {
+    if (m.role === "user") {
+      turns.push({ kind: "user", content: m.content, at: m.created_at });
+      continue;
+    }
+    let last = turns[turns.length - 1];
+    if (!last || last.kind !== "assistant") {
+      last = { kind: "assistant", content: "", steps: [], at: m.created_at };
+      turns.push(last);
+    }
+    if (m.role === "tool") {
+      // tool results arrive in the same order as the calls that asked for them
+      const step = pending.shift();
+      if (step) step.result = m.content;
+      else last.steps.push({ name: "tool", args: "", result: m.content });
+      continue;
+    }
+    for (const tc of m.tool_calls ?? []) {
+      const step = { name: tc.function.name, args: tc.function.arguments };
+      last.steps.push(step);
+      pending.push(step);
+    }
+    if (m.content) last.content = last.content ? `${last.content}\n\n${m.content}` : m.content;
+  }
+  return turns;
+}
+
+function timeLabel(at?: string | null): string {
+  if (!at) return "";
+  const d = new Date(at);
+  if (Number.isNaN(d.getTime())) return "";
+  return new Date().toDateString() === d.toDateString()
+    ? d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
+    : d.toLocaleDateString([], { month: "short", day: "numeric" });
+}
+
+// Compact age for the thread list: "now", "12m", "3h", "4d", then a date.
+function ageLabel(at?: string | null): string {
+  if (!at) return "";
+  const d = new Date(at);
+  const mins = Math.floor((Date.now() - d.getTime()) / 60000);
+  if (Number.isNaN(mins)) return "";
+  if (mins < 1) return "now";
+  if (mins < 60) return `${mins}m`;
+  if (mins < 1440) return `${Math.floor(mins / 60)}h`;
+  if (mins < 10080) return `${Math.floor(mins / 1440)}d`;
+  return d.toLocaleDateString([], { month: "short", day: "numeric" });
+}
+
+function prettyJson(text: string): string {
+  try {
+    return JSON.stringify(JSON.parse(text), null, 2);
+  } catch {
+    return text;
+  }
+}
+
+function argsPreview(args: string): string {
+  try {
+    const parsed = JSON.parse(args);
+    if (parsed && typeof parsed === "object") {
+      return Object.entries(parsed)
+        .map(([k, v]) => `${k}: ${typeof v === "string" ? v : JSON.stringify(v)}`)
+        .join("  ");
+    }
+  } catch {
+    // not JSON, show as-is
+  }
+  return args;
+}
+
+const secs = (ms: number) => `${(Math.max(0, ms) / 1000).toFixed(1)}s`;
+
+// Ticks on its own so the rest of the page does not re-render every 100ms.
+// aria-hidden: a ticking number inside the live region would chatter.
+function Elapsed({ since }: { since: number }) {
+  const [now, setNow] = useState(since);
+  useEffect(() => {
+    const t = setInterval(() => setNow(performance.now()), 100);
+    return () => clearInterval(t);
+  }, []);
+  return (
+    <span aria-hidden className="font-mono tabular-nums">
+      {secs(now - since)}
+    </span>
+  );
+}
+
+// Fades the transcript's top or bottom edge only when there is more to scroll that way.
+function edgeFade(el: HTMLElement) {
+  el.toggleAttribute("data-fade-top", el.scrollTop > 1);
+  el.toggleAttribute("data-fade-bottom", el.scrollHeight - el.scrollTop - el.clientHeight > 1);
+}
+
+function TurnHeader({ name, at, children }: { name: string; at?: string; children?: React.ReactNode }) {
+  return (
+    <div className="flex items-center gap-2 h-5 mb-2">
+      <AuthorTag name={name} />
+      {at && (
+        <time dateTime={at} className="font-mono text-[11.5px]" style={{ color: "var(--ink-faint)" }}>
+          {timeLabel(at)}
+        </time>
+      )}
+      {children}
+    </div>
+  );
+}
+
+function ToolRow({ step, live }: { step: ToolStep; live?: boolean }) {
+  const preview = argsPreview(step.args);
+  const inspectable = !step.running && !!(step.args || step.result);
+  const row = (
+    <>
+      {inspectable ? (
+        <ChevronRight size={13} strokeWidth={1.75} className="chev shrink-0" style={{ color: "var(--ink-faint)" }} />
+      ) : (
+        <Wrench size={13} strokeWidth={1.75} className="shrink-0" style={{ color: "var(--ink-faint)" }} />
+      )}
+      <span className="font-mono text-[12px] shrink-0" style={{ color: "var(--ink)" }}>
+        {step.name}
+      </span>
+      {preview && (
+        <span className="font-mono text-[12px] truncate min-w-0" style={{ color: "var(--ink-faint)" }}>
+          {preview}
+        </span>
+      )}
+      <span className="ml-auto pl-2 shrink-0 flex items-center gap-1 text-[11.5px]" style={{ color: "var(--ink-faint)" }}>
+        {/* history rows mount "done" and sit still; live rows draw the check when their tool returns */}
+        <SyncMark status={step.running ? "running" : "done"} size={12} />
+        {step.running ? "running" : "done"}
+      </span>
+    </>
+  );
+  if (!inspectable) return <div className={`flex items-center gap-2 h-8 px-2.5 ${live ? "tool-live" : ""}`}>{row}</div>;
+  return (
+    <details className="tool-row">
+      <summary className="press flex items-center gap-2 h-8 px-2.5 cursor-pointer list-none select-none [&::-webkit-details-marker]:hidden">
+        {row}
+      </summary>
+      <div className="px-2.5 pt-1 pb-2.5 flex flex-col gap-2">
+        {step.args && (
+          <div>
+            <div className="label mb-1">Arguments</div>
+            <pre className="tool-pre">{prettyJson(step.args)}</pre>
+          </div>
+        )}
+        {step.result && (
+          <div>
+            <div className="label mb-1">Result</div>
+            <pre className="tool-pre">{prettyJson(step.result)}</pre>
+          </div>
+        )}
       </div>
+    </details>
+  );
+}
+
+function ToolSteps({ steps, live }: { steps: ToolStep[]; live?: boolean }) {
+  if (steps.length === 0) return null;
+  return (
+    <div className="ledger hairline-rows mb-3 overflow-hidden" role="group" aria-label="Tool calls">
+      {steps.map((s, i) => (
+        <ToolRow key={i} step={s} live={live} />
+      ))}
+    </div>
+  );
+}
+
+function TurnView({ turn, me }: { turn: Turn; me: string | null }) {
+  if (turn.kind === "user") {
+    return (
+      <article>
+        {me ? <TurnHeader name={me} at={turn.at} /> : <div className="h-5 mb-2" />}
+        <div
+          className="whitespace-pre-wrap break-words text-[14px] leading-relaxed px-3.5 py-2.5 rounded-[var(--radius-card)]"
+          style={{ background: "var(--surface-raised)", color: "var(--ink)", border: "var(--hair) solid var(--border)" }}
+        >
+          {turn.content}
+        </div>
+      </article>
     );
   }
   return (
-    <div
-      className={`max-w-[75%] px-4 py-2.5 rounded-xl text-[13.5px] ${isUser ? "whitespace-pre-wrap" : ""}`}
-      style={{
-        alignSelf: isUser ? "flex-end" : "flex-start",
-        background: isUser ? "var(--surface-raised)" : "var(--surface)",
-        border: "1px solid var(--border)",
-        color: "var(--ink)",
-      }}
-    >
-      {isUser ? message.content : <Markdown text={message.content} />}
-      {message.tool_calls && message.tool_calls.length > 0 && (
-        <div className="mt-1.5 text-[11px]" style={{ color: "var(--ink-faint)" }}>
-          used: {message.tool_calls.map((tc) => tc.function.name).join(", ")}
+    <article>
+      <TurnHeader name={ASSISTANT} at={turn.at} />
+      <ToolSteps steps={turn.steps} />
+      {turn.content && (
+        <div className="text-[14px] px-0.5 break-words" style={{ color: "var(--ink)" }}>
+          <Markdown text={turn.content} />
         </div>
       )}
-    </div>
+    </article>
   );
 }
 
@@ -42,88 +239,150 @@ function ThreadList({
   onCreate,
   onDelete,
 }: {
-  threads: ChatThread[];
+  threads: ChatThread[] | null;
   activeId: string | null;
   onSelect: (id: string) => void;
   onCreate: () => void;
   onDelete: (id: string) => void;
 }) {
   return (
-    <div className="surface flex flex-col gap-1 p-2.5 w-56 shrink-0 h-full overflow-y-auto">
-      <button
-        onClick={onCreate}
-        className="flex items-center gap-1.5 px-2.5 py-2 rounded-lg text-[12.5px] mb-1 shrink-0"
-        style={{ background: "var(--felt)", color: "var(--canvas)" }}
-      >
-        <Plus size={14} /> New chat
-      </button>
-      {threads.map((t) => (
-        <div
-          key={t.id}
-          className="group flex items-center gap-1 rounded-lg"
-          style={{ background: t.id === activeId ? "var(--surface-raised)" : "transparent" }}
-        >
-          <button
-            onClick={() => onSelect(t.id)}
-            className="flex-1 text-left px-2.5 py-2 text-[12.5px] truncate"
-            style={{ color: t.id === activeId ? "var(--ink)" : "var(--ink-dim)" }}
-          >
-            {t.title}
+    <nav aria-label="Chat threads" className="ledger hidden md:flex flex-col w-60 shrink-0 h-full min-h-0">
+      <div className="flex items-center justify-between h-11 pl-3.5 pr-2 shrink-0" style={{ borderBottom: "var(--hair) solid var(--border)" }}>
+        <h2 className="section-title">Threads</h2>
+        <button onClick={onCreate} className="btn btn-ghost btn-sm">
+          <Plus size={14} strokeWidth={1.75} /> New chat
+        </button>
+      </div>
+      <div className="flex-1 min-h-0 overflow-y-auto p-2 flex flex-col gap-0.5">
+        {threads === null && ["80%", "65%", "50%"].map((w) => <div key={w} className="skeleton h-8" style={{ width: w }} />)}
+        {threads?.map((t) => {
+          const active = t.id === activeId;
+          return (
+            <div key={t.id} className={`thread-row group flex items-center rounded-[5px] ${active ? "frame-selected" : ""}`} data-active={active || undefined}>
+              <button
+                onClick={() => onSelect(t.id)}
+                aria-current={active ? "true" : undefined}
+                className="press flex-1 min-w-0 flex items-center gap-2 text-left h-8 pl-2.5 pr-2.5 text-[13px]"
+              >
+                <span className="truncate flex-1">{t.title}</span>
+                <span className="thread-time font-mono text-[11px] shrink-0" style={{ color: "var(--ink-faint)" }}>
+                  {ageLabel(t.updated_at)}
+                </span>
+              </button>
+              <Tooltip label="Delete thread">
+                <button onClick={() => onDelete(t.id)} aria-label="Delete thread" className="thread-delete btn btn-ghost btn-icon btn-sm w-[26px] mr-0.5 shrink-0">
+                  <Trash2 size={13} strokeWidth={1.75} />
+                </button>
+              </Tooltip>
+            </div>
+          );
+        })}
+        {threads?.length === 0 && (
+          <div className="px-2.5 py-2 text-[12.5px]" style={{ color: "var(--ink-faint)" }}>
+            No threads yet.
+          </div>
+        )}
+      </div>
+    </nav>
+  );
+}
+
+function EmptyState({ onPick }: { onPick: (text: string) => void }) {
+  return (
+    <div className="flex-1 flex flex-col justify-center w-full max-w-[560px] mx-auto py-8">
+      <h2 className="text-[17px] font-semibold tracking-[-0.015em]" style={{ color: "var(--ink)" }}>
+        Ask your memory anything
+      </h2>
+      <p className="text-[13.5px] mt-1.5 mb-5 leading-relaxed" style={{ color: "var(--ink-dim)" }}>
+        Ask about people, projects, or code you&apos;ve mapped. Every tool the assistant uses shows up in the thread, so you
+        can check what it read and wrote.
+      </p>
+      <div className="ledger hairline-rows overflow-hidden">
+        {EXAMPLES.map((ex) => (
+          <button key={ex} onClick={() => onPick(ex)} className="example-row press w-full flex items-center gap-2.5 min-h-10 py-2 px-3.5 text-left text-[13px]">
+            <span className="flex-1">{ex}</span>
+            <CornerDownLeft size={13} strokeWidth={1.75} className="shrink-0" style={{ color: "var(--ink-faint)" }} />
           </button>
-          <button
-            onClick={() => onDelete(t.id)}
-            aria-label="Delete thread"
-            className="p-1.5 mr-1 rounded opacity-0 group-hover:opacity-100 shrink-0"
-            style={{ color: "var(--ink-faint)" }}
-          >
-            <Trash2 size={13} />
-          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function LoadingTurns() {
+  return (
+    <div className="flex flex-col gap-7" aria-hidden>
+      {["45%", "85%", "60%"].map((w) => (
+        <div key={w} className="flex flex-col gap-2">
+          <div className="skeleton h-5 w-20" />
+          <div className="skeleton h-10" style={{ width: w }} />
         </div>
       ))}
-      {threads.length === 0 && (
-        <div className="px-2.5 py-2 text-[12px]" style={{ color: "var(--ink-faint)" }}>
-          No threads yet.
-        </div>
-      )}
     </div>
   );
 }
 
 export default function ChatPage() {
-  const [threads, setThreads] = useState<ChatThread[]>([]);
+  const queryClient = useQueryClient();
+  const threads = useThreads().data ?? null;
+  const createThreadMutation = useCreateThread();
+  const deleteThreadMutation = useDeleteThread();
   const [activeId, setActiveId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[] | null>(null);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [streamingText, setStreamingText] = useState("");
-  const [activeTool, setActiveTool] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [liveSteps, setLiveSteps] = useState<ToolStep[]>([]);
+  const [error, setError] = useState<Failure | null>(null);
+  const [loadError, setLoadError] = useState<Failure | null>(null);
   const [needsKey, setNeedsKey] = useState(false);
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const me = useMe().data?.email ?? null;
+  // unknown while loading counts as ready: the server still refuses a send it cannot answer
+  const modelReady = useSettings().data?.model_configured ?? true;
+  const [lastSent, setLastSent] = useState("");
+  // When the current reply was asked for, and how long it took to start answering.
+  const [startedAt, setStartedAt] = useState<number | null>(null);
+  const [thoughtMs, setThoughtMs] = useState<number | null>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const stickRef = useRef(true);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
 
   const loadHistory = useCallback((threadId: string) => {
     setMessages(null);
-    chat
-      .history(threadId)
+    setLoadError(null);
+    stickRef.current = true;
+    queryClient
+      .fetchQuery(historyQuery(threadId))
       .then(setMessages)
-      .catch(() => setMessages([]));
-  }, []);
+      .catch((e) => {
+        setMessages([]);
+        setLoadError(failure(e, "Could not load this conversation."));
+      });
+  }, [queryClient]);
 
   useEffect(() => {
-    chat.threads.list().then(async (list) => {
-      if (list.length === 0) {
-        const created = await chat.threads.create();
-        list = [created];
-      }
-      setThreads(list);
-      setActiveId(list[0].id);
-      loadHistory(list[0].id);
-    });
+    queryClient
+      .fetchQuery({ ...threadsQuery(), staleTime: 0 })
+      .then(async (list: ChatThread[]) => {
+        if (list.length === 0) list = [await createThreadMutation.mutateAsync(undefined)];
+        setActiveId(list[0].id);
+        loadHistory(list[0].id);
+      })
+      .catch((e) => {
+        setMessages([]);
+        setLoadError(failure(e, "Could not load your conversations."));
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadHistory]);
 
+  // Follow new content only while the reader is at the bottom; scrolling up
+  // to reread something holds the view still.
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, sending, streamingText]);
+    const el = scrollRef.current;
+    if (!el) return;
+    if (stickRef.current) el.scrollTop = el.scrollHeight;
+    edgeFade(el);
+  }, [messages, sending, streamingText, liveSteps, error]);
 
   function selectThread(id: string) {
     if (id === activeId) return;
@@ -134,148 +393,323 @@ export default function ChatPage() {
   }
 
   async function createThread() {
-    const created = await chat.threads.create();
-    setThreads((prev) => [created, ...prev]);
+    const created = await createThreadMutation.mutateAsync(undefined);
     setActiveId(created.id);
     setMessages([]);
+    setError(null);
+    setNeedsKey(false);
+    inputRef.current?.focus();
   }
 
   async function deleteThread(id: string) {
-    await chat.threads.delete(id);
-    const remaining = threads.filter((t) => t.id !== id);
-    setThreads(remaining);
+    await deleteThreadMutation.mutateAsync(id);
+    const remaining = (threads ?? []).filter((t) => t.id !== id);
     if (id !== activeId) return;
     if (remaining.length > 0) {
       setActiveId(remaining[0].id);
       loadHistory(remaining[0].id);
     } else {
-      const created = await chat.threads.create();
-      setThreads([created]);
+      const created = await createThreadMutation.mutateAsync(undefined);
       setActiveId(created.id);
       setMessages([]);
     }
   }
 
-  async function send() {
-    const text = input.trim();
-    if (!text || sending || !activeId) return;
+  // `retry` resends the message already on screen instead of adding it again.
+  const abortRef = useRef<AbortController | null>(null);
+
+  async function send(raw: string = input, retry = false) {
+    const text = raw.trim();
+    if (!text || sending || !activeId || !modelReady) return;
     const threadId = activeId;
-    setInput("");
+    if (!retry) setInput("");
     setError(null);
     setNeedsKey(false);
-    setMessages((prev) => [...(prev ?? []), { role: "user", content: text }]);
+    setLastSent(text);
+    stickRef.current = true;
+    if (!retry) setMessages((prev) => [...(prev ?? []), { role: "user", content: text, created_at: new Date().toISOString() }]);
     setSending(true);
     setStreamingText("");
-    setActiveTool(null);
+    setLiveSteps([]);
+    const start = performance.now();
+    setStartedAt(start);
+    setThoughtMs(null);
+    const steps: ToolStep[] = [];
+    const controller = new AbortController();
+    abortRef.current = controller;
+    let reply = "";
     try {
-      let reply = "";
       await chat.send(threadId, text, (event) => {
         if (event.type === "text") {
+          if (!reply) setThoughtMs(performance.now() - start);
           reply += event.delta;
           setStreamingText(reply);
         } else if (event.type === "tool_call") {
-          setActiveTool(event.name);
+          steps.push({ name: event.name, args: "", running: true });
+          setLiveSteps([...steps]);
         } else if (event.type === "tool_result") {
-          setActiveTool(null);
+          const step = steps.find((s) => s.running && s.name === event.name);
+          if (step) step.running = false;
+          setLiveSteps([...steps]);
         } else if (event.type === "error") {
-          setError(event.message);
+          // code and trace id are optional: older backends send only the message
+          setError(failure(event.code ? new ApiError(200, event.code, event.message, event.trace_id) : new Error(event.message), event.message));
           setNeedsKey(/OpenAI API key/i.test(event.message));
         }
-      });
-      setMessages((prev) => [...(prev ?? []), { role: "assistant", content: reply }]);
-      chat.threads.list().then(setThreads);
+      }, controller.signal);
+      if (reply || steps.length) {
+        // the stream only names tools; reopening the thread loads their full arguments and results
+        const tool_calls = steps.map((s, i) => ({ id: `live_${i}`, type: "function" as const, function: { name: s.name, arguments: "" } }));
+        setMessages((prev) => [...(prev ?? []), { role: "assistant", content: reply, tool_calls, created_at: new Date().toISOString() }]);
+      }
+      queryClient.invalidateQueries({ queryKey: chatKeys.threads() });
     } catch (e) {
+      if (controller.signal.aborted) {
+        // stopped by the person: keep whatever streamed so far
+        if (reply) setMessages((prev) => [...(prev ?? []), { role: "assistant", content: reply, created_at: new Date().toISOString() }]);
+        return;
+      }
       const msg = e instanceof Error ? e.message : "Something went wrong.";
-      setError(msg);
+      setError(failure(e, msg));
       setNeedsKey(/OpenAI API key/i.test(msg));
     } finally {
+      abortRef.current = null;
       setSending(false);
       setStreamingText("");
-      setActiveTool(null);
+      setLiveSteps([]);
     }
   }
 
+  const turns = messages ? toTurns(messages) : null;
+  const activeTool = liveSteps.find((s) => s.running)?.name;
+  const canSend = !!input.trim() && !sending && !!activeId && modelReady;
+
   return (
-    <div className="flex flex-col gap-5 h-[calc(100vh-11rem)] md:h-[calc(100vh-7.5rem)]">
-      <div>
-        <h1 className="font-display text-xl" style={{ color: "var(--ink)" }}>
-          Chat
-        </h1>
-        <p className="text-[12.5px] mt-1" style={{ color: "var(--ink-dim)" }}>
-          Ask about people, projects, or code you&apos;ve mapped. The assistant can recall, search, and write to your
-          memory graph.
+    <TooltipGroup>
+    <div className="flex flex-col gap-5 h-[calc(100dvh-6.5rem)] md:h-[calc(100dvh-4rem)]">
+      <header className="flex flex-col gap-1">
+        <h1 className="page-title">Chat</h1>
+        <p className="text-[13px]" style={{ color: "var(--ink-dim)" }}>
+          The assistant can recall, search, and write to your memory graph.
         </p>
-      </div>
+      </header>
 
       <div className="flex-1 min-h-0 flex gap-4">
         <ThreadList threads={threads} activeId={activeId} onSelect={selectThread} onCreate={createThread} onDelete={deleteThread} />
 
-        <div className="flex-1 min-h-0 flex flex-col gap-5">
-          <div className="surface flex-1 min-h-0 flex flex-col p-5 overflow-y-auto gap-3">
-            {messages === null && <div className="text-[12.5px]" style={{ color: "var(--ink-faint)" }}>Loading…</div>}
-            {messages !== null && messages.length === 0 && !sending && (
-              <div className="flex-1 flex items-center justify-center text-center text-[13px]" style={{ color: "var(--ink-faint)" }}>
-                Ask about people, projects, or code you&apos;ve mapped.
-              </div>
+        <section aria-label="Conversation" className="ledger flex-1 min-w-0 min-h-0 flex flex-col overflow-hidden">
+          {/* compact thread switcher where there is no room for the list */}
+          <div className="md:hidden flex items-center gap-2 p-2 shrink-0" style={{ borderBottom: "var(--hair) solid var(--border)" }}>
+            <Select
+              aria-label="Thread"
+              className="h-8 text-[13px] flex-1 min-w-0"
+              value={activeId ?? ""}
+              onChange={selectThread}
+              options={(threads ?? []).map((t) => ({ value: t.id, label: t.title }))}
+            />
+            <Tooltip label="New chat">
+              <button onClick={createThread} aria-label="New chat" className="btn btn-icon h-8 w-8">
+                <Plus size={15} strokeWidth={1.75} />
+              </button>
+            </Tooltip>
+            {activeId && (
+              <Tooltip label="Delete thread">
+                <button onClick={() => deleteThread(activeId)} aria-label="Delete thread" className="btn btn-ghost btn-icon h-8 w-8">
+                  <Trash2 size={14} strokeWidth={1.75} />
+                </button>
+              </Tooltip>
             )}
-            {messages?.map((m, i) => <Bubble key={i} message={m} />)}
-            {sending && (
-              <div
-                className="max-w-[75%] px-4 py-2.5 rounded-xl text-[13.5px]"
-                style={{ background: "var(--surface)", border: "1px solid var(--border)", color: streamingText ? "var(--ink)" : "var(--ink-faint)" }}
-              >
-                {activeTool && (
-                  <div className="text-[12px] mb-1" style={{ color: "var(--ink-faint)" }}>
-                    Using {activeTool}…
-                  </div>
-                )}
-                {streamingText ? <Markdown text={streamingText} /> : activeTool ? "" : "Thinking…"}
-              </div>
-            )}
-            <div ref={bottomRef} />
           </div>
 
-          {error && (
-            <div className="text-[12.5px]" style={{ color: "var(--critical)" }}>
-              {error}
-              {needsKey && (
-                <>
-                  {" "}
-                  <Link href="/settings" className="underline" style={{ color: "var(--ink)" }}>
-                    Add one in Settings
-                  </Link>
-                  .
-                </>
+          <div
+            ref={scrollRef}
+            onScroll={(e) => {
+              const el = e.currentTarget;
+              stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+              edgeFade(el);
+            }}
+            className="transcript flex-1 min-h-0 overflow-y-auto"
+          >
+            <div className="max-w-[720px] mx-auto px-4 md:px-6 py-6 flex flex-col gap-7 min-h-full" aria-live="polite" aria-busy={sending}>
+              {loadError && <ErrorLine error={loadError} />}
+              {turns === null && <LoadingTurns />}
+              {turns !== null && turns.length === 0 && !sending && !loadError && modelReady && <EmptyState onPick={(text) => send(text)} />}
+              {!modelReady && (
+                <div role="status" className="ledger flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3 text-[13px]">
+                  <p className="flex-1 min-w-[220px]" style={{ color: "var(--ink-dim)" }}>
+                    No model is configured, so the assistant can&apos;t answer yet. Chat needs an OpenAI key or a local model endpoint.
+                  </p>
+                  <Link href="/settings" className="btn btn-sm">Set up a model</Link>
+                </div>
+              )}
+              {turns?.map((t, i) => <TurnView key={i} turn={t} me={me} />)}
+              {sending && (
+                <article className="fade-in">
+                  <TurnHeader name={ASSISTANT}>
+                    <span className="flex items-center gap-1.5 text-[12px]" style={{ color: "var(--ink-faint)" }}>
+                      {streamingText ? (
+                        <span>
+                          Thought for <span className="font-mono tabular-nums">{secs(thoughtMs ?? 0)}</span>
+                        </span>
+                      ) : (
+                        <>
+                          <span className="breathe">{activeTool ? `Using ${activeTool}…` : "Thinking…"}</span>
+                          {startedAt !== null && <Elapsed since={startedAt} />}
+                        </>
+                      )}
+                    </span>
+                  </TurnHeader>
+                  <ToolSteps steps={liveSteps} live />
+                  {streamingText && (
+                    <div className="settle text-[14px] px-0.5 break-words" style={{ color: "var(--ink)" }}>
+                      <Markdown text={streamingText} />
+                    </div>
+                  )}
+                </article>
+              )}
+              {error && (
+                <div
+                  role="alert"
+                  className="flex items-start gap-2.5 px-3.5 py-3 rounded-[var(--radius-card)] text-[13px]"
+                  style={{ background: "var(--critical-soft)", color: "var(--critical)", border: "var(--hair) solid var(--border)" }}
+                >
+                  <AlertCircle size={15} strokeWidth={1.75} className="shrink-0 mt-px" />
+                  <div className="min-w-0 break-words">
+                    <div className="font-medium">The assistant couldn&apos;t reply.</div>
+                    <div className="mt-0.5" style={{ color: "var(--ink-dim)" }}>
+                      {needsKey ? (
+                        <>
+                          No OpenAI API key is set, so the assistant can&apos;t answer yet.{" "}
+                          <Link href="/settings" className="underline" style={{ color: "var(--accent-text)" }}>
+                            Add one in Settings
+                          </Link>
+                          .
+                        </>
+                      ) : (
+                        error.message
+                      )}
+                    </div>
+                    {(error.code && !error.code.startsWith("http.")) || error.traceId ? (
+                      <div className="mt-1 flex flex-wrap items-center gap-x-3 font-mono text-[12px]">
+                        {error.code && !error.code.startsWith("http.") && <code>{error.code}</code>}
+                        {error.traceId && <span>Trace {error.traceId}</span>}
+                      </div>
+                    ) : null}
+                    {!needsKey && lastSent && (
+                      <button type="button" onClick={() => send(lastSent, true)} className="btn btn-sm mt-2.5">
+                        <RotateCcw size={13} strokeWidth={1.75} /> Retry
+                      </button>
+                    )}
+                  </div>
+                </div>
               )}
             </div>
-          )}
-
-          <div className="flex items-center gap-2.5">
-            <input
-              className="field flex-1 px-3.5 py-2.5 text-[13.5px]"
-              placeholder="Ask something…"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  send();
-                }
-              }}
-              disabled={sending}
-            />
-            <button
-              onClick={send}
-              disabled={sending || !input.trim()}
-              aria-label="Send"
-              className="p-2.5 rounded-xl shrink-0"
-              style={{ background: "var(--felt)", color: "var(--canvas)", opacity: sending || !input.trim() ? 0.5 : 1 }}
-            >
-              <ArrowUp size={16} />
-            </button>
           </div>
-        </div>
+
+          <form
+            className="shrink-0 px-3 pb-3 md:px-4 md:pb-4"
+            onSubmit={(e) => {
+              e.preventDefault();
+              send();
+            }}
+          >
+            <div className="field max-w-[720px] mx-auto flex flex-col cursor-text" onClick={() => inputRef.current?.focus()}>
+              <textarea
+                ref={inputRef}
+                aria-label="Message"
+                rows={1}
+                className="composer w-full resize-none bg-transparent outline-none px-3.5 pt-3 pb-1 text-[14px] leading-relaxed"
+                placeholder={modelReady ? "Ask something…" : "Set up a model to chat"}
+                disabled={!modelReady}
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                    e.preventDefault();
+                    send();
+                  }
+                }}
+              />
+              <div className="flex items-center gap-2 pl-3.5 pr-2 pb-2">
+                <span className="hidden sm:flex items-center gap-1 text-[11.5px]" style={{ color: "var(--ink-faint)" }}>
+                  <span className="kbd">Enter</span> send <span className="kbd ml-1.5">Shift Enter</span> new line
+                </span>
+                <div className="ml-auto flex">
+                  {sending ? (
+                    <Tooltip label="Stop">
+                      <button type="button" onClick={() => abortRef.current?.abort()} aria-label="Stop" className="btn btn-icon">
+                        <Square size={12} strokeWidth={2.5} fill="currentColor" />
+                      </button>
+                    </Tooltip>
+                  ) : (
+                    <Tooltip label="Send" shortcut="Enter">
+                      <button type="submit" disabled={!canSend} aria-label="Send" className="btn btn-primary btn-icon">
+                        <ArrowUp size={16} strokeWidth={2} />
+                      </button>
+                    </Tooltip>
+                  )}
+                </div>
+              </div>
+            </div>
+          </form>
+        </section>
       </div>
+
+      <style>{`
+        .composer { field-sizing: content; min-height: 24px; max-height: 200px; }
+        .thread-row { color: var(--ink-dim); transition: background-color var(--dur-hover) ease, color var(--dur-hover) ease; }
+        .thread-row[data-active] { background: var(--surface-raised); color: var(--ink); }
+        .thread-delete { display: none; color: var(--ink-faint); }
+        .thread-row:focus-within .thread-delete { display: inline-flex; }
+        .thread-row:focus-within .thread-time { display: none; }
+        .example-row { color: var(--ink-dim); }
+        .example-row:active { background: var(--surface-raised); }
+        .press { transition: transform var(--dur-press) var(--ease-out), background-color var(--dur-hover) ease, color var(--dur-hover) ease; }
+        .press:active { transform: scale(0.97); }
+        .chev { transition: transform var(--dur-hover) var(--ease-out); }
+        .tool-row[open] .chev { transform: rotate(90deg); }
+        .tool-pre {
+          font: 11.5px/1.55 var(--font-mono), ui-monospace, monospace;
+          color: var(--ink-dim);
+          background: var(--surface-raised);
+          border: var(--hair) solid var(--border);
+          border-radius: 6px;
+          padding: 8px 10px;
+          max-height: 240px;
+          overflow: auto;
+          white-space: pre-wrap;
+          word-break: break-word;
+        }
+        @media (hover: hover) and (pointer: fine) {
+          .thread-row:hover { background: var(--surface-raised); color: var(--ink); }
+          .thread-row:hover .thread-delete { display: inline-flex; }
+          .thread-row:hover .thread-time { display: none; }
+          .example-row:hover { background: var(--surface-raised); color: var(--ink); }
+          .tool-row summary:hover { background: var(--surface-raised); }
+        }
+        /* "Thinking" breathes while the assistant works; the words never change under it. */
+        .breathe { animation: chat-breathe 1.6s var(--ease-in-out) infinite; }
+        @keyframes chat-breathe { 50% { opacity: 0.6; } }
+        /* live tool rows arrive; history rows render in place */
+        .tool-live { transition: opacity 180ms var(--ease-out), transform 180ms var(--ease-out); }
+        @starting-style { .tool-live { opacity: 0; transform: translateY(-4px); } }
+        /* the streamed answer settles into focus once per reply */
+        .settle { transition: opacity 200ms var(--ease-out), filter 200ms var(--ease-out); }
+        @starting-style { .settle { opacity: 0.001; filter: blur(2px); } }
+        /* static edge fade, only on a side with more to scroll (mask reads alpha, so the colour is irrelevant) */
+        .transcript { --fade-top: 0px; --fade-bottom: 0px; }
+        .transcript[data-fade-top] { --fade-top: 24px; }
+        .transcript[data-fade-bottom] { --fade-bottom: 24px; }
+        .transcript[data-fade-top],
+        .transcript[data-fade-bottom] {
+          mask-image: linear-gradient(to bottom, transparent, black var(--fade-top), black calc(100% - var(--fade-bottom)), transparent);
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .breathe { animation: none; }
+          .tool-live, .settle { transition: none; }
+        }
+      `}</style>
     </div>
+    </TooltipGroup>
   );
 }

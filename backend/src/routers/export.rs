@@ -1,13 +1,9 @@
-//! Data export: a single JSON download of the caller's own entities (all
-//! kinds, with their memory + relations) and chat history. Ported from
-//! `app/routers/export.py`. `entities/service.py`, `vaults/service.py` and
-//! `chat/service.py` haven't been ported to Rust yet, so the queries those
-//! modules would run are written directly here (scoped to the caller's
-//! personal vault, same as the Python default).
-//!
-//! Scope cut carried over from the Python version: cache records (raw
-//! synced data) are left out -- re-derivable via a source re-sync.
+//! Data export: a single JSON download of the caller's personal vault: entities of every kind with
+//! their memories and relations, plus their chat history. The document's `scope` key says what is in
+//! and what is left out (other vaults, cache records, connectors, settings, audit log). It is built in
+//! memory with one query per table.
 
+use surrealdb::types::SurrealValue;
 use std::collections::HashMap;
 
 use axum::{
@@ -20,9 +16,11 @@ use axum::{
 use chrono::Utc;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use surrealdb::{Datetime, RecordId};
+use surrealdb::types::{Datetime, RecordId};
+use crate::rid::RecordIdExt;
 
-use crate::db::Db;
+use crate::pool::{ControlDb, OrgDb};
+use crate::store;
 use crate::error::{AppError, AppResult};
 use crate::models_user::User;
 use crate::state::AppState;
@@ -33,65 +31,76 @@ pub fn router() -> Router<AppState> {
     Router::new().route("/export", get(export_data))
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, SurrealValue)]
 struct EntityRow {
     id: RecordId,
     #[serde(default)]
+    #[surreal(default)]
     name: String,
     #[serde(default)]
+    #[surreal(default)]
     aliases: Vec<String>,
     #[serde(default)]
+    #[surreal(default)]
     summary: String,
     owner: Option<RecordId>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, SurrealValue)]
 struct MemoryRow {
     id: RecordId,
+    subject: RecordId,
     #[serde(default)]
+    #[surreal(default)]
     text: String,
     owner: Option<RecordId>,
     #[serde(default, rename = "type")]
+    #[surreal(default, rename = "type")]
     kind: String,
     #[serde(default)]
+    #[surreal(default)]
     proof_count: i64,
     status: Option<String>,
     created_at: Option<Datetime>,
     updated_at: Option<Datetime>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, SurrealValue)]
 struct RelationRow {
     id: RecordId,
     #[serde(rename = "in")]
+    #[surreal(rename = "in")]
     in_: RecordId,
     out: RecordId,
     #[serde(default)]
+    #[surreal(default)]
     label: String,
     owner: Option<RecordId>,
     created_at: Option<Datetime>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, SurrealValue)]
 struct ChatMessageRow {
     id: RecordId,
     thread_id: RecordId,
     role: String,
     content: String,
     #[serde(default)]
+    #[surreal(default)]
     tool_calls: Option<Vec<Value>>,
     #[serde(default)]
+    #[surreal(default)]
     tool_call_id: Option<String>,
     created_at: Option<Datetime>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, SurrealValue)]
 struct UserEmailRow {
     id: RecordId,
     email: String,
 }
 
-async fn fetch_emails(db: &Db, ids: &[RecordId]) -> AppResult<HashMap<String, String>> {
+async fn fetch_emails(db: &ControlDb, ids: &[RecordId]) -> AppResult<HashMap<String, String>> {
     if ids.is_empty() {
         return Ok(HashMap::new());
     }
@@ -101,8 +110,8 @@ async fn fetch_emails(db: &Db, ids: &[RecordId]) -> AppResult<HashMap<String, St
             dedup.push(id.clone());
         }
     }
-    let mut res = db
-        .query("SELECT id, email FROM user WHERE id IN $ids")
+    let mut res = store::control::EXPORT_USER_EMAILS
+        .on(db)
         .bind(("ids", dedup))
         .await?;
     let rows: Vec<UserEmailRow> = res.take(0)?;
@@ -113,14 +122,38 @@ fn datetime_str(d: &Option<Datetime>) -> Value {
     json!(d)
 }
 
+// open body: a downloadable dump (Content-Disposition attachment), not consumed through the typed client
+#[utoipa::path(
+    operation_id = "exportData",
+    get,
+    path = "/api/export",
+    tag = "export",
+    summary = "Download the personal vault as JSON",
+    responses((status = 200, body = Object), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    security(("cookie" = []), ("bearer" = [])),
+)]
 async fn export_data(State(state): State<AppState>, user: User) -> AppResult<Response> {
-    let db = &state.db;
-    // the caller's own personal vault (active membership only, never one
-    // they were merely invited to or joined)
-    let vault = crate::vaults::service::default_vault_id(db, &user.id).await?;
+    let state = state.org(&user.org).await?;
+    let document = build_export(&state.db, &state.control, &user).await?;
+    let body = serde_json::to_string_pretty(&document).map_err(|e| AppError::internal(e.to_string()))?;
 
-    // Pass 1: gather every entity + its memory/relations, collecting the
-    // owner ids we'll need emails for.
+    Ok((
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "application/json".to_string()),
+            (header::CONTENT_DISPOSITION, "attachment; filename=\"eunomia-export.json\"".to_string()),
+        ],
+        body,
+    )
+        .into_response())
+}
+
+/// The export document for `user`'s personal vault. Shared with `eunomia replay`.
+pub async fn build_export(db: &OrgDb, control: &ControlDb, user: &User) -> AppResult<Value> {
+    let vault = crate::vaults::service::personal_vault_id(db, &user.id).await?;
+
+    // One query per table, not per entity: the entities of every kind, then the memories and the
+    // relations (both directions) of all of them at once, grouped back onto their entity.
     struct Bundle {
         kind: &'static str,
         row: EntityRow,
@@ -130,52 +163,46 @@ async fn export_data(State(state): State<AppState>, user: User) -> AppResult<Res
     }
 
     let mut bundles: Vec<Bundle> = Vec::new();
-    let mut owner_ids: Vec<RecordId> = Vec::new();
-
     for kind in KINDS {
         let query = format!("SELECT * FROM {kind} WHERE vault = $vault ORDER BY name");
-        let mut res = db.query(query).bind(("vault", vault.clone())).await?;
+        // dynamic: the table name is the entity kind
+        let mut res = store::dynamic(db, "app.export_entities", query).bind(("vault", vault.clone())).await?;
         let rows: Vec<EntityRow> = res.take(0)?;
+        bundles.extend(rows.into_iter().map(|row| Bundle { kind, row, memories: Vec::new(), outgoing: Vec::new(), incoming: Vec::new() }));
+    }
 
-        for row in rows {
-            if let Some(o) = &row.owner {
-                owner_ids.push(o.clone());
+    let ids: Vec<RecordId> = bundles.iter().map(|b| b.row.id.clone()).collect();
+    let at: HashMap<String, usize> = ids.iter().enumerate().map(|(i, id)| (id.to_string(), i)).collect();
+    if !ids.is_empty() {
+        let memories: Vec<MemoryRow> = store::app::EXPORT_MEMORIES.on(db).bind(("ids", ids.clone())).await?.take(0)?;
+        for m in memories {
+            if let Some(i) = at.get(&m.subject.to_string()) {
+                bundles[*i].memories.push(m);
             }
-
-            let mut mem_res = db
-                .query("SELECT * FROM memory WHERE subject = $id ORDER BY created_at DESC")
-                .bind(("id", row.id.clone()))
-                .await?;
-            let memories: Vec<MemoryRow> = mem_res.take(0)?;
-            for m in &memories {
-                if let Some(o) = &m.owner {
-                    owner_ids.push(o.clone());
-                }
+        }
+        let outgoing: Vec<RelationRow> = store::app::EXPORT_RELATIONS_OUT.on(db).bind(("ids", ids.clone())).await?.take(0)?;
+        for r in outgoing {
+            if let Some(i) = at.get(&r.in_.to_string()) {
+                bundles[*i].outgoing.push(r);
             }
-
-            let mut out_res = db
-                .query("SELECT * FROM relates_to WHERE in = $id")
-                .bind(("id", row.id.clone()))
-                .await?;
-            let outgoing: Vec<RelationRow> = out_res.take(0)?;
-
-            let mut in_res = db
-                .query("SELECT * FROM relates_to WHERE out = $id")
-                .bind(("id", row.id.clone()))
-                .await?;
-            let incoming: Vec<RelationRow> = in_res.take(0)?;
-
-            for r in outgoing.iter().chain(incoming.iter()) {
-                if let Some(o) = &r.owner {
-                    owner_ids.push(o.clone());
-                }
+        }
+        let incoming: Vec<RelationRow> = store::app::EXPORT_RELATIONS_IN.on(db).bind(("ids", ids)).await?.take(0)?;
+        for r in incoming {
+            if let Some(i) = at.get(&r.out.to_string()) {
+                bundles[*i].incoming.push(r);
             }
-
-            bundles.push(Bundle { kind, row, memories, outgoing, incoming });
         }
     }
 
-    let emails = fetch_emails(db, &owner_ids).await?;
+    let owner_ids: Vec<RecordId> = bundles
+        .iter()
+        .flat_map(|b| {
+            let owners = b.memories.iter().map(|m| &m.owner).chain(b.outgoing.iter().chain(&b.incoming).map(|r| &r.owner));
+            std::iter::once(&b.row.owner).chain(owners).flatten().cloned().collect::<Vec<_>>()
+        })
+        .collect();
+
+    let emails = fetch_emails(control, &owner_ids).await?;
     let email_for = |id: &Option<RecordId>| -> Value {
         id.as_ref()
             .and_then(|i| emails.get(&i.to_string()))
@@ -243,8 +270,8 @@ async fn export_data(State(state): State<AppState>, user: User) -> AppResult<Res
         })
         .collect();
 
-    let mut chat_res = db
-        .query("SELECT * FROM chat_message WHERE owner = $owner ORDER BY created_at")
+    let mut chat_res = store::app::CHAT_MESSAGES_FOR_OWNER
+        .on(db)
         .bind(("owner", user.id.clone()))
         .await?;
     let chat_rows: Vec<ChatMessageRow> = chat_res.take(0)?;
@@ -263,25 +290,25 @@ async fn export_data(State(state): State<AppState>, user: User) -> AppResult<Res
         })
         .collect();
 
-    let document = json!({
+    let tables = [KINDS.as_slice(), &["memory", "relates_to", "chat_message"]].concat();
+    Ok(json!({
         "exported_at": Utc::now().to_rfc3339(),
         "user": { "id": user.id.to_string(), "email": user.email },
+        "scope": {
+            "vault": "personal",
+            "tables": tables,
+            "left_out": ["other vaults you belong to (export each separately)", "cache_record (synced source data, re-sync to rebuild)", "connectors and settings", "audit_log"],
+        },
         "entities": entities_out,
         "chat_history": chat_history,
-    });
-
-    let body = serde_json::to_string_pretty(&document).map_err(|e| AppError::internal(e.to_string()))?;
-
-    Ok((
-        StatusCode::OK,
-        [
-            (header::CONTENT_TYPE, "application/json".to_string()),
-            (header::CONTENT_DISPOSITION, "attachment; filename=\"eunomia-export.json\"".to_string()),
-        ],
-        body,
-    )
-        .into_response())
+    }))
 }
+
+#[derive(utoipa::OpenApi)]
+#[openapi(paths(
+    export_data,
+))]
+pub struct Doc;
 
 #[cfg(test)]
 mod tests {
@@ -293,7 +320,7 @@ mod tests {
     }
 
     #[test]
-    fn kinds_match_the_python_entity_kind_set() {
+    fn kinds_are_the_six_entity_kinds() {
         assert_eq!(KINDS, ["person", "organisation", "location", "repository", "file", "symbol"]);
     }
 }

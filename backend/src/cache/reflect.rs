@@ -2,18 +2,17 @@
 //!
 //! One `recall` call (same vault scoping -- see `cache::recall`) feeding one
 //! LLM call that must answer only from what's already there and cite it by
-//! index -- no follow-up retrieval, matching `cache/reflect.py`'s deliberate
+//! index -- no follow-up retrieval, a deliberate
 //! scope cut from Hindsight's agentic multi-round loop.
 //!
-//! Ported from `cache/reflect.py`.
 
 use serde::Deserialize;
 use serde_json::{json, Value};
-use surrealdb::RecordId;
+use surrealdb::types::RecordId;
 
 use crate::cache::recall::{self, RecallItem};
 use crate::config::Settings;
-use crate::db::Db;
+use crate::pool::OrgDb;
 use crate::error::{AppError, AppResult};
 use crate::embeddings::provider::{self, Provider};
 
@@ -51,8 +50,7 @@ fn render_memories(items: &[RecallItem]) -> String {
 }
 
 /// Keeps only in-range integer indices (1-based, matching the numbered
-/// memories list), same filter as `cache/reflect.py`'s `cited_indices`
-/// list comprehension.
+/// memories list).
 fn filter_cited_indices(cited: &[i64], items_len: usize) -> Vec<usize> {
     cited.iter().filter(|&&i| i >= 1 && (i as usize) <= items_len).map(|&i| i as usize).collect()
 }
@@ -107,7 +105,7 @@ cite them by index like [1], and say so plainly if they don't contain enough to 
 }
 
 pub async fn reflect(
-    db: &Db,
+    db: &OrgDb,
     settings: &Settings,
     owner: &RecordId,
     query: &str,
@@ -135,9 +133,10 @@ pub async fn reflect(
 
 async fn synthesize(query: &str, items: &[RecallItem], p: &Provider) -> AppResult<Value> {
     let prompt = build_prompt(query, &render_memories(items));
-    let model = provider::chat_model(p).await;
 
-    let resp = provider::client()
+    let client = p.client().await?;
+    let model = provider::chat_model(p).await;
+    let resp = client
         .post(p.url("chat/completions"))
         .bearer_auth(p.bearer())
         .json(&json!({

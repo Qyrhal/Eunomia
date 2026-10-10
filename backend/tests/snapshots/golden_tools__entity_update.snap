@@ -1,0 +1,14 @@
+---
+source: tests/golden_tools.rs
+expression: stable
+---
+{
+  "id": "person:<id1>",
+  "kind": "person",
+  "name": "Alice",
+  "aliases": [
+    "Al"
+  ],
+  "summary": "Tea person",
+  "vault": "vault:<id2>"
+}

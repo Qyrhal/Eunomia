@@ -17,8 +17,7 @@
 //! ```
 //!
 //! Cross-encoder: the diagram has a cross-encoder re-ranking step between RRF
-//! fusion and boosts. This is skipped on purpose, same reasoning as
-//! `cache/recall.py`'s module docstring: OpenAI has no cross-encoder/rerank
+//! fusion and boosts. This is skipped on purpose, for the same reason: OpenAI has no cross-encoder/rerank
 //! API endpoint, and `EMBEDDINGS_BACKEND` is OpenAI-only for the user-facing
 //! path. We go straight from RRF fusion to boosts rather than fake a
 //! cross-encoder with a cheap heuristic pretending to be one.
@@ -27,36 +26,28 @@
 //! scope for v1 -- the temporal arm only activates when an explicit
 //! `time_range` is given.
 //!
-//! Deferred: the graph arm's entity matching mirrors
-//! `entities/service.py::list_entities`'s query shape directly against the
-//! `person`/`organisation`/`location`/`repository`/`file`/`symbol` tables,
-//! rather than calling an `entities::service` module -- this crate's
-//! `entities` module isn't wired into `lib.rs` yet (a concurrent port still
-//! in progress elsewhere in this repo), so depending on it here would block
-//! on someone else's unfinished work. Once it lands, `graph_arm`'s entity
-//! listing could delegate to it instead of querying the tables directly.
+//! The graph arm's entity matching queries the
+//! `person`/`organisation`/`location`/`repository`/`file`/`symbol` tables
+//! directly rather than calling `entities::service`.
 //!
-//! Ported from `cache/recall.py`.
 
+use surrealdb::types::SurrealValue;
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use surrealdb::{Datetime, RecordId};
+use surrealdb::types::{Datetime, RecordId};
+use crate::rid::RecordIdExt;
 
 use crate::cache::search as cs;
 use crate::config::Settings;
-use crate::db::Db;
+use crate::pool::OrgDb;
+use crate::store;
 use crate::error::{AppError, AppResult};
 use crate::vaults::service as vaults_service;
 
-/// Entity tables the graph arm searches -- mirrors `entities/service.py`'s
-/// `KINDS` tuple (see module docstring on why this isn't delegated to a
-/// Rust `entities::service` yet).
-const ENTITY_KINDS: &[&str] = &["person", "organisation", "location", "repository", "file", "symbol"];
-
-/// Input bounds -- anything outside them is a 400 (see `validate`).
+/// Input bounds: anything outside them is a 400 (see `validate`).
 const MAX_LIMIT: usize = 100;
 const MAX_TOKENS: usize = 100_000;
 const MAX_QUERY_CHARS: usize = 2_000;
@@ -78,12 +69,12 @@ const RECENCY_SPAN: f64 = 0.5;
 // proof boost: +5% per extra arm that surfaced the same item.
 const PROOF_STEP: f64 = 0.05;
 
-/// `surrealdb::Datetime` only converts *from* `chrono::DateTime<Utc>`
+/// `surrealdb::types::Datetime` only converts *from* `chrono::DateTime<Utc>`
 /// (`Datetime::from`); the reverse direction isn't exposed on the wrapper
 /// type directly, only on the inner core type it wraps, so go through
 /// `into_inner()`.
-fn to_chrono(dt: Datetime) -> DateTime<Utc> {
-    dt.into_inner().into()
+fn to_chrono(dt: surrealdb::types::Datetime) -> DateTime<Utc> {
+    dt.into_inner()
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -120,12 +111,14 @@ impl MemoryType {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, SurrealValue)]
 struct EntityRow {
     id: RecordId,
     #[serde(default)]
+    #[surreal(default)]
     name: String,
     #[serde(default)]
+    #[surreal(default)]
     aliases: Vec<String>,
 }
 
@@ -161,20 +154,18 @@ fn name_phrases(query: &str) -> Vec<String> {
 /// whose name or an alias appears in `query` (no NER/LLM for v1), ranked by
 /// match specificity (longer matched name first). Found by exact lookup of
 /// the query's [`name_phrases`] on the `(vault, name_key)` and `alias_keys`
-/// indexes -- one query, a bounded number of rows, however large the vault.
+/// indexes: one query, a bounded number of rows, however large the vault.
 ///
 /// For each matched entity, pulls its newest memories, each memory's source
 /// `cache_record`, and the records linked to that source -- the "follow the
 /// entity graph" hop the diagram's Graph arm describes. A tombstoned source
-/// is not followed (the memory itself stays recallable). Three queries in
-/// total.
+/// is not followed (the memory itself stays recallable). Three queries in total.
 ///
-/// Records are the caller's own synced data, not the vault's, so they're
-/// followed only in the caller's personal vault (`include_cache_record`), and
-/// only the caller's own -- in a shared vault a memory's source would
-/// otherwise surface the caller's own same-id record as if it belonged there.
+/// Records are the caller's own synced data, not the vault's, so they are followed only in the
+/// caller's personal vault (`include_cache_record`), and only the caller's own: in a shared vault
+/// a memory's source would otherwise surface the caller's own same-id record as if it belonged there.
 async fn graph_arm(
-    db: &Db,
+    db: &OrgDb,
     owner: &RecordId,
     vault: &RecordId,
     query: &str,
@@ -185,7 +176,7 @@ async fn graph_arm(
     if phrases.is_empty() {
         return Ok(Vec::new());
     }
-    let lookups: Vec<String> = ENTITY_KINDS
+    let lookups: Vec<String> = crate::entities::service::KINDS
         .iter()
         .flat_map(|kind| {
             [
@@ -197,14 +188,15 @@ async fn graph_arm(
             ]
         })
         .collect();
-    let mut res = db
-        .query(format!("RETURN array::flatten([{}]);", lookups.join(", ")))
+    // dynamic: one name lookup and one alias lookup per entity kind, in one round trip.
+    let mut res = store::dynamic(db, "cache.graph_entities", format!("RETURN array::flatten([{}]);", lookups.join(", ")))
         .bind(("vault", vault.clone()))
         .bind(("phrases", phrases))
         .await?;
     let rows: Vec<EntityRow> = res.take(0)?;
 
     let q_lower = query.to_lowercase();
+    #[allow(clippy::mutable_key_type)] // RecordId hashes by value; the interior mutability is never touched
     let mut seen = HashSet::new();
     let mut matches: Vec<(usize, RecordId)> = Vec::new();
     for row in rows {
@@ -213,10 +205,10 @@ async fn graph_arm(
             .filter(|n| !n.is_empty() && q_lower.contains(&n.to_lowercase()))
             .map(str::len)
             .max();
-        if let Some(best) = best {
-            if seen.insert(row.id.clone()) {
-                matches.push((best, row.id));
-            }
+        if let Some(best) = best
+            && seen.insert(row.id.clone())
+        {
+            matches.push((best, row.id));
         }
     }
     matches.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.to_string().cmp(&b.1.to_string())));
@@ -225,14 +217,15 @@ async fn graph_arm(
         return Ok(Vec::new());
     }
 
-    #[derive(Deserialize)]
+    #[derive(Deserialize, SurrealValue)]
     struct MemRow {
         id: RecordId,
         #[serde(default)]
+        #[surreal(default)]
         source: Option<RecordId>,
     }
-    // WITH INDEX: left to itself the planner walks the whole vault's memories
-    // (memory_vault_idx) for each entity
+    // WITH INDEX: left to itself the planner walks the whole vault's memories (memory_vault_idx)
+    // for each entity
     let mut sql = String::new();
     for i in 0..matches.len() {
         sql.push_str(&format!(
@@ -240,7 +233,8 @@ async fn graph_arm(
              WHERE subject = $e{i} AND vault = $vault ORDER BY created_at DESC LIMIT $limit;"
         ));
     }
-    let mut q = db.query(sql).bind(("vault", vault.clone())).bind(("limit", limit as i64));
+    // dynamic: one statement per matched entity.
+    let mut q = store::dynamic(db, "cache.graph_memories", sql).bind(("vault", vault.clone())).bind(("limit", limit as i64));
     for (i, (_, id)) in matches.iter().enumerate() {
         q = q.bind((format!("e{i}"), id.clone()));
     }
@@ -256,14 +250,15 @@ async fn graph_arm(
         .filter_map(|m| m.source.clone())
         .filter(|s| include_cache_record && cs::rid(owner, &cs::literal(s)) == *s)
         .collect();
+    #[allow(clippy::mutable_key_type)]
     let neighbours = cs::live_neighbours(db, &own_sources).await?;
 
     let mut keys: Vec<String> = Vec::new();
     for mem in memories {
-        keys.push(format!("memory:{}", mem.id));
-        if let Some(links) = mem.source.as_ref().and_then(|s| neighbours.get(s).map(|l| (s, l))) {
-            keys.push(format!("cache_record:{}", cs::literal(links.0)));
-            keys.extend(links.1.iter().map(|t| format!("cache_record:{}", cs::literal(t))));
+        keys.push(format!("memory:{}", mem.id.to_string()));
+        if let Some((source, links)) = mem.source.as_ref().and_then(|s| neighbours.get(s).map(|l| (s, l))) {
+            keys.push(format!("cache_record:{}", cs::literal(source)));
+            keys.extend(links.iter().map(|t| format!("cache_record:{}", cs::literal(t))));
         }
         if keys.len() >= limit {
             break;
@@ -280,11 +275,12 @@ async fn graph_arm(
 /// what makes a fact an agent wrote with `memory_write` findable by what it
 /// says, not just by its subject's name -- no embeddings required. Works for
 /// any vault the caller can read.
-async fn memory_text_arm(db: &Db, vault: &RecordId, query: &str, limit: usize) -> AppResult<Vec<String>> {
-    #[derive(Deserialize)]
+async fn memory_text_arm(db: &OrgDb, vault: &RecordId, query: &str, limit: usize) -> AppResult<Vec<String>> {
+    #[derive(Deserialize, SurrealValue)]
     struct ScoredRow {
         id: RecordId,
         #[serde(default)]
+        #[surreal(default)]
         score: f64,
     }
     // one BM25 match per term (`@@` with a whole question needs every word to
@@ -301,7 +297,8 @@ async fn memory_text_arm(db: &Db, vault: &RecordId, query: &str, limit: usize) -
             )
         })
         .collect();
-    let mut q = db.query(sql).bind(("vault", vault.clone())).bind(("limit", limit as i64));
+    // dynamic: one statement per term.
+    let mut q = store::dynamic(db, "cache.memory_text_terms", sql).bind(("vault", vault.clone())).bind(("limit", limit as i64));
     for (i, t) in terms.iter().enumerate() {
         q = q.bind((format!("t{i}"), t.clone()));
     }
@@ -309,7 +306,7 @@ async fn memory_text_arm(db: &Db, vault: &RecordId, query: &str, limit: usize) -
     let mut per_term = Vec::new();
     for i in 0..terms.len() {
         let rows: Vec<ScoredRow> = res.take(i)?;
-        per_term.push(rows.into_iter().map(|r| (format!("memory:{}", r.id), r.score)).collect());
+        per_term.push(rows.into_iter().map(|r| (format!("memory:{}", r.id.to_string()), r.score)).collect());
     }
     Ok(cs::rank_term_hits(per_term, limit))
 }
@@ -319,9 +316,8 @@ async fn memory_text_arm(db: &Db, vault: &RecordId, query: &str, limit: usize) -
 /// see `recall`'s `include_cache_record`) and `memory` rows (`created_at`,
 /// vault-scoped) in the range, ranked by recency. Each side is ordered and
 /// limited in the database, so a broad range never loads the whole range.
-/// Mirrors `cache/recall.py`'s `_temporal_ids`.
 async fn temporal_ids(
-    db: &Db,
+    db: &OrgDb,
     owner: &RecordId,
     vault: &RecordId,
     time_range: Option<(Datetime, Datetime)>,
@@ -332,42 +328,42 @@ async fn temporal_ids(
         return Ok(Vec::new());
     };
 
-    #[derive(Deserialize)]
+    #[derive(Deserialize, SurrealValue)]
     struct CacheRow {
         id: RecordId,
         occurred_at: Datetime,
     }
-    #[derive(Deserialize)]
+    #[derive(Deserialize, SurrealValue)]
     struct MemRow {
         id: RecordId,
         created_at: Datetime,
     }
 
-    let mut sql = String::from(
-        "SELECT id, created_at FROM memory WHERE vault = $vault \
-         AND created_at >= $since AND created_at <= $until ORDER BY created_at DESC LIMIT $limit;",
-    );
+    let mut dated: Vec<(Datetime, String)> = Vec::new();
+
     if include_cache_record {
-        sql.push_str(
-            "SELECT id, occurred_at FROM cache_record WHERE owner = $owner AND deleted = false \
-             AND occurred_at >= $since AND occurred_at <= $until ORDER BY occurred_at DESC LIMIT $limit;",
-        );
+        let mut res = store::cache::CACHE_RECORDS_IN_RANGE
+            .on(db)
+            .bind(("owner", owner.clone()))
+            .bind(("since", since))
+            .bind(("until", until))
+            .bind(("limit", limit as i64))
+            .await?;
+        let rows: Vec<CacheRow> = res.take(0)?;
+        dated.extend(rows.into_iter().map(|r| (r.occurred_at, format!("cache_record:{}", cs::literal(&r.id)))));
     }
-    let mut res = db
-        .query(sql)
-        .bind(("owner", owner.clone()))
+
+    let mut res = store::cache::MEMORIES_IN_RANGE
+        .on(db)
         .bind(("vault", vault.clone()))
         .bind(("since", since))
         .bind(("until", until))
         .bind(("limit", limit as i64))
         .await?;
-    let memories: Vec<MemRow> = res.take(0)?;
-    let records: Vec<CacheRow> = if include_cache_record { res.take(1)? } else { Vec::new() };
-    let mut dated: Vec<(Datetime, String)> = Vec::new();
-    dated.extend(records.into_iter().map(|r| (r.occurred_at, format!("cache_record:{}", cs::literal(&r.id)))));
-    dated.extend(memories.into_iter().map(|r| (r.created_at, format!("memory:{}", r.id))));
+    let rows: Vec<MemRow> = res.take(0)?;
+    dated.extend(rows.into_iter().map(|r| (r.created_at, format!("memory:{}", r.id.to_string()))));
 
-    dated.sort_by(|a, b| b.0.cmp(&a.0));
+    dated.sort_by_key(|d| std::cmp::Reverse(d.0));
     Ok(dated.into_iter().take(limit).map(|(_, k)| k).collect())
 }
 
@@ -380,16 +376,14 @@ struct Hydrated {
     mem_type: String,
 }
 
-/// Every candidate key's content, in two queries (records, memories)
-/// whatever the candidate count. Authorization is re-checked here: records
-/// must be the caller's own and live, memories must be in `vault`. A stale
-/// observation (its facts changed since it was consolidated) is left out --
-/// it is not a current fact; the raw facts it summarised are still recalled.
-/// So is a superseded fact (a later fact contradicted it; see consolidate).
-async fn hydrate(db: &Db, owner: &RecordId, vault: &RecordId, keys: &[&String]) -> AppResult<HashMap<String, Hydrated>> {
+/// Every candidate key's content, in two queries (records, memories) whatever the candidate count.
+/// Authorization is re-checked here: records must be the caller's own and live, memories must be in
+/// `vault`. A stale observation (its facts changed since it was consolidated) is left out: it is not
+/// a current fact; the raw facts it summarised are still recalled. So is a superseded fact (a later
+/// fact contradicted it; see `entities::supersede`).
+async fn hydrate(db: &OrgDb, owner: &RecordId, vault: &RecordId, keys: &[&String]) -> AppResult<HashMap<String, Hydrated>> {
     let mut out = HashMap::new();
-    let record_ids: Vec<String> =
-        keys.iter().filter_map(|k| k.strip_prefix("cache_record:")).map(str::to_string).collect();
+    let record_ids: Vec<String> = keys.iter().filter_map(|k| k.strip_prefix("cache_record:")).map(str::to_string).collect();
     for rec in cs::get_many(db, owner, &record_ids).await? {
         let text = format!("{}\n{}", rec.title, rec.body_text).trim().to_string();
         out.insert(
@@ -406,38 +400,35 @@ async fn hydrate(db: &Db, owner: &RecordId, vault: &RecordId, keys: &[&String]) 
     }
 
     let memory_ids: Vec<RecordId> =
-        keys.iter().filter_map(|k| k.strip_prefix("memory:")).filter_map(|r| r.parse().ok()).collect();
+        keys.iter().filter_map(|k| k.strip_prefix("memory:")).filter_map(|r| crate::rid::parse(r).ok()).collect();
     if memory_ids.is_empty() {
         return Ok(out);
     }
-    #[derive(Deserialize)]
+    #[derive(Deserialize, SurrealValue)]
     struct MemRow {
         id: RecordId,
         #[serde(default)]
+        #[surreal(default)]
         text: String,
         #[serde(default)]
+        #[surreal(default)]
         source: Option<RecordId>,
         created_at: Datetime,
         #[serde(default)]
+        #[surreal(default)]
         updated_at: Option<Datetime>,
         #[serde(rename = "type", default = "default_memory_type")]
+        #[surreal(rename = "type", default = "default_memory_type")]
         mem_type: String,
     }
     fn default_memory_type() -> String {
         "world".to_string()
     }
-    let mut res = db
-        .query(
-            "SELECT id, text, source, created_at, updated_at, type FROM $ids WHERE vault = $vault \
-             AND !(type = \"observation\" AND status = \"stale\") AND status != \"superseded\"",
-        )
-        .bind(("ids", memory_ids))
-        .bind(("vault", vault.clone()))
-        .await?;
+    let mut res = store::cache::MEMORIES_FOR_RECALL.on(db).bind(("ids", memory_ids)).bind(("vault", vault.clone())).await?;
     let rows: Vec<MemRow> = res.take(0)?;
     for row in rows {
         out.insert(
-            format!("memory:{}", row.id),
+            format!("memory:{}", row.id.to_string()),
             Hydrated {
                 id: row.id.to_string(),
                 kind: "memory",
@@ -459,7 +450,6 @@ async fn hydrate(db: &Db, owner: &RecordId, vault: &RecordId, keys: &[&String]) 
 /// recency: 1.0 at age=0, linearly down to a 0.7 floor at 365+ days old;
 ///          1.0 (neutral) when there's no date to judge recency from.
 ///
-/// Mirrors `cache/recall.py`'s `_boost`.
 fn boost(arms_hit: usize, occurred_at: Option<DateTime<Utc>>, now: DateTime<Utc>) -> f64 {
     let proof = 1.0 + PROOF_STEP * (arms_hit as f64 - 1.0);
 
@@ -530,7 +520,7 @@ async fn arm(
 /// the best hit is 1.
 #[allow(clippy::too_many_arguments)]
 pub async fn recall(
-    db: &Db,
+    db: &OrgDb,
     settings: &Settings,
     owner: &RecordId,
     query: &str,
@@ -543,20 +533,21 @@ pub async fn recall(
     let time_range = validate(query, time_range, limit, max_tokens)?;
     let pool = limit.saturating_mul(4).max(40);
 
-    let default_vault = vaults_service::default_vault_id(db, owner).await?;
-    let vaults = match vault_id {
-        Some(v) => {
-            vaults_service::require_membership(db, owner, v).await?;
-            vec![v.clone()]
-        }
-        None => vaults_service::default_read_vault_ids(db, owner).await?,
-    };
+    let mut vaults = Vec::new();
+    match vault_id {
+        Some(v) => vaults.push(v.clone()),
+        None => vaults.extend(vaults_service::default_read_vault_ids(db, owner).await?),
+    }
+    for v in vaults.iter_mut() {
+        *v = crate::authz::authorize(db, owner, crate::authz::Action::ReadMemories, v).await?.vault().clone();
+    }
+    let personal_vault = vaults_service::personal_vault_id(db, owner).await?;
     let names: HashMap<String, String> =
         vaults_service::list_my_vaults(db, owner).await?.into_iter().map(|v| (v.id, v.name)).collect();
 
     let mut scored = Vec::new();
     for vault in &vaults {
-        let mut hits = recall_in(db, settings, owner, query, time_range.clone(), pool, types, vault, *vault == default_vault).await?;
+        let mut hits = recall_in(db, settings, owner, query, time_range, pool, types, vault, *vault == personal_vault).await?;
         let (id, name) = (vault.to_string(), names.get(&vault.to_string()).cloned().unwrap_or_default());
         for h in &mut hits {
             (h.vault, h.vault_name) = (id.clone(), name.clone());
@@ -577,11 +568,11 @@ pub async fn recall(
     })
 }
 
-/// One vault's ranked hits (raw scores, unsorted). The caller's own synced
-/// records are searched only alongside their personal vault (`personal`).
+/// One vault's ranked hits (raw scores, unsorted). The caller's own synced records are searched only
+/// alongside their personal vault (`personal`).
 #[allow(clippy::too_many_arguments)]
 async fn recall_in(
-    db: &Db,
+    db: &OrgDb,
     settings: &Settings,
     owner: &RecordId,
     query: &str,
@@ -596,13 +587,10 @@ async fn recall_in(
     let no_filter = cs::RecordFilter::default();
     let record_keys = |ids: Vec<String>| ids.into_iter().map(|i| format!("cache_record:{i}")).collect::<Vec<_>>();
 
-    // The semantic arm waits on an external embedding provider: it runs
-    // concurrently with the rest, so a slow or hanging provider costs at most
-    // its deadline and never holds up the other four. Those four only query
-    // SurrealDB and run one after another -- measured on a 5000-entity vault,
-    // running them concurrently made each several times slower (they contend
-    // inside the database) and the whole recall slower. Every arm has its own
-    // deadline (see `arm`).
+    // The semantic arm waits on an external embedding provider: it runs concurrently with the rest,
+    // so a slow or hanging provider costs at most its deadline and never holds up the other four.
+    // Those four only query SurrealDB and run one after another (running them concurrently made each
+    // several times slower, they contend inside the database). Every arm has its own deadline.
     let semantic = arm("semantic", true, async {
         if personal && crate::embeddings::service::available(db, settings, owner).await {
             Ok(record_keys(cs::semantic_ids(db, settings, owner, query, &no_filter, pool).await?))
@@ -649,12 +637,12 @@ async fn recall_in(
         let Some(item) = hydrated.remove(key) else {
             continue;
         };
-        if let Some(types) = types {
-            if item.kind == "memory" {
-                let allowed = types.iter().any(|t| t.as_str() == item.mem_type);
-                if !allowed {
-                    continue;
-                }
+        if let Some(types) = types
+            && item.kind == "memory"
+        {
+            let allowed = types.iter().any(|t| t.as_str() == item.mem_type);
+            if !allowed {
+                continue;
             }
         }
         let arms_hit = arms.iter().filter(|arm| arm.contains(key)).count();
@@ -763,6 +751,13 @@ mod tests {
     }
 
     #[test]
+    fn memory_type_as_str_matches_schema_values() {
+        assert_eq!(MemoryType::World.as_str(), "world");
+        assert_eq!(MemoryType::Experience.as_str(), "experience");
+        assert_eq!(MemoryType::Observation.as_str(), "observation");
+    }
+
+    #[test]
     fn name_phrases_are_trimmed_word_runs() {
         let p = name_phrases("What does Ada Lovelace's team think of main.rs?");
         for want in ["ada lovelace", "ada", "lovelace", "main.rs", "team think of main.rs"] {
@@ -805,12 +800,5 @@ mod tests {
         assert!(arm("semantic", true, failing()).await.unwrap().is_empty());
         assert!(arm("keyword", false, failing()).await.is_err());
         assert_eq!(arm("keyword", false, async { Ok(vec!["k".to_string()]) }).await.unwrap(), vec!["k"]);
-    }
-
-    #[test]
-    fn memory_type_as_str_matches_schema_values() {
-        assert_eq!(MemoryType::World.as_str(), "world");
-        assert_eq!(MemoryType::Experience.as_str(), "experience");
-        assert_eq!(MemoryType::Observation.as_str(), "observation");
     }
 }

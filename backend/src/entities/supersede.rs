@@ -10,17 +10,19 @@ use std::time::Duration;
 
 use serde::Deserialize;
 use serde_json::{json, Value};
-use surrealdb::{Datetime, RecordId};
+use surrealdb::types::{Datetime, RecordId, SurrealValue};
 
 use crate::config::Settings;
-use crate::db::Db;
 use crate::embeddings::provider;
 use crate::error::{AppError, AppResult};
+use crate::pool::OrgDb;
+use crate::rid::RecordIdExt;
+use crate::store::entities as q;
 
 /// How many of the subject's latest facts the new ones are compared with.
 const MAX_FACTS: usize = 60;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, SurrealValue)]
 struct FactRow {
     id: RecordId,
     text: String,
@@ -55,14 +57,16 @@ fn pick(numbers: &[Value], ids: &[RecordId]) -> Vec<RecordId> {
         .collect()
 }
 
-async fn call_llm(db: &Db, settings: &Settings, owner: &RecordId, prompt: String) -> AppResult<Vec<Value>> {
+async fn call_llm(db: &OrgDb, settings: &Settings, owner: &RecordId, prompt: String) -> AppResult<Vec<Value>> {
     let p = provider::resolve(db, settings, owner).await?;
     let body = json!({
         "model": provider::chat_model(&p).await,
         "response_format": {"type": "json_object"},
         "messages": [{"role": "user", "content": prompt}],
     });
-    let v: Value = provider::client()
+    let v: Value = p
+        .client()
+        .await?
         .post(p.url("chat/completions"))
         .bearer_auth(p.bearer())
         .json(&body)
@@ -83,7 +87,7 @@ async fn call_llm(db: &Db, settings: &Settings, owner: &RecordId, prompt: String
 /// Compares `subject`'s `new` facts with its other live facts, marks the ones
 /// a later fact supersedes, and (if any) makes the subject's observation
 /// stale. Returns the ids marked. No-op without a chat model.
-pub async fn check(db: &Db, settings: &Settings, owner: &RecordId, subject: &RecordId, new: &[RecordId]) -> Vec<RecordId> {
+pub async fn check(db: &OrgDb, settings: &Settings, owner: &RecordId, subject: &RecordId, new: &[RecordId]) -> Vec<RecordId> {
     if new.is_empty()
         || settings.embeddings_backend == "stub"
         || !crate::embeddings::service::chat_available(db, settings, owner).await
@@ -93,18 +97,15 @@ pub async fn check(db: &Db, settings: &Settings, owner: &RecordId, subject: &Rec
     match run(db, settings, owner, subject, new).await {
         Ok(marked) => marked,
         Err(e) => {
-            tracing::warn!("supersede check failed for {subject}: {}", e.message);
+            tracing::warn!("supersede check failed for {}: {}", subject.to_string(), e.message);
             Vec::new()
         }
     }
 }
 
-async fn run(db: &Db, settings: &Settings, owner: &RecordId, subject: &RecordId, new: &[RecordId]) -> AppResult<Vec<RecordId>> {
-    let mut res = db
-        .query(
-            r#"SELECT id, text, updated_at ?? created_at AS at FROM memory WHERE subject = $subject
-               AND type IN ["world","experience"] AND status != "superseded" ORDER BY at DESC LIMIT $limit"#,
-        )
+async fn run(db: &OrgDb, settings: &Settings, owner: &RecordId, subject: &RecordId, new: &[RecordId]) -> AppResult<Vec<RecordId>> {
+    let mut res = q::LIVE_FACTS
+        .on(db)
         .bind(("subject", subject.clone()))
         .bind(("limit", MAX_FACTS as i64))
         .await?;
@@ -127,11 +128,9 @@ async fn run(db: &Db, settings: &Settings, owner: &RecordId, subject: &RecordId,
     let ids: Vec<RecordId> = rows.iter().map(|r| r.id.clone()).collect();
     let marked = pick(&call_llm(db, settings, owner, build_prompt(&facts)).await?, &ids);
     if !marked.is_empty() {
-        db.query(
-            r#"UPDATE $ids SET status = "superseded";
-               UPDATE memory SET status = "stale" WHERE subject = $subject AND type = "observation";"#,
-        )
-        .bind(("ids", marked.clone()))
+        q::MARK_SUPERSEDED
+            .on(db)
+            .bind(("ids", marked.clone()))
         .bind(("subject", subject.clone()))
         .await?
         .check()?;
@@ -153,7 +152,7 @@ mod tests {
 
     #[test]
     fn pick_maps_numbers_and_ignores_junk() {
-        let ids: Vec<RecordId> = ["memory:a", "memory:b"].iter().map(|s| s.parse().unwrap()).collect();
+        let ids: Vec<RecordId> = ["memory:a", "memory:b"].iter().map(|s| crate::rid::parse(s).unwrap()).collect();
         let got = pick(&[json!(1), json!(1), json!(0), json!(9), json!("2"), json!(-1)], &ids);
         assert_eq!(got, vec![ids[0].clone()]);
     }

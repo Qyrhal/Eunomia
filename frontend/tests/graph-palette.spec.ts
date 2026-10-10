@@ -47,12 +47,16 @@ test.describe("Entity graph", () => {
       .poll(async () => [await link.getAttribute("x1"), await link.getAttribute("x2")])
       .not.toEqual(before);
 
-    // A click (no drag) selects the node.
+    // A click (no drag) selects the node; every node is also reachable by keyboard.
     await adaNode.click();
+    await expect(page.getByRole("button", { name: "Edit" })).toBeVisible();
+    await page.getByRole("button", { name: "Close" }).click();
+    await page.getByRole("button", { name: "Charles Babbage" }).press("Enter");
     await expect(page.getByRole("button", { name: "Edit" })).toBeVisible();
 
     // Switching vault drops the selection from the old vault.
-    await page.getByLabel("Vault").selectOption({ label: "Other vault" });
+    await page.getByRole("combobox", { name: "Vault" }).click();
+    await page.getByRole("option", { name: "Other vault" }).click();
     await expect(page.getByRole("button", { name: "Edit" })).toHaveCount(0);
   });
 
@@ -87,18 +91,19 @@ test.describe("Command palette", () => {
     await registerAndOnboard(page, uniqueEmail("palette"));
     await seedTwoRelatedPeople(page);
     await page.goto("/");
-    await expect(page.getByText("What's next", { exact: true })).toBeVisible(); // hydrated
+    await expect(page.getByText("Connected sources", { exact: true })).toBeVisible(); // hydrated
 
     const input = page.getByPlaceholder("Jump to a page…");
+    const palette = page.getByRole("dialog", { name: "Command palette" });
     await page.keyboard.press("ControlOrMeta+k");
     await expect(input).toBeFocused();
 
     await input.fill("Ada");
-    await expect(page.getByText("Ada Lovelace")).toBeVisible();
+    await expect(palette.getByText("Ada Lovelace")).toBeVisible();
 
     // Below the search threshold, data hits are hidden again.
     await input.fill("A");
-    await expect(page.getByText("Ada Lovelace")).toHaveCount(0);
+    await expect(palette.getByText("Ada Lovelace")).toHaveCount(0);
 
     await input.fill("sett");
     await page.keyboard.press("Enter");

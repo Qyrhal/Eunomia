@@ -15,33 +15,35 @@
 //! lives in the same graph as person/organisation/location and can be
 //! cross-linked to them via `relates_to`.
 //!
-//! Ported from `entities/service.py`. Unlike the Python version's `_as_rid`
-//! (accepts either a `RecordID` or a string), every function here already
-//! deals in `RecordId` -- callers (routers, tools) parse path/user-supplied
+//! Every function here deals in `RecordId` -- callers (routers, tools) parse path/user-supplied
 //! ids first, same convention as `vaults::service`.
 
+use surrealdb::types::SurrealValue;
 use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
-use surrealdb::{Datetime, RecordId};
+use surrealdb::types::{Datetime, RecordId};
+use crate::rid::RecordIdExt;
 
-use crate::db::Db;
-use crate::error::{AppError, AppResult};
+use crate::pool::{ControlDb, OrgDb};
+use crate::store;
+use crate::error::{AppError, AppResult, ErrorCode};
+use crate::store::entities as q;
+use crate::tx::{lock, with_retry, with_retry_dup};
+use crate::authz::{self, Action};
 use crate::vaults::service as vaults_service;
 
-/// Entity kinds this module manages -- mirrors `entities/service.py`'s
-/// `KINDS` tuple and `vaults::service::ENTITY_KINDS`.
+/// Entity kinds this module manages -- the same set as
+/// `vaults::service::ENTITY_KINDS`.
 pub const KINDS: &[&str] = &["person", "organisation", "location", "repository", "file", "symbol"];
 
-/// Code-graph subset of `KINDS`, mirrors `entities/service.py`'s `CodeKind`.
+/// Code-graph subset of `KINDS`.
 pub const CODE_KINDS: &[&str] = &["repository", "file", "symbol"];
 
 /// Validates `kind` against `KINDS`, returning the matching static str --
 /// used everywhere a kind is interpolated into a raw SurrealDB query (table
 /// names can't be bound parameters), so an unrecognized kind can never reach
-/// string-formatted SQL. The Python version doesn't do this (it trusts the
-/// `Literal["person", ...]` type hint, which isn't enforced at runtime) --
-/// this check is a safety addition for the Rust port, not a behavior change
+/// string-formatted SQL. This check is a safety net, not a behavior change
 /// for any caller that already validates kind (every router/tool call site
 /// does).
 pub fn kind_table(kind: &str) -> AppResult<&'static str> {
@@ -49,12 +51,11 @@ pub fn kind_table(kind: &str) -> AppResult<&'static str> {
 }
 
 fn owner_key_string(owner: &RecordId) -> String {
-    String::try_from(owner.key().clone()).unwrap_or_else(|_| owner.to_string())
+    crate::rid::key_string(owner.key()).unwrap_or_else(|| owner.to_string())
 }
 
 /// The internal `cache_record` RecordId for a record's caller-facing id --
-/// mirrors `entities/service.py`'s `_cache_record_rid` (owner-id prefix is
-/// internal).
+/// (the owner-id prefix is internal).
 fn cache_record_rid(owner: &RecordId, record_id: &str) -> RecordId {
     RecordId::from_table_key("cache_record", format!("{}:{}", owner_key_string(owner), record_id))
 }
@@ -63,21 +64,25 @@ fn cache_record_rid(owner: &RecordId, record_id: &str) -> RecordId {
 // Row / output shapes
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, SurrealValue)]
 struct EntityRow {
     id: RecordId,
     #[serde(default)]
+    #[surreal(default)]
     owner: Option<RecordId>,
     vault: RecordId,
     #[serde(default)]
+    #[surreal(default)]
     name: String,
     #[serde(default)]
+    #[surreal(default)]
     aliases: Vec<String>,
     #[serde(default)]
+    #[surreal(default)]
     summary: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct EntityOut {
     pub id: String,
     pub kind: String,
@@ -98,29 +103,38 @@ fn entity_out(kind: &str, row: &EntityRow) -> EntityOut {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, SurrealValue)]
 struct MemoryRow {
     id: RecordId,
     #[serde(default)]
+    #[surreal(default)]
     owner: Option<RecordId>,
     vault: RecordId,
     subject: RecordId,
     #[serde(default)]
+    #[surreal(default)]
     text: String,
     #[serde(default)]
+    #[surreal(default)]
     source: Option<RecordId>,
     created_at: Datetime,
     #[serde(rename = "type", default = "default_memory_type")]
+    #[surreal(rename = "type", default = "default_memory_type")]
     mem_type: String,
     #[serde(default)]
+    #[surreal(default)]
     proof_count: i64,
     #[serde(default)]
+    #[surreal(default)]
     status: Option<String>,
     #[serde(default)]
+    #[surreal(default)]
     source_memories: Option<Vec<RecordId>>,
     #[serde(default)]
+    #[surreal(default)]
     updated_at: Option<Datetime>,
     #[serde(default)]
+    #[surreal(default)]
     version: i64,
 }
 
@@ -128,7 +142,7 @@ fn default_memory_type() -> String {
     "world".to_string()
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct MemoryOut {
     pub id: String,
     pub owner: Option<String>,
@@ -136,12 +150,14 @@ pub struct MemoryOut {
     pub subject: String,
     pub text: String,
     pub source: Option<String>,
+    #[schema(value_type = String)]
     pub created_at: Datetime,
     #[serde(rename = "type")]
     pub mem_type: String,
     pub proof_count: i64,
     pub status: Option<String>,
     pub source_memories: Option<Vec<String>>,
+    #[schema(value_type = Option<String>)]
     pub updated_at: Option<Datetime>,
     pub version: i64,
     pub owner_email: Option<String>,
@@ -155,35 +171,41 @@ fn memory_out(row: &MemoryRow, owner_email: Option<String>) -> MemoryOut {
         subject: row.subject.to_string(),
         text: row.text.clone(),
         source: row.source.as_ref().map(|s| s.to_string()),
-        created_at: row.created_at.clone(),
+        created_at: row.created_at,
         mem_type: row.mem_type.clone(),
         proof_count: row.proof_count,
         status: row.status.clone(),
         source_memories: row.source_memories.as_ref().map(|v| v.iter().map(|r| r.to_string()).collect()),
-        updated_at: row.updated_at.clone(),
+        updated_at: row.updated_at,
         version: row.version,
         owner_email,
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, SurrealValue)]
 struct RelationRow {
     id: RecordId,
     #[serde(rename = "in")]
+    #[surreal(rename = "in")]
     in_: RecordId,
     #[serde(rename = "out")]
+    #[surreal(rename = "out")]
     out_: RecordId,
     #[serde(default)]
+    #[surreal(default)]
     label: String,
     #[serde(default)]
+    #[surreal(default)]
     source: Option<RecordId>,
     #[serde(default)]
+    #[surreal(default)]
     owner: Option<RecordId>,
     #[serde(default)]
+    #[surreal(default)]
     created_at: Option<Datetime>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct RelationOut {
     pub id: String,
     #[serde(rename = "in")]
@@ -193,6 +215,7 @@ pub struct RelationOut {
     pub label: String,
     pub source: Option<String>,
     pub owner: Option<String>,
+    #[schema(value_type = Option<String>)]
     pub created_at: Option<Datetime>,
     pub direction: Option<String>,
     pub owner_email: Option<String>,
@@ -206,13 +229,13 @@ fn relation_out(row: &RelationRow, direction: Option<&str>, owner_email: Option<
         label: row.label.clone(),
         source: row.source.as_ref().map(|s| s.to_string()),
         owner: row.owner.as_ref().map(|o| o.to_string()),
-        created_at: row.created_at.clone(),
+        created_at: row.created_at,
         direction: direction.map(str::to_string),
         owner_email,
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct EntityDetail {
     pub id: String,
     pub kind: String,
@@ -224,14 +247,14 @@ pub struct EntityDetail {
     pub relations: Vec<RelationOut>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct ListEntitiesOut {
     pub results: Vec<EntityOut>,
     pub total: usize,
     pub has_more: bool,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct GraphNode {
     pub id: String,
     pub kind: String,
@@ -239,7 +262,7 @@ pub struct GraphNode {
     pub owner_email: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct GraphEdge {
     pub source: String,
     pub target: String,
@@ -247,7 +270,7 @@ pub struct GraphEdge {
     pub owner_email: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct GraphOut {
     pub nodes: Vec<GraphNode>,
     pub edges: Vec<GraphEdge>,
@@ -273,27 +296,28 @@ pub struct WriteMemoryOut {
 
 /// `vault_id`, membership-checked, or `owner`'s personal vault when omitted --
 /// the one place every public function in this module resolves its scope.
-async fn resolve_vault(db: &Db, owner: &RecordId, vault_id: Option<&RecordId>) -> AppResult<RecordId> {
+async fn resolve_vault(db: &OrgDb, owner: &RecordId, vault_id: Option<&RecordId>, action: Action) -> AppResult<RecordId> {
     match vault_id {
         None => vaults_service::default_vault_id(db, owner).await,
-        Some(v) => {
-            vaults_service::require_membership(db, owner, v).await?;
-            Ok(v.clone())
-        }
+        Some(v) => Ok(authz::authorize(db, owner, action, v).await?.vault().clone()),
     }
 }
 
 /// Whether `owner` may read/write a row in `vault` -- member of its vault.
 /// Not-a-member is treated the same as not-found everywhere in this module.
-async fn accessible(db: &Db, owner: &RecordId, vault: &RecordId) -> AppResult<bool> {
-    let ids = vaults_service::accessible_vault_ids(db, owner).await?;
-    Ok(ids.contains(vault))
+async fn accessible(db: &OrgDb, owner: &RecordId, vault: &RecordId, action: Action) -> AppResult<bool> {
+    match authz::authorize(db, owner, action, vault).await {
+        Ok(_) => Ok(true),
+        Err(e) if e.code == ErrorCode::VaultForbidden => Ok(false),
+        Err(e) => Err(e),
+    }
 }
 
 /// Batch-resolve `user` RecordIds to emails, for attributing who wrote what
 /// in a shared vault -- one query per call site rather than N+1 lookups.
-async fn emails_for(db: &Db, user_ids: Vec<Option<RecordId>>) -> AppResult<HashMap<String, String>> {
+async fn emails_for(db: &ControlDb, user_ids: Vec<Option<RecordId>>) -> AppResult<HashMap<String, String>> {
     let ids: Vec<RecordId> = {
+        #[allow(clippy::mutable_key_type)] // RecordId hashes by value; the interior mutability is never touched
         let mut seen = HashSet::new();
         user_ids
             .into_iter()
@@ -304,43 +328,35 @@ async fn emails_for(db: &Db, user_ids: Vec<Option<RecordId>>) -> AppResult<HashM
     if ids.is_empty() {
         return Ok(HashMap::new());
     }
-    #[derive(Deserialize)]
+    #[derive(Deserialize, SurrealValue)]
     struct Row {
         id: RecordId,
         email: String,
     }
-    let mut res = db.query("SELECT id, email FROM user WHERE id IN $ids").bind(("ids", ids)).await?;
+    let mut res = q::EMAILS_FOR.on(db).bind(("ids", ids)).await?;
     let rows: Vec<Row> = res.take(0)?;
     Ok(rows.into_iter().map(|r| (r.id.to_string(), r.email)).collect())
 }
 
-/// Whether `rid` points into an entity table. Any other row with a `vault`
-/// field (a `memory`, a `vault_member`) must never be read, edited or deleted
-/// as an "entity".
-pub fn is_entity_id(rid: &RecordId) -> bool {
-    KINDS.contains(&rid.table())
-}
-
-async fn select_entity(db: &Db, rid: &RecordId) -> AppResult<Option<EntityRow>> {
-    if !is_entity_id(rid) {
-        return Ok(None);
+/// `rid` must name an entity table. `rid::parse` takes any table, so without this a tool or route
+/// handed `memory:..` or `vault_member:..` would read it as an entity.
+pub fn require_entity_id(rid: &RecordId) -> AppResult<()> {
+    if KINDS.contains(&rid.table()) {
+        return Ok(());
     }
-    let row: Option<EntityRow> = db.select(rid.clone()).await?;
-    Ok(row)
+    Err(AppError::bad_request(format!("{} is not an entity id", rid.to_string())))
 }
 
-/// Same guard for memory ids.
-async fn select_memory(db: &Db, rid: &RecordId) -> AppResult<Option<MemoryRow>> {
-    if rid.table() != "memory" {
-        return Ok(None);
+/// `rid` must be a `memory` row.
+pub fn require_memory_id(rid: &RecordId) -> AppResult<()> {
+    if rid.table() == "memory" {
+        return Ok(());
     }
-    let row: Option<MemoryRow> = db.select(rid.clone()).await?;
-    Ok(row)
+    Err(AppError::bad_request(format!("{} is not a memory id", rid.to_string())))
 }
 
-/// Relations and merges stay inside one vault: an edge from a shared vault's
-/// entity into someone's personal one would show its label and endpoint to
-/// every member, and deleting/merging in one vault would rewrite the other.
+/// Relations and merges stay inside one vault: an edge from a shared vault's entity into someone's
+/// personal one would show its label and endpoint to every member, and merging would rewrite the other.
 fn same_vault(a: &EntityRow, b: &EntityRow) -> AppResult<()> {
     if a.vault != b.vault {
         return Err(AppError::bad_request("both entities must be in the same vault"));
@@ -348,49 +364,21 @@ fn same_vault(a: &EntityRow, b: &EntityRow) -> AppResult<()> {
     Ok(())
 }
 
+async fn select_entity(db: &OrgDb, rid: &RecordId) -> AppResult<Option<EntityRow>> {
+    require_entity_id(rid)?;
+    let row: Option<EntityRow> = store::get(db, rid).await?;
+    Ok(row)
+}
+
 // ---------------------------------------------------------------------------
 // Core CRUD
 // ---------------------------------------------------------------------------
 
-/// Serialises this process's find-then-create of entities and observations.
-/// The UNIQUE indexes are the cross-process guarantee, but SurrealDB 2.3 has
-/// been seen to let two simultaneous CREATEs through one of them (about one
-/// run in five of the concurrency e2e test), so writes from this server also
-/// queue here. Held only around the lookup and the write -- a few ms.
-static ENTITY_WRITE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-static OBSERVATION_WRITE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
-/// Whether a failed write lost a race to a concurrent one: a UNIQUE index
-/// rejected it, or SurrealDB aborted the conflicting transaction.
-fn is_write_conflict(e: &surrealdb::Error) -> bool {
-    let msg = e.to_string();
-    msg.contains("already contains") || msg.contains("can be retried")
-}
-
-/// The `table` entity in `vault` whose name or an alias is `needle`
-/// (lowercased), a name match first -- both lookups index-backed.
-async fn find_entity(db: &Db, table: &str, vault: &RecordId, needle: &str) -> AppResult<Option<EntityRow>> {
-    let mut res = db
-        .query(format!(
-            "SELECT * FROM {table} WHERE vault = $vault AND name_key = $needle LIMIT 1; \
-             SELECT * FROM {table} WITH INDEX {table}_alias_keys_idx WHERE alias_keys CONTAINS $needle AND vault = $vault \
-             ORDER BY created_at LIMIT 1;"
-        ))
-        .bind(("vault", vault.clone()))
-        .bind(("needle", needle.to_string()))
-        .await?;
-    let by_name: Vec<EntityRow> = res.take(0)?;
-    let by_alias: Vec<EntityRow> = res.take(1)?;
-    Ok(by_name.into_iter().chain(by_alias).next())
-}
-
 /// Find-or-create a `kind` entity in the resolved vault, matched
 /// case-insensitively against existing `name`/`aliases`. New aliases are
-/// merged onto a match rather than creating a duplicate row. Concurrent
-/// calls for one name return one entity: the `(vault, name_key)` UNIQUE
-/// index rejects the second CREATE, which then returns the winner's row.
+/// merged onto a match rather than creating a duplicate row.
 pub async fn upsert_entity(
-    db: &Db,
+    db: &OrgDb,
     owner: &RecordId,
     kind: &str,
     name: &str,
@@ -413,7 +401,7 @@ fn split_decorated(name: &str) -> Option<(&str, Vec<String>)> {
 /// decorated name (see [`split_decorated`]) whose base name already exists
 /// resolves to that entity, the suffix parts becoming aliases.
 pub async fn upsert_entity_created(
-    db: &Db,
+    db: &OrgDb,
     owner: &RecordId,
     kind: &str,
     name: &str,
@@ -421,98 +409,89 @@ pub async fn upsert_entity_created(
     vault_id: Option<&RecordId>,
 ) -> AppResult<(EntityOut, bool)> {
     let table = kind_table(kind)?;
-    let vault = resolve_vault(db, owner, vault_id).await?;
-    let mut aliases = aliases.unwrap_or_default();
+    let vault = resolve_vault(db, owner, vault_id, Action::WriteMemories).await?;
+    let aliases = aliases.unwrap_or_default();
     let name = name.trim();
     if name.is_empty() {
         return Err(AppError::bad_request("entity name can't be empty"));
     }
     let needle = name.to_lowercase();
 
-    let guard = ENTITY_WRITE.lock().await;
-    let mut found = find_entity(db, table, &vault, &needle).await?;
-    if found.is_none() {
-        if let Some((base, extra)) = split_decorated(name) {
-            found = find_entity(db, table, &vault, &base.to_lowercase()).await?;
-            if found.is_some() {
-                aliases.extend(extra);
+    // A decorated name ("Jane Doe (Acme/JD)") whose base name already exists resolves to it, the
+    // suffix parts becoming aliases.
+    let decorated = split_decorated(name);
+    // Read-then-write: a concurrent upsert of the same name (in any case) loses on the
+    // `(vault, name_key)` unique index, and the retry's re-read finds the winner. Both lookups are
+    // index reads (`name_key`, `alias_keys`), however large the vault.
+    let (row, created) = with_retry_dup(|| async {
+        let mut found = None;
+        let mut aliases = aliases.clone();
+        let needles = std::iter::once((needle.clone(), None)).chain(decorated.as_ref().map(|(base, extra)| (base.to_lowercase(), Some(extra))));
+        for (key, extra) in needles {
+            let mut res = q::find_by_key(db, table).bind(("vault", vault.clone())).bind(("needle", key)).await?.check()?;
+            let by_name: Vec<EntityRow> = res.take(0)?;
+            let by_alias: Vec<EntityRow> = res.take(1)?;
+            if let Some(row) = by_name.into_iter().chain(by_alias).next() {
+                aliases.extend(extra.into_iter().flatten().cloned());
+                found = Some(row);
+                break;
             }
         }
-    }
-    if found.is_none() {
-        let mut created = db
-            .query(format!(
-                "CREATE {table} SET owner = $owner, vault = $vault, name = $name, aliases = $aliases RETURN AFTER"
-            ))
+
+        if let Some(row) = found {
+            if aliases.iter().all(|a| row.aliases.contains(a)) {
+                return Ok((row, false));
+            }
+            // array::union is atomic, so two alias merges cannot lose each other's update.
+            let mut updated = q::MERGE_ALIASES
+                .on(db)
+                .bind(("id", row.id.clone()))
+                .bind(("aliases", aliases.clone()))
+                .await?
+                .check()?;
+            let rows: Vec<EntityRow> = updated.take(0)?;
+            return Ok((rows.into_iter().next().unwrap_or(row), false));
+        }
+
+        let mut created = q::create_entity(db, table)
             .bind(("owner", owner.clone()))
             .bind(("vault", vault.clone()))
             .bind(("name", name.to_string()))
             .bind(("aliases", aliases.clone()))
-            .await?;
-        match created.take::<Vec<EntityRow>>(0) {
-            Ok(rows) => {
-                let row = rows.into_iter().next().ok_or_else(|| AppError::internal("entity insert returned no row"))?;
-                return Ok((entity_out(table, &row), true));
-            }
-            Err(e) if is_write_conflict(&e) => found = find_entity(db, table, &vault, &needle).await?,
-            Err(e) => return Err(e.into()),
-        }
-    }
-    drop(guard);
-    let row = found.ok_or_else(|| AppError::internal("entity vanished during a concurrent write"))?;
-
-    let existing: HashSet<String> = row.aliases.iter().cloned().collect();
-    if aliases.iter().all(|a| existing.contains(a)) {
-        return Ok((entity_out(table, &row), false));
-    }
-    let mut updated = db
-        .query("UPDATE $id SET aliases = array::sort(array::union(aliases, $aliases)), updated_at = time::now() RETURN AFTER")
-        .bind(("id", row.id.clone()))
-        .bind(("aliases", aliases))
-        .await?;
-    let updated_rows: Vec<EntityRow> = updated.take(0)?;
-    let updated_row = updated_rows.into_iter().next().ok_or_else(|| AppError::internal("entity update returned no row"))?;
-    Ok((entity_out(table, &updated_row), false))
+            .await?
+            .check()?;
+        let rows: Vec<EntityRow> = created.take(0)?;
+        let row = rows.into_iter().next().ok_or_else(|| surrealdb::Error::query("entity insert returned no row".into(), None))?;
+        Ok((row, true))
+    })
+    .await?;
+    Ok((entity_out(table, &row), created))
 }
 
-/// Other `kind` entities in the entity's vault whose name or an alias shares
-/// a word (3+ letters) with its name -- likely the same thing under another
-/// name ("Dave" / "David Smith" share nothing; "David" / "David Smith" do).
-pub async fn possible_duplicates(db: &Db, entity: &EntityOut) -> AppResult<Vec<EntityOut>> {
+/// Other `kind` entities in the entity's vault whose name or an alias shares a word (3+ letters) with
+/// its name -- likely the same thing under another name ("Dave" / "David Smith" share nothing;
+/// "David" / "David Smith" do).
+pub async fn possible_duplicates(db: &OrgDb, entity: &EntityOut) -> AppResult<Vec<EntityOut>> {
     let table = kind_table(&entity.kind)?;
-    let words: Vec<String> = entity
-        .name
-        .to_lowercase()
-        .split(|c: char| !c.is_alphanumeric())
-        .filter(|w| w.chars().count() >= 3)
-        .map(String::from)
-        .collect();
+    let words: Vec<String> =
+        entity.name.to_lowercase().split(|c: char| !c.is_alphanumeric()).filter(|w| w.chars().count() >= 3).map(String::from).collect();
     if words.is_empty() {
         return Ok(Vec::new());
     }
-    let id: RecordId = entity.id.parse().map_err(|_| AppError::internal("entity id did not round-trip"))?;
-    let vault: RecordId = entity.vault.parse().map_err(|_| AppError::internal("vault id did not round-trip"))?;
-    let mut res = db
-        .query(format!(
-            "SELECT * FROM {table} WHERE vault = $vault AND id != $id \
-             AND (string::words(name_key) CONTAINSANY $words OR alias_keys CONTAINSANY $words) LIMIT 5"
-        ))
-        .bind(("vault", vault))
-        .bind(("id", id))
+    let mut res = q::sharing_a_word(db, table)
+        .bind(("vault", crate::rid::parse(&entity.vault).map_err(|_| AppError::internal("vault id did not round-trip"))?))
+        .bind(("id", crate::rid::parse(&entity.id).map_err(|_| AppError::internal("entity id did not round-trip"))?))
         .bind(("words", words))
-        .await?;
+        .await?
+        .check()?;
     let rows: Vec<EntityRow> = res.take(0)?;
     Ok(rows.iter().map(|r| entity_out(table, r)).collect())
 }
 
-/// Ids of the entities in `vault` with a fact whose text matches `query`
-/// (full-text, so a handle or username only ever written in a fact is found).
-pub async fn subjects_mentioning(db: &Db, vault: &RecordId, query: &str) -> AppResult<HashSet<String>> {
-    let mut res = db
-        .query("SELECT VALUE subject FROM memory WHERE vault = $vault AND text @@ $q LIMIT 200")
-        .bind(("vault", vault.clone()))
-        .bind(("q", query.to_string()))
-        .await?;
+/// Ids of the entities in `vault` with a fact whose text matches `query` (full-text, so a handle or
+/// username only ever written in a fact is found).
+pub async fn subjects_mentioning(db: &OrgDb, vault: &RecordId, query: &str) -> AppResult<HashSet<String>> {
+    let mut res = q::SUBJECTS_MENTIONING.on(db).bind(("vault", vault.clone())).bind(("q", query.to_string())).await?.check()?;
     let ids: Vec<RecordId> = res.take(0)?;
     Ok(ids.iter().map(|r| r.to_string()).collect())
 }
@@ -534,7 +513,7 @@ pub async fn subjects_mentioning(db: &Db, vault: &RecordId, query: &str) -> AppR
 /// rather than only in `write_memory` so the auto-extraction path also
 /// triggers it.
 pub async fn add_memory(
-    db: &Db,
+    db: &OrgDb,
     owner: &RecordId,
     subject_id: &RecordId,
     text: &str,
@@ -543,100 +522,64 @@ pub async fn add_memory(
 ) -> AppResult<MemoryOut> {
     let subject_row = select_entity(db, subject_id)
         .await?
-        .ok_or_else(|| AppError::bad_request(format!("subject entity not found: {subject_id}")))?;
-    if !accessible(db, owner, &subject_row.vault).await? {
-        return Err(AppError::new(
-            axum::http::StatusCode::FORBIDDEN,
-            format!("not a member of {}'s vault", subject_row.vault),
+        .ok_or_else(|| AppError::bad_request(format!("subject entity not found: {}", subject_id.to_string())))?;
+    if !accessible(db, owner, &subject_row.vault, Action::WriteMemories).await? {
+        return Err(AppError::coded(
+            crate::error::ErrorCode::VaultForbidden,
+            format!("not a member of {}'s vault", subject_row.vault.to_string()),
         ));
     }
 
-    // One observation per subject: writing another one -- e.g. an MCP agent
-    // doing the consolidating -- revises it in place.
-    if mem_type == "observation" {
-        return save_observation(db, owner, &subject_row.vault, subject_id, text, None).await;
-    }
-
     let source = source_record_id.map(|r| cache_record_rid(owner, r));
-    let q = db
-        .query(
-            "CREATE memory SET owner = $owner, vault = $vault, subject = $subject, text = $text, \
-             type = $type, source = $source RETURN AFTER",
-        )
-        .bind(("owner", owner.clone()))
-        .bind(("vault", subject_row.vault.clone()))
-        .bind(("subject", subject_id.clone()))
-        .bind(("text", text.to_string()))
-        .bind(("type", mem_type.to_string()))
-        .bind(("source", source));
-    let mut res = q.await?;
-    let rows: Vec<MemoryRow> = res.take(0)?;
-    let memory = rows.into_iter().next().ok_or_else(|| AppError::internal("memory insert returned no row"))?;
+    let is_obs = mem_type == "observation";
+    let obs_id = observation_rid(subject_id);
 
-    if mem_type != "observation" {
-        db.query(r#"UPDATE memory SET status = "stale" WHERE subject = $subject AND type = "observation""#)
+    // One round trip, all-or-nothing. An observation is revised in place (one
+    // per subject; a new one gets a deterministic id so two racing creators
+    // collide on the key instead of making duplicates). A raw fact creates the
+    // memory and marks the subject's observation stale, skipping the write when
+    // it is already stale so concurrent fact writers do not conflict on it.
+    // The hot path only point-reads the deterministic id: a `WHERE subject`
+    // range read would conflict with every concurrent insert for the subject.
+    // The range read remains as a fallback for observations that predate
+    // deterministic ids.
+    let stmt = if is_obs { &q::WRITE_OBSERVATION } else { &q::WRITE_FACT };
+    let _guard = lock(&subject_id.to_string()).await;
+    let memory = with_retry_dup(|| async {
+        let mut res = stmt
+            .on(db)
+            .bind(("owner", owner.clone()))
+            .bind(("vault", subject_row.vault.clone()))
             .bind(("subject", subject_id.clone()))
-            .await?;
-    }
+            .bind(("text", text.to_string()))
+            .bind(("type", mem_type.to_string()))
+            .bind(("source", source.clone()))
+            .bind(("obs_id", obs_id.clone()))
+            .await?
+            .check()?;
+        let rows: Vec<MemoryRow> = res.take(stmt.slot)?;
+        rows.into_iter().next().ok_or_else(|| surrealdb::Error::query("memory write returned no row".into(), None))
+    })
+    .await?;
 
     Ok(memory_out(&memory, None))
 }
 
-/// Creates or revises `subject`'s one observation, marking it fresh.
-/// `lineage` (the raw facts it was built from) replaces `source_memories` and
-/// `proof_count` when given; an agent-written belief (`None`) leaves them.
-/// The `memory_observation_unique` index makes a concurrent second CREATE
-/// fail; that writer then revises the row that won instead.
-pub(crate) async fn save_observation(
-    db: &Db,
-    owner: &RecordId,
-    vault: &RecordId,
-    subject: &RecordId,
-    text: &str,
-    lineage: Option<Vec<RecordId>>,
-) -> AppResult<MemoryOut> {
-    let set_lineage = if lineage.is_some() { ", source_memories = $lineage, proof_count = $proof" } else { "" };
-    let update = format!(
-        "UPDATE memory SET text = $text, version += 1, status = \"fresh\", updated_at = time::now(){set_lineage} \
-         WHERE subject = $subject AND type = \"observation\" RETURN AFTER"
-    );
-    let create = format!(
-        "CREATE memory SET owner = $owner, vault = $vault, subject = $subject, text = $text, \
-         type = \"observation\", status = \"fresh\"{set_lineage} RETURN AFTER"
-    );
-    let proof = lineage.as_ref().map(|l| l.len() as i64);
-    let _guard = OBSERVATION_WRITE.lock().await;
-    for attempt in 0..3 {
-        for sql in [&update, &create] {
-            let mut res = db
-                .query(sql.as_str())
-                .bind(("owner", owner.clone()))
-                .bind(("vault", vault.clone()))
-                .bind(("subject", subject.clone()))
-                .bind(("text", text.to_string()))
-                .bind(("lineage", lineage.clone()))
-                .bind(("proof", proof))
-                .await?;
-            match res.take::<Vec<MemoryRow>>(0) {
-                Ok(rows) => {
-                    if let Some(row) = rows.into_iter().next() {
-                        return Ok(memory_out(&row, None));
-                    }
-                }
-                Err(e) if attempt < 2 && is_write_conflict(&e) => break,
-                Err(e) => return Err(e.into()),
-            }
-        }
-    }
-    Err(AppError::internal("observation write kept conflicting"))
+/// Deterministic id of a subject's observation when it is first created, so
+/// concurrent creators collide (and retry into an update) instead of leaving
+/// two observations. Older observations keep their random ids; lookups go by
+/// `subject` + `type`, never by this id.
+pub fn observation_rid(subject: &RecordId) -> RecordId {
+    RecordId::from_table_key("memory", crate::tx::stable_key('o', &subject.to_string()))
 }
 
 /// Programmatic memory write -- a direct path for an agent to record a fact
 /// about a person/organisation/location via a tool call. Finds-or-creates
 /// the subject entity by reusing `upsert_entity`'s dedupe logic, then
+#[allow(clippy::too_many_arguments)] // public signature, grouping args would change callers
 /// records the memory against it.
 pub async fn write_memory(
-    db: &Db,
+    db: &OrgDb,
     owner: &RecordId,
     subject_name: &str,
     subject_kind: &str,
@@ -647,7 +590,7 @@ pub async fn write_memory(
 ) -> AppResult<WriteMemoryOut> {
     let (entity, created) = upsert_entity_created(db, owner, subject_kind, subject_name, None, vault_id).await?;
     let entity_rid: RecordId =
-        entity.id.parse().map_err(|_| AppError::internal("entity id did not round-trip"))?;
+        crate::rid::parse(&entity.id).map_err(|_| AppError::internal("entity id did not round-trip"))?;
     let memory = add_memory(db, owner, &entity_rid, text, source_record_id, mem_type).await?;
     let possible_duplicates = if created { possible_duplicates(db, &entity).await? } else { Vec::new() };
     Ok(WriteMemoryOut { entity, memory, superseded: Vec::new(), possible_duplicates })
@@ -657,18 +600,28 @@ pub async fn write_memory(
 /// duplicate relation is a no-op that returns the existing edge. Both
 /// endpoints must be in the same vault, one `owner` belongs to.
 pub async fn add_relation(
-    db: &Db,
+    db: &OrgDb,
     owner: &RecordId,
     from_id: &RecordId,
     to_id: &RecordId,
     label: &str,
     source_record_id: Option<&str>,
 ) -> AppResult<RelationOut> {
-    let (Some(in_row), Some(out_row)) = (select_entity(db, from_id).await?, select_entity(db, to_id).await?) else {
-        return Err(AppError::new(axum::http::StatusCode::FORBIDDEN, "not a member of both entities' vaults"));
+    let in_row = select_entity(db, from_id).await?;
+    let out_row = select_entity(db, to_id).await?;
+    let in_ok = match &in_row {
+        Some(r) => accessible(db, owner, &r.vault, Action::WriteMemories).await?,
+        None => false,
     };
-    if !accessible(db, owner, &in_row.vault).await? || !accessible(db, owner, &out_row.vault).await? {
-        return Err(AppError::new(axum::http::StatusCode::FORBIDDEN, "not a member of both entities' vaults"));
+    let out_ok = match &out_row {
+        Some(r) => accessible(db, owner, &r.vault, Action::WriteMemories).await?,
+        None => false,
+    };
+    let (Some(in_row), Some(out_row)) = (in_row, out_row) else {
+        return Err(AppError::coded(crate::error::ErrorCode::VaultForbidden, "not a member of both entities' vaults"));
+    };
+    if !in_ok || !out_ok {
+        return Err(AppError::coded(crate::error::ErrorCode::VaultForbidden, "not a member of both entities' vaults"));
     }
     same_vault(&in_row, &out_row)?;
 
@@ -677,8 +630,8 @@ pub async fn add_relation(
     }
 
     let source = source_record_id.map(|r| cache_record_rid(owner, r));
-    let res = db
-        .query("RELATE $in->relates_to->$out SET label = $label, owner = $owner, source = $source RETURN AFTER")
+    let res = q::RELATE_RETURNING
+        .on(db)
         .bind(("in", from_id.clone()))
         .bind(("out", to_id.clone()))
         .bind(("label", label.to_string()))
@@ -707,9 +660,9 @@ pub async fn add_relation(
     }
 }
 
-async fn find_relation(db: &Db, from_id: &RecordId, to_id: &RecordId, label: &str) -> AppResult<Option<RelationRow>> {
-    let mut res = db
-        .query("SELECT * FROM relates_to WHERE in = $in AND out = $out AND label = $label LIMIT 1")
+async fn find_relation(db: &OrgDb, from_id: &RecordId, to_id: &RecordId, label: &str) -> AppResult<Option<RelationRow>> {
+    let mut res = q::FIND_RELATION
+        .on(db)
         .bind(("in", from_id.clone()))
         .bind(("out", to_id.clone()))
         .bind(("label", label.to_string()))
@@ -721,31 +674,25 @@ async fn find_relation(db: &Db, from_id: &RecordId, to_id: &RecordId, label: &st
 /// Delete one `memory` row, vault-scoped. Returns `false` (no-op) if it
 /// doesn't exist or `owner` isn't a member of its vault, rather than
 /// erroring -- mirrors `get_entity`'s not-found-is-None convention.
-pub async fn delete_memory(db: &Db, owner: &RecordId, memory_id: &RecordId) -> AppResult<bool> {
-    let row = select_memory(db, memory_id).await?;
+pub async fn delete_memory(db: &OrgDb, owner: &RecordId, memory_id: &RecordId) -> AppResult<bool> {
+    require_memory_id(memory_id)?;
+    let row: Option<MemoryRow> = store::get(db, memory_id).await?;
     let Some(row) = row else { return Ok(false) };
-    if !accessible(db, owner, &row.vault).await? {
+    if !accessible(db, owner, &row.vault, Action::WriteMemories).await? {
         return Ok(false);
     }
-    // A deleted raw fact leaves the subject's observation's lineage and makes
-    // it stale (rebuilt from the surviving facts on the next consolidation);
-    // an observation built from nothing but this fact is deleted with it.
-    db.query(
-        "BEGIN TRANSACTION; \
-         DELETE $id; \
-         IF $raw { \
-             DELETE memory WHERE subject = $subject AND type = \"observation\" AND source_memories = [$id]; \
-             UPDATE memory SET status = \"stale\", updated_at = time::now(), \
-                 source_memories = IF source_memories THEN array::complement(source_memories, [$id]) ELSE NONE END \
-                 WHERE subject = $subject AND type = \"observation\"; \
-         }; \
-         COMMIT TRANSACTION;",
-    )
-    .bind(("id", memory_id.clone()))
-    .bind(("subject", row.subject.clone()))
-    .bind(("raw", row.mem_type != "observation"))
-    .await?
-    .check()?;
+    // A deleted raw fact leaves its subject's observation's lineage and makes it stale; an
+    // observation built from nothing but this fact is deleted with it (one transaction).
+    with_retry(|| async {
+        q::DELETE_MEMORY
+            .on(db)
+            .bind(("id", memory_id.clone()))
+            .bind(("subject", row.subject.clone()))
+            .bind(("raw", row.mem_type != "observation"))
+            .await?
+            .check()
+    })
+    .await?;
     Ok(true)
 }
 
@@ -762,13 +709,12 @@ fn check_memory_edit(current_type: &str, text: Option<&str>, new_type: Option<&s
     if text.is_some_and(|t| t.trim().is_empty()) {
         return Err(AppError::bad_request("memory text can't be empty"));
     }
-    if let Some(t) = new_type {
-        if current_type == "observation" || !RAW_MEMORY_TYPES.contains(&t) {
+    if let Some(t) = new_type
+        && (current_type == "observation" || !RAW_MEMORY_TYPES.contains(&t)) {
             return Err(AppError::bad_request(
                 "`type` can only switch a fact between world and experience; observations keep theirs",
             ));
         }
-    }
     Ok(())
 }
 
@@ -776,45 +722,42 @@ fn check_memory_edit(current_type: &str, text: Option<&str>, new_type: Option<&s
 /// not-found-is-None like `get_entity`. Bumps `version`. Editing a raw fact
 /// marks its subject's observation stale, same as writing a new one.
 pub async fn update_memory(
-    db: &Db,
+    db: &OrgDb,
     owner: &RecordId,
     memory_id: &RecordId,
     text: Option<&str>,
     new_type: Option<&str>,
 ) -> AppResult<Option<MemoryOut>> {
-    let row = select_memory(db, memory_id).await?;
+    require_memory_id(memory_id)?;
+    let row: Option<MemoryRow> = store::get(db, memory_id).await?;
     let Some(row) = row else { return Ok(None) };
-    if !accessible(db, owner, &row.vault).await? {
+    if !accessible(db, owner, &row.vault, Action::WriteMemories).await? {
         return Ok(None);
     }
     check_memory_edit(&row.mem_type, text, new_type)?;
 
-    let mut set = vec!["version = version + 1", "updated_at = time::now()"];
-    if text.is_some() {
-        set.push("text = $text");
-        if row.mem_type != "observation" {
-            set.push("status = NONE"); // an edited fact is current again
+    let stmt = match (text, new_type) {
+        (Some(_), Some(_)) => &q::UPDATE_MEMORY_TEXT_TYPE,
+        (Some(_), None) => &q::UPDATE_MEMORY_TEXT,
+        _ => &q::UPDATE_MEMORY_TYPE,
+    };
+    let mut res = with_retry(|| async {
+        let mut qry = stmt
+            .on(db)
+            .bind(("id", memory_id.clone()))
+            .bind(("subject", row.subject.clone()))
+            .bind(("raw", row.mem_type != "observation"));
+        if let Some(t) = text {
+            qry = qry.bind(("text", t.to_string()));
         }
-    }
-    if new_type.is_some() {
-        set.push("type = $type");
-    }
-    let mut q = db.query(format!("UPDATE $id SET {} RETURN AFTER", set.join(", "))).bind(("id", memory_id.clone()));
-    if let Some(t) = text {
-        q = q.bind(("text", t.to_string()));
-    }
-    if let Some(t) = new_type {
-        q = q.bind(("type", t.to_string()));
-    }
-    let mut res = q.await?;
-    let rows: Vec<MemoryRow> = res.take(0)?;
+        if let Some(t) = new_type {
+            qry = qry.bind(("type", t.to_string()));
+        }
+        qry.await?.check()
+    })
+    .await?;
+    let rows: Vec<MemoryRow> = res.take(stmt.slot)?;
     let updated = rows.into_iter().next().ok_or_else(|| AppError::internal("memory update returned no row"))?;
-
-    if updated.mem_type != "observation" {
-        db.query(r#"UPDATE memory SET status = "stale" WHERE subject = $subject AND type = "observation""#)
-            .bind(("subject", updated.subject.clone()))
-            .await?;
-    }
     Ok(Some(memory_out(&updated, None)))
 }
 
@@ -822,15 +765,19 @@ pub async fn update_memory(
 /// not-found-is-None convention as `get_entity`. Only the fields passed
 /// (`Some`) are updated.
 pub async fn update_entity(
-    db: &Db,
+    db: &OrgDb,
     owner: &RecordId,
     entity_id: &RecordId,
     name: Option<&str>,
     aliases: Option<Vec<String>>,
     summary: Option<&str>,
 ) -> AppResult<Option<EntityOut>> {
+    let name = name.map(str::trim);
+    if name == Some("") {
+        return Err(AppError::bad_request("entity name can't be empty"));
+    }
     let Some(mut row) = select_entity(db, entity_id).await? else { return Ok(None) };
-    if !accessible(db, owner, &row.vault).await? {
+    if !accessible(db, owner, &row.vault, Action::WriteMemories).await? {
         return Ok(None);
     }
 
@@ -847,28 +794,18 @@ pub async fn update_entity(
 
     if !set_clauses.is_empty() {
         set_clauses.push("updated_at = time::now()");
-        let query = format!("UPDATE $id SET {} RETURN AFTER", set_clauses.join(", "));
-        let mut q = db.query(query).bind(("id", entity_id.clone()));
+        let mut qry = q::update_entity(db, &set_clauses.join(", ")).bind(("id", entity_id.clone()));
         if let Some(n) = name {
-            q = q.bind(("name", n.trim().to_string()));
+            qry = qry.bind(("name", n.to_string()));
         }
         if let Some(a) = aliases {
-            q = q.bind(("aliases", a));
+            qry = qry.bind(("aliases", a));
         }
         if let Some(s) = summary {
-            q = q.bind(("summary", s.to_string()));
+            qry = qry.bind(("summary", s.to_string()));
         }
-        let mut res = q.await?;
-        let rows: Vec<EntityRow> = match res.take(0) {
-            Err(e) if e.to_string().contains("already contains") => {
-                return Err(AppError::bad_request(format!(
-                    "another {} in this vault is already named {:?}; merge them instead",
-                    entity_id.table(),
-                    name.unwrap_or_default()
-                )))
-            }
-            r => r?,
-        };
+        let mut res = qry.await?;
+        let rows: Vec<EntityRow> = res.take(0)?;
         row = rows.into_iter().next().ok_or_else(|| AppError::internal("entity update returned no row"))?;
     }
 
@@ -878,29 +815,34 @@ pub async fn update_entity(
 /// Delete an entity and everything hanging off it: its `memory` rows and its
 /// `relates_to` edges in both directions. Vault-scoped, same
 /// not-found-is-false convention as `delete_memory`.
-pub async fn delete_entity(db: &Db, owner: &RecordId, entity_id: &RecordId) -> AppResult<bool> {
+pub async fn delete_entity(db: &OrgDb, owner: &RecordId, entity_id: &RecordId) -> AppResult<bool> {
     let Some(row) = select_entity(db, entity_id).await? else { return Ok(false) };
-    if !accessible(db, owner, &row.vault).await? {
+    if !accessible(db, owner, &row.vault, Action::WriteMemories).await? {
         return Ok(false);
     }
-    db.query("DELETE memory WHERE subject = $id").bind(("id", entity_id.clone())).await?;
-    db.query("DELETE relates_to WHERE in = $id OR out = $id").bind(("id", entity_id.clone())).await?;
-    db.query("DELETE $id").bind(("id", entity_id.clone())).await?;
+    with_retry(|| async {
+        q::DELETE_ENTITY
+        .on(db)
+        .bind(("id", entity_id.clone()))
+        .await?
+        .check()
+    })
+    .await?;
     Ok(true)
 }
 
 /// Merge `loser_id` into `winner_id` -- for two entities of the same `kind`
 /// that turned out to be duplicates. Reassigns the loser's `memory` rows and
 /// `relates_to` edges (both directions) to the winner, adds the loser's name
-/// and aliases as aliases of the winner, then deletes the loser -- all in one
+/// and aliases as aliases of the winner, then deletes the loser, all in one
 /// transaction ([`merge_rows`]). If both had an observation they become one
-/// stale observation, rebuilt on the next consolidation. Returns the
-/// winner's row after the merge.
+/// stale observation, rebuilt on the next consolidation. Returns the winner's
+/// row after the merge.
 ///
 /// Errors (400) if the two ids are the same, of different kinds or vaults, or not
 /// found / `owner` isn't a member of either one's vault.
 pub async fn merge_entities(
-    db: &Db,
+    db: &OrgDb,
     owner: &RecordId,
     winner_id: &RecordId,
     loser_id: &RecordId,
@@ -918,15 +860,15 @@ pub async fn merge_entities(
 
     let winner = select_entity(db, winner_id)
         .await?
-        .ok_or_else(|| AppError::bad_request(format!("winner entity not found: {winner_id}")))?;
-    if !accessible(db, owner, &winner.vault).await? {
-        return Err(AppError::bad_request(format!("winner entity not found: {winner_id}")));
+        .ok_or_else(|| AppError::bad_request(format!("winner entity not found: {}", winner_id.to_string())))?;
+    if !accessible(db, owner, &winner.vault, Action::WriteMemories).await? {
+        return Err(AppError::bad_request(format!("winner entity not found: {}", winner_id.to_string())));
     }
     let loser = select_entity(db, loser_id)
         .await?
-        .ok_or_else(|| AppError::bad_request(format!("loser entity not found: {loser_id}")))?;
-    if !accessible(db, owner, &loser.vault).await? {
-        return Err(AppError::bad_request(format!("loser entity not found: {loser_id}")));
+        .ok_or_else(|| AppError::bad_request(format!("loser entity not found: {}", loser_id.to_string())))?;
+    if !accessible(db, owner, &loser.vault, Action::WriteMemories).await? {
+        return Err(AppError::bad_request(format!("loser entity not found: {}", loser_id.to_string())));
     }
     same_vault(&winner, &loser)?;
 
@@ -940,127 +882,20 @@ fn loser_names(loser: &EntityRow) -> Vec<String> {
     std::iter::once(&loser.name).chain(&loser.aliases).filter(|n| !n.is_empty()).cloned().collect()
 }
 
-/// Folds every observation of `$winner` and `$loser` into the oldest one,
-/// owned by `$winner`: texts joined, lineages unioned, marked stale so the
-/// next consolidation rebuilds it from the merged raw facts. Runs inside a
-/// caller's transaction (it frees the unique observation slot first).
-const FOLD_OBSERVATIONS: &str = "\
-    LET $obs = (SELECT id, text, source_memories, created_at FROM array::union( \
-        (SELECT VALUE id FROM memory WHERE subject = $winner AND type = \"observation\"), \
-        (SELECT VALUE id FROM memory WHERE subject = $loser AND type = \"observation\")) ORDER BY created_at, id); \
-    IF array::len($obs) > 1 { \
-        DELETE array::slice($obs.id, 1); \
-        UPDATE $obs[0].id SET subject = $winner, text = array::join($obs.text, \"\\n\\n\"), version += 1, \
-            source_memories = array::distinct(array::flatten($obs.map(|$o| $o.source_memories ?? []))), \
-            status = \"stale\", updated_at = time::now(); \
-    };";
-
-/// Moves everything of `loser` onto `winner` (same kind and vault, already
-/// checked) and deletes `loser`, in ONE transaction: memories (observations
-/// folded, see [`FOLD_OBSERVATIONS`]), `relates_to` edges in both directions
-/// (re-created on the winner unless it already has that exact edge -- the
-/// only conflict that is skipped; edges between the two are dropped), and
-/// `add_aliases` onto the winner. Any failing statement rolls all of it
-/// back, so a merge never half-happens. Every read is an index or graph
-/// lookup, keeping the transaction's read set (and so its chance of
-/// clashing with concurrent writes) small.
-async fn merge_rows(db: &Db, winner: &RecordId, loser: &RecordId, add_aliases: Vec<String>) -> AppResult<()> {
-    db.query(format!(
-        "BEGIN TRANSACTION; {FOLD_OBSERVATIONS} \
-         UPDATE memory SET subject = $winner WHERE subject = $loser; \
-         UPDATE memory SET status = \"stale\", updated_at = time::now() WHERE subject = $winner AND type = \"observation\"; \
-         FOR $e IN (SELECT * FROM $loser->relates_to WHERE out NOT IN [$winner, $loser]) {{ \
-             IF array::len(SELECT id FROM relates_to WHERE in = $winner AND out = $e.out AND label = $e.label) = 0 {{ \
-                 LET $o = $e.out; \
-                 RELATE $winner->relates_to->$o SET label = $e.label, owner = $e.owner, source = $e.source, created_at = $e.created_at; \
-             }}; \
-         }}; \
-         FOR $e IN (SELECT * FROM $loser<-relates_to WHERE in NOT IN [$winner, $loser]) {{ \
-             IF array::len(SELECT id FROM relates_to WHERE in = $e.in AND out = $winner AND label = $e.label) = 0 {{ \
-                 LET $i = $e.in; \
-                 RELATE $i->relates_to->$winner SET label = $e.label, owner = $e.owner, source = $e.source, created_at = $e.created_at; \
-             }}; \
-         }}; \
-         DELETE array::union((SELECT VALUE id FROM $loser->relates_to), (SELECT VALUE id FROM $loser<-relates_to)); \
-         UPDATE $winner SET aliases = array::sort(array::union(aliases, $aliases)), updated_at = time::now(); \
-         DELETE $loser; \
-         COMMIT TRANSACTION;"
-    ))
-    .bind(("winner", winner.clone()))
-    .bind(("loser", loser.clone()))
-    .bind(("aliases", add_aliases))
-    .await?
-    .check()?;
-    Ok(())
-}
-
-/// Folds rows that would violate one of `db::UNIQUE_STATEMENTS`' indexes on
-/// `table`, so the index can be defined: entities sharing a vault and
-/// case-insensitive name are merged into the oldest ([`merge_rows`]), and a
-/// subject's several observations into one stale one. Runs at startup until
-/// the index exists; a no-op once it does.
-pub async fn dedupe(db: &Db, table: &str) -> AppResult<()> {
-    let index = crate::db::UNIQUE_STATEMENTS
-        .iter()
-        .find(|(t, _)| *t == table)
-        .and_then(|(_, sql)| sql.split_whitespace().nth(5))
-        .ok_or_else(|| AppError::internal(format!("no unique index for {table}")))?;
-    let mut res = db.query(format!("INFO FOR TABLE {table}")).await?;
-    let info: Option<serde_json::Value> = res.take(0)?;
-    if info.as_ref().and_then(|i| i.pointer(&format!("/indexes/{index}"))).is_some() {
-        return Ok(());
-    }
-
-    #[derive(Deserialize)]
-    struct Group {
-        ids: Vec<RecordId>,
-    }
-    #[derive(Deserialize)]
-    struct Group1 {
-        id: RecordId,
-    }
-    if table == "memory" {
-        db.query("UPDATE memory SET type = type WHERE type = \"observation\" AND obs_subject = NONE").await?.check()?;
-        let mut res = db
-            .query(
-                "SELECT subject, array::group(id) AS ids FROM memory WHERE type = \"observation\" GROUP BY subject",
-            )
-            .await?;
-        let groups: Vec<Group> = res.take(0)?;
-        #[derive(Deserialize)]
-        struct Subject {
-            subject: RecordId,
-        }
-        for g in groups.into_iter().filter(|g| g.ids.len() > 1) {
-            let s: Option<Subject> = db.select(g.ids[0].clone()).await?;
-            let Some(s) = s else { continue };
-            db.query(format!("BEGIN TRANSACTION; {FOLD_OBSERVATIONS} COMMIT TRANSACTION;"))
-                .bind(("winner", s.subject.clone()))
-                .bind(("loser", s.subject))
-                .await?
-                .check()?;
-        }
-        return Ok(());
-    }
-
-    let table = kind_table(table)?;
-    db.query(format!("UPDATE {table} SET name = name WHERE name_key = NONE OR alias_keys = NONE")).await?.check()?;
-    let mut res = db
-        .query(format!(
-            "SELECT vault, name_key, array::group(id) AS ids FROM {table} GROUP BY vault, name_key"
-        ))
-        .await?;
-    let groups: Vec<Group> = res.take(0)?;
-    for g in groups.into_iter().filter(|g| g.ids.len() > 1) {
-        // the oldest one wins
-        let mut res = db.query("SELECT id, created_at FROM $ids ORDER BY created_at, id").bind(("ids", g.ids)).await?;
-        let ids: Vec<RecordId> = res.take::<Vec<Group1>>(0)?.into_iter().map(|r| r.id).collect();
-        let Some((winner, losers)) = ids.split_first() else { continue };
-        for loser in losers {
-            let names = select_entity(db, loser).await?.map(|r| loser_names(&r)).unwrap_or_default();
-            merge_rows(db, winner, loser, names).await?;
-        }
-    }
+/// Moves everything of `loser` onto `winner` (same kind and vault, already checked) and deletes
+/// `loser`, in ONE transaction (see [`q::MERGE_ENTITIES`]): any failing statement rolls all of it
+/// back, so a merge never half-happens. Retried on a commit conflict with a concurrent write.
+async fn merge_rows(db: &OrgDb, winner: &RecordId, loser: &RecordId, add_aliases: Vec<String>) -> AppResult<()> {
+    with_retry(|| async {
+        q::MERGE_ENTITIES
+            .on(db)
+            .bind(("winner", winner.clone()))
+            .bind(("loser", loser.clone()))
+            .bind(("aliases", add_aliases.clone()))
+            .await?
+            .check()
+    })
+    .await?;
     Ok(())
 }
 
@@ -1068,42 +903,31 @@ pub async fn dedupe(db: &Db, table: &str) -> AppResult<()> {
 /// directions, or `None` if it doesn't exist / `owner` isn't a member of its
 /// vault. Every row carries `owner_email` -- who wrote it -- since in a
 /// shared vault that's no longer implied by who's asking.
-pub async fn get_entity(db: &Db, owner: &RecordId, entity_id: &RecordId) -> AppResult<Option<EntityDetail>> {
+pub async fn get_entity(db: &OrgDb, control: &ControlDb, owner: &RecordId, entity_id: &RecordId) -> AppResult<Option<EntityDetail>> {
     let Some(row) = select_entity(db, entity_id).await? else { return Ok(None) };
-    if !accessible(db, owner, &row.vault).await? {
+    if !accessible(db, owner, &row.vault, Action::ReadMemories).await? {
         return Ok(None);
     }
 
-    // Only rows in the entity's own vault: a cross-vault edge or memory left
-    // over from before relations/merges were confined to one vault stays hidden.
-    // Edges are read through the graph (`$id->relates_to`): with a plain
-    // `WHERE out = $id AND in.vault = $vault` SurrealDB 2.3 plans `in.vault`
-    // as a lookup on the vault/name indexes and returns nothing.
-    let mut mem_res = db
-        .query("SELECT * FROM memory WITH INDEX memory_subject_idx WHERE subject = $id AND vault = $vault ORDER BY created_at DESC")
+    // only rows in the entity's own vault: a cross-vault edge or memory left over from before
+    // relations and merges were confined to one vault stays hidden
+    let mut mem_res = q::MEMORIES_OF
+        .on(db)
         .bind(("id", entity_id.clone()))
         .bind(("vault", row.vault.clone()))
         .await?;
     let memories: Vec<MemoryRow> = mem_res.take(0)?;
 
-    let mut out_res = db
-        .query("SELECT * FROM $id->relates_to WHERE out.vault = $vault")
-        .bind(("id", entity_id.clone()))
-        .bind(("vault", row.vault.clone()))
-        .await?;
+    let mut out_res = q::EDGES_OUT_IN_VAULT.on(db).bind(("id", entity_id.clone())).bind(("vault", row.vault.clone())).await?;
     let outgoing: Vec<RelationRow> = out_res.take(0)?;
-    let mut in_res = db
-        .query("SELECT * FROM $id<-relates_to WHERE in.vault = $vault")
-        .bind(("id", entity_id.clone()))
-        .bind(("vault", row.vault.clone()))
-        .await?;
+    let mut in_res = q::EDGES_IN_IN_VAULT.on(db).bind(("id", entity_id.clone())).bind(("vault", row.vault.clone())).await?;
     let incoming: Vec<RelationRow> = in_res.take(0)?;
 
     let mut owner_ids: Vec<Option<RecordId>> = vec![row.owner.clone()];
     owner_ids.extend(memories.iter().map(|m| m.owner.clone()));
     owner_ids.extend(outgoing.iter().map(|r| r.owner.clone()));
     owner_ids.extend(incoming.iter().map(|r| r.owner.clone()));
-    let emails = emails_for(db, owner_ids).await?;
+    let emails = emails_for(control, owner_ids).await?;
 
     let memory_out_rows: Vec<MemoryOut> = memories
         .iter()
@@ -1136,14 +960,14 @@ pub async fn get_entity(db: &Db, owner: &RecordId, entity_id: &RecordId) -> AppR
 /// result -- `limit=None` returns everything from `offset` onward. Returns
 /// `{results, total, has_more}`.
 pub async fn list_entities(
-    db: &Db,
+    db: &OrgDb,
     owner: &RecordId,
     kind: Option<&str>,
     vault_id: Option<&RecordId>,
     limit: Option<usize>,
     offset: usize,
 ) -> AppResult<ListEntitiesOut> {
-    let vault = resolve_vault(db, owner, vault_id).await?;
+    let vault = resolve_vault(db, owner, vault_id, Action::ReadMemories).await?;
     let kinds: Vec<&str> = match kind {
         Some(k) => vec![kind_table(k)?],
         None => KINDS.to_vec(),
@@ -1152,7 +976,7 @@ pub async fn list_entities(
     let mut rows_by_kind: Vec<(&str, EntityRow)> = Vec::new();
     for k in kinds {
         let mut res =
-            db.query(format!("SELECT * FROM {k} WHERE vault = $vault ORDER BY name")).bind(("vault", vault.clone())).await?;
+            q::select_by_vault(db, k, true).bind(("vault", vault.clone())).await?;
         let rows: Vec<EntityRow> = res.take(0)?;
         rows_by_kind.extend(rows.into_iter().map(|r| (k, r)));
     }
@@ -1172,15 +996,16 @@ pub async fn list_entities(
 /// force-directed view (resolved vault, or `owner`'s personal vault), or a
 /// subgraph restricted to `kinds`.
 ///
-/// v1 limitation, accepted as-is (matches the Python version): an edge is
+/// v1 limitation, accepted as-is: an edge is
 /// only included when BOTH endpoints are in the requested kind set.
 pub async fn graph(
-    db: &Db,
+    db: &OrgDb,
+    control: &ControlDb,
     owner: &RecordId,
     kinds: Option<&[String]>,
     vault_id: Option<&RecordId>,
 ) -> AppResult<GraphOut> {
-    let vault = resolve_vault(db, owner, vault_id).await?;
+    let vault = resolve_vault(db, owner, vault_id, Action::ReadMemories).await?;
     let requested: Vec<&str> = match kinds {
         Some(ks) => {
             let mut out = Vec::with_capacity(ks.len());
@@ -1195,12 +1020,12 @@ pub async fn graph(
     let mut rows_by_kind: Vec<(&str, EntityRow)> = Vec::new();
     for k in &requested {
         let mut res =
-            db.query(format!("SELECT * FROM {k} WHERE vault = $vault")).bind(("vault", vault.clone())).await?;
+            q::select_by_vault(db, k, false).bind(("vault", vault.clone())).await?;
         let rows: Vec<EntityRow> = res.take(0)?;
         rows_by_kind.extend(rows.into_iter().map(|r| (*k, r)));
     }
 
-    let emails = emails_for(db, rows_by_kind.iter().map(|(_, r)| r.owner.clone()).collect()).await?;
+    let emails = emails_for(control, rows_by_kind.iter().map(|(_, r)| r.owner.clone()).collect()).await?;
     let nodes: Vec<GraphNode> = rows_by_kind
         .iter()
         .map(|(k, r)| GraphNode {
@@ -1216,12 +1041,12 @@ pub async fn graph(
     if !ids.is_empty() {
         // `in IN $ids` doesn't match against a union-typed `record<a|b|c>`
         // field reliably -- `$ids CONTAINS field` does.
-        let mut res = db
-            .query("SELECT * FROM relates_to WHERE $ids CONTAINS in AND $ids CONTAINS out")
+        let mut res = q::EDGES_AMONG
+            .on(db)
             .bind(("ids", ids))
             .await?;
         let rows: Vec<RelationRow> = res.take(0)?;
-        let edge_emails = emails_for(db, rows.iter().map(|r| r.owner.clone()).collect()).await?;
+        let edge_emails = emails_for(control, rows.iter().map(|r| r.owner.clone()).collect()).await?;
         edges = rows
             .iter()
             .map(|r| GraphEdge {
@@ -1237,8 +1062,7 @@ pub async fn graph(
 }
 
 /// Expected `relates_to` label for a code-entity's parent pairing --
-/// file->repository = "part_of", symbol->file = "defined_in". Mirrors
-/// `entities/service.py`'s `_PARENT_LABELS`.
+/// file->repository = "part_of", symbol->file = "defined_in".
 fn parent_label(kind: &str, parent_kind: &str) -> &'static str {
     match (kind, parent_kind) {
         ("file", "repository") => "part_of",
@@ -1256,7 +1080,7 @@ fn parent_label(kind: &str, parent_kind: &str) -> &'static str {
 /// agent-facing API, so a mismatched pairing isn't an error -- it just falls
 /// back to the generic "part_of" label rather than hard-failing.
 pub async fn upsert_code_entity(
-    db: &Db,
+    db: &OrgDb,
     owner: &RecordId,
     kind: &str,
     name: &str,
@@ -1268,11 +1092,11 @@ pub async fn upsert_code_entity(
         return Err(AppError::bad_request(format!("unknown code kind {kind:?}")));
     }
     let mut entity = upsert_entity(db, owner, kind, name, None, vault_id).await?;
-    let entity_rid: RecordId = entity.id.parse().map_err(|_| AppError::internal("entity id did not round-trip"))?;
+    let entity_rid: RecordId = crate::rid::parse(&entity.id).map_err(|_| AppError::internal("entity id did not round-trip"))?;
 
     if let Some(summary) = summary {
-        let mut updated = db
-            .query("UPDATE $id SET summary = $summary, updated_at = time::now() RETURN AFTER")
+        let mut updated = q::SET_SUMMARY
+            .on(db)
             .bind(("id", entity_rid.clone()))
             .bind(("summary", summary.to_string()))
             .await?;
@@ -1364,31 +1188,5 @@ mod tests {
     #[test]
     fn default_memory_type_is_world() {
         assert_eq!(default_memory_type(), "world");
-    }
-
-    #[test]
-    fn only_entity_tables_are_entity_ids() {
-        assert!(is_entity_id(&"person:a".parse().unwrap()));
-        assert!(is_entity_id(&"symbol:a".parse().unwrap()));
-        for other in ["memory:a", "vault_member:a", "vault:a", "user:a", "cache_record:a"] {
-            assert!(!is_entity_id(&other.parse().unwrap()), "{other}");
-        }
-    }
-
-    fn entity_in(vault: &str) -> EntityRow {
-        EntityRow {
-            id: "person:x".parse().unwrap(),
-            owner: None,
-            vault: vault.parse().unwrap(),
-            name: String::new(),
-            aliases: Vec::new(),
-            summary: String::new(),
-        }
-    }
-
-    #[test]
-    fn relations_and_merges_need_one_vault() {
-        assert!(same_vault(&entity_in("vault:a"), &entity_in("vault:a")).is_ok());
-        assert!(same_vault(&entity_in("vault:a"), &entity_in("vault:b")).is_err());
     }
 }

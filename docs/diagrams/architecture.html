@@ -4940,11 +4940,11 @@
         <!-- Connection paths (before components for correct z-order) -->
         <path data-edge-from="browser" data-edge-to="web" data-edge-label="Open app" data-edge-key="0" data-edge-id="web-access" data-composition-points="230,338;300,338" d="M 230 338 L 300 338" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
         <path data-edge-from="web" data-edge-to="api" data-edge-label="/api/*" data-edge-key="1" data-edge-id="rest-api" data-composition-points="490,338;610,338" d="M 490 338 L 610 338" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="api" data-edge-to="store" data-edge-label="Read / write" data-edge-key="2" data-edge-id="database" data-composition-points="800,338;940,338" d="M 800 338 L 940 338" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="agent" data-edge-to="api" data-edge-label="/mcp" data-edge-key="3" data-edge-id="mcp-tools" data-composition-points="705,136;705,300" d="M 705 136 L 705 300" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="sources" data-edge-to="sync" data-edge-label="Fetch records" data-edge-key="4" data-edge-id="source-fetch" data-composition-points="490,588;610,588" d="M 490 588 L 610 588" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="sync" data-edge-to="api" data-edge-label="Shared state" data-edge-key="5" data-edge-id="ingest-store" data-composition-points="705,550;705,376" d="M 705 550 L 705 376" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="sync" data-edge-to="model" data-edge-label="Embed / extract" data-edge-key="6" data-edge-id="enrichment" data-composition-points="800,588;940,588" d="M 800 588 L 940 588" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="agent" data-edge-to="api" data-edge-label="/mcp" data-edge-key="2" data-edge-id="mcp-tools" data-composition-points="705,136;705,300" d="M 705 136 L 705 300" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="api" data-edge-to="store" data-edge-label="Read / write" data-edge-key="3" data-edge-id="database" data-composition-points="800,331;940,331" d="M 800 331 L 940 331" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="worker" data-edge-to="store" data-edge-label="Claim jobs, write" data-edge-key="4" data-edge-id="job-queue" data-composition-points="800,581;870,581;870,345;940,345" d="M 800 581 L 862 581 Q 870 581 870 573 L 870 353 Q 870 345 878 345 L 940 345" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="sources" data-edge-to="worker" data-edge-label="Fetch records" data-edge-key="5" data-edge-id="source-fetch" data-composition-points="490,588;610,588" d="M 490 588 L 610 588" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="worker" data-edge-to="model" data-edge-label="Embed / extract" data-edge-key="6" data-edge-id="enrichment" data-composition-points="800,595;940,595" d="M 800 595 L 940 595" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
 
         <!-- Components -->
         <g id="node-browser" data-node-id="browser" data-node-label="Browser" tabindex="0" role="button" aria-label="Focus Browser, Dashboard, graphs, chat, Architecture component" aria-pressed="false" data-node-kind="external" data-node-sublabel="Dashboard, graphs, chat" data-node-context="Architecture component">
@@ -4973,31 +4973,31 @@
         <text data-detail="context" x="395" y="352" class="t-muted" font-size="9" text-anchor="middle">Web app · :3000</text>
         </g>
 
-        <g id="node-api" data-node-id="api" data-node-label="Rust / Axum" tabindex="0" role="button" aria-label="Focus Rust / Axum, API + shared tools · :8001, Architecture component" aria-pressed="false" data-node-kind="backend" data-node-sublabel="API + shared tools · :8001" data-node-context="Architecture component">
-          <title>Rust / Axum · API + shared tools · :8001 · Architecture component</title>
+        <g id="node-api" data-node-id="api" data-node-label="Rust / Axum API" tabindex="0" role="button" aria-label="Focus Rust / Axum API, Shared tools · :8001, Architecture component" aria-pressed="false" data-node-kind="backend" data-node-sublabel="Shared tools · :8001" data-node-context="Architecture component">
+          <title>Rust / Axum API · Shared tools · :8001 · Architecture component</title>
           <rect x="610" y="300" width="190" height="76" rx="6" class="c-mask"/>
           <rect x="610" y="300" width="190" height="76" rx="6" class="c-backend" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(616 306) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-detail-anchor x="705" y="336" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Rust / Axum</text>
-        <text data-detail="context" x="705" y="352" class="t-muted" font-size="9" text-anchor="middle">API + shared tools · :8001</text>
+          <text data-detail-anchor x="705" y="336" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Rust / Axum API</text>
+        <text data-detail="context" x="705" y="352" class="t-muted" font-size="9" text-anchor="middle">Shared tools · :8001</text>
         </g>
 
-        <g id="node-store" data-node-id="store" data-node-label="SurrealDB 2.3" tabindex="0" role="button" aria-label="Focus SurrealDB 2.3, Records, memories, relations, Architecture component" aria-pressed="false" data-node-kind="database" data-node-sublabel="Records, memories, relations" data-node-context="Architecture component">
-          <title>SurrealDB 2.3 · Records, memories, relations · Architecture component</title>
+        <g id="node-store" data-node-id="store" data-node-label="SurrealDB 3.3" tabindex="0" role="button" aria-label="Focus SurrealDB 3.3, Control DB + one DB per org, Architecture component" aria-pressed="false" data-node-kind="database" data-node-sublabel="Control DB + one DB per org" data-node-context="Architecture component">
+          <title>SurrealDB 3.3 · Control DB + one DB per org · Architecture component</title>
           <rect x="940" y="300" width="190" height="76" rx="6" class="c-mask"/>
           <rect x="940" y="300" width="190" height="76" rx="6" class="c-database" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(946 306) scale(0.6875)">
             <ellipse cx="8" cy="4" rx="5" ry="2"/>
             <path d="M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4M3 8c0 1.1 2.2 2 5 2s5-.9 5-2"/>
           </g>
-          <text data-detail-anchor x="1035" y="336" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">SurrealDB 2.3</text>
-        <text data-detail="context" x="1035" y="352" class="t-muted" font-size="9" text-anchor="middle">Records, memories, relations</text>
+          <text data-detail-anchor x="1035" y="336" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">SurrealDB 3.3</text>
+        <text data-detail="context" x="1035" y="352" class="t-muted" font-size="9" text-anchor="middle">Control DB + one DB per org</text>
         </g>
 
-        <g id="node-agent" data-node-id="agent" data-node-label="AI agents" tabindex="0" role="button" aria-label="Focus AI agents, MCP + bearer token, Architecture component" aria-pressed="false" data-node-kind="external" data-node-sublabel="MCP + bearer token" data-node-context="Architecture component">
-          <title>AI agents · MCP + bearer token · Architecture component</title>
+        <g id="node-agent" data-node-id="agent" data-node-label="AI agents" tabindex="0" role="button" aria-label="Focus AI agents, MCP · token or OAuth, Architecture component" aria-pressed="false" data-node-kind="external" data-node-sublabel="MCP · token or OAuth" data-node-context="Architecture component">
+          <title>AI agents · MCP · token or OAuth · Architecture component</title>
           <rect x="610" y="60" width="190" height="76" rx="6" class="c-mask"/>
           <rect x="610" y="60" width="190" height="76" rx="6" class="c-external" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(616 66) scale(0.6875)">
@@ -5005,7 +5005,7 @@
             <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
           </g>
           <text data-detail-anchor x="705" y="96" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">AI agents</text>
-        <text data-detail="context" x="705" y="112" class="t-muted" font-size="9" text-anchor="middle">MCP + bearer token</text>
+        <text data-detail="context" x="705" y="112" class="t-muted" font-size="9" text-anchor="middle">MCP · token or OAuth</text>
         </g>
 
         <g id="node-sources" data-node-id="sources" data-node-label="Connected apps" tabindex="0" role="button" aria-label="Focus Connected apps, 12 source adapters, Architecture component" aria-pressed="false" data-node-kind="external" data-node-sublabel="12 source adapters" data-node-context="Architecture component">
@@ -5020,15 +5020,15 @@
         <text data-detail="context" x="395" y="602" class="t-muted" font-size="9" text-anchor="middle">12 source adapters</text>
         </g>
 
-        <g id="node-sync" data-node-id="sync" data-node-label="Sync + ingest" tabindex="0" role="button" aria-label="Focus Sync + ingest, Map, upsert, enrich, Architecture component" aria-pressed="false" data-node-kind="backend" data-node-sublabel="Map, upsert, enrich" data-node-context="Architecture component">
-          <title>Sync + ingest · Map, upsert, enrich · Architecture component</title>
+        <g id="node-worker" data-node-id="worker" data-node-label="Job workers" tabindex="0" role="button" aria-label="Focus Job workers, Sync, embed, extract, Architecture component" aria-pressed="false" data-node-kind="backend" data-node-sublabel="Sync, embed, extract" data-node-context="Architecture component">
+          <title>Job workers · Sync, embed, extract · Architecture component</title>
           <rect x="610" y="550" width="190" height="76" rx="6" class="c-mask"/>
           <rect x="610" y="550" width="190" height="76" rx="6" class="c-backend" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(616 556) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-detail-anchor x="705" y="586" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Sync + ingest</text>
-        <text data-detail="context" x="705" y="602" class="t-muted" font-size="9" text-anchor="middle">Map, upsert, enrich</text>
+          <text data-detail-anchor x="705" y="586" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Job workers</text>
+        <text data-detail="context" x="705" y="602" class="t-muted" font-size="9" text-anchor="middle">Sync, embed, extract</text>
         </g>
 
         <g id="node-model" data-node-id="model" data-node-label="Model endpoint" tabindex="0" role="button" aria-label="Focus Model endpoint, Optional · OpenAI-compatible, Architecture component" aria-pressed="false" data-node-kind="external" data-node-sublabel="Optional · OpenAI-compatible" data-node-context="Architecture component">
@@ -5052,25 +5052,25 @@
           <rect x="530.6" y="318" width="38.8" height="14" rx="3" class="c-mask"/>
           <text x="550" y="328" class="t-muted" font-size="8" text-anchor="middle">/api/*</text>
         </g>
-        <g data-detail="context" data-edge-from="api" data-edge-to="store" data-edge-label="Read / write" data-edge-key="2" data-edge-id="database">
-          <rect x="836.2" y="318" width="67.6" height="14" rx="3" class="c-mask"/>
-          <text x="870" y="328" class="t-muted" font-size="8" text-anchor="middle">Read / write</text>
-        </g>
-        <g data-detail="context" data-edge-from="agent" data-edge-to="api" data-edge-label="/mcp" data-edge-key="3" data-edge-id="mcp-tools">
+        <g data-detail="context" data-edge-from="agent" data-edge-to="api" data-edge-label="/mcp" data-edge-key="2" data-edge-id="mcp-tools">
           <rect x="690" y="140" width="30" height="14" rx="3" class="c-mask"/>
           <text x="705" y="150" class="t-muted" font-size="8" text-anchor="middle">/mcp</text>
         </g>
-        <g data-detail="context" data-edge-from="sources" data-edge-to="sync" data-edge-label="Fetch records" data-edge-key="4" data-edge-id="source-fetch">
+        <g data-detail="context" data-edge-from="api" data-edge-to="store" data-edge-label="Read / write" data-edge-key="3" data-edge-id="database">
+          <rect x="836.2" y="311" width="67.6" height="14" rx="3" class="c-mask"/>
+          <text x="870" y="321" class="t-muted" font-size="8" text-anchor="middle">Read / write</text>
+        </g>
+        <g data-detail="context" data-edge-from="worker" data-edge-to="store" data-edge-label="Claim jobs, write" data-edge-key="4" data-edge-id="job-queue">
+          <rect x="824.2" y="443" width="91.6" height="14" rx="3" class="c-mask"/>
+          <text x="870" y="453" class="t-muted" font-size="8" text-anchor="middle">Claim jobs, write</text>
+        </g>
+        <g data-detail="context" data-edge-from="sources" data-edge-to="worker" data-edge-label="Fetch records" data-edge-key="5" data-edge-id="source-fetch">
           <rect x="513.8" y="568" width="72.4" height="14" rx="3" class="c-mask"/>
           <text x="550" y="578" class="t-muted" font-size="8" text-anchor="middle">Fetch records</text>
         </g>
-        <g data-detail="context" data-edge-from="sync" data-edge-to="api" data-edge-label="Shared state" data-edge-key="5" data-edge-id="ingest-store">
-          <rect x="671.2" y="530" width="67.6" height="14" rx="3" class="c-mask"/>
-          <text x="705" y="540" class="t-muted" font-size="8" text-anchor="middle">Shared state</text>
-        </g>
-        <g data-detail="context" data-edge-from="sync" data-edge-to="model" data-edge-label="Embed / extract" data-edge-key="6" data-edge-id="enrichment">
-          <rect x="829" y="568" width="82" height="14" rx="3" class="c-mask"/>
-          <text x="870" y="578" class="t-muted" font-size="8" text-anchor="middle">Embed / extract</text>
+        <g data-detail="context" data-edge-from="worker" data-edge-to="model" data-edge-label="Embed / extract" data-edge-key="6" data-edge-id="enrichment">
+          <rect x="829" y="593" width="82" height="14" rx="3" class="c-mask"/>
+          <text x="870" y="603" class="t-muted" font-size="8" text-anchor="middle">Embed / extract</text>
         </g>
 
         <!-- Legend -->
@@ -5290,10 +5290,10 @@
       <div class="card">
         <div class="card-header">
           <div class="card-dot emerald"></div>
-          <h3>One database</h3>
+          <h3>A database per org</h3>
         </div>
         <ul>
-          <li>&bull; Graph, full-text and vector indexes share SurrealDB.</li>
+          <li>&bull; Org data sits behind its own database user; accounts and jobs live in control.</li>
         </ul>
       </div>
 

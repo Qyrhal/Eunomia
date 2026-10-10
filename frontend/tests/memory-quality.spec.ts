@@ -1,7 +1,7 @@
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { test, expect, request as pwRequest, type APIRequestContext } from "@playwright/test";
-import { uniqueEmail } from "./helpers";
+import { uniqueEmail, MOCK_BIND, mockBase } from "./helpers";
 
 // Retrieval quality from real agent use: outdated facts drop out of recall,
 // every hit carries its vault, date and a 0-1 score, a handle only ever
@@ -36,7 +36,7 @@ function startModel(): Promise<{ base: string; close: () => void }> {
     });
   });
   return new Promise((resolve) =>
-    server.listen(0, "127.0.0.1", () => resolve({ base: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, close: () => server.close() }))
+    server.listen(0, MOCK_BIND, () => resolve({ base: mockBase((server.address() as AddressInfo).port), close: () => server.close() }))
   );
 }
 

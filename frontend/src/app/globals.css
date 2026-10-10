@@ -1,49 +1,66 @@
 @import "tailwindcss";
 
-/* ---- Eunomia ----
-   A calm, confident instrument panel for a personal memory hub. Dark canvas,
-   soft rounded cards, one muted felt-green accent reserved for the thing
-   that's healthy, primary, or actually new — never for general decoration.
-   Single theme, no light mode. */
+/* ---- Eunomia: Multiplayer Canvas ----
+   The shared canvas a team's agents and people work on. Near-black (or
+   paper-white) ground with a faint dot grid, floating 1px panels, Figma-style
+   author tags. One accent, felt green, reserved for what you can press or
+   have selected. Author colours only ever mark who wrote something.
+   Dark is the default; `data-theme="light"` on <html> flips it. */
 
 :root {
   color-scheme: dark;
-  --canvas: #0b0d0f;
-  --surface: #16191d;
-  --surface-raised: #20242a;
-  --ink: #f2f4f6;
-  --ink-dim: #9aa3ad;
-  --ink-faint: #7a8390;
-  --border: rgba(242, 244, 246, 0.08);
-  --border-strong: rgba(242, 244, 246, 0.16);
-  --felt: #3fa873;
-  --good: #3fa873;
-  --warning: #c9a35c;
-  --critical: #c1685c;
 
-  /* a small, muted palette for entity kinds — distinct from each other and
-     from --felt, so the single accent still reads as "the" accent. */
+  --canvas: #0b0c0e;
+  --surface: #121316;
+  --surface-raised: #1a1b1f;
+  --surface-hover: #212328;
+  --ink: #ededef;
+  --ink-dim: #a3a7ae;
+  --ink-faint: #80858e;
+  --border: rgba(237, 237, 239, 0.08);
+  --border-strong: rgba(237, 237, 239, 0.15);
+  --grid-dot: rgba(237, 237, 239, 0.07);
+
+  /* the one accent: fills, text-on-dark, and the ink that sits on a fill */
+  --accent: #3fa873;
+  --accent-text: #52bd87;
+  --accent-soft: rgba(63, 168, 115, 0.14);
+  --on-accent: #04140b;
+  --felt: var(--accent);
+
+  --good: #3fa873;
+  --warning: #d0a651;
+  --critical: #d4705f;
+  --critical-soft: rgba(212, 112, 95, 0.12);
+
+  /* author tags (multiplayer presence). Never used for actions or status. */
+  --author-1: #f0815e;
+  --author-2: #5fa6f2;
+  --author-3: #b48cf0;
+  --author-4: #e2b04f;
+  --author-5: #e77fa9;
+  --author-6: #4fc1c7;
+  --on-author: #0b0c0e;
+
+  --shadow-panel: 0 0 0 1px var(--border), 0 1px 1px rgba(0, 0, 0, 0.25), 0 12px 32px -12px rgba(0, 0, 0, 0.6);
+  --shadow-pop: 0 0 0 1px var(--border-strong), 0 4px 12px -2px rgba(0, 0, 0, 0.4), 0 24px 64px -16px rgba(0, 0, 0, 0.7);
+  --scrim: rgba(4, 5, 6, 0.6);
+
+  /* entity kinds -- muted, distinct from the accent */
   --kind-person: #6f9bc9;
   --kind-organisation: #a692c9;
   --kind-location: #c98a5a;
-  /* code-entity kinds -- a second map (repositories/files/symbols), kept in
-     the same muted-palette family but a distinct hue triad (teal/olive/rose)
-     from the person/organisation/location triad above. */
   --kind-repository: #5a9e8f;
   --kind-file: #9e9150;
   --kind-symbol: #9e5a7a;
 
-  /* chart/category series — muted, none competing with --felt. */
   --series-1: #8b7fc9;
   --series-2: #6f9bc9;
   --series-3: #c98aa0;
   --series-4: #c9a35c;
 
-  /* connector marketplace icon-tile tints — one per connector kind, muted
-     like the --kind-* palette above, distinct from --felt. */
   --connector-up-bank: #5a8fc9;
   --connector-pocketai: #a85ec9;
-  --connector-open-connector: #c97a4a;
   --connector-github: #8a8f98;
   --connector-slack: #c95ea8;
   --connector-notion: #a8a29e;
@@ -55,129 +72,556 @@
   --connector-todoist: #c9825a;
   --connector-stripe: #8f6fc9;
 
-  --font-display: var(--font-inter);
-  --font-sans: var(--font-inter);
-  --font-mono: var(--font-plex-mono);
+  --font-display: var(--font-geist);
+  --font-sans: var(--font-geist);
+  --font-mono: var(--font-geist-mono);
 
-  --radius-card: 18px;
-  --radius-field: 10px;
-  --radius-control: 12px;
+  --radius-card: 10px;
+  --radius-field: 7px;
+  --radius-control: 7px;
+
+  /* one device pixel for every rule and border */
+  --hair: 1px;
+
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+  --dur-press: 140ms;
+  --dur-hover: 120ms;
+  --dur-pop: 180ms;
+  --dur-drawer: 260ms;
 }
 
+@media (min-resolution: 2dppx) {
+  :root {
+    --hair: 0.5px;
+  }
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --canvas: #f5f6f7;
+  --surface: #ffffff;
+  --surface-raised: #f0f1f3;
+  --surface-hover: #e8e9ec;
+  --ink: #111214;
+  --ink-dim: #4f545c;
+  --ink-faint: #676c75;
+  --border: rgba(17, 18, 20, 0.1);
+  --border-strong: rgba(17, 18, 20, 0.18);
+  --grid-dot: rgba(17, 18, 20, 0.1);
+
+  --accent: #2b7d53;
+  --accent-text: #23744b;
+  --accent-soft: rgba(43, 125, 83, 0.1);
+  --on-accent: #ffffff;
+
+  --good: #2b7d53;
+  --warning: #9a6b12;
+  --critical: #b4432f;
+  --critical-soft: rgba(180, 67, 47, 0.08);
+
+  --author-1: #e0623c;
+  --author-2: #2f7fd8;
+  --author-3: #8a5ad8;
+  --author-4: #c48a14;
+  --author-5: #cf4f84;
+  --author-6: #1f9aa1;
+  --on-author: #ffffff;
+
+  --shadow-panel: 0 0 0 1px var(--border), 0 1px 2px rgba(17, 18, 20, 0.04), 0 12px 32px -14px rgba(17, 18, 20, 0.16);
+  --shadow-pop: 0 0 0 1px var(--border-strong), 0 4px 12px -2px rgba(17, 18, 20, 0.08), 0 24px 64px -16px rgba(17, 18, 20, 0.25);
+  --scrim: rgba(17, 18, 20, 0.28);
+}
+
+@layer base {
 * {
   border-color: var(--border);
+}
+
+html {
+  background: var(--canvas);
 }
 
 body {
   background: var(--canvas);
   color: var(--ink);
   font-family: var(--font-sans), system-ui, sans-serif;
+  font-size: 14px;
+  font-feature-settings: "ss01", "cv11";
+  caret-color: var(--accent);
 }
+
+}
+
+@layer components {
+/* ---- type ---- */
 
 .font-display {
   font-family: var(--font-display), system-ui, sans-serif;
-  font-weight: 700;
-  letter-spacing: -0.02em;
+  font-weight: 600;
+  letter-spacing: -0.025em;
 }
 
 .font-mono {
   font-family: var(--font-mono), ui-monospace, monospace;
+  font-feature-settings: normal;
   font-variant-numeric: tabular-nums;
 }
 
-.surface {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-card);
+.tabular {
+  font-variant-numeric: tabular-nums;
 }
 
+/* A page title: one per page, top left of the canvas. */
+.page-title {
+  font-family: var(--font-display), system-ui, sans-serif;
+  font-size: 22px;
+  line-height: 1.2;
+  font-weight: 600;
+  letter-spacing: -0.025em;
+  color: var(--ink);
+  text-wrap: balance;
+}
+
+/* A section heading inside a page. */
+.section-title {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  color: var(--ink);
+}
+
+/* Small quiet label for a field, table column or stat. Never a kicker above
+   a heading -- headings carry their own weight. */
+.eyebrow,
+.label {
+  font-size: 12px;
+  line-height: 1.3;
+  color: var(--ink-faint);
+}
+
+/* ---- the canvas ---- */
+
+.canvas-grid {
+  background-color: var(--canvas);
+  background-image: radial-gradient(circle at 1px 1px, var(--grid-dot) 1px, transparent 0);
+  background-size: 20px 20px;
+}
+
+/* ---- containers ---- */
+
+.surface,
 .ledger {
   background: var(--surface);
-  border: 1px solid var(--border);
+  border: var(--hair) solid var(--border);
   border-radius: var(--radius-card);
 }
 
-.eyebrow {
-  font-size: 11.5px;
-  letter-spacing: 0.01em;
-  color: var(--ink-faint);
+/* A floating panel: the inspector, popovers, the palette. */
+.panel {
+  background: var(--surface);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-panel);
 }
 
 .hairline-rows > * + * {
-  border-top: 1px solid var(--border);
+  border-top: var(--hair) solid var(--border);
 }
+
+/* Figma-style selection: accent outline with four square handles. Table rows
+   get the outline only (a pseudo-element would become an extra cell). */
+.frame-selected {
+  position: relative;
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+tr.frame-selected::after {
+  content: none;
+}
+.frame-selected:not(tr)::after {
+  content: "";
+  position: absolute;
+  inset: -3px;
+  pointer-events: none;
+  --h: 6px;
+  background:
+    linear-gradient(var(--accent), var(--accent)) top left / var(--h) var(--h) no-repeat,
+    linear-gradient(var(--accent), var(--accent)) top right / var(--h) var(--h) no-repeat,
+    linear-gradient(var(--accent), var(--accent)) bottom left / var(--h) var(--h) no-repeat,
+    linear-gradient(var(--accent), var(--accent)) bottom right / var(--h) var(--h) no-repeat;
+}
+
+/* ---- controls ---- */
 
 .field {
   background: var(--surface-raised);
-  border: 1px solid var(--border);
+  border: var(--hair) solid var(--border);
   border-radius: var(--radius-field);
   color: var(--ink);
   font-family: var(--font-sans), system-ui, sans-serif;
+  transition: border-color var(--dur-hover) ease, background-color var(--dur-hover) ease;
+}
+.field:focus-within,
+.field:focus {
+  border-color: var(--accent);
+  outline: none;
 }
 
-.field::placeholder {
+.field::placeholder,
+input::placeholder,
+textarea::placeholder {
   color: var(--ink-faint);
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 12px;
+  border-radius: var(--radius-control);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  border: var(--hair) solid var(--border-strong);
+  background: var(--surface-raised);
+  color: var(--ink);
+  transition:
+    transform var(--dur-press) var(--ease-out),
+    background-color var(--dur-hover) ease,
+    border-color var(--dur-hover) ease;
+}
+.btn:active:not(:disabled) {
+  transform: scale(0.97);
+}
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.btn-primary {
+  background: var(--accent);
+  border-color: transparent;
+  color: var(--on-accent);
+}
+.btn-ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--ink-dim);
+}
+.btn-danger {
+  background: transparent;
+  border-color: var(--border-strong);
+  color: var(--critical);
+}
+.btn-sm {
+  height: 26px;
+  padding: 0 9px;
+  font-size: 12px;
+}
+.btn-icon {
+  width: 30px;
+  padding: 0;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .btn:hover:not(:disabled) {
+    background: var(--surface-hover);
+  }
+  .btn-primary:hover:not(:disabled) {
+    background: color-mix(in oklab, var(--accent) 88%, var(--ink));
+  }
+  .btn-ghost:hover:not(:disabled) {
+    color: var(--ink);
+  }
+  .btn-danger:hover:not(:disabled) {
+    background: var(--critical-soft);
+  }
 }
 
 .pill {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 5px 11px;
-  border-radius: 999px;
-  border: 1px solid var(--border);
+  height: 24px;
+  padding: 0 9px;
+  border-radius: 6px;
+  border: var(--hair) solid var(--border);
   background: var(--surface-raised);
   color: var(--ink-dim);
   font-size: 12px;
   line-height: 1;
+  transition: transform var(--dur-press) var(--ease-out), border-color var(--dur-hover) ease, color var(--dur-hover) ease;
 }
-
-.pill[aria-pressed="true"],
+button.pill:active {
+  transform: scale(0.97);
+}
+/* Multi-select filters that are on: quiet, so a row of them never turns
+   into a wall of accent. Single-choice selection (tabs) keeps the accent. */
+.pill[aria-pressed="true"] {
+  border-color: var(--border-strong);
+  background: var(--surface-hover);
+  color: var(--ink);
+}
+.pill[aria-pressed="false"] {
+  opacity: 0.7;
+}
 .pill[aria-selected="true"] {
-  border-color: var(--felt);
+  border-color: var(--accent);
+  background: var(--accent-soft);
   color: var(--ink);
 }
 
-.stat-ring-arc {
-  transition: stroke-dasharray 0.6s ease;
+.kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  border-radius: 4px;
+  border: var(--hair) solid var(--border-strong);
+  background: var(--surface);
+  color: var(--ink-faint);
+  font: 500 11px var(--font-mono), ui-monospace, monospace;
+  line-height: 1;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .stat-ring-arc {
-    transition: none;
+/* Figma multiplayer name tag: who wrote this. */
+.author-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  max-width: 100%;
+  padding: 0 6px;
+  border-radius: 4px 4px 4px 1px;
+  background: var(--author, var(--ink-faint));
+  color: var(--on-author);
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+/* Sidebar nav row. Selected = raised fill + accent icon. */
+.nav-link {
+  color: var(--ink-dim);
+  transition: background-color var(--dur-hover) ease, color var(--dur-hover) ease;
+}
+.nav-link .nav-icon {
+  color: var(--ink-faint);
+}
+.nav-link[data-active] {
+  background: var(--surface-raised);
+  color: var(--ink);
+  font-weight: 500;
+}
+.nav-link[data-active] .nav-icon {
+  color: var(--accent-text);
+}
+@media (hover: hover) and (pointer: fine) {
+  .nav-link:hover {
+    background: var(--surface-raised);
+    color: var(--ink);
   }
 }
 
+/* Status dot. */
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+
+/* Data tables: tabular numerals, hairline rows, quiet headers. */
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.data-table th {
+  height: 32px;
+  padding: 0 12px;
+  text-align: left;
+  font-weight: 500;
+  font-size: 12px;
+  color: var(--ink-faint);
+  border-bottom: var(--hair) solid var(--border);
+}
+.data-table td {
+  height: 40px;
+  padding: 0 12px;
+  border-bottom: var(--hair) solid var(--border);
+  font-variant-numeric: tabular-nums;
+}
+.data-table tr:last-child td {
+  border-bottom: 0;
+}
+@media (hover: hover) and (pointer: fine) {
+  .data-table tbody tr:hover td {
+    background: var(--surface-raised);
+  }
+}
+
+/* Skeleton block for loading states. */
+.skeleton {
+  border-radius: 5px;
+  background: linear-gradient(90deg, var(--surface-raised) 0%, var(--surface-hover) 50%, var(--surface-raised) 100%);
+  background-size: 200% 100%;
+  animation: skeleton 1.2s linear infinite;
+}
+@keyframes skeleton {
+  to {
+    background-position: -200% 0;
+  }
+}
+
+/* Popover / menu entrance: from slightly smaller, never from nothing. Set
+   transform-origin to the trigger side on the element. */
+.pop-in {
+  transition: opacity var(--dur-pop) var(--ease-out), transform var(--dur-pop) var(--ease-out);
+  @starting-style {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+}
+
+/* Custom select (components/Select.tsx). */
+.select-trigger {
+  cursor: default;
+}
+.select-trigger[data-open] {
+  border-color: var(--accent);
+}
+.select-chevron {
+  color: var(--ink-faint);
+}
+.select-list {
+  position: fixed;
+  z-index: 60;
+  overflow-y: auto;
+  padding: 4px;
+  box-shadow: var(--shadow-pop);
+  overscroll-behavior: contain;
+}
+.select-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 0 8px;
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--ink-dim);
+  cursor: default;
+  user-select: none;
+}
+.select-option[aria-selected="true"] {
+  color: var(--ink);
+}
+.select-option[aria-selected="true"] svg {
+  color: var(--accent-text);
+}
+.select-option[data-active] {
+  background: var(--surface-raised);
+  color: var(--ink);
+}
+
+/* Mobile drawer slides from the left edge. */
+.drawer-in {
+  transition: transform var(--dur-drawer) var(--ease-drawer);
+  @starting-style {
+    transform: translateX(-100%);
+  }
+}
+.fade-in {
+  transition: opacity var(--dur-pop) ease;
+  @starting-style {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-property: opacity, color, background-color, border-color !important;
+    animation-duration: 0.01ms !important;
+  }
+  .btn:active,
+  button.pill:active {
+    transform: none;
+  }
+}
+
+}
+
+/* Theme wipe (ThemeToggle): the new theme grows as a circle from the toggle.
+   Only while the toggle runs a pointer-started View Transition; no crossfade. */
+html[data-theme-wipe]::view-transition-old(root),
+html[data-theme-wipe]::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+
+@layer base {
+/* ---- browser surfaces ---- */
+
 ::selection {
-  background: var(--felt);
-  color: var(--canvas);
+  background: var(--accent);
+  color: var(--on-accent);
 }
 
 :focus-visible {
-  outline: 2px solid var(--felt);
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 
-/* Markdown inside chat bubbles (react-markdown output). */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+
+/* Native datalist arrow: off, it clashes with the themed controls. */
+input[list]::-webkit-calendar-picker-indicator {
+  display: none !important;
+}
+
+a {
+  text-underline-offset: 3px;
+  text-decoration-thickness: 1px;
+}
+
+}
+
+@layer components {
+/* ---- markdown (chat bubbles, docs) ---- */
 .md > :first-child { margin-top: 0; }
 .md > :last-child { margin-bottom: 0; }
-.md p, .md ul, .md ol, .md pre, .md blockquote, .md table { margin: 0 0 0.65em; }
-.md h1, .md h2, .md h3, .md h4 { font-weight: 600; margin: 0.9em 0 0.4em; line-height: 1.3; }
-.md h1 { font-size: 1.2em; }
+.md p, .md ul, .md ol, .md pre, .md blockquote, .md table { margin: 0 0 0.7em; }
+.md { line-height: 1.6; }
+.md h1, .md h2, .md h3, .md h4 { font-weight: 600; margin: 1em 0 0.4em; line-height: 1.3; letter-spacing: -0.015em; }
+.md h1 { font-size: 1.25em; }
 .md h2 { font-size: 1.1em; }
 .md h3, .md h4 { font-size: 1em; }
 .md ul { list-style: disc; padding-left: 1.3em; }
 .md ol { list-style: decimal; padding-left: 1.4em; }
 .md li + li { margin-top: 0.2em; }
-.md a { color: var(--felt); text-decoration: underline; text-underline-offset: 2px; }
+.md li::marker { color: var(--ink-faint); }
+.md a { color: var(--accent-text); text-decoration: underline; }
 .md strong { font-weight: 600; }
-.md hr { border: 0; border-top: 1px solid var(--border); margin: 0.9em 0; }
-.md blockquote { border-left: 2px solid var(--border-strong); padding-left: 0.8em; color: var(--ink-dim); }
-.md code { font-family: var(--font-mono), ui-monospace, monospace; font-size: 0.9em; background: var(--surface-raised); border: 1px solid var(--border); border-radius: 5px; padding: 0.05em 0.35em; }
-.md pre { background: var(--surface-raised); border: 1px solid var(--border); border-radius: 10px; padding: 0.7em 0.9em; overflow-x: auto; }
-.md pre code { background: none; border: 0; padding: 0; font-size: 0.88em; }
-.md table { border-collapse: collapse; display: block; overflow-x: auto; }
-.md th, .md td { border: 1px solid var(--border); padding: 0.3em 0.7em; text-align: left; }
+.md hr { border: 0; border-top: var(--hair) solid var(--border); margin: 1em 0; }
+.md blockquote { border-left: 1px solid var(--border-strong); padding-left: 0.9em; color: var(--ink-dim); }
+.md code { font-family: var(--font-mono), ui-monospace, monospace; font-size: 0.88em; background: var(--surface-raised); border: var(--hair) solid var(--border); border-radius: 4px; padding: 0.08em 0.35em; }
+.md pre { background: var(--surface-raised); border: var(--hair) solid var(--border); border-radius: 8px; padding: 0.75em 0.9em; overflow-x: auto; }
+.md pre code { background: none; border: 0; padding: 0; font-size: 0.86em; }
+.md table { border-collapse: collapse; display: block; overflow-x: auto; font-variant-numeric: tabular-nums; }
+.md th, .md td { border: var(--hair) solid var(--border); padding: 0.35em 0.75em; text-align: left; }
 .md th { background: var(--surface-raised); font-weight: 600; }
 
 /* Labels drawn over the 3D scenes (positioned per frame by Scene3D). */
@@ -191,8 +635,10 @@ body {
   text-shadow: 0 0 4px var(--canvas), 0 0 2px var(--canvas);
 }
 
-/* Long-form docs: a little more air than chat bubbles. */
-.docs .md h1 { font-size: 1.6em; margin-bottom: 0.6em; }
-.docs .md h2 { font-size: 1.2em; margin-top: 1.6em; }
-.docs .md p, .docs .md ul, .docs .md ol, .docs .md table, .docs .md pre { margin-bottom: 0.9em; }
+/* Long-form docs: more air than chat bubbles, held to a reading measure. */
+.docs .md { max-width: 70ch; }
+.docs .md h1 { font-size: 1.75em; margin-bottom: 0.6em; letter-spacing: -0.025em; }
+.docs .md h2 { font-size: 1.2em; margin-top: 1.8em; }
+.docs .md p, .docs .md ul, .docs .md ol, .docs .md table, .docs .md pre { margin-bottom: 0.95em; }
 .docs .md td, .docs .md th { font-size: 0.92em; }
+}

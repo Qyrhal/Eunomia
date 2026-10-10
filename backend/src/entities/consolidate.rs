@@ -3,8 +3,7 @@
 //! statement, stored as that subject's `type="observation"` memory row.
 //!
 //! Modeled on vectorize.io's Hindsight "observations" concept, with
-//! deliberate scope cuts (see `entities/consolidate.py`'s module docstring
-//! for the full rationale): scope is always one entity (`subject`), no
+//! deliberate scope cuts: scope is always one entity (`subject`), no
 //! NLP-based world/experience classification, "update history" is just the
 //! `version` counter, and the mission text is a single configurable string
 //! rather than a full strategy-matching system.
@@ -17,24 +16,32 @@
 //! stale one is rebuilt from scratch out of the subject's surviving facts --
 //! the old belief is not carried forward, since it may rest on a fact that
 //! has since been corrected or deleted. Recall leaves stale observations out.
+//! This module only ever sets `status="fresh"` again, once consolidation has
+//! caught up; without a model it changes nothing.
 //! New facts are first checked against earlier ones (`supersede`); a fact
 //! they make untrue is marked superseded and left out of the rebuild.
 //!
 //! Best-effort throughout, same safety pattern as `extract.rs`: never fails
 //! the caller, no-ops in stub-backend mode.
 //!
-//! Ported from `entities/consolidate.py`.
 
+use surrealdb::types::SurrealValue;
 use std::collections::HashSet;
 use std::time::Duration;
 
 use serde::Deserialize;
 use serde_json::{json, Value};
-use surrealdb::RecordId;
+use surrealdb::types::RecordId;
+use crate::rid::RecordIdExt;
 
 use crate::config::Settings;
-use crate::db::Db;
+use crate::pool::OrgDb;
+use crate::store;
 use crate::error::{AppError, AppResult};
+use crate::store::entities as q;
+use crate::tx::with_retry_dup;
+
+use super::service::observation_rid;
 
 use crate::embeddings::provider;
 
@@ -43,30 +50,36 @@ use super::extract::app_settings_row;
 pub const DEFAULT_MISSION: &str = "Observations are stable facts about people and relationships: preferences, skills, roles, \
 recurring patterns, and how they change over time. Ignore ephemeral or one-off details.";
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, SurrealValue)]
 struct SubjectRow {
     vault: RecordId,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, SurrealValue)]
 struct RawMemoryRow {
     id: RecordId,
     text: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, SurrealValue)]
 struct ObservationRow {
+    id: RecordId,
     #[serde(default)]
+    #[surreal(default)]
     text: String,
     #[serde(default)]
+    #[surreal(default)]
     source_memories: Option<Vec<RecordId>>,
     #[serde(default)]
+    #[surreal(default)]
+    version: i64,
+    #[serde(default)]
+    #[surreal(default)]
     status: Option<String>,
 }
 
 /// The result of a successful consolidation -- just enough to let callers
-/// (the `consolidate_observations` tool) report what happened; mirrors the
-/// Python version's "truthy dict vs `None`" convention as `Option<..>`.
+/// (the `consolidate_observations` tool) report what happened, as an `Option<..>`.
 #[derive(Debug, Clone)]
 pub struct ConsolidatedObservation {
     pub id: String,
@@ -88,6 +101,9 @@ New raw facts:\n{facts_block}\n",
     )
 }
 
+/// (facts to send, belief to extend, lineage to store)
+type Plan<'a> = (Vec<&'a (String, String)>, Option<&'a str>, Vec<String>);
+
 /// What to consolidate given the subject's current raw facts `raw` (id,
 /// text) and its observation (`None` if there isn't one): `(facts to send,
 /// current belief to extend, lineage to store)`, or `None` when nothing
@@ -97,7 +113,7 @@ New raw facts:\n{facts_block}\n",
 fn plan<'a>(
     raw: &'a [(String, String)],
     existing: Option<(&'a str, &HashSet<String>, bool)>,
-) -> Option<(Vec<&'a (String, String)>, Option<&'a str>, Vec<String>)> {
+) -> Option<Plan<'a>> {
     let all_ids: Vec<String> = raw.iter().map(|(id, _)| id.clone()).collect();
     match existing {
         Some((belief, seen, false)) => {
@@ -110,7 +126,7 @@ fn plan<'a>(
 }
 
 async fn call_llm(
-    db: &Db,
+    db: &OrgDb,
     settings: &Settings,
     owner: &RecordId,
     mission: &str,
@@ -125,7 +141,9 @@ async fn call_llm(
         "messages": [{"role": "user", "content": build_prompt(mission, current_belief, facts)}],
     });
 
-    let resp = provider::client()
+    let resp = p
+        .client()
+        .await?
         .post(p.url("chat/completions"))
         .bearer_auth(p.bearer())
         .json(&body)
@@ -151,9 +169,9 @@ async fn call_llm(
 }
 
 /// The configured observations mission for `owner`, or `DEFAULT_MISSION` if
-/// unset -- mirrors `tools.py::consolidate_observations` reading
+/// unset, read from
 /// `app_settings.observations_mission`.
-pub async fn observations_mission(db: &Db, owner: &RecordId) -> AppResult<String> {
+pub async fn observations_mission(db: &OrgDb, owner: &RecordId) -> AppResult<String> {
     let row = app_settings_row(db, owner).await?;
     Ok(if row.observations_mission.is_empty() { DEFAULT_MISSION.to_string() } else { row.observations_mission })
 }
@@ -163,34 +181,39 @@ pub async fn observations_mission(db: &Db, owner: &RecordId) -> AppResult<String
 /// Returns the updated/created observation, or `None` if there was nothing
 /// to do (no new raw facts beyond what's already consolidated) or the LLM
 /// call failed / isn't available (stub backend).
+#[allow(clippy::result_large_err)] // surrealdb::Error is large; boxing it would change the error type
 pub async fn consolidate_subject(
-    db: &Db,
+    db: &OrgDb,
     settings: &Settings,
     owner: &RecordId,
     subject_id: &RecordId,
     mission: Option<&str>,
 ) -> AppResult<Option<ConsolidatedObservation>> {
-    if !super::service::is_entity_id(subject_id) {
+    if super::service::require_entity_id(subject_id).is_err() {
         return Ok(None);
     }
-    let subject_row: Option<SubjectRow> = db.select(subject_id.clone()).await?;
+    let subject_row: Option<SubjectRow> = store::get(db, subject_id).await?;
     let Some(subject_row) = subject_row else { return Ok(None) };
-    // Not a member: same as not found -- the facts must never reach the
-    // caller's model, nor the observation land in someone else's vault.
-    if !crate::vaults::service::accessible_vault_ids(db, owner).await?.contains(&subject_row.vault) {
-        return Ok(None);
+    // Not a member: same as not found. The facts must never reach the caller's model, nor the
+    // observation land in someone else's vault.
+    match crate::authz::authorize(db, owner, crate::authz::Action::WriteMemories, &subject_row.vault).await {
+        Ok(_) => {}
+        Err(e) if e.code == crate::error::ErrorCode::VaultForbidden => return Ok(None),
+        Err(e) => return Err(e),
     }
 
-    let mut res = db
-        .query(
-            r#"SELECT id, text, created_at FROM memory WHERE subject = $id AND type IN ["world","experience"]
-                   AND status != "superseded" ORDER BY created_at, id;
-               SELECT text, source_memories, status FROM memory WHERE subject = $id AND type = "observation" LIMIT 1"#,
-        )
+    let mut raw_res = q::RAW_MEMORIES
+        .on(db)
         .bind(("id", subject_id.clone()))
         .await?;
-    let raw_rows: Vec<RawMemoryRow> = res.take(0)?;
-    let existing: Option<ObservationRow> = res.take::<Vec<ObservationRow>>(1)?.into_iter().next();
+    let raw_rows: Vec<RawMemoryRow> = raw_res.take(0)?;
+
+    let mut existing_res = q::OBSERVATION_OF
+        .on(db)
+        .bind(("id", subject_id.clone()))
+        .await?;
+    let existing_rows: Vec<ObservationRow> = existing_res.take(0)?;
+    let existing = existing_rows.into_iter().next();
 
     let seen: HashSet<String> = existing
         .as_ref()
@@ -221,19 +244,44 @@ pub async fn consolidate_subject(
     let belief = match call_llm(db, settings, owner, &mission, current_belief, &fact_texts).await {
         Ok(b) => b,
         Err(e) => {
-            tracing::warn!("consolidation LLM call failed for {}: {}", subject_id, e.message);
+            tracing::warn!("consolidation LLM call failed for {}: {}", subject_id.to_string(), e.message);
             return Ok(None);
         }
     };
 
-    let lineage: Vec<RecordId> = lineage
+    let source_memories: Vec<RecordId> = lineage
         .iter()
-        .map(|s| s.parse())
+        .map(|s| crate::rid::parse(s))
         .collect::<Result<Vec<_>, _>>()
         .map_err(|_| AppError::internal("source memory id did not round-trip"))?;
-    let row = super::service::save_observation(db, owner, &subject_row.vault, subject_id, &belief, Some(lineage)).await?;
+    let proof_count = lineage.len() as i64;
 
-    Ok(Some(ConsolidatedObservation { id: row.id, text: row.text }))
+    // The LLM call above is too slow to hold a transaction open, so the write
+    // is optimistic: it only lands if the observation is still the one we read
+    // (same version, or still absent). Otherwise someone else revised it
+    // meanwhile; skip, and the next consolidation recomputes from the new state.
+    let stmt = if existing.is_none() { &q::CONSOLIDATE_CREATE } else { &q::CONSOLIDATE_UPDATE };
+    let row = with_retry_dup(|| async {
+        let mut res = stmt
+            .on(db)
+            .bind(("owner", owner.clone()))
+            .bind(("vault", subject_row.vault.clone()))
+            .bind(("subject", subject_id.clone()))
+            .bind(("obs_id", observation_rid(subject_id)))
+            .bind(("id", existing.as_ref().map(|e| e.id.clone())))
+            .bind(("expected_version", existing.as_ref().map(|e| e.version)))
+            .bind(("text", belief.clone()))
+            .bind(("proof_count", proof_count))
+            .bind(("source_memories", source_memories.clone()))
+            .await?
+            .check()?;
+        let rows: Vec<ObservationRow> = res.take(stmt.slot)?;
+        Ok(rows.into_iter().next())
+    })
+    .await?;
+    let Some(row) = row else { return Ok(None) };
+
+    Ok(Some(ConsolidatedObservation { id: row.id.to_string(), text: row.text }))
 }
 
 #[cfg(test)]
@@ -299,7 +347,7 @@ mod tests {
     }
 
     #[test]
-    fn default_mission_matches_python_default() {
+    fn default_mission_text() {
         assert!(DEFAULT_MISSION.contains("stable facts about people and relationships"));
     }
 }

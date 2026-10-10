@@ -1,7 +1,7 @@
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { test, expect, request as pwRequest, type APIRequestContext } from "@playwright/test";
-import { uniqueEmail } from "./helpers";
+import { uniqueEmail, MOCK_BIND, mockBase } from "./helpers";
 
 // Model-provider security against a live stack, with local mock
 // OpenAI-compatible endpoints that record every request they receive.
@@ -68,8 +68,8 @@ async function startMock(port = 0, vector = 0.01): Promise<Mock> {
       res.end(JSON.stringify(reply.body ?? {}));
     });
   });
-  await new Promise<void>((resolve) => server.listen(port, "127.0.0.1", resolve));
-  mock.url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1`;
+  await new Promise<void>((resolve) => server.listen(port, MOCK_BIND, resolve));
+  mock.url = `${mockBase((server.address() as AddressInfo).port)}/v1`;
   mock.close = () => new Promise((resolve) => server.close(() => resolve()));
   return mock;
 }
@@ -154,7 +154,7 @@ test.describe("#60 credentials only go to their own endpoint", () => {
     await settings(u.ctx, { openai_base_url: redirecting.url, openai_api_key: "sk-user-redirect" });
 
     const models = await (await u.ctx.get("/api/settings/openai-models")).json();
-    expect(models.error).toContain("307");
+    expect(models.error).toBe("upstream_error"); // the 307 is not followed; the status is not echoed
     await tool(u.ctx, "memory_write", { subject_name: "Ada", subject_kind: "person", text: "Likes engines." });
     await tool(u.ctx, "recall", { query: "engines" });
     await tool(u.ctx, "reflect", { query: "What does Ada like?" });

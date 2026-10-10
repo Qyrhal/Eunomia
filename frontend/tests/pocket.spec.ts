@@ -1,7 +1,7 @@
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { test, expect } from "@playwright/test";
-import { registerAndOnboard, uniqueEmail } from "./helpers";
+import { registerAndOnboard, uniqueEmail, MOCK_BIND, mockBase } from "./helpers";
 
 // Pocket end to end against one stand-in server playing both Pocket's
 // public API and an OpenAI-compatible model server (reached through
@@ -83,9 +83,9 @@ function mockPocketAndModels(): Promise<{ base: string; chatModels: string[]; em
     });
   });
   return new Promise((resolve) =>
-    server.listen(0, "127.0.0.1", () => {
+    server.listen(0, MOCK_BIND, () => {
       const { port } = server.address() as AddressInfo;
-      resolve({ base: `http://127.0.0.1:${port}`, chatModels, embedded, extractionPrompts, close: () => server.close() });
+      resolve({ base: mockBase(port), chatModels, embedded, extractionPrompts, close: () => server.close() });
     })
   );
 }
@@ -141,7 +141,7 @@ test("a Pocket recording is stored whole, embedded, graphed, and deletable", asy
     await page.getByText("Full transcript").click();
     await expect(page.getByText(/Grace Hopper: I will pair with Ada/)).toBeVisible();
 
-    // ...and "Delete all data" takes two confirmations.
+    // ...and "Delete all data" takes two confirmations in a modal.
     await page.getByRole("button", { name: "Delete all heypocket data" }).click();
     const dialog = page.getByRole("dialog");
     await expect(dialog).toContainText("3 heypocket records");
@@ -151,7 +151,7 @@ test("a Pocket recording is stored whole, embedded, graphed, and deletable", asy
     await dialog.getByRole("textbox").fill("heypocket");
     await confirm.click();
     await expect(dialog).toBeHidden();
-    await expect(page.getByText("No records.")).toBeVisible();
+    await expect(page.getByText(/No records yet/)).toBeVisible();
 
     const gone = await (await page.request.post("/api/tools/get", { data: { id: "heypocket:heypocket.recording:rec_e2e" } })).json();
     expect(gone.error).toBe("not found");
@@ -164,7 +164,8 @@ test("a Pocket recording is stored whole, embedded, graphed, and deletable", asy
     await page.goto("/settings");
     await expect(page.getByLabel("Base URL")).toHaveValue(mock.base);
     await page.waitForLoadState("networkidle"); // dev mode loads settings twice
-    await page.getByLabel("Chat model").fill("llama3.1-e2e");
+    await page.getByLabel("Chat model").click(); // the endpoint lists its models, so it is a select
+    await page.getByRole("option", { name: "llama3.1-e2e" }).click();
     await page.getByRole("button", { name: "Save settings" }).click();
     await expect(page.getByRole("button", { name: "Saved" })).toBeVisible();
     const saved = await (await page.request.get("/api/settings")).json();

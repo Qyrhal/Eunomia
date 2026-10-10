@@ -1,0 +1,147 @@
+# Optional self-host observability: SigNoz (traces, logs, metrics).
+# Layered on top of the main stack, off unless the `observability` profile is
+# on. See docs/observability.md.
+#
+#   docker compose -f docker-compose.yml -f deploy/observability/docker-compose.yml \
+#     --profile observability up -d
+#
+# Generated from SigNoz's Foundry (foundryctl v0.3.0, single node, SQLite
+# metastore, ClickHouse Keeper), then pinned and joined to the main network.
+# No service here publishes a port to anything but 127.0.0.1.
+x-obs: &obs
+  profiles: ["observability"]
+  restart: unless-stopped
+
+services:
+  # OTLP collector. The backend sends to http://signoz-otel-collector:4317 (gRPC)
+  # or :4318 (HTTP) over the compose network.
+  signoz-otel-collector:
+    <<: *obs
+    image: signoz/signoz-otel-collector:v0.144.12
+    entrypoint: ["/bin/sh"]
+    command:
+      - -c
+      - |
+        /signoz-otel-collector migrate sync check &&
+        /signoz-otel-collector --config=/etc/otel-collector-config.yaml --manager-config=/etc/opamp-config.yaml --copy-path=/var/tmp/collector-config.yaml
+    environment:
+      - SIGNOZ_OTEL_COLLECTOR_CLICKHOUSE_DSN=tcp://signoz-telemetrystore-clickhouse-0-0:9000
+      - SIGNOZ_OTEL_COLLECTOR_TIMEOUT=10m
+    # Host ports are for a backend run outside Docker (cargo run).
+    ports:
+      - "127.0.0.1:${SIGNOZ_OTLP_GRPC_PORT:-4317}:4317"
+      - "127.0.0.1:${SIGNOZ_OTLP_HTTP_PORT:-4318}:4318"
+    volumes:
+      - ./deploy/observability/ingester/ingester.yaml:/etc/otel-collector-config.yaml:ro
+      - ./deploy/observability/ingester/opamp.yaml:/etc/opamp-config.yaml:ro
+    depends_on:
+      signoz-telemetrystore-migrator:
+        condition: service_completed_successfully
+
+  # SigNoz UI and API.
+  signoz-signoz-0:
+    <<: *obs
+    image: signoz/signoz:v0.145.0
+    environment:
+      - SIGNOZ_SQLSTORE_PROVIDER=sqlite
+      - SIGNOZ_SQLSTORE_SQLITE_PATH=/var/lib/signoz/signoz.db
+      - SIGNOZ_TELEMETRYSTORE_CLICKHOUSE_DSN=tcp://signoz-telemetrystore-clickhouse-0-0:9000
+      - SIGNOZ_TELEMETRYSTORE_PROVIDER=clickhouse
+    ports:
+      - "127.0.0.1:${SIGNOZ_UI_PORT:-8080}:8080"
+    volumes:
+      - eunomia-obs-signoz:/var/lib/signoz
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    depends_on:
+      signoz-telemetrystore-clickhouse-0-0:
+        condition: service_healthy
+
+  signoz-telemetrykeeper-clickhousekeeper-0:
+    <<: *obs
+    image: clickhouse/clickhouse-keeper:25.12.5
+    entrypoint:
+      - /usr/bin/clickhouse-keeper
+      - --config-file=/etc/clickhouse-keeper/keeper.yaml
+    volumes:
+      - eunomia-obs-keeper:/var/lib/clickhouse-keeper
+      - ./deploy/observability/telemetrykeeper/clickhousekeeper/keeper-0.yaml:/etc/clickhouse-keeper/keeper.yaml:ro
+    healthcheck:
+      test: ["CMD", "clickhouse-keeper-client", "-h", "localhost", "-p", "9181", "-q", "ls"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  signoz-telemetrystore-clickhouse-0-0:
+    <<: *obs
+    image: clickhouse/clickhouse-server:25.12.5
+    environment:
+      - CLICKHOUSE_SKIP_USER_SETUP=1
+      - CLICKHOUSE_CONFIG=/etc/clickhouse-server/config-0-0.yaml
+    volumes:
+      - eunomia-obs-clickhouse:/var/lib/clickhouse
+      - eunomia-obs-user-scripts:/var/lib/clickhouse/user_scripts:ro
+      - ./deploy/observability/telemetrystore/clickhouse/config-0-0.yaml:/etc/clickhouse-server/config-0-0.yaml:ro
+      - ./deploy/observability/telemetrystore/clickhouse/functions.yaml:/etc/clickhouse-server/functions.yaml:ro
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    depends_on:
+      signoz-telemetrykeeper-clickhousekeeper-0:
+        condition: service_healthy
+      signoz-telemetrystore-clickhouse-user-scripts:
+        condition: service_completed_successfully
+
+  # One-shot: downloads SigNoz's histogramQuantile binary (needs internet once).
+  signoz-telemetrystore-clickhouse-user-scripts:
+    <<: *obs
+    restart: on-failure
+    image: clickhouse/clickhouse-server:25.12.5
+    command:
+      - bash
+      - -c
+      - |-
+        version="v0.0.1"
+        node_os=$$(uname -s | tr '[:upper:]' '[:lower:]')
+        node_arch=$$(uname -m | sed s/aarch64/arm64/ | sed s/x86_64/amd64/)
+        echo "Fetching histogram-binary for $${node_os}/$${node_arch}"
+        cd /tmp
+        wget -O histogram-quantile.tar.gz "https://github.com/SigNoz/signoz/releases/download/histogram-quantile%2F$${version}/histogram-quantile_$${node_os}_$${node_arch}.tar.gz"
+        tar -xvzf histogram-quantile.tar.gz
+        mv histogram-quantile /var/lib/clickhouse/user_scripts/histogramQuantile
+    volumes:
+      - eunomia-obs-user-scripts:/var/lib/clickhouse/user_scripts
+
+  # One-shot: creates / upgrades the ClickHouse schema.
+  signoz-telemetrystore-migrator:
+    <<: *obs
+    restart: on-failure
+    image: signoz/signoz-otel-collector:v0.144.12
+    entrypoint: ["/bin/sh"]
+    command:
+      - -c
+      - |
+        /signoz-otel-collector migrate ready &&
+        /signoz-otel-collector migrate bootstrap &&
+        /signoz-otel-collector migrate sync up &&
+        /signoz-otel-collector migrate async up
+    environment:
+      - SIGNOZ_OTEL_COLLECTOR_CLICKHOUSE_DSN=tcp://signoz-telemetrystore-clickhouse-0-0:9000
+      - SIGNOZ_OTEL_COLLECTOR_TIMEOUT=10m
+    depends_on:
+      signoz-telemetrystore-clickhouse-0-0:
+        condition: service_healthy
+
+volumes:
+  eunomia-obs-signoz:
+  eunomia-obs-keeper:
+  eunomia-obs-clickhouse:
+  eunomia-obs-user-scripts:

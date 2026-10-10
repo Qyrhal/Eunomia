@@ -5,9 +5,9 @@
   "status": "pass",
   "visualReview": "pending",
   "artifact": {
-    "path": "/Users/midhun/Documents/GitHub/Eunomia/docs/diagrams/architecture.html",
-    "sha256": "dc66cc6b0b7ab2d966e84f2a25480e80518182b6c33d8742538a61dd54a0c45f",
-    "bytes": 634886
+    "path": "/Users/midhun/Documents/GitHub/Eunomia-pr81/docs/diagrams/architecture.html",
+    "sha256": "f49ad50f67d2f9b1feab7c54bbe3315a9f5d9256f29c829a9285455197cd969b",
+    "bytes": 635015
   },
   "state": {
     "detail": "read",

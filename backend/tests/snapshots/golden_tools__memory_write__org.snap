@@ -1,0 +1,30 @@
+---
+source: tests/golden_tools.rs
+expression: stable
+---
+{
+  "entity": {
+    "id": "organisation:<id6>",
+    "kind": "organisation",
+    "name": "Acme",
+    "aliases": [],
+    "summary": "",
+    "vault": "vault:<id2>"
+  },
+  "memory": {
+    "id": "memory:<id7>",
+    "owner": "user:<id4>",
+    "vault": "vault:<id2>",
+    "subject": "organisation:<id6>",
+    "text": "Acme builds anvils",
+    "source": null,
+    "created_at": "<ts>",
+    "type": "world",
+    "proof_count": 1,
+    "status": null,
+    "source_memories": null,
+    "updated_at": "<ts>",
+    "version": 1,
+    "owner_email": null
+  }
+}

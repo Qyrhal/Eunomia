@@ -123,15 +123,15 @@ mod tests {
             route("GET", "/calendars/primary/events", json!({"kind": "calendar#events", "items": [
                 {"id": "e2", "status": "cancelled", "summary": "Old sync", "start": {"date": "2024-03-05"}, "end": {"date": "2024-03-06"}},
             ]}))
-            .query("pageToken=n2"),
+            .query_has("pageToken=n2"),
             route("GET", "/calendars/primary/events", json!({"kind": "calendar#events", "nextPageToken": "n2", "items": [
                 {"id": "e1", "status": "confirmed", "summary": "Design review", "description": "Walk through the sync UI",
                  "location": "Room 4", "htmlLink": "https://www.google.com/calendar/event?eid=e1",
                  "start": {"dateTime": "2024-03-04T10:00:00+11:00"}, "end": {"dateTime": "2024-03-04T11:00:00+11:00"},
                  "organizer": {"email": "ada@example.com"}, "attendees": [{"email": "ada@example.com"}, {"email": "me@example.com"}]},
             ]}))
-            .query("updatedMin=2024-03-01T00:00:00Z")
-            .query("showDeleted=true"),
+            .query_has("updatedMin=2024-03-01T00:00:00Z")
+            .query_has("showDeleted=true"),
         ])
         .await;
 

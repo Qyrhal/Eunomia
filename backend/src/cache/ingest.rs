@@ -1,34 +1,28 @@
 //! The ingest pipeline: raw source record -> cache row -> enrichment.
 //!
-//! One entrypoint, [`ingest`], shared by scheduled syncs, manual syncs and
-//! webhooks (via `sources::registry::ingest`). Stages, per record: map ->
-//! upsert (idempotent; reconciles `links`) -> embed -> extract entities.
-//! Then, once per batch: consolidate observations for every subject that got
-//! a new raw memory.
+//! One entrypoint, [`ingest`], shared by scheduled syncs, manual syncs and webhooks (via
+//! `sources::registry::ingest`). Per record (one or more envelopes): map -> upsert (idempotent; reconciles `links`) ->
+//! embed -> queue entity extraction.
 //!
-//! Partial failure is isolated: a record that can't be mapped or stored is
-//! counted in `failed` (the caller then keeps its sync cursor so the record
-//! is retried), the batch continues. Enrichment is best-effort and never
-//! counts as a failed record:
-//! - Embedding runs when an embedding backend is available. A record left
-//!   without an embedding (provider outage) is re-embedded the next time the
-//!   same unchanged record is replayed.
-//! - Entity extraction + consolidation run only when the server can make
-//!   chat completions for the owner (`chat_available`), on new or changed
-//!   records. With no model configured, raw records are stored and nothing
-//!   calls out.
-
-use std::collections::HashSet;
+//! Partial failure is isolated: a record that can't be mapped or stored is counted in `failed`
+//! (the caller then keeps its sync cursor so the record is retried) and the batch continues.
+//! Enrichment is best-effort and never counts as a failed record:
+//! - Embedding runs when an embedding backend is available. A record left without an embedding
+//!   (provider outage) is re-embedded the next time the same unchanged record is replayed, and the
+//!   `embed` job reconciler finds it too.
+//! - Entity extraction and consolidation run as background jobs (`jobs::handlers`): this pipeline
+//!   only enqueues an `extract` job per new or changed record; the handler does nothing when the
+//!   owner has no chat model, so with no model raw records are stored and nothing calls out.
 
 use serde::Serialize;
 use serde_json::Value;
-use surrealdb::RecordId;
+use surrealdb::types::RecordId;
 
 use crate::cache::search::{self, Envelope};
 use crate::config::Settings;
-use crate::db::Db;
-use crate::entities::{consolidate, extract};
+use crate::pool::OrgDb;
 use crate::error::AppResult;
+use crate::store;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct IngestReport {
@@ -44,7 +38,8 @@ impl IngestReport {
         IngestReport { source: source.to_string(), written: 0, skipped: 0, failed: 0, errors: Vec::new() }
     }
 
-    /// Truncates `errors` to the first 20 for the response payload.
+    /// Truncates `errors`
+    /// to the first 20 for the response payload.
     pub fn as_dict(&self) -> Value {
         serde_json::json!({
             "source": self.source,
@@ -56,7 +51,7 @@ impl IngestReport {
     }
 }
 
-async fn embed_record(db: &Db, settings: &Settings, owner: &RecordId, rec: &search::CacheRecord) -> AppResult<()> {
+async fn embed_record(db: &OrgDb, settings: &Settings, owner: &RecordId, rec: &search::CacheRecord) -> AppResult<()> {
     let text = format!("{}\n{}", rec.title, rec.body_text).trim().to_string();
     if text.is_empty() {
         return Ok(());
@@ -69,38 +64,23 @@ async fn embed_record(db: &Db, settings: &Settings, owner: &RecordId, rec: &sear
     search::set_embedding(db, owner, &rec.id, vec).await
 }
 
-async fn has_embedding(db: &Db, owner: &RecordId, record_id: &str) -> AppResult<bool> {
-    let mut res = db.query("SELECT VALUE embedding != NONE FROM ONLY $id").bind(("id", search::rid(owner, record_id))).await?;
+async fn has_embedding(db: &OrgDb, owner: &RecordId, record_id: &str) -> AppResult<bool> {
+    let mut res = store::cache::HAS_EMBEDDING.on(db).bind(("id", search::rid(owner, record_id))).await?;
     Ok(res.take::<Option<bool>>(0)?.unwrap_or(false))
 }
 
-async fn consolidate_touched_subjects(db: &Db, settings: &Settings, owner: &RecordId, subject_ids: &HashSet<String>) {
-    if subject_ids.is_empty() {
-        return;
-    }
-    let mission = consolidate::observations_mission(db, owner).await.ok();
-    for id in subject_ids {
-        let Ok(subject) = id.parse::<RecordId>() else { continue };
-        if let Err(e) = consolidate::consolidate_subject(db, settings, owner, &subject, mission.as_deref()).await {
-            tracing::warn!("consolidation failed for {id}: {}", e.message);
-        }
-    }
-}
-
-/// `raw_records` are JSON values; `map_fn` maps one raw record to its
-/// envelopes (none to skip it), or `Err(message)` on a mapping failure.
+/// `raw_records` are untyped JSON values; `map_fn` maps one raw record to its envelopes (none to skip
+/// it), or `Err(message)` on a mapping failure.
 pub async fn ingest(
-    db: &Db,
-    settings: &Settings,
+    state: &crate::state::OrgState,
     owner: &RecordId,
     source_key: &str,
     raw_records: &[Value],
     map_fn: impl Fn(&Value) -> Result<Vec<Envelope>, String>,
 ) -> AppResult<IngestReport> {
+    let (db, settings) = (&state.db, &state.settings);
     let mut report = IngestReport::new(source_key);
-    let mut touched_subjects: HashSet<String> = HashSet::new();
     let can_embed = crate::embeddings::service::available(db, settings, owner).await;
-    let can_extract = crate::embeddings::service::chat_available(db, settings, owner).await;
 
     for raw in raw_records {
         let envs = match map_fn(raw) {
@@ -119,7 +99,7 @@ pub async fn ingest(
             if env.source.is_empty() {
                 env.source = source_key.to_string();
             }
-            let (rec, changed) = match upsert_retrying(db, owner, &env).await {
+            let (rec, changed) = match search::upsert(db, owner, &env).await {
                 Ok(r) => r,
                 Err(e) => {
                     report.failed += 1;
@@ -137,40 +117,19 @@ pub async fn ingest(
             }
 
             // An unchanged record is re-embedded only if a previous attempt failed.
-            if can_embed && (changed || !has_embedding(db, owner, &rec.id).await.unwrap_or(true)) {
-                if let Err(e) = embed_record(db, settings, owner, &rec).await {
-                    report.errors.push(format!("embed {}: {}", rec.id, e.message));
-                }
+            if can_embed
+                && (changed || !has_embedding(db, owner, &rec.id).await.unwrap_or(true))
+                && let Err(e) = embed_record(db, settings, owner, &rec).await
+            {
+                report.errors.push(format!("embed {}: {}", rec.id, e.message));
             }
-            if changed && can_extract {
-                let record = extract::ExtractRecord {
-                    id: rec.id.clone(),
-                    title: rec.title.clone(),
-                    body_text: rec.body_text.clone(),
-                    occurred_at: rec.occurred_at.as_ref().and_then(crate::sources::base::datetime_to_chrono).map(|d| d.to_rfc3339()),
-                };
-                touched_subjects.extend(extract::extract_entities(db, settings, owner, &record).await);
+            if changed {
+                crate::jobs::handlers::enqueue_extract(state, owner, &rec.id, &rec.content_hash).await;
             }
         }
     }
 
-    consolidate_touched_subjects(db, settings, owner, &touched_subjects).await;
     Ok(report)
-}
-
-/// Concurrent writers (other syncs, other users) can conflict on the shared
-/// indexes; SurrealDB rejects the loser as retryable, so retry it a few times.
-async fn upsert_retrying(db: &Db, owner: &RecordId, env: &Envelope) -> AppResult<(search::CacheRecord, bool)> {
-    let mut attempt = 0;
-    loop {
-        match search::upsert(db, owner, env).await {
-            Err(e) if attempt < 4 && e.message.contains("can be retried") => {
-                attempt += 1;
-                tokio::time::sleep(std::time::Duration::from_millis(50 * attempt)).await;
-            }
-            other => return other,
-        }
-    }
 }
 
 fn raw_id(raw: &Value) -> String {

@@ -1,0 +1,22 @@
+---
+source: tests/golden_tools.rs
+expression: stable
+---
+{
+  "results": [
+    {
+      "id": "vault:<id2>",
+      "name": "Personal",
+      "kind": "personal",
+      "created_at": "<ts>",
+      "role": "owner"
+    },
+    {
+      "id": "vault:<id14>",
+      "name": "Team",
+      "kind": "org",
+      "created_at": "<ts>",
+      "role": "owner"
+    }
+  ]
+}

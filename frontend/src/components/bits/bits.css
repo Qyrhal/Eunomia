@@ -1,0 +1,243 @@
+/* Inspired by React Bits (reactbits.dev). Original implementation for Eunomia.
+   Usage: imported by the bits components that need it; never import it from a page.
+   Colours come from globals.css tokens only. Reduced motion renders final states. */
+
+/* Lets the selection handles grow as one length (a paint on four 6px squares). */
+@property --h {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 6px;
+}
+
+@layer components {
+/* ---- shared draw grammar: an SVG path with pathLength="1" draws itself ---- */
+.bits-draw {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 0;
+}
+.bits-draw[data-animate] {
+  animation: bits-draw var(--bits-draw-ms, 200ms) var(--ease-out) both;
+}
+@keyframes bits-draw {
+  from {
+    stroke-dashoffset: 1;
+  }
+}
+
+/* ---- SyncMark ---- */
+.bits-spin {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: bits-spin 800ms linear infinite;
+}
+@keyframes bits-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ---- CopyButton ---- */
+.bits-copy-check {
+  --bits-draw-ms: 180ms;
+  color: var(--bits-done, var(--good));
+}
+/* On a green primary button the green tick would vanish: use the button's ink. */
+.btn-primary {
+  --bits-done: currentColor;
+}
+
+/* ---- DigitRoll ---- */
+.bits-roll {
+  position: relative;
+  display: inline-block;
+  white-space: nowrap;
+}
+.bits-roll[data-rolling] > .bits-roll-text {
+  color: transparent;
+}
+.bits-roll-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: flex-start;
+  pointer-events: none;
+}
+.bits-roll-col {
+  display: inline-block;
+  height: 1lh;
+  overflow: hidden;
+}
+.bits-roll-stack {
+  display: block;
+  animation: bits-roll-up 240ms var(--ease-out) both;
+  animation-delay: calc(var(--i, 0) * 30ms);
+}
+.bits-roll-stack > span {
+  display: block;
+  height: 1lh;
+}
+.bits-roll-stack[data-dir="down"] {
+  animation-name: bits-roll-down;
+}
+@keyframes bits-roll-up {
+  from {
+    transform: translateY(0);
+  }
+  to {
+    transform: translateY(-1lh);
+  }
+}
+@keyframes bits-roll-down {
+  from {
+    transform: translateY(-1lh);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+
+/* ---- DecryptReveal ---- */
+.bits-decrypt {
+  position: relative;
+}
+.bits-decrypt[data-revealing] > .bits-decrypt-text {
+  color: transparent;
+}
+.bits-decrypt-overlay {
+  position: absolute;
+  inset: 0;
+  white-space: pre;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+.bits-decrypt-noise {
+  color: var(--ink-faint);
+}
+
+/* ---- HoldButton: a critical wash that fills left to right while held ---- */
+.bits-hold {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+}
+.bits-hold-fill {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: var(--critical-soft);
+  clip-path: inset(0 100% 0 0);
+  transition: clip-path 200ms var(--ease-out);
+  pointer-events: none;
+}
+/* A short delay so an ordinary click never flashes the red fill. */
+.bits-hold[data-holding] .bits-hold-fill {
+  clip-path: inset(0 0 0 0);
+  transition: clip-path var(--hold-ms, 900ms) linear 150ms;
+}
+
+/* ---- Spark: short lines thrown from a point ---- */
+.bits-spark {
+  position: fixed;
+  width: 1.5px;
+  height: 7px;
+  margin: -3.5px 0 0 -0.75px;
+  border-radius: 1px;
+  pointer-events: none;
+  z-index: 100;
+}
+
+/* ---- BlurWords ---- */
+.bits-word {
+  display: inline-block;
+  animation: bits-blur-in 420ms var(--ease-out) both;
+  animation-delay: calc(var(--i, 0) * 45ms);
+}
+@keyframes bits-blur-in {
+  from {
+    opacity: 0.001;
+    filter: blur(4px);
+    transform: translateY(4px);
+  }
+}
+
+/* ---- Tooltip ---- */
+.bits-tip-anchor {
+  display: inline-flex;
+}
+.bits-tip {
+  position: fixed;
+  z-index: 60;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 240px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-pop);
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.3;
+  white-space: nowrap;
+  pointer-events: none;
+  transform-origin: var(--tip-origin, bottom center);
+  transition: opacity 140ms var(--ease-out), scale 140ms var(--ease-out);
+  @starting-style {
+    opacity: 0;
+    scale: 0.96;
+  }
+}
+.bits-tip[data-instant] {
+  transition: none;
+}
+.bits-tip .kbd {
+  height: 16px;
+  min-width: 16px;
+  font-size: 11.5px;
+}
+
+/* ---- Selection handles snap out when a pointer picked the frame ---- */
+html[data-input="pointer"] .frame-selected:not(tr)::after {
+  transition: --h 120ms var(--ease-out), opacity 120ms var(--ease-out);
+  @starting-style {
+    --h: 3.6px;
+    opacity: 0;
+  }
+}
+
+/* ---- Theme toggle: Sun and Moon share a cell and blur-crossfade ---- */
+.bits-theme-icon {
+  display: grid;
+}
+.bits-theme-icon > svg {
+  grid-area: 1 / 1;
+}
+.bits-theme-icon > svg:not([data-on]) {
+  opacity: 0;
+  filter: blur(4px);
+  transform: scale(0.6);
+}
+html[data-input="pointer"] .bits-theme-icon > svg {
+  transition: opacity 200ms var(--ease-out), filter 200ms var(--ease-out), transform 200ms var(--ease-out);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bits-draw[data-animate],
+  .bits-spin,
+  .bits-roll-stack,
+  .bits-word {
+    animation: none;
+  }
+  .bits-tip,
+  .bits-hold-fill,
+  .bits-hold[data-holding] .bits-hold-fill,
+  html[data-input="pointer"] .frame-selected:not(tr)::after,
+  html[data-input="pointer"] .bits-theme-icon > svg {
+    transition: none;
+  }
+  .bits-hold[data-holding] .bits-hold-fill {
+    clip-path: inset(0 100% 0 0);
+  }
+}
+}

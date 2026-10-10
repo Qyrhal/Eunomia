@@ -15,15 +15,18 @@
 //! The tool helpers (`summary`, `list_recordings`, `search_recordings`) read
 //! `cache_record` directly.
 
+use surrealdb::types::SurrealValue;
 use async_trait::async_trait;
 use chrono::{Duration, Utc};
 use serde::Deserialize;
 use serde_json::{json, Value};
-use surrealdb::RecordId;
+use surrealdb::types::RecordId;
 
 use crate::connectors::clients::PocketAIClient;
-use crate::db::Db;
 use crate::error::AppResult;
+use crate::pool::OrgDb;
+use crate::rid::RecordIdExt;
+use crate::store;
 use crate::sources::base::{datetime_to_chrono, envelope, items, owner_key_str, rfc3339, s, Conn, Source, SourceCtx, SyncResult, MAX_PAGES};
 
 /// Transcript chunk size: well under the embedding input limit, and a
@@ -150,7 +153,7 @@ impl Source for HeyPocketSource {
         out
     }
 
-    async fn persist(&self, db: &Db, owner: &RecordId, raw: &Value) -> AppResult<()> {
+    async fn persist(&self, db: &OrgDb, owner: &RecordId, raw: &Value) -> AppResult<()> {
         let Some(rid) = id_of(raw) else { return Ok(()) };
         let r = Recording::from(raw);
         let recorded_at = raw
@@ -158,30 +161,27 @@ impl Source for HeyPocketSource {
             .or_else(|| raw.get("created_at"))
             .and_then(|v| v.as_str())
             .and_then(|v| chrono::DateTime::parse_from_rfc3339(v).ok())
-            .map(|d| surrealdb::Datetime::from(d.with_timezone(&Utc)));
+            .map(|d| surrealdb::types::Datetime::from(d.with_timezone(&Utc)));
         let parts = chunk(&r.transcript).len();
-        db.query(
-            "UPSERT $id CONTENT { owner: $owner, recording_id: $rid, title: $title, recorded_at: $recorded_at, \
-             duration_seconds: $duration, tags: $tags, speakers: $speakers, summary: $summary, \
-             action_items: $action_items, transcript: $transcript, raw: $raw, synced_at: time::now() }; \
-             UPDATE cache_record SET deleted = true, updated_at = time::now() WHERE owner = $owner \
-             AND type = 'heypocket.transcript_chunk' AND payload.recording_id = $rid AND payload.part >= $parts;",
-        )
-        .bind(("id", record_id(owner, rid)))
-        .bind(("owner", owner.clone()))
-        .bind(("rid", rid.to_string()))
-        .bind(("title", s(raw, "/title").to_string()))
-        .bind(("recorded_at", recorded_at))
-        .bind(("duration", raw.get("duration").and_then(Value::as_f64).unwrap_or(0.0)))
-        .bind(("tags", r.tags))
-        .bind(("speakers", r.speakers))
-        .bind(("summary", r.summary))
-        .bind(("action_items", r.action_items))
-        .bind(("transcript", r.transcript.join("\n")))
-        .bind(("raw", raw.clone()))
-        .bind(("parts", parts as i64))
-        .await?
-        .check()?;
+        crate::tx::with_retry(|| async {
+            store::app::SOURCES_POCKET_RECORDING_PUT
+                .on(db)
+                .bind(("id", record_id(owner, rid)))
+                .bind(("owner", owner.clone()))
+                .bind(("rid", rid.to_string()))
+                .bind(("title", s(raw, "/title").to_string()))
+                .bind(("recorded_at", recorded_at))
+                .bind(("duration", raw.get("duration").and_then(Value::as_f64).unwrap_or(0.0)))
+                .bind(("tags", r.tags.clone()))
+                .bind(("speakers", r.speakers.clone()))
+                .bind(("summary", r.summary.clone()))
+                .bind(("action_items", r.action_items.clone()))
+                .bind(("transcript", r.transcript.join("\n")))
+                .bind(("raw", raw.clone()))
+                .bind(("parts", parts as i64))
+                .await
+        })
+        .await?;
         Ok(())
     }
 }
@@ -275,45 +275,38 @@ fn chunk(lines: &[String]) -> Vec<String> {
 /// Everything stored for one recording: title, summary, action items, tags,
 /// speakers and the full transcript (not the verbatim `raw`, which can be
 /// large; it stays in the table). `None` if it isn't stored.
-pub async fn stored(db: &Db, owner: &RecordId, recording_id: &str) -> AppResult<Option<Value>> {
-    let mut res = db
-        .query(
-            "SELECT recording_id, title, recorded_at, duration_seconds, tags, speakers, summary, action_items, transcript \
-             FROM ONLY $id",
-        )
-        .bind(("id", record_id(owner, recording_id)))
-        .await?;
+pub async fn stored(db: &OrgDb, owner: &RecordId, recording_id: &str) -> AppResult<Option<Value>> {
+    let mut res = store::app::SOURCES_POCKET_RECORDING_GET.on(db).bind(("id", record_id(owner, recording_id))).await?;
     Ok(res.take::<Option<Value>>(0)?)
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, SurrealValue)]
 pub(crate) struct CachedRecording {
     #[serde(default)]
+    #[surreal(default)]
     title: String,
     #[serde(default)]
-    occurred_at: Option<surrealdb::Datetime>,
+    #[surreal(default)]
+    occurred_at: Option<surrealdb::types::Datetime>,
     #[serde(default)]
+    #[surreal(default)]
     url: String,
     #[serde(default)]
+    #[surreal(default)]
     payload: Value,
 }
 
 async fn cached_recordings(ctx: &SourceCtx<'_>, days: i64) -> AppResult<Vec<CachedRecording>> {
     let since = Utc::now() - Duration::days(days);
-    let mut res = ctx
-        .db
-        .query(
-            "SELECT title, occurred_at, url, payload FROM cache_record \
-             WHERE owner = $owner AND type = 'heypocket.recording' AND deleted = false \
-             AND occurred_at != NONE AND occurred_at >= $since ORDER BY occurred_at DESC LIMIT 2000",
-        )
+    let mut res = store::app::SOURCES_HEYPOCKET_RECENT
+        .on(ctx.db)
         .bind(("owner", ctx.owner.clone()))
-        .bind(("since", surrealdb::Datetime::from(since)))
+        .bind(("since", surrealdb::types::Datetime::from(since)))
         .await?;
     Ok(res.take(0)?)
 }
 
-fn iso(dt: &Option<surrealdb::Datetime>) -> Option<String> {
+fn iso(dt: &Option<surrealdb::types::Datetime>) -> Option<String> {
     dt.as_ref().and_then(datetime_to_chrono).map(|d| d.to_rfc3339())
 }
 
@@ -331,8 +324,7 @@ fn tags_of(payload: &Value) -> Vec<String> {
 }
 
 /// Recording count/duration/tag breakdown over the last `days`, computed from
-/// cached recordings (not a live API call) -- matches the "no invented
-/// metrics" ethos of the Python tool.
+/// cached recordings (not a live API call) with no invented metrics.
 pub(crate) fn compute_summary(recs: &[CachedRecording]) -> Value {
     let mut tag_counts: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
     for r in recs {
@@ -364,7 +356,7 @@ pub async fn summary(ctx: &SourceCtx<'_>, days: i64) -> AppResult<Value> {
 
 pub async fn list_recordings(ctx: &SourceCtx<'_>, days: i64, tag: Option<&str>, limit: i64) -> AppResult<Value> {
     let recs = cached_recordings(ctx, days).await?;
-    let limit = limit.min(200).max(0) as usize;
+    let limit = limit.clamp(0, 200) as usize;
     let out: Vec<Value> = recs
         .iter()
         .filter(|r| tag.map(|t| tags_of(&r.payload).iter().any(|x| x == t)).unwrap_or(true))
@@ -380,19 +372,11 @@ pub async fn list_recordings(ctx: &SourceCtx<'_>, days: i64, tag: Option<&str>, 
     Ok(json!(out))
 }
 
-/// Deferred: Python's `search_recordings` runs `cache.search`'s hybrid
-/// BM25+embedding search; `embeddings.service` isn't ported, so this is a
-/// plain case-insensitive substring match over cached title/body_text.
+/// A plain case-insensitive substring match over cached title/body_text.
 pub async fn search_recordings(ctx: &SourceCtx<'_>, query: &str) -> AppResult<Value> {
     let needle = query.to_lowercase();
-    let mut res = ctx
-        .db
-        .query(
-            "SELECT title, occurred_at, url, payload FROM cache_record \
-             WHERE owner = $owner AND type = 'heypocket.recording' AND deleted = false \
-             AND (string::contains(string::lowercase(title), $q) OR string::contains(string::lowercase(body_text), $q)) \
-             LIMIT 20",
-        )
+    let mut res = store::app::SOURCES_HEYPOCKET_SEARCH
+        .on(ctx.db)
         .bind(("owner", ctx.owner.clone()))
         .bind(("q", needle))
         .await?;
@@ -458,8 +442,8 @@ mod tests {
             }})
         };
         let mock = serve(vec![
-            route("GET", "/public/recordings", list("rec_1", "2024-05-02T09:00:00Z", true)).query("page=1"),
-            route("GET", "/public/recordings", list("rec_2", "2024-05-03T09:00:00Z", false)).query("page=2"),
+            route("GET", "/public/recordings", list("rec_1", "2024-05-02T09:00:00Z", true)).query_has("page=1"),
+            route("GET", "/public/recordings", list("rec_2", "2024-05-03T09:00:00Z", false)).query_has("page=2"),
             route("GET", "/public/recordings/rec_1", detail("rec_1")),
             route("GET", "/public/recordings/rec_2", detail("rec_2")),
         ])

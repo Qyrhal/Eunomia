@@ -18,11 +18,11 @@ test("every page and tab renders cleanly", async ({ page }) => {
     ["/chat", "Chat"],
     ["/entities", "Entities"],
     ["/code", "Code"],
-    ["/vaults", "Who sees what"],
+    ["/vaults", "Vaults"],
     ["/connectors", "Connectors"],
     ["/docs", "Quickstart"],
     ["/skill", "How your agents use memory"],
-    ["/settings", "The instrument"],
+    ["/settings", "Settings"],
   ];
   for (const [path, text] of pages) {
     await page.goto(path);

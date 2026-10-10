@@ -4,6 +4,8 @@ Connectors pull your data from other services into Eunomia, where agents read it
 
 After the first sync, each connector syncs again on its interval (changeable on its setup page). A failed sync shows the provider's error on the connector's page and the dashboard, and retries with backoff (15 min → 6 h).
 
+Every sync is a `sync` job in the background job queue (see `docs/architecture/jobs.md`): scheduled syncs and **Sync now** share it, so only one sync of a connector runs at a time. If one is already waiting or running, **Sync now** says so instead of starting another.
+
 | Connector | What it syncs | Credential (where to get it) | Scopes / permissions | Default interval |
 |---|---|---|---|---|
 | Up Bank | Transactions (from 30 days back, then incremental), accounts, categories; webhooks optional | Personal access token — [api.up.com.au](https://api.up.com.au/getting_started) or Up app → Profile → Data sharing | Read-only by design | 15 min |
@@ -21,11 +23,11 @@ After the first sync, each connector syncs again on its interval (changeable on 
 
 ## Pocket recordings
 
-Each recording is stored whole — everything Pocket's API returns, verbatim, plus the full speaker-labelled transcript — so an agent can always read the entire meeting: `get` on a Pocket record (the recording or any of its transcript chunks) returns the whole stored recording. For search and memory, the recording is also cached as a summary record (summary, action items, speakers, tags) plus transcript chunks small enough to embed. With a chat model available (Settings → OpenAI), people, organisations and their relations are extracted from each chunk into the memory graph.
+Each recording is stored whole: everything Pocket's API returns, verbatim, plus the full speaker-labelled transcript, so an agent can always read the entire meeting. `get` on a Pocket record (the recording or any of its transcript chunks) returns the whole stored recording. For search and memory, the recording is also cached as a summary record (summary, action items, speakers, tags) plus transcript chunks small enough to embed. With a chat model available (Settings, OpenAI), people, organisations and their relations are extracted from each chunk into the memory graph (as queued jobs).
 
 ## Deleting a connector's data
 
-**Delete all data** on a connector's page (two confirmations) permanently removes everything synced from it: its records and their search index, Pocket's stored recordings, and every fact and relation extracted from them. Observations built on those facts are rebuilt from what remains. Entities themselves, the connection and its sync position are kept, so later syncs bring in new data only. API: `DELETE /api/connectors/{kind}/data`.
+**Delete all data** on a connector's page (two steps) permanently removes everything synced from it: its records and their search index, Pocket's stored recordings, and every fact and relation extracted from them. Observations built on those facts are rebuilt from what remains. Entities themselves, the connection and its sync position are kept, so later syncs bring in new data only. API: `DELETE /api/connectors/{kind}/data` (account-level: a vault-restricted token cannot call it; recorded in the audit log as `connector.delete_data`).
 
 ## Google (Gmail, Google Calendar): getting a refresh token
 
@@ -61,3 +63,5 @@ host (a GitHub Enterprise server, or a mock in tests), the server operator
 sets `EUNOMIA_ALLOW_CONNECTOR_BASE_URL=1` on the backend, and the connector's
 config can then carry a `base_url`. It's off by default because on a shared
 server it would let any user make the backend call internal addresses.
+
+Even with the override on, connector requests go through the same outbound guard as model calls: cloud metadata and the database address are refused, redirects are not followed, and `ALLOW_PRIVATE_LLM_URL=0` also blocks private ranges.

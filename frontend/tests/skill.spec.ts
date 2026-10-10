@@ -30,8 +30,8 @@ test("the memory skill is viewable, editable and resettable, and edits reach MCP
   await expect(page.getByRole("heading", { name: "House rules" })).toBeVisible();
   expect(await instructions()).toContain("Always remember project deadlines.");
 
-  page.once("dialog", (d) => d.accept());
   await page.getByRole("button", { name: "Reset to default" }).click();
+  await page.getByRole("button", { name: "Replace with built-in" }).click();
   await expect(page.getByLabel("Skill source")).toHaveText("Built-in default");
   expect(await instructions()).not.toContain("House rules");
 });

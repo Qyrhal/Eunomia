@@ -1,0 +1,30 @@
+---
+source: tests/golden_tools.rs
+expression: stable
+---
+{
+  "entity": {
+    "id": "person:<id12>",
+    "kind": "person",
+    "name": "Alicia",
+    "aliases": [],
+    "summary": "",
+    "vault": "vault:<id2>"
+  },
+  "memory": {
+    "id": "memory:<id13>",
+    "owner": "user:<id4>",
+    "vault": "vault:<id2>",
+    "subject": "person:<id12>",
+    "text": "Alicia is the same person",
+    "source": null,
+    "created_at": "<ts>",
+    "type": "world",
+    "proof_count": 1,
+    "status": null,
+    "source_memories": null,
+    "updated_at": "<ts>",
+    "version": 1,
+    "owner_email": null
+  }
+}

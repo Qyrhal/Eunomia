@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [main]
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   backend:
     runs-on: ubuntu-latest
@@ -15,16 +19,27 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # No SurrealDB service container needed: the test suite is pure unit
-      # tests (no live DB) -- see backend/src/**/*.rs's `#[cfg(test)]` modules.
+      # Tests run against an in-memory SurrealDB, so no service container is
+      # needed.
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
 
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: backend
 
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
+
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo nextest run
+      # The whole suite under the --allow-funcs list read out of docker-compose.yml.
+      - run: TEST_HARDENED=1 cargo nextest run
+      # The isolation proof with the application-level owner/vault filters switched off.
+      - run: ISOLATION_TEST_NO_APP_FILTERS=1 cargo nextest run --test isolation
       - run: cargo build --release
-      - run: cargo test --release
 
   frontend:
     runs-on: ubuntu-latest
@@ -39,6 +54,12 @@ jobs:
           bun-version: "1.3.14"
 
       - run: bun install --frozen-lockfile
+      # The committed client in src/lib/gen must match backend/openapi.json.
+      - name: API client is up to date
+        run: |
+          bun run gen:api
+          git diff --exit-code -- src/lib/gen
+          test -z "$(git status --porcelain -- src/lib/gen)"
       - run: bun run lint
       # `next build` generates `.next/types/*.d.ts`, which `next-env.d.ts`
       # references and tsconfig.json includes -- both are gitignored
@@ -47,72 +68,96 @@ jobs:
       - run: bun run build
       - run: bunx tsc --noEmit
 
-  # The Playwright suite (vault isolation, every tool, MCP, recall eval, UI)
-  # against a real backend + the SurrealDB version deployments pin. No OpenAI
-  # key: specs that need a model bring their own fake endpoint.
   e2e:
+    needs: [backend, frontend]
     runs-on: ubuntu-latest
-    timeout-minutes: 45
-    env:
-      E2E_BASE_URL: http://localhost:3000
     steps:
       - uses: actions/checkout@v4
-      # in-memory, pinned to the version deployments run (a service container
-      # can't be given the `start` command)
-      - run: docker run -d --name surrealdb --user root -p 8000:8000 surrealdb/surrealdb:v2.3 start --user root --pass root memory
 
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: backend
-      - run: cargo build --release
-        working-directory: backend
+      - run: docker compose -p eunomia-ci build
+
+      # Throwaway secrets, generated fresh for every run. docker-compose.ci.yml publishes
+      # SurrealDB on 127.0.0.1:8000 so the memory-correctness spec can seed SQL fixtures.
+      - name: Start stack
+        run: |
+          echo "JWT_SECRET=$(openssl rand -hex 32)" >> .env
+          echo "ENCRYPTION_KEY=$(openssl rand -hex 32)" >> .env
+          # The connectors spec points connectors at its in-test mock provider.
+          echo "EUNOMIA_ALLOW_CONNECTOR_BASE_URL=1" >> .env
+          # the suite registers many users a minute from one address
+          printf "RATE_LIMIT_AUTH_PER_MIN=1000\nRATE_LIMIT_USER_PER_MIN=100000\nRATE_LIMIT_TOKEN_PER_MIN=100000\n" >> .env
+          # The backend writes https.json here and the HTTPS spec plays the updater.
+          mkdir -p update-status && chmod 777 update-status
+          echo "E2E_UPDATE_STATUS_DIR=$PWD/update-status" >> "$GITHUB_ENV"
+          docker compose -p eunomia-ci -f docker-compose.yml -f docker-compose.ci.yml up -d backend frontend
+
+      - name: Wait for backend and frontend
+        run: |
+          for url in http://localhost:8001/healthz http://localhost:3000; do
+            for _ in $(seq 1 60); do
+              if curl -fsS -o /dev/null "$url"; then
+                echo "$url is up"
+                continue 2
+              fi
+              sleep 2
+            done
+            echo "$url did not become ready" >&2
+            docker compose -p eunomia-ci logs --no-color
+            exit 1
+          done
+
+      # The first user of an install is its instance admin. Register one before any spec runs
+      # (generated password) and find the org database it got, for the SQL-fixture tests.
+      - name: Create the e2e admin
+        run: |
+          bash scripts/ci/e2e-setup.sh > "$RUNNER_TEMP/e2e.env"
+          echo "::add-mask::$(sed -n 's/^E2E_ADMIN_PASSWORD=//p' "$RUNNER_TEMP/e2e.env")"
+          cat "$RUNNER_TEMP/e2e.env" >> "$GITHUB_ENV"
+          echo "E2E_SURREAL_HTTP=http://127.0.0.1:8000" >> "$GITHUB_ENV"
+          # in-test mock servers listen on the runner; the backend container reaches them via the host gateway
+          echo "E2E_MOCK_BIND=0.0.0.0" >> "$GITHUB_ENV"
+          echo "E2E_MOCK_HOST=host.docker.internal" >> "$GITHUB_ENV"
 
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: "1.3.14"
+
       - run: bun install --frozen-lockfile
         working-directory: frontend
-      # the /api and /mcp rewrites are resolved at build time
-      - run: bun run build
+      - run: bunx playwright install --with-deps chromium
         working-directory: frontend
-        env:
-          BACKEND_INTERNAL_URL: http://localhost:8001
-      # playwright.config.ts uses channel "chrome": Google Chrome ships with
-      # the ubuntu runner image, so no browser download is needed.
 
-      - name: Start backend and frontend
-        run: |
-          export UPDATE_STATUS_DIR="$RUNNER_TEMP/update-status"
-          mkdir -p "$UPDATE_STATUS_DIR"
-          echo "E2E_UPDATE_STATUS_DIR=$UPDATE_STATUS_DIR" >> "$GITHUB_ENV"
-          PORT=8001 SURREAL_URL=ws://localhost:8000/rpc EMBEDDINGS_BACKEND=openai EUNOMIA_ALLOW_CONNECTOR_BASE_URL=1 \
-            ENCRYPTION_KEY="$(openssl rand -base64 32)" JWT_SECRET="$(openssl rand -hex 32)" \
-            nohup backend/target/release/eunomia-backend > "$RUNNER_TEMP/backend.log" 2>&1 &
-          (cd frontend && PORT=3000 nohup bun run start > "$RUNNER_TEMP/frontend.log" 2>&1 &)
-          for url in http://localhost:8001/healthz http://localhost:3000/login; do
-            timeout 60 bash -c "until curl -sf $url >/dev/null; do sleep 1; done" \
-              || { cat "$RUNNER_TEMP"/backend.log "$RUNNER_TEMP"/frontend.log; exit 1; }
-          done
-
+      # E2E_BASE_URL points Playwright at the running compose frontend
+      # instead of starting `bun run dev`. CI=true turns on trace: retain-on-failure.
       - run: bunx playwright test
         working-directory: frontend
+        env:
+          E2E_BASE_URL: http://localhost:3000
 
-      - if: always()
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: recall-eval
           path: frontend/test-results/**/recall-eval.json
           if-no-files-found: ignore
-      - if: failure()
-        run: cat "$RUNNER_TEMP"/backend.log "$RUNNER_TEMP"/frontend.log
-      - if: failure()
-        uses: actions/upload-artifact@v4
+
+      - name: Stack logs
+        if: failure()
+        run: docker compose -p eunomia-ci logs --no-color > stack.log 2>&1 || true
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
         with:
-          name: playwright-results
+          name: playwright-report
           path: |
-            frontend/test-results/
-            ${{ runner.temp }}/*.log
+            frontend/playwright-report
+            frontend/test-results
+            stack.log
+          if-no-files-found: ignore
+
+      - name: Tear down stack
+        if: always()
+        run: docker compose -p eunomia-ci -f docker-compose.yml -f docker-compose.ci.yml down -v
 
   scripts:
     runs-on: ubuntu-latest
@@ -120,8 +165,37 @@ jobs:
       - uses: actions/checkout@v4
       # connect-agents.sh against a throwaway HOME and a mock API, with jq and
       # again with the python3 fallback.
-      - run: bash scripts/tests/connect-agents.test.sh
       - run: CONNECT_JSON=py bash scripts/tests/connect-agents.test.sh
-      - run: bash scripts/tests/auto-update.test.sh
-      - run: bash scripts/tests/https.test.sh
-      - run: bash -n scripts/auto-update.sh scripts/connect-agents.sh
+      # Every script test that needs no Docker, by glob so a new one cannot be forgotten.
+      # SKIP lists the ones that need real containers (upgrade-surreal-v3 has its own job below).
+      - run: |
+          SKIP="upgrade-surreal-v3.test.sh"
+          rc=0
+          for t in scripts/tests/*.test.sh; do
+            case " $SKIP " in *" $(basename "$t") "*) echo "skip $t"; continue ;; esac
+            echo "== $t"; bash "$t" || rc=1
+          done
+          exit $rc
+      - run: bash -n scripts/*.sh scripts/ci/*.sh scripts/tests/*.sh backend/scripts/backup/eunomia-backup.sh
+
+  # Real SurrealDB 2.7 -> 3.3 data move (scripts/upgrade-surreal-v3.sh), including a
+  # forced mismatch that must roll back, and an upgrade from the released v1.2.2
+  # compose file (surrealdb:v2.3, no backup service). Throwaway compose project fw-upgrade.
+  upgrade-surreal-v3:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # case B reads the released v1.2.2 compose file from its tag
+      - run: bash scripts/tests/upgrade-surreal-v3.test.sh
+
+  # Backups really restore, on a throwaway SurrealDB 3.3.1 container. The two drills share the
+  # container name fw-backup-db and port 8211, so they run one after the other.
+  restore-drill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash scripts/restore-drill.sh
+      - run: bash scripts/restore-drill-tenancy.sh

@@ -1,0 +1,15 @@
+{
+  "buildPath": "code",
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "design-system-radius",
+        "value": "1px",
+        "createdAt": "2026-10-08T09:51:42.112Z",
+        "reason": "Claude: rounds the cap of a 1.5px-wide Spark line in bits.css, not a UI surface radius"
+      }
+    ]
+  }
+}
