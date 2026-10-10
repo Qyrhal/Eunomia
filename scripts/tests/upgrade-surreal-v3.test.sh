@@ -48,6 +48,8 @@ s = re.sub(r"surrealdb/surrealdb:v[0-9.]+", sys.argv[2], s)
 s = s.replace("${SURREAL_DATA_VOLUME:-eunomia-surreal-data-v3}", "eunomia-surreal-data")
 s = re.sub(r"\n    depends_on:\n      surreal-upgrade:\n        condition: service_completed_successfully", "", s)
 s = re.sub(r"\n  surreal-upgrade:\n(    .*\n|      .*\n)+", "\n", s)
+# 2.x refuses --allow-experimental=files (3.x file buckets)
+s = re.sub(r"\n      - --allow-experimental=files", "", s)
 print(s, end="")
 PYEOF
 grep -qE '^  surreal-upgrade:|service_completed_successfully' "$W/compose.old" && { echo "compose.old still has surreal-upgrade"; exit 1; }

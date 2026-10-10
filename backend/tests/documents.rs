@@ -183,7 +183,9 @@ async fn upload_index_retrieve_download_export_delete() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn uploads_are_validated() {
     let (app, _stop) = app().await;
-    let cases: Vec<(&str, Option<&str>, Vec<u8>, StatusCode, &str)> = vec![
+    // (filename, content type, body, status, code)
+    type Case = (&'static str, Option<&'static str>, Vec<u8>, StatusCode, &'static str);
+    let cases: Vec<Case> = vec![
         ("big.txt", Some("text/plain"), vec![b'a'; 300 * 1024], StatusCode::PAYLOAD_TOO_LARGE, "document.too_large"),
         ("tool.exe", Some("application/x-msdownload"), b"MZ".to_vec(), StatusCode::UNSUPPORTED_MEDIA_TYPE, "document.unsupported_type"),
         ("sheet.docx", None, b"PK".to_vec(), StatusCode::UNSUPPORTED_MEDIA_TYPE, "document.unsupported_type"),

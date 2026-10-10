@@ -216,7 +216,7 @@ pub struct DocumentOut {
 }
 
 fn ts(d: &Datetime) -> String {
-    d.clone().into_inner().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+    (*d).into_inner().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
 impl From<&DocRow> for DocumentOut {
@@ -808,7 +808,7 @@ async fn index(state: &OrgState, owner: &RecordId, doc: &DocRow) -> Result<usize
                 external_id,
                 title,
                 body_text: piece,
-                occurred_at: Some(doc.created_at.clone()),
+                occurred_at: Some(doc.created_at),
                 url: String::new(),
                 payload: json!({
                     "document_id": id, "revision": doc.revision, "part": i, "char_start": start, "char_end": end, "filename": doc.filename,
