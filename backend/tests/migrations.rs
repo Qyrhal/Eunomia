@@ -342,3 +342,23 @@ async fn case_variants_are_merged_and_existing_rows_get_their_keys_in_0010() {
     let key: Option<String> = db.query("SELECT VALUE name_key FROM ONLY person:solo").await.unwrap().take(0).unwrap();
     assert_eq!(key.unwrap(), "rear admiral");
 }
+
+/// 0011 restarts Pocket sync cursors with only allow-listed functions: it must run (TEST_HARDENED=1
+/// too) on a database that already has a heypocket cursor, which is when its WHERE clause evaluates.
+#[tokio::test]
+async fn pocket_cursor_reset_in_0011_runs_with_cursors_present() {
+    let db = fresh().await;
+    migrate::apply_up_to(&db, 10).await.unwrap();
+    db.query(
+        "CREATE user:u SET email = 'a@b.c', password_hash = 'x';
+         CREATE sync_status:`u:heypocket` SET owner = user:u, cursor = '2026-09-01T00:00:00Z';
+         CREATE sync_status:`u:github` SET owner = user:u, cursor = 'keep';",
+    )
+    .await
+    .unwrap()
+    .check()
+    .unwrap();
+    migrate::apply_up_to(&db, 11).await.unwrap();
+    let cursors: Vec<String> = db.query("SELECT VALUE cursor FROM sync_status ORDER BY id").await.unwrap().take(0).unwrap();
+    assert_eq!(cursors, ["keep", ""], "github kept, heypocket restarted");
+}

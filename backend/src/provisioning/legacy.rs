@@ -24,10 +24,12 @@ use crate::store::{self, root};
 const CONTROL_COPY: &[&str] =
     &["user", "api_token", "session", "oauth_client", "oauth_grant", "oauth_code", "oauth_token", "audit_event", "job", "failure_capsule"];
 
-/// Org tables to copy. Edges come last.
+/// Org tables to copy: every table in `store::TENANT_TABLES` (a test keeps the two in step, so a new
+/// org table can't be left behind). Edges come last. A table the old database never had (an install
+/// from before it existed) counts as empty.
 const TENANT_COPY: &[&str] = &[
     "app_settings", "vault", "vault_member", "connector", "sync_status", "cache_record", "person", "organisation", "location", "repository", "file",
-    "symbol", "memory", "chat_thread", "chat_message", "audit_log", "embed_cache",
+    "symbol", "memory", "chat_thread", "chat_message", "audit_log", "embed_cache", "pocket_recording", "document",
 ];
 const TENANT_EDGES: &[&str] = &["linked_to", "relates_to"];
 
@@ -115,22 +117,24 @@ async fn run(p: &Provisioner, control: &ControlDb, settings: &Settings, org: Org
     let dst = p.session(&rt, &db).await?;
 
     // Accounts and credentials, then membership: oldest user owns.
-    for table in CONTROL_COPY {
+    let present = tables_of(&legacy).await?;
+    for table in CONTROL_COPY.iter().filter(|t| present.contains(**t)) {
         copy_table(&legacy, &ctrl, table, false).await?;
     }
     store::control::USER_EMAIL_LC_BACKFILL.on(control).await?.check()?;
     add_memberships(control, &ctrl, &org).await?;
-    for table in TENANT_COPY {
+    for table in TENANT_COPY.iter().filter(|t| present.contains(**t)) {
         copy_table(&legacy, &dst, table, false).await?;
     }
-    for table in TENANT_EDGES {
+    for table in TENANT_EDGES.iter().filter(|t| present.contains(**t)) {
         copy_table(&legacy, &dst, table, true).await?;
     }
 
     // Verify before declaring done.
     let mut mismatched = Vec::new();
     for (table, to) in CONTROL_COPY.iter().map(|t| (t, &ctrl)).chain(TENANT_COPY.iter().chain(TENANT_EDGES).map(|t| (t, &dst))) {
-        let (a, b) = (count(&legacy, table).await?, count(to, table).await?);
+        let a = if present.contains(*table) { count(&legacy, table).await? } else { 0 };
+        let b = count(to, table).await?;
         if a != b {
             mismatched.push(format!("{table}: {a} in the old database, {b} in the new"));
         }
@@ -174,6 +178,12 @@ async fn add_memberships(control: &ControlDb, ctrl: &crate::db::Db, org: &OrgId)
         .await?
         .check()?;
     Ok(())
+}
+
+/// The tables the old database defines.
+async fn tables_of(db: &crate::db::Db) -> AppResult<std::collections::HashSet<String>> {
+    let info: Option<serde_json::Value> = root(db, "legacy.info_db", "INFO FOR DB").await?.take(0)?;
+    Ok(info.as_ref().and_then(|i| i.get("tables")).and_then(|t| t.as_object()).map(|t| t.keys().cloned().collect()).unwrap_or_default())
 }
 
 async fn count(db: &crate::db::Db, table: &str) -> AppResult<i64> {
@@ -236,3 +246,14 @@ impl Provisioner {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_org_table_is_moved() {
+        let moved: std::collections::BTreeSet<&str> = TENANT_COPY.iter().chain(TENANT_EDGES).copied().collect();
+        let tables: std::collections::BTreeSet<&str> = store::TENANT_TABLES.iter().copied().collect();
+        assert_eq!(moved, tables, "TENANT_COPY + TENANT_EDGES must be exactly store::TENANT_TABLES");
+    }
+}

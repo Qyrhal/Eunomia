@@ -19,4 +19,5 @@ DEFINE FIELD OVERWRITE synced_at ON pocket_recording TYPE datetime DEFAULT time:
 DEFINE INDEX OVERWRITE pocket_recording_owner_idx ON pocket_recording FIELDS owner;
 -- Pocket syncs before this table stored no transcript or summary: restart those cursors so the next
 -- sync refetches every recording. Runs once, with the table still empty.
-UPDATE sync_status SET cursor = "" WHERE cursor != "" AND string::ends_with(record::id(id), ":heypocket");
+-- (record::id is outside the hardened server's function allow-list: match the id's text instead)
+UPDATE sync_status SET cursor = "" WHERE cursor != "" AND string::contains(<string> id, ":heypocket");

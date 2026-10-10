@@ -53,6 +53,8 @@ pub const LEGACY_TENANT_VERSION: u32 = 8;
 const LEGACY_CHECKSUMS: &[(u32, &str)] = &[
     (1, "31199597d8ffdb899e26dd741ec3886f6af03467f65710f4c7a1db2bfc3ce5a5"),
     (5, "7227cfd0e1a0f672f6938c4bada0b9d7c720e42ff06ff7d8d93bfd11f231acd2"),
+    // 0011 used record::id(), which the hardened server denies; databases that applied it before the fix
+    (11, "d6147063dcbca6f2863b2ea79b4799f70dc422d166753272ec7659cf06f44a46"),
 ];
 
 const LEDGER: &str = "DEFINE TABLE IF NOT EXISTS _migration SCHEMAFULL;

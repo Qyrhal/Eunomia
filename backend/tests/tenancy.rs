@@ -155,6 +155,12 @@ async fn only_org(state: &eunomia_backend::state::AppState) -> OrgId {
 #[tokio::test]
 async fn the_move_carries_a_2x_export_into_one_org_and_is_a_noop_the_second_time() {
     let (state, old) = state_with_legacy().await;
+    // a 1.4 install also has Pocket recordings stored whole (the fixture predates the table)
+    old.query("DEFINE TABLE pocket_recording SCHEMALESS; CREATE pocket_recording:`u:rec1` SET owner = user:u, recording_id = 'rec1', title = 'Standup', transcript = 'Ann: hi';")
+        .await
+        .unwrap()
+        .check()
+        .unwrap();
     run_move(&state).await;
     let org = only_org(&state).await;
 
@@ -167,7 +173,7 @@ async fn the_move_carries_a_2x_export_into_one_org_and_is_a_noop_the_second_time
 
     // org data moved, record ids unchanged, and the indexes answer over it
     let db = state.pool.for_org(&org).await.unwrap();
-    for (table, n) in [("memory", 2), ("cache_record", 2), ("person", 1), ("organisation", 1), ("relates_to", 1), ("vault_member", 3)] {
+    for (table, n) in [("memory", 2), ("cache_record", 2), ("person", 1), ("organisation", 1), ("relates_to", 1), ("vault_member", 3), ("pocket_recording", 1)] {
         assert_eq!(count(db.test_raw(), table).await, n, "{table}");
     }
     let owner = eunomia_backend::rid::parse("user:u").unwrap();
