@@ -174,7 +174,7 @@ function UploadRows({ rows, onDismiss }: { rows: UploadRow[]; onDismiss: (key: s
               className="h-1 rounded-full overflow-hidden"
               style={{ background: "var(--surface-raised)" }}
             >
-              <div className="h-full" style={{ width: `${Math.round(r.progress * 100)}%`, background: "var(--accent)", transition: "width 120ms linear" }} />
+              <div className="h-full" style={{ width: `${Math.round(r.progress * 100)}%`, background: "var(--ink-dim)", transition: "width 120ms linear" }} />
             </div>
           )}
         </div>
