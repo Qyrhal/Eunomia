@@ -28,6 +28,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: backend
+          shared-key: backend-tests
 
       - uses: taiki-e/install-action@v2
         with:
@@ -35,11 +36,28 @@ jobs:
 
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo nextest run
+      # No separate `cargo build --release`: the e2e job builds the release image.
+
+  # The same suite under the hardened server settings, in parallel with `backend`.
+  backend-hardened:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend
+          shared-key: backend-tests
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
       # The whole suite under the --allow-funcs list read out of docker-compose.yml.
       - run: TEST_HARDENED=1 cargo nextest run
       # The isolation proof with the application-level owner/vault filters switched off.
       - run: ISOLATION_TEST_NO_APP_FILTERS=1 cargo nextest run --test isolation
-      - run: cargo build --release
 
   frontend:
     runs-on: ubuntu-latest
@@ -69,7 +87,8 @@ jobs:
       - run: bunx tsc --noEmit
 
   e2e:
-    needs: [backend, frontend]
+    # Runs alongside the test jobs: it builds its own images, so waiting for them only adds time.
+    needs: [frontend]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
