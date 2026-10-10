@@ -283,6 +283,61 @@ async fn migrations_wait_for_the_lock_and_take_over_a_stale_one() {
     assert_eq!(count(&db, "_migration_lock").await, 0, "lock released");
 }
 
+/// A migration that runs four times longer than the staleness threshold keeps its lock (its heartbeat
+/// moves `at` forward): the second process waits for it to finish instead of running DDL beside it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_live_holder_keeps_the_migration_lock_past_the_stale_threshold() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    const STALE: std::time::Duration = std::time::Duration::from_millis(600);
+    let db = fresh().await;
+    let done = std::sync::Arc::new(AtomicBool::new(false));
+    let holder = {
+        let (db, done) = (db.clone(), done.clone());
+        tokio::spawn(async move {
+            migrate::locked_for_tests(&db, STALE, async {
+                tokio::time::sleep(STALE * 4).await;
+                done.store(true, Ordering::SeqCst);
+                Ok(())
+            })
+            .await
+        })
+    };
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let saw_done = migrate::locked_for_tests(&db, STALE, async { Ok(done.load(Ordering::SeqCst)) }).await.unwrap();
+    holder.await.unwrap().unwrap();
+    assert!(saw_done, "the lock was taken over while its holder was still migrating");
+    assert_eq!(count(&db, "_migration_lock").await, 0, "both holders released the lock");
+}
+
+/// A holder that dies mid-migration (no release, no more heartbeats) leaves a lock that is taken over
+/// once it is stale, and not before.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_dead_holders_migration_lock_is_taken_after_the_stale_threshold() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    const STALE: std::time::Duration = std::time::Duration::from_millis(600);
+    let db = fresh().await;
+    let started = std::sync::Arc::new(AtomicBool::new(false));
+    let crashed = {
+        let (db, started) = (db.clone(), started.clone());
+        tokio::spawn(async move {
+            migrate::locked_for_tests(&db, STALE, async {
+                started.store(true, Ordering::SeqCst);
+                std::future::pending::<surrealdb::Result<()>>().await
+            })
+            .await
+        })
+    };
+    while !started.load(Ordering::SeqCst) {
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    crashed.abort(); // the process is gone: its heartbeat and release never run again
+    let died = std::time::Instant::now();
+    migrate::locked_for_tests(&db, STALE, async { Ok(()) }).await.unwrap();
+    let waited = died.elapsed();
+    assert!(waited >= STALE - std::time::Duration::from_millis(100), "took a live-looking lock after {waited:?}");
+    assert!(waited < STALE * 5, "a dead holder's lock was not taken over in time ({waited:?})");
+}
+
 /// 0010 backfills `name_key` / `alias_keys` on rows that predate them and, before the case-insensitive
 /// UNIQUE index builds, folds entities that differ only by case into the oldest: memories move over,
 /// two observations become one stale one, edges follow, and a lone survivor keeps its own data.
