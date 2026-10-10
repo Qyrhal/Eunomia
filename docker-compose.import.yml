@@ -16,5 +16,6 @@ services:
       - --allow-rpc
       - --allow-http
       - --allow-arbitrary-query=system
-      - --allow-funcs=time,string,search,count,array,vector,math
+      - --allow-funcs=time,string,search,count,array,vector,math,file,type::file
+      - --allow-experimental=files
       - rocksdb:/data/eunomia.db

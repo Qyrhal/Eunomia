@@ -33,6 +33,11 @@ When you learn how a codebase fits together, map it with
 `code_entity_upsert` (repository, file, symbol) and `code_relate` (`calls`,
 `imports`, …).
 
+## Documents
+
+To keep a file the user gives you (notes, a spec, an export), `document_upload` it; its passages then
+show up in `recall` and `search` with a `document` reference, and `document_get` reads it whole.
+
 ## Answering from memory
 
 `reflect` gives a cited answer. If it returns `mode: "recall_only"`, write the

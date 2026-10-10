@@ -69,6 +69,19 @@ bk restore "$(basename "$d")" --wipe >/dev/null
 check "each database is wiped, created and imported" sh -c "grep -c 'import ' '$SHIM_LOG' | grep -qx 3 && grep -q 'REMOVE DATABASE IF EXISTS .control.' '$SHIM_LOG' && grep -q 'import control: OPTION IMPORT; -- dump of control' '$SHIM_LOG'"
 check "a wrong key refuses clearly" sh -c "BACKUP_ENCRYPTION_KEY=nope sh '$SCRIPT' restore '$(basename "$d")' 2>&1 | grep -q 'integrity check'"
 
+# 3a. uploaded documents (the file bucket folder) go into a tenancy backup as documents.tar.enc and come back
+rm -rf "$TMP/backups"/*; sleep 1
+mkdir -p "$TMP/docs/org_x/abc/1"; printf 'original bytes\n' > "$TMP/docs/org_x/abc/1/notes.md"
+DOCUMENTS_DIR="$TMP/docs" MOCK_TENANCY=1 bk now manual >/dev/null
+d="$(ls -d "$TMP"/backups/manual-* | head -1)"
+check "the documents folder is archived, encrypted" sh -c "test -f '$d/documents.tar.enc' && head -n1 '$d/documents.tar.enc' | grep -q '^EUNOMIA-BK2 ' && ! grep -q 'original bytes' '$d/documents.tar.enc'"
+rm -rf "$TMP/docs"/*; mkdir -p "$TMP/docs/stale"
+DOCUMENTS_DIR="$TMP/docs" bk restore "$(basename "$d")" --wipe >/dev/null 2>&1
+check "restore --wipe brings the documents back and drops what was not in the backup" sh -c "test \"\$(cat '$TMP/docs/org_x/abc/1/notes.md')\" = 'original bytes' && test ! -e '$TMP/docs/stale'"
+rm -rf "$TMP/docs"; rm -rf "$TMP/backups"/*; sleep 1
+DOCUMENTS_DIR="$TMP/docs" MOCK_TENANCY=1 bk now manual >/dev/null
+check "no documents folder, no archive" test -z "$(ls "$TMP"/backups/manual-*/documents.tar.enc 2>/dev/null)"
+
 # 3b. no BACKUP_ENCRYPTION_KEY: a key is generated once into the backup volume and reused
 rm -rf "$TMP/backups"/*
 out1="$(unset BACKUP_ENCRYPTION_KEY; bk now manual 2>&1)"

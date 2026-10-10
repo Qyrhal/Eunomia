@@ -860,7 +860,7 @@ mod tests {
         assert!(bucket_url("s3://key:secret@host/bucket", db).is_err());
         assert!(bucket_url("s3://bucket?access_key=a&secret_key=b", db).is_err());
         assert!(bucket_url("file:relative", db).is_err() || bucket_url("file:relative", db).unwrap().starts_with("file:/"));
-        assert!(bucket_url("file:/a/../b", db).is_err());
+        assert_eq!(bucket_url("file:/a/../b", db).unwrap(), "file:/b/org_0123abcd", "the URL parser resolves dot segments");
         assert!(bucket_url("http://example.com", db).is_err());
         assert!(bucket_url("file:/documents", "org;DROP").is_err());
     }

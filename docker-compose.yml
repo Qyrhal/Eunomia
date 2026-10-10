@@ -21,16 +21,25 @@ services:
       - --allow-rpc
       - --allow-http
       - --allow-arbitrary-query=system
-      - --allow-funcs=time,string,search,count,array,vector,math
+      # file and type::file: the documents bucket (file::put/get/delete on type::file pointers)
+      - --allow-funcs=time,string,search,count,array,vector,math,file,type::file
+      # file buckets are experimental in 3.3; write it with `=`, the flag takes several values and
+      # would swallow the database path below (docs/documents.md)
+      - --allow-experimental=files
       - --query-timeout=60s
       - --transaction-timeout=60s
       - rocksdb:/data/eunomia.db
+    environment:
+      # the only folder a `file:` bucket may use: uploaded documents (EUNOMIA_DOCUMENTS_BACKEND)
+      - SURREAL_BUCKET_FOLDER_ALLOWLIST=/documents
     # No host port: only the backend talks to the DB, over the compose network.
     volumes:
       # 3.x data lives on eunomia-surreal-data-v3. An install from before 2.0 keeps its 2.x data
       # on eunomia-surreal-data, which is never opened by 3.x: surreal-upgrade (below) copies it
       # across first and records SURREAL_DATA_VOLUME in .env.
       - ${SURREAL_DATA_VOLUME:-eunomia-surreal-data-v3}:/data
+      # uploaded documents' original bytes (docs/documents.md); backed up by the backup service
+      - eunomia-documents:/documents
     depends_on:
       surreal-upgrade:
         condition: service_completed_successfully
@@ -102,6 +111,10 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-}
       - OTEL_SERVICE_NAME=eunomia-backend
+      # where the database keeps uploaded documents: a folder on the surrealdb service (above), or an
+      # S3-compatible bucket whose credentials the surrealdb service holds (docs/documents.md)
+      - EUNOMIA_DOCUMENTS_BACKEND=${EUNOMIA_DOCUMENTS_BACKEND:-file:/documents}
+      - EUNOMIA_DOCUMENTS_MAX_BYTES=${EUNOMIA_DOCUMENTS_MAX_BYTES:-26214400}
     # Read/write access to ONE small status directory -- not the repo, not
     # the docker socket. The `updater` service below does the actual update.
     volumes:
@@ -190,13 +203,51 @@ services:
       - SURREAL_DB=${SURREAL_DB:-eunomia}
     volumes:
       - eunomia-backups:/backups
+      # uploaded documents, written into each backup as documents.tar.enc (and restored from it)
+      - eunomia-documents:/documents
     depends_on:
       surrealdb:
+        condition: service_healthy
+
+  # Optional S3-compatible store for documents, for trying S3 locally (docs/documents.md): set
+  # COMPOSE_PROFILES=minio, MINIO_ROOT_USER, MINIO_ROOT_PASSWORD and
+  # EUNOMIA_DOCUMENTS_BACKEND=s3+http://minio:9000/eunomia-docs, and give the surrealdb service the
+  # same key as AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY (an override file). A community MinIO build:
+  # the upstream minio/minio image is no longer published. No host port.
+  minio:
+    image: pgsty/minio:RELEASE.2026-08-04T00-00-00Z
+    profiles: [minio]
+    restart: unless-stopped
+    command: ["server", "/data"]
+    environment:
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER:-}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD:-}
+    volumes:
+      - eunomia-minio:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Creates the eunomia-docs bucket once MinIO is up (idempotent; exits).
+  minio-bucket:
+    image: pgsty/minio:RELEASE.2026-08-04T00-00-00Z
+    profiles: [minio]
+    restart: "no"
+    environment:
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER:-}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD:-}
+    entrypoint: ["sh", "-c", "mc alias set local http://minio:9000 \"$$MINIO_ROOT_USER\" \"$$MINIO_ROOT_PASSWORD\" >/dev/null && mc mb --ignore-existing local/eunomia-docs"]
+    depends_on:
+      minio:
         condition: service_healthy
 
 volumes:
   eunomia-surreal-data:
   eunomia-surreal-data-v3:
   eunomia-backups:
+  eunomia-documents:
+  eunomia-minio:
   eunomia-caddy-data:
   eunomia-caddy-config:

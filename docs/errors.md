@@ -37,6 +37,10 @@ The `ErrorCode` enum is in `backend/src/error.rs`. A unit test fails if a code i
 | `source.not_found` | 404 | Unknown source key. | `routers/sources.rs`, `sources/registry.rs` |
 | `tool.not_found` | 404 | Unknown tool name (REST, MCP and registry). | `routers/tools.rs`, `routers/mcp.rs`, `tools/registry.rs` |
 | `resource.not_found` | 404 | Generic not found, also the default for a bare 404. | `error.rs`, `routers/entities.rs` (bad id), various |
+| `document.not_found` | 404 | No such document of yours (a guessed id, another user's or org's, or one already deleted). | `documents/` |
+| `document.too_large` | 413 | The upload is larger than `EUNOMIA_DOCUMENTS_MAX_BYTES` (default 25 MiB), or than the transport allows. | `documents/` |
+| `document.unsupported_type` | 415 | The upload is not one of the supported types (plain text, Markdown, JSON, CSV, text-based PDF). | `documents/` |
+| `document.storage_unavailable` | 503 | Document storage is off (`EUNOMIA_DOCUMENTS_BACKEND` unset) or the database's file bucket cannot be reached (server without `--allow-experimental=files`, backend down). See [documents.md](documents.md). | `documents/` |
 | `validation.invalid` | 400 | The request or tool arguments are invalid. Also the default for a bare 400, for MCP protocol errors and for tool errors with no more specific code. | most routers, `tools/registry.rs`, `routers/mcp.rs` |
 | `db.conflict` | 409 | A transaction conflicted with another write. Retryable: repeat the request. Also the default for a bare 409. | `error.rs` (DB error mapping) |
 | `db.duplicate` | 409 | A unique index rejected the write. Not retryable. | `error.rs` (DB error mapping), `routers/auth.rs` |
