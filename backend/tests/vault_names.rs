@@ -19,7 +19,13 @@ async fn vaults_keep_separate_areas_apart_and_can_be_used_by_name() {
     let garden = app.tool("recall", json!({"query": "what happens in June?", "vault_id": "Garden Project"})).await;
     let texts: Vec<&str> = garden["results"].as_array().unwrap().iter().map(|r| r["text"].as_str().unwrap()).collect();
     assert_eq!(texts, ["Tomatoes need staking by June."]); // nothing from the other vault
-    assert!(app.tool("recall", json!({"query": "what happens in June?"})).await["results"].as_array().unwrap().is_empty()); // nor the personal one
+    // nor the personal one
+    assert!(app.tool("recall", json!({"query": "what happens in June?", "vault_id": "personal"})).await["results"].as_array().unwrap().is_empty());
+    // no vault given: every org vault, each hit labelled with its vault
+    let everywhere = app.tool("recall", json!({"query": "what happens in June?"})).await;
+    let pairs: Vec<(String, String)> = everywhere["results"].as_array().unwrap().iter().map(|r| (r["vault_name"].as_str().unwrap().to_string(), r["text"].as_str().unwrap().to_string())).collect();
+    assert!(pairs.contains(&("Garden Project".into(), "Tomatoes need staking by June.".into())), "{everywhere}");
+    assert!(pairs.contains(&("Book Club".into(), "The club reads Dune in June.".into())), "{everywhere}");
 
     assert!(app.tool("recall", json!({"query": "June", "vault_id": "Nope"})).await["error"].as_str().unwrap().contains("no vault named"));
     assert_eq!(app.tool("vault_rename", json!({"vault_id": "Book Club", "name": "Reading Group"})).await["name"], "Reading Group");

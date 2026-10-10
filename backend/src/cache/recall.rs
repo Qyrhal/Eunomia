@@ -547,7 +547,7 @@ pub async fn recall(
 
     let mut scored = Vec::new();
     for vault in &vaults {
-        let mut hits = recall_in(db, settings, owner, query, time_range.clone(), pool, types, vault, *vault == personal_vault).await?;
+        let mut hits = recall_in(db, settings, owner, query, time_range, pool, types, vault, *vault == personal_vault).await?;
         let (id, name) = (vault.to_string(), names.get(&vault.to_string()).cloned().unwrap_or_default());
         for h in &mut hits {
             (h.vault, h.vault_name) = (id.clone(), name.clone());

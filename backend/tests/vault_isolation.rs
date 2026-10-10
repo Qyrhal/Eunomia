@@ -157,8 +157,14 @@ async fn a_member_of_other_peoples_personal_vaults_still_defaults_to_their_own()
     assert!(!s(&found).contains("ALICESECRET") && s(&found).contains("BOBSECRET"), "{found}");
     let search = s(&w.ok(&w.bob, "entities_search", json!({"query": "Zed"})).await);
     assert!(search.contains(&w.bob_zed) && !search.contains(&w.alice_zed), "{search}");
-    // personal recall does not include the user's other vaults
-    assert!(!s(&w.ok(&w.alice, "recall", json!({"query": "Quinn Teammate mango"})).await).contains("SHAREDFACT"));
+    // recall without a vault covers the user's org vaults, each hit labelled; a named vault narrows it
+    let all = w.ok(&w.alice, "recall", json!({"query": "Quinn Teammate mango"})).await;
+    let shared = all["results"].as_array().unwrap().iter().find(|i| i["text"].as_str().unwrap_or("").contains("SHAREDFACT")).cloned();
+    let shared = shared.unwrap_or_else(|| panic!("org-vault facts are found without vault_id: {all}"));
+    assert_eq!(shared["vault"], w.shared.as_str());
+    assert_eq!(shared["vault_name"], "Shared");
+    let narrowed = w.ok(&w.alice, "recall", json!({"query": "Quinn Teammate mango", "vault_id": w.alice_personal})).await;
+    assert!(!s(&narrowed).contains("SHAREDFACT"), "{narrowed}");
 }
 
 #[tokio::test]
