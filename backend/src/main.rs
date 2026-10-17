@@ -14,7 +14,11 @@ async fn main() {
     }
     let _otel = eunomia_backend::telemetry::init(&settings.log_level);
     let role = Role::from_env();
-    let signup_open = matches!(std::env::var("SIGNUP").unwrap_or_default().trim().to_ascii_lowercase().as_str(), "" | "open");
+    let signup_mode = std::env::var("SIGNUP").unwrap_or_default().trim().to_ascii_lowercase();
+    let signup_open = matches!(signup_mode.as_str(), "" | "open");
+    if !matches!(signup_mode.as_str(), "" | "open" | "invite" | "closed") {
+        tracing::warn!(value = %signup_mode, "SIGNUP is not open, invite or closed: treating it as closed, nobody but the first user can sign up");
+    }
     if signup_open && eunomia_backend::llm_net::allow_private_llm_url() {
         tracing::warn!("SIGNUP=open and ALLOW_PRIVATE_LLM_URL=1 together: anyone who can reach this server can sign up and point it at private addresses. Set SIGNUP=invite or ALLOW_PRIVATE_LLM_URL=0; see docs/deployment.md.");
     }

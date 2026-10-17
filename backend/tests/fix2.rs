@@ -53,18 +53,31 @@ async fn signup_policy_and_cookie_flags_follow_the_environment() {
         async move { http(&router, "POST", "/api/auth/register", Some(json!({"email": email, "password": PASSWORD})), None, None).await }
     };
 
+    // each refusal names its cause (issue #96: a bare 403 told the owner nothing)
     set("SIGNUP", "closed");
     let ((status, body), _) = register("late@example.com").await;
-    assert_eq!((status, body["code"].as_str()), (StatusCode::FORBIDDEN, Some("auth.forbidden")), "{body}");
+    assert_eq!((status, body["code"].as_str()), (StatusCode::FORBIDDEN, Some("auth.signup_closed")), "{body}");
+    assert!(body["detail"].as_str().unwrap_or("").contains("closed"), "{body}");
+
+    set("SIGNUP", "yes"); // a well-meant value that is not a mode closes signup
+    let ((status, body), _) = register("late@example.com").await;
+    assert_eq!((status, body["code"].as_str()), (StatusCode::FORBIDDEN, Some("auth.signup_closed")), "{body}");
 
     set("SIGNUP", "invite");
     set("SIGNUP_ALLOWLIST", "invited@example.com");
-    assert_eq!(register("stranger@example.com").await.0.0, StatusCode::FORBIDDEN);
+    let ((status, body), _) = register("stranger@example.com").await;
+    assert_eq!((status, body["code"].as_str()), (StatusCode::FORBIDDEN, Some("auth.signup_invite_only")), "{body}");
+    assert!(body["detail"].as_str().unwrap_or("").contains("invite-only"), "{body}");
     assert_eq!(register("Invited@example.com").await.0.0, StatusCode::OK);
 
     unset("SIGNUP");
     unset("SIGNUP_ALLOWLIST");
-    assert_eq!(register("anyone@example.com").await.0.0, StatusCode::OK, "default is open");
+    // the second user of a default install signs up, whatever password they pick, and can log in
+    let ((status, body), _) = register("anyone@example.com").await;
+    assert_eq!(status, StatusCode::OK, "default is open: {body}");
+    let (status, body) = http(&app.router, "POST", "/api/auth/login", Some(json!({"email": "anyone@example.com", "password": PASSWORD})), None, None).await.0;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["email"], "anyone@example.com");
 
     // cookie Secure flag: auto honours X-Forwarded-Proto from a trusted proxy peer, not from anyone else
     let login = |proto: Option<&'static str>, peer: [u8; 4]| {

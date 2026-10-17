@@ -133,20 +133,30 @@ fn session_cookie_header(token: &str, public_url: &str, https: Option<Extension<
 
 /// `SIGNUP`: who may create an account once the install has a first user.
 /// `open` lets anyone who can reach the server sign up; `invite` only emails the operator listed in
-/// `SIGNUP_ALLOWLIST` or `EUNOMIA_ADMIN_EMAILS` (a vault invitation needs an existing account, so it
-/// cannot be the invitation); `closed` nobody. The first user can always sign up. Unknown values close.
-fn signup_allowed(mode: &str, has_users: bool, email: &str, allowlist: &str) -> bool {
+/// `SIGNUP_ALLOWLIST` (a vault invitation needs an existing account, so it cannot be the invitation);
+/// `closed` nobody. The first user can always sign up. Unknown values close.
+///
+/// `reserved` is an address listed in `EUNOMIA_ADMIN_EMAILS`: it is not verified, so whoever signed up
+/// with it first would become operator, and it must already have an account before it is listed.
+/// A mode that refuses anyway keeps its own message, so a closed or invite-only server tells a
+/// stranger nothing about which addresses are operators.
+fn signup_refusal(mode: &str, has_users: bool, email: &str, allowlist: &str, reserved: bool) -> Option<AppError> {
     if !has_users {
-        return true;
+        return None;
     }
     match mode.trim().to_ascii_lowercase().as_str() {
-        "" | "open" => true,
+        "" | "open" => {}
         "invite" => {
             let email = models_user::normalize_email(email);
-            allowlist.split(',').map(models_user::normalize_email).any(|e| !e.is_empty() && e == email)
+            if !allowlist.split(',').map(models_user::normalize_email).any(|e| !e.is_empty() && e == email) {
+                return Some(AppError::coded(ErrorCode::AuthSignupInviteOnly, "Sign-up is invite-only on this server. Ask the admin to add your email to the allow list."));
+            }
         }
-        _ => false,
+        _ => return Some(AppError::coded(ErrorCode::AuthSignupClosed, "Sign-up is closed on this server. Ask the admin for an account.")),
     }
+    reserved.then(|| {
+        AppError::coded(ErrorCode::AuthSignupReserved, "This email is reserved for a server operator (EUNOMIA_ADMIN_EMAILS). Sign in with it instead, or ask the admin to remove it from the list before signing up.")
+    })
 }
 
 #[utoipa::path(
@@ -166,11 +176,9 @@ async fn register(
     Json(body): Json<Credentials>,
 ) -> AppResult<Response> {
     let has_users = crate::capsules::first_user(&state.control).await?.is_some();
-    // an operator address is not verified, so whoever signed up with it first would become operator:
-    // it must already have an account before it is listed (same refusal text, nothing to probe)
     let reserved = has_users && authz::operator_email_listed(&body.email);
-    if reserved || !signup_allowed(&std::env::var("SIGNUP").unwrap_or_default(), has_users, &body.email, &std::env::var("SIGNUP_ALLOWLIST").unwrap_or_default()) {
-        return Err(AppError::coded(ErrorCode::AuthForbidden, "Signup is not open on this server. Ask the admin for access."));
+    if let Some(refused) = signup_refusal(&std::env::var("SIGNUP").unwrap_or_default(), has_users, &body.email, &std::env::var("SIGNUP_ALLOWLIST").unwrap_or_default(), reserved) {
+        return Err(refused);
     }
     let user = models_user::register_user(&state, &body.email, &body.password)
         .await
@@ -611,16 +619,24 @@ mod tests {
 
     #[test]
     fn signup_modes() {
+        let code = |m: &str, has_users: bool, email: &str, allowlist: &str, reserved: bool| {
+            signup_refusal(m, has_users, email, allowlist, reserved).map(|e| e.code.as_str())
+        };
         // a fresh install always lets the first user in
         for m in ["open", "invite", "closed", "junk"] {
-            assert!(signup_allowed(m, false, "a@x.com", ""), "{m}");
+            assert_eq!(code(m, false, "a@x.com", "", true), None, "{m}");
         }
-        assert!(signup_allowed("", true, "a@x.com", ""), "default is open");
-        assert!(signup_allowed("open", true, "a@x.com", ""));
-        assert!(!signup_allowed("closed", true, "a@x.com", "a@x.com"));
-        assert!(!signup_allowed("junk", true, "a@x.com", "a@x.com"), "a typo closes");
-        assert!(signup_allowed("invite", true, "A@x.com", "b@x.com, a@X.com"));
-        assert!(!signup_allowed("invite", true, "c@x.com", "b@x.com,"));
+        assert_eq!(code("", true, "a@x.com", "", false), None, "default is open");
+        assert_eq!(code("open", true, "a@x.com", "", false), None);
+        assert_eq!(code("closed", true, "a@x.com", "a@x.com", false), Some("auth.signup_closed"));
+        assert_eq!(code("junk", true, "a@x.com", "a@x.com", false), Some("auth.signup_closed"), "a typo closes");
+        assert_eq!(code("invite", true, "A@x.com", "b@x.com, a@X.com", false), None);
+        assert_eq!(code("invite", true, "c@x.com", "b@x.com,", false), Some("auth.signup_invite_only"));
+        // a reserved operator address is refused only where the mode would have let it in
+        assert_eq!(code("open", true, "a@x.com", "", true), Some("auth.signup_reserved"));
+        assert_eq!(code("invite", true, "a@x.com", "a@x.com", true), Some("auth.signup_reserved"));
+        assert_eq!(code("invite", true, "a@x.com", "", true), Some("auth.signup_invite_only"), "nothing to probe");
+        assert_eq!(code("closed", true, "a@x.com", "", true), Some("auth.signup_closed"), "nothing to probe");
     }
 
     #[test]

@@ -19,6 +19,9 @@ tokio::task_local! {
 pub enum ErrorCode {
     AuthUnauthorized,
     AuthForbidden,
+    AuthSignupClosed,
+    AuthSignupInviteOnly,
+    AuthSignupReserved,
     AuthEmailTaken,
     AuthNotFound,
     AuthScope,
@@ -57,6 +60,9 @@ impl ErrorCode {
     pub const ALL: &'static [ErrorCode] = &[
         ErrorCode::AuthUnauthorized,
         ErrorCode::AuthForbidden,
+        ErrorCode::AuthSignupClosed,
+        ErrorCode::AuthSignupInviteOnly,
+        ErrorCode::AuthSignupReserved,
         ErrorCode::AuthEmailTaken,
         ErrorCode::AuthNotFound,
         ErrorCode::AuthScope,
@@ -95,6 +101,9 @@ impl ErrorCode {
         match self {
             ErrorCode::AuthUnauthorized => "auth.unauthorized",
             ErrorCode::AuthForbidden => "auth.forbidden",
+            ErrorCode::AuthSignupClosed => "auth.signup_closed",
+            ErrorCode::AuthSignupInviteOnly => "auth.signup_invite_only",
+            ErrorCode::AuthSignupReserved => "auth.signup_reserved",
             ErrorCode::AuthEmailTaken => "auth.email_taken",
             ErrorCode::AuthNotFound => "auth.not_found",
             ErrorCode::AuthScope => "auth.scope",
@@ -133,7 +142,13 @@ impl ErrorCode {
     pub fn default_status(self) -> StatusCode {
         match self {
             ErrorCode::AuthUnauthorized | ErrorCode::AuthTokenExpired | ErrorCode::AuthSessionExpired => StatusCode::UNAUTHORIZED,
-            ErrorCode::AuthForbidden | ErrorCode::AuthScope | ErrorCode::TenantDenied | ErrorCode::VaultForbidden => {
+            ErrorCode::AuthForbidden
+            | ErrorCode::AuthSignupClosed
+            | ErrorCode::AuthSignupInviteOnly
+            | ErrorCode::AuthSignupReserved
+            | ErrorCode::AuthScope
+            | ErrorCode::TenantDenied
+            | ErrorCode::VaultForbidden => {
                 StatusCode::FORBIDDEN
             }
             ErrorCode::RateLimited => StatusCode::TOO_MANY_REQUESTS,
@@ -311,7 +326,8 @@ mod tests {
         // exhaustive match: adding a variant fails to compile until it is handled here and in ALL
         for c in ErrorCode::ALL {
             match c {
-                ErrorCode::AuthUnauthorized | ErrorCode::AuthForbidden | ErrorCode::AuthEmailTaken | ErrorCode::AuthNotFound
+                ErrorCode::AuthUnauthorized | ErrorCode::AuthForbidden | ErrorCode::AuthSignupClosed | ErrorCode::AuthSignupInviteOnly
+                | ErrorCode::AuthSignupReserved | ErrorCode::AuthEmailTaken | ErrorCode::AuthNotFound
                 | ErrorCode::AuthScope | ErrorCode::AuthTokenExpired | ErrorCode::AuthSessionExpired | ErrorCode::RateLimited
                 | ErrorCode::TenantDenied | ErrorCode::TenantNotFound | ErrorCode::TenantSchemaBehind
                 | ErrorCode::TenantProvisioningDisabled | ErrorCode::VaultNotFound | ErrorCode::VaultForbidden | ErrorCode::VaultNameTaken | ErrorCode::EntityNotFound

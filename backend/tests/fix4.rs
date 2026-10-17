@@ -116,7 +116,11 @@ async fn a_failed_signup_leaves_no_user_membership_or_vault() {
 }
 
 async fn register_http(app: &TestApp, email: &str) -> StatusCode {
-    http(&app.router, "POST", "/api/auth/register", Some(json!({ "email": email, "password": PASSWORD })), None, None).await.0 .0
+    register_http_full(app, email).await.0
+}
+
+async fn register_http_full(app: &TestApp, email: &str) -> (StatusCode, serde_json::Value) {
+    http(&app.router, "POST", "/api/auth/register", Some(json!({ "email": email, "password": PASSWORD })), None, None).await.0
 }
 
 #[tokio::test]
@@ -125,7 +129,8 @@ async fn a_listed_operator_address_cannot_be_claimed_by_signup() {
     let app = TestApp::new().await;
     // SAFETY: serialised by ENV; nothing else in this binary reads it
     unsafe { std::env::set_var("EUNOMIA_ADMIN_EMAILS", "boss@example.com, Ops@example.com") };
-    assert_eq!(register_http(&app, "Boss@Example.com").await, StatusCode::FORBIDDEN);
+    let (status, body) = register_http_full(&app, "Boss@Example.com").await;
+    assert_eq!((status, body["code"].as_str()), (StatusCode::FORBIDDEN, Some("auth.signup_reserved")), "{body}");
     assert_eq!(register_http(&app, "ops@example.com").await, StatusCode::FORBIDDEN);
     assert_eq!(register_http(&app, "ordinary@example.com").await, StatusCode::OK);
     // an account made before the address was listed is the operator

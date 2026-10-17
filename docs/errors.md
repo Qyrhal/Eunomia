@@ -15,7 +15,10 @@ The `ErrorCode` enum is in `backend/src/error.rs`. A unit test fails if a code i
 | Code | HTTP | Meaning | Emitted by |
 |------|------|---------|------------|
 | `auth.unauthorized` | 401 | No valid session cookie or API token, or wrong email or password. | `auth.rs` (extractor), `routers/auth.rs`, `routers/mcp.rs` |
-| `auth.forbidden` | 403 | Request rejected before auth, for example a disallowed browser `Origin` on `/mcp`, a non-admin reading `/api/debug/capsules/{trace_id}`, or a signup the server refuses (closed, not on the allow list, or an address reserved in `EUNOMIA_ADMIN_EMAILS`). | `routers/mcp.rs`, `routers/debug.rs`, `routers/auth.rs` |
+| `auth.forbidden` | 403 | Request rejected before auth, for example a disallowed browser `Origin` on `/mcp` or a non-admin reading `/api/debug/capsules/{trace_id}`. | `routers/mcp.rs`, `routers/debug.rs` |
+| `auth.signup_closed` | 403 | Signup refused because `SIGNUP` is `closed` (or an unrecognised value, which closes). The first user of a fresh install can always sign up. | `routers/auth.rs` |
+| `auth.signup_invite_only` | 403 | Signup refused because `SIGNUP=invite` and the email is not in `SIGNUP_ALLOWLIST`. | `routers/auth.rs` |
+| `auth.signup_reserved` | 403 | Signup refused because the email is listed in `EUNOMIA_ADMIN_EMAILS` and the install already has users: register the operator account first, then list it. Only returned where `SIGNUP` would otherwise have allowed the address. | `routers/auth.rs` |
 | `auth.email_taken` | 409 | Signup with an email that already has an account. | `models_user.rs`, `routers/auth.rs` |
 | `auth.not_found` | 404 | API token or session id does not exist or is not yours. | `routers/auth.rs` |
 | `auth.scope` | 403 | The token lacks the scope this route or tool needs, or is restricted to another vault, or the route is account-level and the token is vault-restricted. | `gate.rs`, `authz.rs`, `tools/registry.rs` |
