@@ -60,7 +60,7 @@ const EMBED_BATCH: i64 = 50;
 /// Per run; the reconciler enqueues again while a backlog remains.
 const EMBED_BATCHES: usize = 10;
 
-/// Embed cache records whose `embedding` is NONE.
+/// Embed cache records whose `embedding` is NONE, then memory facts with no current vector.
 async fn embed(state: AppState, job: Job) -> Result<(), JobError> {
     let state = org_state(&state, &job).await?;
     #[derive(serde::Deserialize, SurrealValue)]
@@ -97,6 +97,12 @@ async fn embed(state: AppState, job: Job) -> Result<(), JobError> {
                 .bind(("embedding", vector))
                 .await
                 .map_err(AppError::from)?;
+        }
+    }
+    // then memory facts: never embedded, embedded by another provider or model, or edited since
+    for _ in 0..EMBED_BATCHES {
+        if embeddings::embed_fact_backlog(db, &state.settings, &job.owner, EMBED_BATCH).await? == 0 {
+            break;
         }
     }
     Ok(())

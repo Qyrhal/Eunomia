@@ -76,6 +76,12 @@ pub struct EmbedSpec {
 }
 
 impl EmbedSpec {
+    /// What a stored vector records it was made with (a memory's `embedding_spec`): vectors are only
+    /// compared under the same key.
+    pub fn key(&self) -> String {
+        format!("{}|{}|{DIM}", self.origin, self.model)
+    }
+
     fn cache_key(&self, secret: &str, text: &str) -> String {
         hmac_hex(secret, &format!("{}\n{}\n{DIM}\n{text}", self.origin, self.model))
     }
@@ -171,7 +177,8 @@ async fn embed_openai(texts: &[String], p: &Provider, model: &str) -> AppResult<
 }
 
 /// What `owner`'s vectors are made with now: the provider's origin and the model (`stub` for the
-/// hermetic test backend). For export provenance; stored vectors do not record it yet.
+/// hermetic test backend). For export provenance, and the spec a fact's stored vector is tagged with
+/// ([`embed_facts`]); record vectors do not record it yet.
 pub async fn spec_for(db: &OrgDb, settings: &Settings, owner: &RecordId) -> AppResult<EmbedSpec> {
     if settings.embeddings_backend != "openai" {
         return Ok(EmbedSpec { origin: "stub".to_string(), model: "stub".to_string() });
@@ -223,7 +230,11 @@ pub async fn embed(db: &OrgDb, settings: &Settings, texts: &[String], owner: Opt
     if texts.is_empty() {
         return Ok(Vec::new());
     }
+    Ok(embed_with_spec(db, settings, texts, owner).await?.1)
+}
 
+/// [`embed`], also returning the [`EmbedSpec`] the vectors were made with.
+pub async fn embed_with_spec(db: &OrgDb, settings: &Settings, texts: &[String], owner: Option<&RecordId>) -> AppResult<(EmbedSpec, Vec<Vec<f32>>)> {
     let (spec, prov) = if settings.embeddings_backend == "openai" {
         let p = match owner {
             Some(o) => provider::resolve(db, settings, o).await?,
@@ -235,6 +246,9 @@ pub async fn embed(db: &OrgDb, settings: &Settings, texts: &[String], owner: Opt
     } else {
         (EmbedSpec { origin: "stub".to_string(), model: "stub".to_string() }, None)
     };
+    if texts.is_empty() {
+        return Ok((spec, Vec::new()));
+    }
     let keys: Vec<String> = texts.iter().map(|t| spec.cache_key(&settings.encryption_key, t)).collect();
 
     let mut res = store::cache::EMBED_CACHE_GET.on(db).bind(("keys", keys.clone())).await?;
@@ -261,7 +275,58 @@ pub async fn embed(db: &OrgDb, settings: &Settings, texts: &[String], owner: Opt
         }
     }
 
-    Ok(keys.iter().map(|k| cached.get(k).cloned().unwrap_or_default()).collect())
+    let vectors = keys.iter().map(|k| cached.get(k).cloned().unwrap_or_default()).collect();
+    Ok((spec, vectors))
+}
+
+/// Stores a vector for each `(memory id, text)` fact, made with `owner`'s provider and model and
+/// tagged with that [`EmbedSpec::key`], so recall's fact arm compares it only under the same spec.
+/// The write is conditional on the text, so a fact edited meanwhile never keeps the old text's
+/// vector. Callers check [`available`] first.
+pub async fn embed_facts(db: &OrgDb, settings: &Settings, owner: &RecordId, facts: &[(RecordId, String)]) -> AppResult<()> {
+    if facts.is_empty() {
+        return Ok(());
+    }
+    let texts: Vec<String> = facts.iter().map(|(_, t)| t.clone()).collect();
+    let (spec, vectors) = embed_with_spec(db, settings, &texts, Some(owner)).await?;
+    let key = spec.key();
+    for ((id, text), vector) in facts.iter().zip(vectors) {
+        if vector.len() != DIM {
+            return Err(AppError::internal(format!("embedding for {} has dimension {}", id.to_string(), vector.len())));
+        }
+        crate::tx::with_retry(|| async {
+            store::cache::SET_MEMORY_EMBEDDING
+                .on(db)
+                .bind(("id", id.clone()))
+                .bind(("text", text.clone()))
+                .bind(("embedding", vector.clone()))
+                .bind(("spec", key.clone()))
+                .await?
+                .check()
+        })
+        .await?;
+    }
+    Ok(())
+}
+
+/// Embeds up to `limit` of `owner`'s facts that have no current vector under their provider and
+/// model (never embedded, embedded by another provider or model, or edited since). Returns how many
+/// it found.
+pub async fn embed_fact_backlog(db: &OrgDb, settings: &Settings, owner: &RecordId, limit: i64) -> AppResult<usize> {
+    #[derive(Deserialize, SurrealValue)]
+    struct Row {
+        id: RecordId,
+        text: String,
+    }
+    if !available(db, settings, owner).await {
+        return Ok(0);
+    }
+    let spec = spec_for(db, settings, owner).await?.key();
+    let mut res = store::jobs::MEMORY_EMBED_BACKLOG.on(db).bind(("owner", owner.clone())).bind(("spec", spec)).bind(("limit", limit)).await?;
+    let rows: Vec<Row> = res.take(0)?;
+    let facts: Vec<(RecordId, String)> = rows.into_iter().map(|r| (r.id, r.text)).collect();
+    embed_facts(db, settings, owner, &facts).await?;
+    Ok(facts.len())
 }
 
 #[cfg(test)]

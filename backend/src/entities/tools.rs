@@ -97,7 +97,9 @@ pub async fn memory_write(
     vault_id: Option<&RecordId>,
 ) -> AppResult<service::WriteMemoryOut> {
     let out = service::write_memory(&state.db, owner, subject_name, subject_kind, text, source_record_id, mem_type, vault_id).await?;
-    if out.memory.mem_type != "observation" && super::supersede::enabled(&state.db, &state.settings, owner).await {
+    // no provider: neither embedding nor supersede, and the provider is looked up once
+    let can_embed = embed_written(state, owner, &out.memory).await;
+    if out.memory.mem_type != "observation" && can_embed && super::supersede::enabled(&state.db, &state.settings, owner).await {
         let subject = crate::rid::parse(&out.entity.id).map_err(|_| crate::error::AppError::internal("entity id did not round-trip"))?;
         let memory = crate::rid::parse(&out.memory.id).map_err(|_| crate::error::AppError::internal("memory id did not round-trip"))?;
         crate::jobs::enqueue_lossy(&state.control, crate::jobs::handlers::supersede_job(state.db.org(), owner, &subject, &memory)).await;
@@ -106,13 +108,32 @@ pub async fn memory_write(
 }
 
 pub async fn memory_update(
-    db: &OrgDb,
+    state: &OrgState,
     owner: &RecordId,
     memory_id: &RecordId,
     text: Option<&str>,
     new_type: Option<&str>,
 ) -> AppResult<Option<service::MemoryOut>> {
-    service::update_memory(db, owner, memory_id, text, new_type).await
+    let out = service::update_memory(&state.db, owner, memory_id, text, new_type).await?;
+    if let Some(m) = &out {
+        embed_written(state, owner, m).await;
+    }
+    Ok(out)
+}
+
+/// Embeds a fact just written or edited, for recall's fact arm, and says whether `owner` can embed at
+/// all. Best effort: on failure the embed job's backfill picks it up
+/// (`embeddings::service::embed_fact_backlog`).
+pub async fn embed_written(state: &OrgState, owner: &RecordId, memory: &service::MemoryOut) -> bool {
+    use crate::embeddings::service as embeddings;
+    if !embeddings::available(&state.db, &state.settings, owner).await {
+        return false;
+    }
+    let Ok(id) = crate::rid::parse(&memory.id) else { return true };
+    if let Err(e) = embeddings::embed_facts(&state.db, &state.settings, owner, &[(id, memory.text.clone())]).await {
+        tracing::warn!(error = %e.message, "fact embedding left to the embed job");
+    }
+    true
 }
 
 pub async fn entity_update(

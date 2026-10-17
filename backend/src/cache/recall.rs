@@ -1,11 +1,11 @@
-//! Recall pipeline: 5 arms (semantic, keyword, graph, temporal, memory text),
-//! fused via Reciprocal Rank Fusion, then boosted by recency + "proof" (how
+//! Recall pipeline: 6 arms (semantic over records, keyword, graph, temporal, memory text, semantic
+//! over memory facts), fused via Reciprocal Rank Fusion, then boosted by recency + "proof" (how
 //! many arms agreed on an item), then truncated to a token budget.
 //!
 //! Pipeline, matching the reference diagram:
 //!
 //! ```text
-//!     [semantic | keyword, graph, temporal, memory text]  (provider arm alongside the DB arms)
+//!     [semantic | keyword, graph, temporal, memory text, memory semantic]  (provider arm alongside the DB arms)
 //!                      |
 //!                 RRF fusion (k=60, reusing cache::search's rrf_scores)
 //!                      |
@@ -308,6 +308,26 @@ async fn memory_text_arm(db: &OrgDb, vault: &RecordId, query: &str, limit: usize
     Ok(cs::rank_term_hits(per_term, limit))
 }
 
+/// Semantic arm over remembered facts: this vault's facts closest to the query vector, among those
+/// embedded under the caller's provider and model (`spec`, see `EmbedSpec::key`). Finds a fact by
+/// meaning when no word of the query appears in it ("Ada's occupation" for "Ada is a software engineer").
+async fn memory_semantic_arm(db: &OrgDb, vault: &RecordId, query_vec: Option<&(String, Vec<f32>)>, limit: usize) -> AppResult<Vec<String>> {
+    let Some((spec, vec)) = query_vec else { return Ok(Vec::new()) };
+    #[derive(Deserialize, SurrealValue)]
+    struct IdRow {
+        id: RecordId,
+    }
+    let rows: Vec<IdRow> = store::cache::MEMORY_NEAREST
+        .on(db)
+        .bind(("vault", vault.clone()))
+        .bind(("spec", spec.clone()))
+        .bind(("vec", vec.clone()))
+        .bind(("limit", limit as i64))
+        .await?
+        .take(0)?;
+    Ok(rows.into_iter().map(|r| format!("memory:{}", r.id.to_string())).collect())
+}
+
 /// A record's candidate key in recall: its internal key, whoever owns it.
 fn record_key(id: &RecordId) -> String {
     format!("cache_record:{}", cs::key_of(id))
@@ -459,7 +479,7 @@ async fn hydrate(db: &OrgDb, scope: &cs::RecordScope, vault: &RecordId, keys: &[
 /// small multipliers in spirit, not exact values -- the task leaves the
 /// exact formula up to the implementation.
 ///
-/// proof:   `1 + 0.05 * (arms_hit - 1)` -> 1.00 .. 1.20 for 1..5 arms
+/// proof:   `1 + 0.05 * (arms_hit - 1)` -> 1.00 .. 1.25 for 1..6 arms
 /// recency: 1.0 at age=0, linearly down to a 0.7 floor at 365+ days old;
 ///          1.0 (neutral) when there's no date to judge recency from.
 ///
@@ -581,6 +601,8 @@ struct RecordArms {
     keyword: Vec<String>,
     temporal: Vec<String>,
     found: HashMap<String, cs::CacheRecord>,
+    /// The query's vector and the spec it was made with, for the fact arm; None without embeddings.
+    query_vec: Option<(String, Vec<f32>)>,
 }
 
 impl RecordArms {
@@ -602,12 +624,16 @@ async fn record_arms(
 ) -> AppResult<RecordArms> {
     let no_filter = cs::RecordFilter::default();
     let keys = |ids: Vec<RecordId>| ids.iter().map(record_key).collect::<Vec<_>>();
+    // the query is embedded once, inside the semantic arm's deadline; the fact arm reuses the vector
+    let mut query_vec = None;
     let semantic = arm("semantic", true, async {
-        if crate::embeddings::service::available(db, settings, scope.owner()).await {
-            Ok(keys(cs::semantic_ids(db, settings, scope, query, &no_filter, pool).await?))
-        } else {
-            Ok(Vec::new())
+        if !crate::embeddings::service::available(db, settings, scope.owner()).await {
+            return Ok(Vec::new());
         }
+        let (spec, vecs) = crate::embeddings::service::embed_with_spec(db, settings, &[query.to_string()], Some(scope.owner())).await?;
+        let vec = vecs.into_iter().next().unwrap_or_default();
+        query_vec = Some((spec.key(), vec.clone()));
+        Ok(keys(cs::nearest_ids(db, scope, vec, &no_filter, pool).await?))
     });
     let local = async {
         let keyword = arm("keyword", false, async { Ok(keys(cs::keyword_ids(db, scope, query, &no_filter, pool).await?)) }).await;
@@ -626,11 +652,11 @@ async fn record_arms(
         .map(|k| RecordId::from_table_key("cache_record", k["cache_record:".len()..].to_string()))
         .collect();
     let found = cs::get_many(db, scope, &ids).await?.into_iter().filter_map(|r| Some((record_key(r.rid.as_ref()?), r))).collect();
-    Ok(RecordArms { semantic, keyword, temporal, found })
+    Ok(RecordArms { semantic, keyword, temporal, found, query_vec })
 }
 
 /// One vault's ranked hits (raw scores, unsorted): its share of the record arms, plus the graph,
-/// temporal and memory text arms over its memories. `scope` is the recall's scope narrowed to `vault`.
+/// temporal, memory text and memory semantic arms over its memories. `scope` is the recall's scope narrowed to `vault`.
 #[allow(clippy::too_many_arguments)]
 async fn recall_in(
     db: &OrgDb,
@@ -656,13 +682,15 @@ async fn recall_in(
     let graph = arm("graph", false, graph_arm(db, vault, query, pool)).await?;
     let temporal = arm("temporal", false, temporal_ids(db, vault, time_range, pool, dated)).await?;
     let memory = arm("memory_text", false, memory_text_arm(db, vault, query, pool)).await?;
-    let arms = [semantic_keys, keyword_keys, graph, temporal, memory];
+    let memory_semantic = arm("memory_semantic", true, memory_semantic_arm(db, vault, records.query_vec.as_ref(), pool)).await?;
+    let arms = [semantic_keys, keyword_keys, graph, temporal, memory, memory_semantic];
     tracing::debug!(
         semantic = arms[0].len(),
         keyword = arms[1].len(),
         graph = arms[2].len(),
         temporal = arms[3].len(),
         memory_text = arms[4].len(),
+        memory_semantic = arms[5].len(),
         elapsed_ms = started.elapsed().as_millis() as u64,
         "recall: arm candidates"
     );
