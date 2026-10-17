@@ -31,6 +31,7 @@ pub fn router() -> Router<AppState> {
         .route("/entities", get(list_entities).post(create_entity))
         .route("/entities/graph", get(entity_graph))
         .route("/entities/cloud", get(vector_cloud))
+        .route("/entities/cloud/compare", get(compare_cloud_points))
         .route("/entities/memory/{memory_id}", axum::routing::patch(update_memory).delete(delete_memory))
         .route("/entities/{entity_id}", get(get_entity).patch(update_entity).delete(delete_entity))
         .route("/entities/{entity_id}/memory", post(add_memory))
@@ -142,15 +143,48 @@ async fn vector_cloud(
     Query(q): Query<CloudQuery>,
 ) -> AppResult<Json<crate::cache::cloud::Cloud>> {
     let state = state.org(&user.org).await?;
-    let ids = q
-        .vault_ids
-        .unwrap_or_default()
-        .split(',')
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(parse_record_id)
-        .collect::<AppResult<Vec<_>>>()?;
+    let ids = parse_vault_ids(q.vault_ids.as_deref())?;
     Ok(Json(crate::cache::cloud::cloud(&state.db, &state.settings, &user.id, &ids).await?))
+}
+
+fn parse_vault_ids(raw: Option<&str>) -> AppResult<Vec<RecordId>> {
+    raw.unwrap_or_default().split(',').map(str::trim).filter(|s| !s.is_empty()).map(parse_record_id).collect()
+}
+
+#[derive(Debug, Default, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+struct CompareQuery {
+    /// comma-separated vault ids, the same as for the cloud; default: your personal vault
+    #[serde(default)]
+    vault_ids: Option<String>,
+    /// comma-separated point ids from that cloud, at most 8
+    ids: String,
+}
+
+/// Cosine similarity between up to 8 cloud points and each one's nearest neighbours,
+/// in the full vector space (not the 3D projection) -- see `cache::cloud::compare`.
+#[utoipa::path(
+    operation_id = "compareCloudPoints",
+    get,
+    path = "/api/entities/cloud/compare",
+    tag = "entities",
+    summary = "Compare vector cloud points",
+    params(CompareQuery),
+    responses((status = 200, body = crate::cache::cloud::CloudCompare), (status = "default", description = "Error", body = crate::openapi::Problem, content_type = "application/problem+json")),
+    security(("cookie" = []), ("bearer" = [])),
+)]
+async fn compare_cloud_points(
+    State(state): State<AppState>,
+    user: User,
+    Query(q): Query<CompareQuery>,
+) -> AppResult<Json<crate::cache::cloud::CloudCompare>> {
+    let state = state.org(&user.org).await?;
+    let vaults = parse_vault_ids(q.vault_ids.as_deref())?;
+    let ids: Vec<String> = q.ids.split(',').map(str::trim).filter(|s| !s.is_empty()).map(String::from).collect();
+    if ids.len() > crate::cache::cloud::MAX_COMPARE {
+        return Err(AppError::bad_request(format!("Compare at most {} points at once.", crate::cache::cloud::MAX_COMPARE)));
+    }
+    Ok(Json(crate::cache::cloud::compare(&state.db, &state.settings, &user.id, &vaults, &ids).await?))
 }
 
 fn parse_record_id(id: &str) -> AppResult<RecordId> {
@@ -447,6 +481,7 @@ async fn merge_entities(
     create_entity,
     entity_graph,
     vector_cloud,
+    compare_cloud_points,
     update_memory,
     delete_memory,
     get_entity,

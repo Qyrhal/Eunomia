@@ -2,6 +2,7 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tansta
 import {
   addMemory,
   addRelation,
+  compareCloudPoints,
   createEntity,
   deleteEntity,
   deleteMemory,
@@ -12,7 +13,7 @@ import {
   mergeEntities,
   updateEntity,
 } from "@/lib/gen";
-import type { Cloud, EntityDetail, EntityGraph, EntityKind, EntityMemory, EntityRelation, EntitySummary } from "@/lib/types";
+import type { Cloud, CloudCompare, EntityDetail, EntityGraph, EntityKind, EntityMemory, EntityRelation, EntitySummary } from "@/lib/types";
 import { call } from "./client";
 
 export const entityKeys = {
@@ -21,6 +22,7 @@ export const entityKeys = {
   detail: (id: string) => [...entityKeys.all, "detail", id] as const,
   graph: (kinds: EntityKind[] | undefined, vaultId: string | undefined) => [...entityKeys.all, "graph", kinds ?? null, vaultId ?? null] as const,
   cloud: (vaultIds: string[]) => [...entityKeys.all, "cloud", vaultIds] as const,
+  compare: (vaultIds: string[], ids: string[]) => [...entityKeys.all, "cloud", vaultIds, "compare", ids] as const,
   live: () => [...entityKeys.all, "live"] as const,
 };
 
@@ -52,6 +54,19 @@ export const useEntityCloud = (vaultIds: string[]) =>
     placeholderData: keepPreviousData,
     enabled: vaultIds.length > 0,
   });
+
+/** Similarity between picked cloud points and their nearest neighbours, for the same vault layers. */
+export const useCloudCompare = (vaultIds: string[], ids: string[]) => {
+  const sorted = [...ids].sort();
+  return useQuery({
+    queryKey: entityKeys.compare(vaultIds, sorted),
+    queryFn: () =>
+      call(compareCloudPoints({ query: { vault_ids: vaultIds.join(","), ids: sorted.join(",") } })) as Promise<CloudCompare>,
+    // Adding a point to the comparison keeps the old numbers until the new ones land.
+    placeholderData: keepPreviousData,
+    enabled: vaultIds.length > 0 && ids.length > 0,
+  });
+};
 
 // Memories live on entities, the graph and the cloud both draw them: any write refreshes the whole entity tree.
 const useEntityMutation = <V, R>(fn: (v: V) => Promise<R>) => {

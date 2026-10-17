@@ -187,6 +187,19 @@ async fn shared_vault_reads_never_return_personal_data() {
     assert_eq!(status, 200);
     assert!(cloud["points"].as_array().unwrap().iter().all(|p| p["vault"] == w.shared.as_str() && p["kind"] != "record"));
     assert!(!s(&cloud).contains("SECRET"));
+    // a comparison scoped to the shared vault skips a point from someone's personal vault
+    let path = format!(
+        "/api/entities/cloud/compare?vault_ids={}&ids={},{}",
+        urlenc(&w.shared),
+        urlenc(&w.quinn_memory),
+        urlenc(&w.alice_zed_memory)
+    );
+    let (status, cmp) = w.get(&w.bob, &path).await;
+    assert_eq!(status, 200, "{cmp}");
+    assert!(!s(&cmp).contains(&w.alice_zed_memory), "{cmp}");
+    assert_eq!(cmp["neighbours"].as_array().unwrap().len(), 1, "{cmp}");
+    let nine = ["x"; 9].join(",");
+    assert_eq!(w.get(&w.bob, &format!("/api/entities/cloud/compare?ids={nine}")).await.0, 400);
 }
 
 fn urlenc(v: &str) -> String {
@@ -242,7 +255,7 @@ async fn outsider_cannot_use_vaults(w: &World) {
         w.denied(m, "vault_invite", json!({"vault_id": vault_id, "email": m.user.email})).await;
         w.denied(m, "vault_remove_member", json!({"vault_id": vault_id, "email": w.alice.user.email})).await;
         w.denied(m, "vault_delete", json!({"vault_id": vault_id})).await;
-        for path in ["/api/entities/cloud?vault_ids=", "/api/entities?vault_id=", "/api/entities/graph?vault_id="] {
+        for path in ["/api/entities/cloud?vault_ids=", "/api/entities/cloud/compare?ids=x&vault_ids=", "/api/entities?vault_id=", "/api/entities/graph?vault_id="] {
             assert_eq!(w.get(m, &format!("{path}{}", urlenc(vault_id))).await.0, 403, "{path}");
         }
     }

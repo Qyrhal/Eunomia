@@ -103,6 +103,11 @@ export type CloneOut = {
 };
 
 export type Cloud = {
+    /**
+     * Mean cosine similarity over every pair of points, in the full vector space.
+     * Null with fewer than two points.
+     */
+    mean_similarity?: number | null;
     points: Array<CloudPoint>;
     /**
      * "semantic" (model embeddings) or "lexical" (hashed words, no model)
@@ -110,7 +115,50 @@ export type Cloud = {
     space: string;
 };
 
+export type CloudCompare = {
+    neighbours: Array<CloudNeighbours>;
+    /**
+     * Every pair of the requested ids that are in the cloud.
+     */
+    pairs: Array<CloudPair>;
+    /**
+     * Same meaning as `Cloud.space`.
+     */
+    space: string;
+};
+
+export type CloudNear = {
+    id: string;
+    similarity: number;
+};
+
+export type CloudNeighbours = {
+    id: string;
+    /**
+     * The closest other points in the same cloud, most similar first.
+     */
+    near: Array<CloudNear>;
+};
+
+export type CloudPair = {
+    a: string;
+    b: string;
+    /**
+     * Euclidean distance between the unit vectors, 0 to 2.
+     */
+    distance: number;
+    /**
+     * Cosine similarity of the full (unit-length) vectors, -1 to 1.
+     */
+    similarity: number;
+};
+
 export type CloudPoint = {
+    /**
+     * Cosine similarity of this point's full vector to the cloud's mean direction
+     * (not the 3D projection). Low means an outlier, high means central.
+     */
+    centrality: number;
     id: string;
     /**
      * "record", or the memory's type (world/experience/observation)
@@ -2045,6 +2093,37 @@ export type GetVectorCloudResponses = {
 };
 
 export type GetVectorCloudResponse = GetVectorCloudResponses[keyof GetVectorCloudResponses];
+
+export type CompareCloudPointsData = {
+    body?: never;
+    path?: never;
+    query: {
+        /**
+         * comma-separated vault ids, the same as for the cloud; default: your personal vault
+         */
+        vault_ids?: string;
+        /**
+         * comma-separated point ids from that cloud, at most 8
+         */
+        ids: string;
+    };
+    url: '/api/entities/cloud/compare';
+};
+
+export type CompareCloudPointsErrors = {
+    /**
+     * Error
+     */
+    default: Problem;
+};
+
+export type CompareCloudPointsError = CompareCloudPointsErrors[keyof CompareCloudPointsErrors];
+
+export type CompareCloudPointsResponses = {
+    200: CloudCompare;
+};
+
+export type CompareCloudPointsResponse = CompareCloudPointsResponses[keyof CompareCloudPointsResponses];
 
 export type GetEntityGraphData = {
     body?: never;

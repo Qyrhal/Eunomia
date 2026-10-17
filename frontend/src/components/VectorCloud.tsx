@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { X } from "lucide-react";
 import ErrorLine, { failure } from "./ErrorLine";
 import Scene3D from "./Scene3D";
+import VectorCloudColumn, { MAX_COMPARE } from "./VectorCloudColumn";
 import { useEntityCloud } from "@/lib/queries/entities";
 import { useVaults } from "@/lib/queries/vaults";
 
@@ -27,6 +28,8 @@ export default function VectorCloud() {
       ? failure(cloudQuery.error, "Could not load the vector cloud.", " Reload the page to try again.")
       : null;
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // Rows picked for comparison, in pick order; drawn larger in the scene.
+  const [checked, setChecked] = useState<string[]>([]);
 
   const colorOf = (vaultId: string) => LAYER_COLORS[Math.max(0, picked.indexOf(vaultId)) % LAYER_COLORS.length];
   const points = useMemo(
@@ -40,13 +43,27 @@ export default function VectorCloud() {
     return v ? (v.kind === "personal" ? "Personal" : v.name) : id;
   };
 
+  function toggleRow(id: string) {
+    if (checked.includes(id)) return setChecked(checked.filter((x) => x !== id));
+    if (checked.length >= MAX_COMPARE) return;
+    setChecked([...checked, id]);
+    setSelectedId(id);
+  }
+
+  // Clicking a point reads it and adds its row to the comparison.
+  function pickPoint(id: string) {
+    setSelectedId(id);
+    if (!checked.includes(id) && checked.length < MAX_COMPARE) setChecked([...checked, id]);
+  }
+
   function toggle(id: string) {
     setSelectedId(null);
+    setChecked([]);
     setPicked(picked.includes(id) ? picked.filter((x) => x !== id) : [...picked, id]);
   }
 
   return (
-    <div className="flex flex-col gap-3 flex-1 min-h-0">
+    <div className="flex flex-col gap-3 flex-1 lg:min-h-0">
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <div className="flex gap-2 flex-wrap items-center" role="group" aria-label="Vault layers">
           {vaults.map((v) => {
@@ -76,51 +93,68 @@ export default function VectorCloud() {
         )}
       </div>
       <p className="text-[12px] -mt-1" style={{ color: "var(--ink-faint)" }}>
-        Each point is a memory or synced record. Layer vaults into one shared space, drag to orbit, click a point to read it.
+        Each point is a memory or synced record. Layer vaults into one shared space, drag to orbit, click a point or a row to read and compare it.
       </p>
 
-      <div className="ledger relative flex-1 min-h-0 overflow-hidden" style={{ minHeight: 420 }}>
-        {error ? (
-          <div className="m-4">
-            <ErrorLine error={error} />
-          </div>
-        ) : picked.length === 0 ? (
-          <div className="p-10 text-center text-[13px]" style={{ color: "var(--ink-dim)" }}>
-            Pick at least one vault above to plot its memories.
-          </div>
-        ) : !data ? (
-          <div className="absolute inset-4 skeleton" aria-busy="true" aria-label="Loading the vector cloud" />
-        ) : points.length === 0 ? (
-          <div className="p-10 text-center text-[13px]" style={{ color: "var(--ink-dim)" }}>
-            Nothing stored in these vaults yet.
-          </div>
-        ) : (
-          <Scene3D points={points} axes={AXES} selectedId={selectedId} onSelect={setSelectedId} ariaLabel="Vector cloud" />
-        )}
-        {selected && (
-          <aside
-            key={selected.id}
-            aria-label="Selected point"
-            className="panel pop-in absolute top-3 right-3 left-3 md:left-auto md:w-72 p-4 flex flex-col gap-2"
-            style={{ transformOrigin: "top right" }}
-          >
-            <div className="flex items-center gap-2 label">
-              <span className="dot" style={{ background: selected.color }} aria-hidden />
-              <span className="truncate">
-                {nameOf(selected.vault)} · {selected.kind}
-              </span>
-              <button
-                type="button"
-                className="btn btn-ghost btn-sm ml-auto"
-                style={{ width: 22, height: 22, padding: 0 }}
-                aria-label="Close"
-                onClick={() => setSelectedId(null)}
-              >
-                <X size={13} strokeWidth={1.75} />
-              </button>
+      <div className="flex flex-col lg:flex-row gap-3 flex-1 lg:min-h-0">
+        <div className="ledger relative flex-1 min-h-0 overflow-hidden" style={{ minHeight: 420 }}>
+          {error ? (
+            <div className="m-4">
+              <ErrorLine error={error} />
             </div>
-            <p className="text-[13px] leading-snug" style={{ color: "var(--ink)" }}>{selected.label}</p>
-          </aside>
+          ) : picked.length === 0 ? (
+            <div className="p-10 text-center text-[13px]" style={{ color: "var(--ink-dim)" }}>
+              Pick at least one vault above to plot its memories.
+            </div>
+          ) : !data ? (
+            <div className="absolute inset-4 skeleton" aria-busy="true" aria-label="Loading the vector cloud" />
+          ) : points.length === 0 ? (
+            <div className="p-10 text-center text-[13px]" style={{ color: "var(--ink-dim)" }}>
+              Nothing stored in these vaults yet.
+            </div>
+          ) : (
+            <Scene3D points={points} axes={AXES} selectedId={selectedId} onSelect={pickPoint} marked={checked} ariaLabel="Vector cloud" />
+          )}
+          {selected && (
+            <aside
+              key={selected.id}
+              aria-label="Selected point"
+              className="panel pop-in absolute top-3 right-3 left-3 md:left-auto md:w-72 p-4 flex flex-col gap-2"
+              style={{ transformOrigin: "top right" }}
+            >
+              <div className="flex items-center gap-2 label">
+                <span className="dot" style={{ background: selected.color }} aria-hidden />
+                <span className="truncate">
+                  {nameOf(selected.vault)} · {selected.kind}
+                </span>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm ml-auto"
+                  style={{ width: 22, height: 22, padding: 0 }}
+                  aria-label="Close"
+                  onClick={() => setSelectedId(null)}
+                >
+                  <X size={13} strokeWidth={1.75} />
+                </button>
+              </div>
+              <p className="text-[13px] leading-snug" style={{ color: "var(--ink)" }}>{selected.label}</p>
+            </aside>
+          )}
+        </div>
+        {!error && data && points.length > 0 && (
+          <div className="lg:w-[380px] shrink-0 lg:overflow-y-auto">
+            <VectorCloudColumn
+              points={points}
+              space={data.space}
+              meanSimilarity={data.mean_similarity ?? null}
+              vaultIds={picked}
+              checked={checked}
+              onToggle={toggleRow}
+              onClear={() => setChecked([])}
+              onFocus={setSelectedId}
+              nameOf={nameOf}
+            />
+          </div>
         )}
       </div>
     </div>

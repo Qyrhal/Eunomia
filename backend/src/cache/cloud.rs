@@ -40,6 +40,9 @@ pub struct CloudPoint {
     pub x: f32,
     pub y: f32,
     pub z: f32,
+    /// Cosine similarity of this point's full vector to the cloud's mean direction
+    /// (not the 3D projection). Low means an outlier, high means central.
+    pub centrality: f32,
 }
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
@@ -47,6 +50,45 @@ pub struct Cloud {
     /// "semantic" (model embeddings) or "lexical" (hashed words, no model)
     pub space: &'static str,
     pub points: Vec<CloudPoint>,
+    /// Mean cosine similarity over every pair of points, in the full vector space.
+    /// Null with fewer than two points.
+    pub mean_similarity: Option<f32>,
+}
+
+/// Most ids one comparison takes: keeps the pairwise table and the neighbour scan small.
+pub const MAX_COMPARE: usize = 8;
+const NEIGHBOURS: usize = 5;
+
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct CloudPair {
+    pub a: String,
+    pub b: String,
+    /// Cosine similarity of the full (unit-length) vectors, -1 to 1.
+    pub similarity: f32,
+    /// Euclidean distance between the unit vectors, 0 to 2.
+    pub distance: f32,
+}
+
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct CloudNear {
+    pub id: String,
+    pub similarity: f32,
+}
+
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct CloudNeighbours {
+    pub id: String,
+    /// The closest other points in the same cloud, most similar first.
+    pub near: Vec<CloudNear>,
+}
+
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct CloudCompare {
+    /// Same meaning as `Cloud.space`.
+    pub space: &'static str,
+    /// Every pair of the requested ids that are in the cloud.
+    pub pairs: Vec<CloudPair>,
+    pub neighbours: Vec<CloudNeighbours>,
 }
 
 struct Item {
@@ -194,9 +236,103 @@ async fn layer_items(db: &OrgDb, scope: &cs::RecordScope, vault: &RecordId) -> A
     Ok(items)
 }
 
+fn dot(a: &[f32], b: &[f32]) -> f32 {
+    a.iter().zip(b).map(|(x, y)| x * y).sum()
+}
+
+fn unit(mut v: Vec<f32>) -> Vec<f32> {
+    let norm = dot(&v, &v).sqrt();
+    if norm > 0.0 {
+        v.iter_mut().for_each(|x| *x /= norm);
+    }
+    v
+}
+
+/// Mean pairwise cosine and each row's cosine to the mean direction, in O(n*d):
+/// for unit rows with sum s, the sum over pairs i != j of v_i.v_j is |s|^2 minus the
+/// number of nonzero rows. Zero rows (no words) count as similarity 0.
+pub fn spread(rows: &[Vec<f32>]) -> (Option<f32>, Vec<f32>) {
+    let n = rows.len();
+    let Some(d) = rows.first().map(Vec::len) else { return (None, Vec::new()) };
+    let mut sum = vec![0f32; d];
+    for r in rows {
+        sum.iter_mut().zip(r).for_each(|(s, x)| *s += x);
+    }
+    let nonzero = rows.iter().filter(|r| r.iter().any(|x| *x != 0.0)).count() as f32;
+    let mean = (n > 1).then(|| (dot(&sum, &sum) - nonzero) / (n * (n - 1)) as f32);
+    let len = dot(&sum, &sum).sqrt();
+    let central = rows.iter().map(|r| if len > 0.0 { dot(r, &sum) / len } else { 0.0 }).collect();
+    (mean, central)
+}
+
+type Compared = (Vec<(usize, usize, f32)>, Vec<Vec<(usize, f32)>>);
+
+/// For each index in `focus`: every pair among them, and its top neighbours among all rows.
+/// Rows must be unit length. O(focus * n * d).
+pub fn compare_rows(rows: &[Vec<f32>], focus: &[usize]) -> Compared {
+    let mut pairs = Vec::new();
+    for (k, &a) in focus.iter().enumerate() {
+        for &b in &focus[k + 1..] {
+            pairs.push((a, b, dot(&rows[a], &rows[b])));
+        }
+    }
+    let near = focus
+        .iter()
+        .map(|&a| {
+            let mut sims: Vec<(usize, f32)> = (0..rows.len()).filter(|&j| j != a).map(|j| (j, dot(&rows[a], &rows[j]))).collect();
+            sims.sort_by(|x, y| y.1.total_cmp(&x.1));
+            sims.truncate(NEIGHBOURS);
+            sims
+        })
+        .collect();
+    (pairs, near)
+}
+
 /// The cloud for `vault_ids` (default: the caller's personal vault). Every
 /// vault must be one the caller belongs to.
 pub async fn cloud(db: &OrgDb, settings: &Settings, owner: &RecordId, vault_ids: &[RecordId]) -> AppResult<Cloud> {
+    let (space, items, vectors) = vectors(db, settings, owner, vault_ids).await?;
+    let coords = pca3(&vectors);
+    let (mean_similarity, central) = spread(&vectors);
+    let points = items
+        .into_iter()
+        .zip(coords)
+        .zip(central)
+        .map(|((i, [x, y, z]), centrality)| CloudPoint { id: i.id, vault: i.vault, kind: i.kind, label: label(&i.text), x, y, z, centrality })
+        .collect();
+    Ok(Cloud { space, points, mean_similarity })
+}
+
+/// Pairwise similarity and nearest neighbours for up to [`MAX_COMPARE`] point ids of the
+/// same cloud `cloud()` draws for `vault_ids`. Ids not in that cloud are skipped.
+pub async fn compare(db: &OrgDb, settings: &Settings, owner: &RecordId, vault_ids: &[RecordId], ids: &[String]) -> AppResult<CloudCompare> {
+    let (space, items, vectors) = vectors(db, settings, owner, vault_ids).await?;
+    let mut focus: Vec<usize> = Vec::new();
+    for id in ids.iter().take(MAX_COMPARE) {
+        if let Some(i) = items.iter().position(|it| &it.id == id)
+            && !focus.contains(&i)
+        {
+            focus.push(i);
+        }
+    }
+    let (pairs, near) = compare_rows(&vectors, &focus);
+    let id = |i: usize| items[i].id.clone();
+    Ok(CloudCompare {
+        space,
+        pairs: pairs
+            .into_iter()
+            .map(|(a, b, s)| CloudPair { a: id(a), b: id(b), similarity: s, distance: (2.0 - 2.0 * s).max(0.0).sqrt() })
+            .collect(),
+        neighbours: focus
+            .iter()
+            .zip(near)
+            .map(|(&a, n)| CloudNeighbours { id: id(a), near: n.into_iter().map(|(j, s)| CloudNear { id: id(j), similarity: s }).collect() })
+            .collect(),
+    })
+}
+
+/// Every authorized point in `vault_ids` with its unit-length vector.
+async fn vectors(db: &OrgDb, settings: &Settings, owner: &RecordId, vault_ids: &[RecordId]) -> AppResult<(&'static str, Vec<Item>, Vec<Vec<f32>>)> {
     let personal = vaults_service::personal_vault_id(db, owner).await?;
     let vaults: Vec<RecordId> =
         if vault_ids.is_empty() { vec![vaults_service::default_vault_id(db, owner).await?] } else { vault_ids.to_vec() };
@@ -231,14 +367,7 @@ pub async fn cloud(db: &OrgDb, settings: &Settings, owner: &RecordId, vault_ids:
         Some(v) if v.iter().all(|x| x.len() == embeddings::DIM) => ("semantic", v),
         _ => ("lexical", items.iter().map(|i| lexical_vector(&i.text)).collect()),
     };
-
-    let coords = pca3(&vectors);
-    let points = items
-        .into_iter()
-        .zip(coords)
-        .map(|(i, [x, y, z])| CloudPoint { id: i.id, vault: i.vault, kind: i.kind, label: label(&i.text), x, y, z })
-        .collect();
-    Ok(Cloud { space, points })
+    Ok((space, items, vectors.into_iter().map(unit).collect()))
 }
 
 #[cfg(test)]
@@ -278,6 +407,38 @@ mod tests {
     fn pca_handles_empty_and_single_inputs() {
         assert!(pca3(&[]).is_empty());
         assert_eq!(pca3(&[vec![1.0, 2.0]]), vec![[0.0, 0.0, 0.0]]);
+    }
+
+    #[test]
+    fn spread_matches_the_brute_force_pairwise_mean() {
+        let rows: Vec<Vec<f32>> = vec![vec![1.0, 0.0], vec![0.0, 1.0], vec![0.6, 0.8], vec![0.0, 0.0]];
+        let (mean, central) = spread(&rows);
+        let mut total = 0.0;
+        for i in 0..4 {
+            for j in 0..4 {
+                if i != j {
+                    total += cos(&rows[i], &rows[j]);
+                }
+            }
+        }
+        assert!((mean.unwrap() - total / 12.0).abs() < 1e-5);
+        // [0.6, 0.8] sits closest to the mean direction; the zero row scores 0
+        assert!(central[2] > central[0] && central[2] > central[1]);
+        assert_eq!(central[3], 0.0);
+        assert_eq!(spread(&[vec![1.0, 0.0]]).0, None);
+        assert_eq!(spread(&[]).0, None);
+    }
+
+    #[test]
+    fn compare_rows_lists_pairs_and_ranks_neighbours() {
+        let rows: Vec<Vec<f32>> = [[1.0, 0.0], [0.0, 1.0], [0.8, 0.6], [0.6, 0.8], [-1.0, 0.0]].iter().map(|r| r.to_vec()).collect();
+        let (pairs, near) = compare_rows(&rows, &[0, 1, 2]);
+        assert_eq!(pairs.len(), 3);
+        assert_eq!((pairs[0].0, pairs[0].1), (0, 1));
+        assert!(pairs[0].2.abs() < 1e-6);
+        let order: Vec<usize> = near[0].iter().map(|(j, _)| *j).collect();
+        assert_eq!(order, vec![2, 3, 1, 4]); // most similar first, never itself
+        assert!((near[0][3].1 + 1.0).abs() < 1e-6);
     }
 
     #[test]
