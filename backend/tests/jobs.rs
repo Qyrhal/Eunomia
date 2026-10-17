@@ -376,6 +376,26 @@ async fn embed_reconciler_fills_missing_embeddings() {
     wait_for("embed job done", 20, || async { rows(&state, kind::EMBED).await[0].status == "done" }).await;
 }
 
+/// Facts written before fact embeddings existed (or by a path that does not embed) are backfilled by
+/// the same reconciler and embed job.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn embed_reconciler_fills_missing_fact_embeddings() {
+    let state = state_with("stub").await;
+    let user = common::register(&state, "facts@example.com").await;
+    let db = common::org_db(&state, &user).await;
+    common::sys(eunomia_backend::entities::service::write_memory(&db, &user.id, "Ada Lovelace", "person", "wrote the first program", None, "world", None))
+        .await
+        .unwrap();
+    let missing = "SELECT count() AS n FROM memory WHERE embedding_spec IS NONE GROUP ALL";
+    assert_eq!(org_count(&state, &user, missing).await, 1);
+
+    leader::tick(&state, 0).await; // tick 0 runs the slow probes
+    assert_eq!(rows(&state, kind::EMBED).await.len(), 1);
+    let (_w, _stop) = spawn_worker(&state, handlers::registry(), cfg("w"));
+    wait_for("fact embedded", 20, || async { org_count(&state, &user, missing).await == 0 }).await;
+    wait_for("embed job done", 20, || async { rows(&state, kind::EMBED).await[0].status == "done" }).await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn ingest_queues_extraction_and_the_handler_noops_without_a_key() {
     let state = state_with("stub").await; // stub: no LLM

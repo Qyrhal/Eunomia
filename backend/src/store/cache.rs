@@ -47,6 +47,21 @@ pub const UPSERT_RECORD: Stmt = Stmt::new(
 pub const HAS_EMBEDDING: Stmt = Stmt::new("cache.has_embedding", "SELECT VALUE embedding != NONE FROM ONLY $id");
 pub const SET_EMBEDDING: Stmt = Stmt::new("cache.set_embedding", "UPDATE $id SET embedding = $embedding");
 
+/// A fact's vector and the spec it was made with, only while its text is still the embedded text.
+/// `embedded_at` against `updated_at` tells a later edit left it stale (see `MEMORY_NEAREST`).
+pub const SET_MEMORY_EMBEDDING: Stmt = Stmt::new(
+    "cache.set_memory_embedding",
+    "UPDATE $id SET embedding = $embedding, embedding_spec = $spec, embedded_at = time::now() WHERE text = $text",
+);
+/// Recall's fact arm: this vault's facts closest to `$vec` among those embedded under `$spec` and not
+/// edited since. An exact cosine scan of the vault's facts.
+// ponytail: exact scan per vault (bounded by its fact count), an HNSW index on memory.embedding if a vault outgrows the arm deadline
+pub const MEMORY_NEAREST: Stmt = Stmt::new(
+    "cache.memory_nearest",
+    "SELECT id, vector::similarity::cosine(embedding, $vec) AS sim FROM memory \
+     WHERE vault = $vault AND embedding_spec = $spec AND embedded_at >= updated_at ORDER BY sim DESC LIMIT $limit",
+);
+
 /// The owner's own live records by id, whatever vault they are filed in (work done on the owner's
 /// behalf, never a read); a tombstone reads as absent.
 pub const RECORDS_BY_IDS: Stmt =
@@ -159,6 +174,8 @@ pub const ALL: &[&Stmt] = &[
     &MEMORIES_FOR_RECALL,
     &LIVE_NEIGHBOURS,
     &SET_EMBEDDING,
+    &SET_MEMORY_EMBEDDING,
+    &MEMORY_NEAREST,
     &LINKS_OUT,
     &LINKS_OUT_REL,
     &LINKS_IN,

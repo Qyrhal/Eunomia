@@ -269,7 +269,13 @@ pub async fn extract_entities(db: &OrgDb, settings: &Settings, owner: &RecordId,
     };
 
     match apply_extraction(db, owner, &record.id, record.vault.as_ref(), &data).await {
-        Ok(touched) => touched,
+        Ok(touched) => {
+            // the new source-linked facts, for recall's fact arm; anything left over is the embed job's
+            if let Err(e) = crate::embeddings::service::embed_fact_backlog(db, settings, owner, 50).await {
+                tracing::warn!(error = %e.message, "fact embedding left to the embed job");
+            }
+            touched
+        }
         Err(e) => {
             tracing::warn!("entity extraction upsert failed for {}: {}", record.id, e.message);
             HashSet::new()

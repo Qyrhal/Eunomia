@@ -170,7 +170,7 @@ pub const EDGES_IN_IN_VAULT: Stmt =
 
 
 pub const MEMORIES_OF: Stmt =
-    Stmt::new("entities.memories_of", "SELECT * FROM memory WHERE subject = $id AND vault = $vault ORDER BY created_at DESC");
+    Stmt::new("entities.memories_of", "SELECT * OMIT embedding FROM memory WHERE subject = $id AND vault = $vault ORDER BY created_at DESC");
 
 pub const EDGES_AMONG: Stmt = Stmt::new(
     "entities.edges_among",
@@ -197,11 +197,11 @@ pub const MARK_SUPERSEDED: Stmt = Stmt::new(
 );
 pub const RAW_MEMORIES: Stmt = Stmt::new(
     "entities.raw_memories",
-    r#"SELECT * FROM memory WHERE subject = $id AND type IN ["world","experience"] AND status != "superseded" ORDER BY created_at"#,
+    r#"SELECT * OMIT embedding FROM memory WHERE subject = $id AND type IN ["world","experience"] AND status != "superseded" ORDER BY created_at"#,
 );
 pub const OBSERVATION_OF: Stmt = Stmt::new(
     "entities.observation_of",
-    r#"SELECT * FROM memory WHERE subject = $id AND type = "observation" LIMIT 1"#,
+    r#"SELECT * OMIT embedding FROM memory WHERE subject = $id AND type = "observation" LIMIT 1"#,
 );
 pub const CONSOLIDATE_CREATE: Stmt = Stmt::at(
     "entities.consolidate_create",

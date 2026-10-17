@@ -97,7 +97,7 @@ pub const AUDIT_COUNT: Stmt =
     Stmt::new("app.audit_count", "SELECT count() FROM audit_log WHERE owner = $owner GROUP ALL");
 
 pub const EXPORT_MEMORIES: Stmt =
-    Stmt::new("app.export_memories", "SELECT * FROM memory WHERE subject IN $ids ORDER BY created_at DESC");
+    Stmt::new("app.export_memories", "SELECT * OMIT embedding FROM memory WHERE subject IN $ids ORDER BY created_at DESC");
 
 pub const EXPORT_RELATIONS_OUT: Stmt = Stmt::new("app.export_relations_out", "SELECT * FROM relates_to WHERE in IN $ids");
 

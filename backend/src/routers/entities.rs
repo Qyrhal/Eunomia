@@ -266,7 +266,7 @@ async fn update_memory(
 ) -> AppResult<Json<service::MemoryOut>> {
     let state = state.org(&user.org).await?;
     let rid = parse_record_id(&memory_id)?;
-    let memory = service::update_memory(&state.db, &user.id, &rid, body.text.as_deref(), body.mem_type.as_deref()).await?;
+    let memory = crate::entities::tools::memory_update(&state, &user.id, &rid, body.text.as_deref(), body.mem_type.as_deref()).await?;
     memory.map(Json).ok_or_else(|| AppError::coded(ErrorCode::MemoryNotFound, "not found"))
 }
 
@@ -386,7 +386,9 @@ async fn add_memory(
     if service::get_entity(&state.db, &state.control, &user.id, &rid).await?.is_none() {
         return Err(AppError::coded(ErrorCode::EntityNotFound, "not found"));
     }
-    Ok(Json(service::add_memory(&state.db, &user.id, &rid, &body.text, None, &body.mem_type).await?))
+    let memory = service::add_memory(&state.db, &user.id, &rid, &body.text, None, &body.mem_type).await?;
+    crate::entities::tools::embed_written(&state, &user.id, &memory).await;
+    Ok(Json(memory))
 }
 
 #[utoipa::path(

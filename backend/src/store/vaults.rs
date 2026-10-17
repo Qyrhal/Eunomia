@@ -163,7 +163,7 @@ pub const MERGE_ENTITY_INTO: Stmt = Stmt::new(
     "UPDATE $id SET aliases = $aliases, summary = $summary, updated_at = time::now()",
 );
 
-pub const MEMORIES_OF: Stmt = Stmt::new("vaults.memories_of", "SELECT * FROM memory WHERE subject = $id AND vault = $vault");
+pub const MEMORIES_OF: Stmt = Stmt::new("vaults.memories_of", "SELECT * OMIT embedding FROM memory WHERE subject = $id AND vault = $vault");
 
 pub const COPY_MEMORY: Stmt = Stmt::new(
     "vaults.copy_memory",

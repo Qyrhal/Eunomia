@@ -205,17 +205,19 @@ flowchart TD
     Q --> G[Graph: named entities and their facts]
     Q --> T[Temporal: explicit date range]
     Q --> M[Memory text: remembered facts]
+    Q --> V[Memory semantic: fact vectors]
     S --> R[Reciprocal Rank Fusion]
     K --> R
     G --> R
     T --> R
     M --> R
+    V --> R
     R --> H[Hydrate and recheck scope / freshness]
     H --> B[Boost by recency and retrieval agreement]
     B --> O[Sort, limit and fit optional token budget]
 ```
 
-The semantic arm runs concurrently with the local database work. The four
+The semantic arm runs concurrently with the local database work. The
 database arms execute sequentially to avoid measured database contention.
 Every arm has a four-second deadline. Timeouts yield no candidates for that
 arm; a semantic provider error also drops only the semantic arm. Other
@@ -224,7 +226,12 @@ not a total request deadline.
 
 Semantic and record-keyword searches only include the caller's own records
 alongside their personal vault. Memory-text search works across readable
-vaults without embeddings. The graph arm finds exact entity names and aliases
+vaults without embeddings. The memory semantic arm reuses the query vector the
+semantic arm made and, per readable vault, ranks facts by cosine similarity
+(an exact scan of that vault's facts), comparing only facts whose
+`embedding_spec` is the caller's current provider and model and that were not
+edited after `embedded_at`. Facts are embedded when written or edited, and the
+embed job backfills the rest. The graph arm finds exact entity names and aliases
 from phrases in the query, follows their memories, and includes eligible
 source records and linked neighbours. The temporal arm requires an explicit
 `time_range`; it does not parse phrases such as “last week”.

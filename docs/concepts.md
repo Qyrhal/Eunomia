@@ -117,18 +117,23 @@ it with `memory_delete` (which also invalidates the observation, as above).
 
 ## Recall
 
-`recall` runs five arms and fuses them (reciprocal rank fusion), then boosts
+`recall` runs six arms and fuses them (reciprocal rank fusion), then boosts
 results that several arms agree on and recent ones:
 
 1. **semantic**: embeddings over records (needs a model key)
 2. **keyword**: full-text over records
 3. **memory text**: full-text (BM25) over memories, so a fact is found by what it says
-4. **graph**: entities named in the question, then their memories and linked records
-5. **temporal**: an explicit `time_range`
+4. **memory semantic**: embeddings over memories in every vault you can read, so a
+   fact is found by what it means ("Ada's occupation" finds "Ada is a software
+   engineer"). Needs a model key. A fact is compared only when its vector was made
+   by your current provider and model; facts written before, or under another
+   model, are embedded again by the background embed job.
+5. **graph**: entities named in the question, then their memories and linked records
+6. **temporal**: an explicit `time_range`
 
-The semantic arm runs alongside the four database arms, and every arm has a
+The semantic arm runs alongside the database arms, and every arm has a
 4-second deadline: a slow or failing embedding provider drops only the
-semantic arm. Inputs are bounded (query at
+semantic arms. Inputs are bounded (query at
 most 2000 characters, `limit` 1-100, `max_tokens` 1-100000, `time_range` two
 ISO 8601 dates with since <= until); anything else is a clear error.
 
