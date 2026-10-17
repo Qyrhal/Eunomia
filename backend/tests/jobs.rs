@@ -383,7 +383,7 @@ async fn embed_reconciler_fills_missing_fact_embeddings() {
     let state = state_with("stub").await;
     let user = common::register(&state, "facts@example.com").await;
     let db = common::org_db(&state, &user).await;
-    common::sys(eunomia_backend::entities::service::write_memory(&db, &user.id, "Ada Lovelace", "person", "wrote the first program", None, "world", None))
+    common::sys(eunomia_backend::entities::service::write_memory(&db, &user.id, "Ada Lovelace", "person", "wrote the first program", None, "world", None, None))
         .await
         .unwrap();
     let missing = "SELECT count() AS n FROM memory WHERE embedding_spec IS NONE GROUP ALL";

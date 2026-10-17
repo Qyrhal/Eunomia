@@ -168,7 +168,7 @@ pub const MEMORIES_OF: Stmt = Stmt::new("vaults.memories_of", "SELECT * OMIT emb
 pub const COPY_MEMORY: Stmt = Stmt::new(
     "vaults.copy_memory",
     "CREATE memory SET owner = $owner, vault = $vault, subject = $subject, text = $text, \
-                 type = $type, source = $source RETURN AFTER",
+                 type = $type, source = $source, occurred_at = $occurred_at RETURN AFTER",
 );
 
 pub const RELATIONS_FROM: Stmt = Stmt::new("vaults.relations_from", "SELECT * FROM relates_to WHERE in = $id");

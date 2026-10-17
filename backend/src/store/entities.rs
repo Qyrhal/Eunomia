@@ -32,7 +32,7 @@ pub const WRITE_OBSERVATION: Stmt = Stmt::at(
 pub const WRITE_FACT: Stmt = Stmt::at(
     "entities.write_fact",
     r#"BEGIN TRANSACTION;
-        CREATE memory SET owner = $owner, vault = $vault, subject = $subject, text = $text, type = $type, source = $source RETURN AFTER;
+        CREATE memory SET owner = $owner, vault = $vault, subject = $subject, text = $text, type = $type, source = $source, occurred_at = $occurred_at RETURN AFTER;
         LET $cur = (SELECT VALUE id FROM $obs_id);
         IF array::len($cur) > 0 {
             UPDATE $obs_id SET status = "stale" WHERE status != "stale"

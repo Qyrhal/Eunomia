@@ -585,6 +585,9 @@ struct MemoryRow {
     #[serde(default)]
     #[surreal(default)]
     source: Option<RecordId>,
+    #[serde(default)]
+    #[surreal(default)]
+    occurred_at: Option<surrealdb::types::Datetime>,
 }
 
 fn default_memory_type() -> String {
@@ -799,6 +802,7 @@ async fn copy_into(db: &OrgDb, user_id: &RecordId, src: &RecordId, dest: &Record
             .bind(("text", mem.text))
             .bind(("type", mem.mem_type))
             .bind(("source", mem.source.map(|s| chunk_map.get(&s).cloned().unwrap_or(s))))
+            .bind(("occurred_at", mem.occurred_at))
             .await?;
         }
     }

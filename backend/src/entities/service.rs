@@ -180,6 +180,9 @@ struct MemoryRow {
     #[serde(default)]
     #[surreal(default)]
     version: i64,
+    #[serde(default)]
+    #[surreal(default)]
+    occurred_at: Option<Datetime>,
 }
 
 fn default_memory_type() -> String {
@@ -205,6 +208,10 @@ pub struct MemoryOut {
     pub updated_at: Option<Datetime>,
     pub version: i64,
     pub owner_email: Option<String>,
+    /// When the fact happened, if its writer said (`created_at` is when it was stored).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Option<String>)]
+    pub occurred_at: Option<Datetime>,
 }
 
 fn memory_out(row: &MemoryRow, owner_email: Option<String>) -> MemoryOut {
@@ -223,6 +230,7 @@ fn memory_out(row: &MemoryRow, owner_email: Option<String>) -> MemoryOut {
         updated_at: row.updated_at,
         version: row.version,
         owner_email,
+        occurred_at: row.occurred_at,
     }
 }
 
@@ -610,6 +618,7 @@ pub async fn add_memory(
     text: &str,
     source_record_id: Option<&str>,
     mem_type: &str,
+    occurred_at: Option<&str>,
 ) -> AppResult<MemoryOut> {
     let subject_row = select_entity(db, subject_id)
         .await?
@@ -620,10 +629,12 @@ pub async fn add_memory(
             format!("not a member of {}'s vault", subject_row.vault.to_string()),
         ));
     }
-    insert_memory(db, owner, subject_id, &subject_row.vault, text, source_record_id, mem_type).await
+    insert_memory(db, owner, subject_id, &subject_row.vault, text, source_record_id, mem_type, occurred_at).await
 }
 
 /// [`add_memory`] once the subject and its vault are known and the caller may write there.
+/// `occurred_at` (ISO 8601) is when a raw fact happened; an observation is a current belief and has none.
+#[allow(clippy::too_many_arguments)]
 async fn insert_memory(
     db: &OrgDb,
     owner: &RecordId,
@@ -632,7 +643,10 @@ async fn insert_memory(
     text: &str,
     source_record_id: Option<&str>,
     mem_type: &str,
+    occurred_at: Option<&str>,
 ) -> AppResult<MemoryOut> {
+    let occurred_at: Option<Datetime> =
+        occurred_at.map(|s| crate::cache::search::parse_datetime("occurred_at", s)).transpose()?.map(Datetime::from);
     let source = source_record_id.map(|r| cache_record_rid(owner, r));
     let is_obs = mem_type == "observation";
     let obs_id = observation_rid(subject_id);
@@ -658,6 +672,7 @@ async fn insert_memory(
             .bind(("type", mem_type.to_string()))
             .bind(("source", source.clone()))
             .bind(("obs_id", obs_id.clone()))
+            .bind(("occurred_at", occurred_at))
             .await?
             .check()?;
         let rows: Vec<MemoryRow> = res.take(stmt.slot)?;
@@ -690,6 +705,7 @@ pub async fn write_memory(
     source_record_id: Option<&str>,
     mem_type: &str,
     vault_id: Option<&RecordId>,
+    occurred_at: Option<&str>,
 ) -> AppResult<WriteMemoryOut> {
     authz::require_scope(Action::WriteMemories.scope())?;
     // upsert_entity_created resolved and checked the vault for a write, and the entity lives in it:
@@ -698,7 +714,7 @@ pub async fn write_memory(
     let entity_rid: RecordId =
         crate::rid::parse(&entity.id).map_err(|_| AppError::internal("entity id did not round-trip"))?;
     let vault: RecordId = crate::rid::parse(&entity.vault).map_err(|_| AppError::internal("vault id did not round-trip"))?;
-    let memory = insert_memory(db, owner, &entity_rid, &vault, text, source_record_id, mem_type).await?;
+    let memory = insert_memory(db, owner, &entity_rid, &vault, text, source_record_id, mem_type, occurred_at).await?;
     let possible_duplicates = if created { possible_duplicates(db, &entity).await? } else { Vec::new() };
     Ok(WriteMemoryOut { entity, memory, possible_duplicates })
 }

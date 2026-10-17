@@ -536,6 +536,10 @@ export type MemberOut = {
 };
 
 export type MemoryCreate = {
+    /**
+     * When the fact happened (ISO 8601 date or datetime), if not now.
+     */
+    occurred_at?: string | null;
     text: string;
     type?: string;
 };
@@ -543,6 +547,10 @@ export type MemoryCreate = {
 export type MemoryOut = {
     created_at: string;
     id: string;
+    /**
+     * When the fact happened, if its writer said (`created_at` is when it was stored).
+     */
+    occurred_at?: string | null;
     owner?: string | null;
     owner_email?: string | null;
     proof_count: number;

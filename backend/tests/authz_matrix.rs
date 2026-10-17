@@ -143,7 +143,7 @@ async fn entity_row_operations_matrix() {
         let v = w.vault().await;
         let e = entities::upsert_entity(&w.db, &w.owner.id, "person", "Alice", None, Some(&v)).await.unwrap();
         let eid: RecordId = rid::parse(&e.id).unwrap();
-        let mem = entities::add_memory(&w.db, &w.owner.id, &eid, "likes tea", None, "world").await.unwrap();
+        let mem = entities::add_memory(&w.db, &w.owner.id, &eid, "likes tea", None, "world", None).await.unwrap();
         let mid: RecordId = rid::parse(&mem.id).unwrap();
         let u = w.user(who);
         let member_like = matches!(who, Owner | Member);
@@ -154,7 +154,7 @@ async fn entity_row_operations_matrix() {
         check("update entity", who, got, member_like);
         let got = entities::update_memory(&w.db, &u.id, &mid, Some("likes coffee"), None).await.unwrap().is_some();
         check("update memory", who, got, member_like);
-        let got = allowed(entities::add_memory(&w.db, &u.id, &eid, "new", None, "world").await);
+        let got = allowed(entities::add_memory(&w.db, &u.id, &eid, "new", None, "world", None).await);
         check("add memory", who, got, member_like);
         let got = entities::delete_memory(&w.db, &u.id, &mid).await.unwrap();
         check("delete memory", who, got, member_like);

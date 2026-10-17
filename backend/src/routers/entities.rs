@@ -68,6 +68,9 @@ struct MemoryCreate {
     text: String,
     #[serde(rename = "type", default = "default_memory_type")]
     mem_type: String,
+    /// When the fact happened (ISO 8601 date or datetime), if not now.
+    #[serde(default)]
+    occurred_at: Option<String>,
 }
 
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
@@ -420,7 +423,7 @@ async fn add_memory(
     if service::get_entity(&state.db, &state.control, &user.id, &rid).await?.is_none() {
         return Err(AppError::coded(ErrorCode::EntityNotFound, "not found"));
     }
-    let memory = service::add_memory(&state.db, &user.id, &rid, &body.text, None, &body.mem_type).await?;
+    let memory = service::add_memory(&state.db, &user.id, &rid, &body.text, None, &body.mem_type, body.occurred_at.as_deref()).await?;
     crate::entities::tools::embed_written(&state, &user.id, &memory).await;
     Ok(Json(memory))
 }

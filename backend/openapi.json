@@ -5811,6 +5811,13 @@
           "text"
         ],
         "properties": {
+          "occurred_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the fact happened (ISO 8601 date or datetime), if not now."
+          },
           "text": {
             "type": "string"
           },
@@ -5837,6 +5844,13 @@
           },
           "id": {
             "type": "string"
+          },
+          "occurred_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the fact happened, if its writer said (`created_at` is when it was stored)."
           },
           "owner": {
             "type": [

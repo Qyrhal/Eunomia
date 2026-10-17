@@ -177,12 +177,13 @@ async fn call_llm(db: &OrgDb, settings: &Settings, owner: &RecordId, text: &str,
 
 /// Applies the parsed extraction and returns the set of subject ids (as
 /// strings) that got a new raw `memory` row -- used by the ingest pipeline
-/// to know which entities need re-consolidation.
+/// to know which entities need re-consolidation. Each fact is dated by its record (`occurred_at`).
 async fn apply_extraction(
     db: &OrgDb,
     owner: &RecordId,
     source_record_id: &str,
     vault: Option<&RecordId>,
+    occurred_at: Option<&str>,
     data: &ExtractionData,
 ) -> AppResult<HashSet<String>> {
     let mut entity_ids: HashMap<String, (RecordId, String)> = HashMap::new();
@@ -220,7 +221,7 @@ async fn apply_extraction(
                 if fact.is_empty() {
                     continue;
                 }
-                service::add_memory(db, owner, &entry_id, fact, Some(source_record_id), "world").await?;
+                service::add_memory(db, owner, &entry_id, fact, Some(source_record_id), "world", occurred_at).await?;
                 touched.insert(entry_id.to_string());
             }
         }
@@ -268,7 +269,9 @@ pub async fn extract_entities(db: &OrgDb, settings: &Settings, owner: &RecordId,
         }
     };
 
-    match apply_extraction(db, owner, &record.id, record.vault.as_ref(), &data).await {
+    // a date the store would refuse is dropped, never the whole extraction
+    let occurred_at = record.occurred_at.as_deref().filter(|d| crate::cache::search::parse_datetime("occurred_at", d).is_ok());
+    match apply_extraction(db, owner, &record.id, record.vault.as_ref(), occurred_at, &data).await {
         Ok(touched) => {
             // the new source-linked facts, for recall's fact arm; anything left over is the embed job's
             if let Err(e) = crate::embeddings::service::embed_fact_backlog(db, settings, owner, 50).await {

@@ -685,6 +685,22 @@ expression: info(&db).await
       "indexes": [
         {
           "cols": [
+            "in"
+          ],
+          "index": "",
+          "name": "relates_to_in_idx",
+          "table": "relates_to"
+        },
+        {
+          "cols": [
+            "out"
+          ],
+          "index": "",
+          "name": "relates_to_out_idx",
+          "table": "relates_to"
+        },
+        {
+          "cols": [
             "source"
           ],
           "index": "",

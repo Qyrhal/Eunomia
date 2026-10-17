@@ -233,8 +233,13 @@ semantic arm made and, per readable vault, ranks facts by cosine similarity
 edited after `embedded_at`. Facts are embedded when written or edited, and the
 embed job backfills the rest. The graph arm finds exact entity names and aliases
 from phrases in the query, follows their memories, and includes eligible
-source records and linked neighbours. The temporal arm requires an explicit
-`time_range`; it does not parse phrases such as “last week”.
+source records and linked neighbours. It then follows one `relates_to` hop in
+either direction (at most 10 related entities each way, both ends in the vault
+being searched) and adds the related entities' facts and sources, ranked after
+the named ones. The temporal arm requires an explicit
+`time_range`; it does not parse phrases such as “last week”. A fact is dated by
+`occurred_at` (when it happened, given to `memory_write` or taken from the
+record it was extracted from), else `created_at`.
 
 Reciprocal Rank Fusion sums `1 / (60 + rank)` across the ranked candidate
 lists, with rank starting at 1. Hydration rechecks record ownership and vault scope and excludes stale

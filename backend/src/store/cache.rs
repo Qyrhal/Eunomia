@@ -22,10 +22,11 @@ pub const CACHE_RECORDS_IN_RANGE: Stmt = Stmt::new(
     "SELECT id, occurred_at FROM cache_record WHERE (vault IN $vaults OR ($own AND vault = NONE AND owner = $owner)) \
      AND deleted = false AND occurred_at >= $since AND occurred_at <= $until ORDER BY occurred_at DESC LIMIT $limit",
 );
+/// A fact is dated by when it happened (`occurred_at`, given by its writer), else when it was stored.
 pub const MEMORIES_IN_RANGE: Stmt = Stmt::new(
     "cache.memories_in_range",
-    "SELECT id, created_at FROM memory WHERE vault = $vault \
-     AND created_at >= $since AND created_at <= $until ORDER BY created_at DESC LIMIT $limit",
+    "SELECT id, occurred_at ?? created_at AS at FROM memory WHERE vault = $vault \
+     AND (occurred_at ?? created_at) >= $since AND (occurred_at ?? created_at) <= $until ORDER BY at DESC LIMIT $limit",
 );
 
 /// A record's sync links, to tell whether a replay changed only them.
@@ -76,8 +77,16 @@ pub const RECORDS_IN_SCOPE: Stmt = Stmt::new(
 /// since it was consolidated, so it is not a current fact; the raw facts are still recalled).
 pub const MEMORIES_FOR_RECALL: Stmt = Stmt::new(
     "cache.memories_for_recall",
-    "SELECT id, text, source, created_at, updated_at, type FROM $ids WHERE vault = $vault \
+    "SELECT id, text, source, created_at, updated_at, occurred_at, type FROM $ids WHERE vault = $vault \
      AND !(type = \"observation\" AND status = \"stale\") AND status != \"superseded\"",
+);
+
+/// Recall's graph hop: the entities related to `$ids` in either direction, both ends in `$vault` (an edge
+/// into or out of another vault is never followed), at most `$limit` each way.
+pub const GRAPH_NEIGHBOURS: Stmt = Stmt::new(
+    "cache.graph_neighbours",
+    "SELECT VALUE out FROM relates_to WHERE in IN $ids AND in.vault = $vault AND out.vault = $vault LIMIT $limit; \
+     SELECT VALUE in FROM relates_to WHERE out IN $ids AND in.vault = $vault AND out.vault = $vault LIMIT $limit",
 );
 
 /// Each source's live linked records in either direction, one traversal for the whole batch (recall's
@@ -172,6 +181,7 @@ pub const ALL: &[&Stmt] = &[
     &RECORDS_BY_IDS,
     &RECORDS_IN_SCOPE,
     &MEMORIES_FOR_RECALL,
+    &GRAPH_NEIGHBOURS,
     &LIVE_NEIGHBOURS,
     &SET_EMBEDDING,
     &SET_MEMORY_EMBEDDING,

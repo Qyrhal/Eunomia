@@ -263,6 +263,11 @@ async fn a_synced_record_is_embedded_and_its_entities_extracted_and_consolidated
     })
     .await;
     assert_eq!(q("SELECT VALUE text FROM memory WHERE type = 'world' AND owner = $owner").await, vec!["Ada reported the importer bug".to_string()]);
+    // the extracted fact is dated by its record, not by when it was extracted
+    assert_eq!(
+        q("SELECT VALUE text FROM memory WHERE type = 'world' AND owner = $owner AND occurred_at != NONE AND occurred_at = source.occurred_at").await,
+        vec!["Ada reported the importer bug".to_string()]
+    );
     assert_eq!(q("SELECT VALUE text FROM memory WHERE type = 'observation' AND owner = $owner").await, vec!["Ada reports importer bugs.".to_string()]);
     let _ = stop.send(true);
 }

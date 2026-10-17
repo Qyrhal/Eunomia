@@ -59,6 +59,8 @@ const ARM_DEADLINE: Duration = Duration::from_secs(4);
 /// (runs of up to `NAME_WORDS` of the first `MAX_NAME_WORDS` words).
 const GRAPH_CANDIDATES: usize = 20;
 const GRAPH_ENTITIES: usize = 10;
+/// The graph arm's one `relates_to` hop: at most this many related entities each way.
+const GRAPH_HOP_ENTITIES: usize = 10;
 const NAME_WORDS: usize = 6;
 const MAX_NAME_WORDS: usize = 64;
 
@@ -83,7 +85,7 @@ pub struct RecallItem {
     pub kind: &'static str,
     pub text: String,
     pub source: Option<String>,
-    /// A record's date, or when a memory was last written or edited.
+    /// A record's date; a memory's event time (`occurred_at`), else when it was last written or edited.
     pub occurred_at: Option<String>,
     /// 0..1, relative to the best hit of this recall.
     pub score: f64,
@@ -163,7 +165,9 @@ fn name_phrases(query: &str) -> Vec<String> {
 /// For each matched entity, pulls its newest memories, each memory's source
 /// `cache_record`, and the records linked to that source -- the "follow the
 /// entity graph" hop the diagram's Graph arm describes. A tombstoned source
-/// is not followed (the memory itself stays recallable). Three queries in total.
+/// is not followed (the memory itself stays recallable). Then one `relates_to` hop: the entities related
+/// to a matched one (both ends in this vault, at most [`GRAPH_HOP_ENTITIES`] each way) are followed the
+/// same way, ranked after the matched ones. Four queries in total.
 ///
 /// A followed record shows only if it is filed in this vault (or, in the caller's personal vault, is
 /// the caller's own unrouted record): [`hydrate`] drops the rest.
@@ -218,6 +222,19 @@ async fn graph_arm(db: &OrgDb, vault: &RecordId, query: &str, limit: usize) -> A
     if matches.is_empty() {
         return Ok(Vec::new());
     }
+    let mut entities: Vec<RecordId> = matches.into_iter().map(|(_, id)| id).collect();
+    let mut res = store::cache::GRAPH_NEIGHBOURS
+        .on(db)
+        .bind(("ids", entities.clone()))
+        .bind(("vault", vault.clone()))
+        .bind(("limit", GRAPH_HOP_ENTITIES as i64))
+        .await?;
+    let (fwd, back): (Vec<RecordId>, Vec<RecordId>) = (res.take(0)?, res.take(1)?);
+    for id in fwd.into_iter().chain(back) {
+        if !entities.contains(&id) {
+            entities.push(id);
+        }
+    }
 
     #[derive(Deserialize, SurrealValue)]
     struct MemRow {
@@ -229,20 +246,20 @@ async fn graph_arm(db: &OrgDb, vault: &RecordId, query: &str, limit: usize) -> A
     // WITH INDEX: left to itself the planner walks the whole vault's memories (memory_vault_idx)
     // for each entity
     let mut sql = String::new();
-    for i in 0..matches.len() {
+    for i in 0..entities.len() {
         sql.push_str(&format!(
             "SELECT id, source, created_at FROM memory WITH INDEX memory_subject_idx \
              WHERE subject = $e{i} AND vault = $vault ORDER BY created_at DESC LIMIT $limit;"
         ));
     }
-    // dynamic: one statement per matched entity.
+    // dynamic: one statement per matched or related entity.
     let mut q = store::dynamic(db, "cache.graph_memories", sql).bind(("vault", vault.clone())).bind(("limit", limit as i64));
-    for (i, (_, id)) in matches.iter().enumerate() {
+    for (i, id) in entities.iter().enumerate() {
         q = q.bind((format!("e{i}"), id.clone()));
     }
     let mut res = q.await?;
     let mut memories: Vec<MemRow> = Vec::new();
-    for i in 0..matches.len() {
+    for i in 0..entities.len() {
         memories.extend(res.take::<Vec<MemRow>>(i)?);
     }
 
@@ -350,7 +367,7 @@ async fn temporal_records(db: &OrgDb, scope: &cs::RecordScope, time_range: Optio
 
 /// Explicit date-range filter only -- no NL date parsing in v1. Merges the
 /// newest `limit` of `records` (this vault's share of [`temporal_records`], dated `occurred_at`) and
-/// `memory` rows (`created_at`, vault-scoped) in the range, ranked by recency. Each side is ordered and
+/// `memory` rows (`occurred_at`, else `created_at`; vault-scoped) in the range, ranked by recency. Each side is ordered and
 /// limited in the database, so a broad range never loads the whole range.
 async fn temporal_ids(
     db: &OrgDb,
@@ -366,7 +383,7 @@ async fn temporal_ids(
     #[derive(Deserialize, SurrealValue)]
     struct MemRow {
         id: RecordId,
-        created_at: Datetime,
+        at: Datetime,
     }
 
     let mut dated = records;
@@ -378,7 +395,7 @@ async fn temporal_ids(
         .bind(("limit", limit as i64))
         .await?;
     let rows: Vec<MemRow> = res.take(0)?;
-    dated.extend(rows.into_iter().map(|r| (r.created_at, format!("memory:{}", r.id.to_string()))));
+    dated.extend(rows.into_iter().map(|r| (r.at, format!("memory:{}", r.id.to_string()))));
 
     dated.sort_by_key(|d| std::cmp::Reverse(d.0));
     Ok(dated.into_iter().take(limit).map(|(_, k)| k).collect())
@@ -449,6 +466,9 @@ async fn hydrate(db: &OrgDb, scope: &cs::RecordScope, vault: &RecordId, keys: &[
         #[serde(default)]
         #[surreal(default)]
         updated_at: Option<Datetime>,
+        #[serde(default)]
+        #[surreal(default)]
+        occurred_at: Option<Datetime>,
         #[serde(rename = "type", default = "default_memory_type")]
         #[surreal(rename = "type", default = "default_memory_type")]
         mem_type: String,
@@ -466,7 +486,7 @@ async fn hydrate(db: &OrgDb, scope: &cs::RecordScope, vault: &RecordId, keys: &[
                 kind: "memory",
                 text: row.text,
                 source: row.source.map(|s| cs::caller_id(&s, scope.owner())),
-                occurred_at: Some(to_chrono(row.updated_at.unwrap_or(row.created_at))),
+                occurred_at: Some(to_chrono(row.occurred_at.or(row.updated_at).unwrap_or(row.created_at))),
                 mem_type: row.mem_type,
                 document: None,
             },

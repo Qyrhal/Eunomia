@@ -140,6 +140,8 @@ pub(super) fn register_all(registry: &mut HashMap<&'static str, ToolSpec>) {
         mem_type: String,
         #[serde(default)]
         vault_id: Option<String>,
+        #[serde(default)]
+        occurred_at: Option<String>,
     }
     fn default_memory_write_type() -> String {
         "world".to_string()
@@ -157,6 +159,7 @@ pub(super) fn register_all(registry: &mut HashMap<&'static str, ToolSpec>) {
                 "source_record_id": {"type": "string"},
                 "type": {"type": "string", "enum": ["world", "experience", "observation"]},
                 "vault_id": {"type": "string", "description": "write into this vault instead of your personal one (a vault id or its name, e.g. \"Acme\")"},
+                "occurred_at": {"type": "string", "description": "when the fact happened, if not now (ISO 8601 date or datetime, e.g. \"2025-03-01\"); recall's time range uses it"},
             },
             "required": ["subject_name", "subject_kind", "text"],
         }),
@@ -179,6 +182,7 @@ pub(super) fn register_all(registry: &mut HashMap<&'static str, ToolSpec>) {
                     a.source_record_id.as_deref(),
                     &a.mem_type,
                     vault_id.as_ref(),
+                    a.occurred_at.as_deref(),
                 )
                 .await;
                 Ok(to_tool_value(result))

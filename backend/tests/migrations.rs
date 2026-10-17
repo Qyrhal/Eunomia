@@ -482,3 +482,31 @@ async fn existing_connectors_become_first_connections_in_0017() {
     let cursor: Option<String> = db.query("SELECT VALUE cursor FROM ONLY sync_status:`u:gmail`").await.unwrap().take(0).unwrap();
     assert_eq!(cursor.as_deref(), Some("keep"));
 }
+
+/// 0020 (event time) over facts and relations written before it: they keep their rows, read with no
+/// `occurred_at`, still take edits, and a new fact can carry one.
+#[tokio::test]
+async fn event_time_in_0020_leaves_existing_facts_as_they_were() {
+    let db = fresh().await;
+    migrate::apply_up_to(&db, 19).await.unwrap();
+    db.query(
+        "CREATE person:ada SET owner = user:u, vault = vault:v, name = 'Ada';
+         CREATE person:bob SET owner = user:u, vault = vault:v, name = 'Bob';
+         CREATE memory:old SET owner = user:u, vault = vault:v, subject = person:ada, text = 'Ada likes tea';
+         RELATE person:ada->relates_to->person:bob SET label = 'knows';",
+    )
+    .await
+    .unwrap()
+    .check()
+    .unwrap();
+    migrate::apply_up_to(&db, 20).await.unwrap();
+    assert_eq!(count(&db, "memory WHERE occurred_at = NONE").await, 1);
+    db.query("UPDATE memory:old SET text = 'Ada likes coffee', updated_at = time::now()").await.unwrap().check().unwrap();
+    assert_eq!(count(&db, "relates_to WHERE in = person:ada AND out = person:bob").await, 1);
+    db.query("CREATE memory SET owner = user:u, vault = vault:v, subject = person:ada, text = 'moved', occurred_at = d'2025-03-01T00:00:00Z'")
+        .await
+        .unwrap()
+        .check()
+        .unwrap();
+    assert_eq!(count(&db, "memory WHERE occurred_at != NONE").await, 1);
+}

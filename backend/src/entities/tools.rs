@@ -95,8 +95,9 @@ pub async fn memory_write(
     source_record_id: Option<&str>,
     mem_type: &str,
     vault_id: Option<&RecordId>,
+    occurred_at: Option<&str>,
 ) -> AppResult<service::WriteMemoryOut> {
-    let out = service::write_memory(&state.db, owner, subject_name, subject_kind, text, source_record_id, mem_type, vault_id).await?;
+    let out = service::write_memory(&state.db, owner, subject_name, subject_kind, text, source_record_id, mem_type, vault_id, occurred_at).await?;
     // no provider: neither embedding nor supersede, and the provider is looked up once
     let can_embed = embed_written(state, owner, &out.memory).await;
     if out.memory.mem_type != "observation" && can_embed && super::supersede::enabled(&state.db, &state.settings, owner).await {

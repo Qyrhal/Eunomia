@@ -30,6 +30,7 @@ pub const MIGRATIONS: &[(u32, &str, &str)] = &[
     (17, "multi_connect", include_str!("../migrations/tenant/0017_multi_connect.surql")),
     (18, "vault_buckets", include_str!("../migrations/tenant/0018_vault_buckets.surql")),
     (19, "memory_embeddings", include_str!("../migrations/tenant/0019_memory_embeddings.surql")),
+    (20, "memory_event_time", include_str!("../migrations/tenant/0020_memory_event_time.surql")),
 ];
 
 /// The tenant schema version this code writes. An org database is current at this version.
