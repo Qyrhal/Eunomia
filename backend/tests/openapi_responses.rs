@@ -92,7 +92,10 @@ async fn entity_responses_match_their_schemas() {
     c.call("getEntity", &format!("/api/entities/{ada_id}"), None).await;
     c.call("updateEntity", &format!("/api/entities/{ada_id}"), Some(json!({"summary": "a mathematician"}))).await;
     c.call("getEntityGraph", "/api/entities/graph", None).await;
-    c.call("getVectorCloud", "/api/entities/cloud", None).await;
+    let cloud = c.call("getVectorCloud", "/api/entities/cloud", None).await;
+    let first = cloud["points"][0]["id"].as_str().expect("the memory above is a point").replace(':', "%3A");
+    let cmp = c.call("compareCloudPoints", &format!("/api/entities/cloud/compare?ids={first}"), None).await;
+    assert_eq!(cmp["neighbours"].as_array().unwrap().len(), 1, "{cmp}");
     let dup = c.call("createEntity", "/api/entities", Some(json!({"kind": "person", "name": "Robert"}))).await;
     c.call("mergeEntities", &format!("/api/entities/{bob_id}/merge"), Some(json!({"loser_id": dup["id"]}))).await;
 }

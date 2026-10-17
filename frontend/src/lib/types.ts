@@ -225,8 +225,15 @@ export type VaultInvitation = {
   created_at: string | null;
 };
 
-export type CloudPoint = { id: string; vault: string; kind: string; label: string; x: number; y: number; z: number };
-export type Cloud = { space: "semantic" | "lexical"; points: CloudPoint[] };
+/** `centrality`: cosine of the full vector to the cloud's mean direction (not the 3D projection). */
+export type CloudPoint = { id: string; vault: string; kind: string; label: string; x: number; y: number; z: number; centrality: number };
+export type Cloud = { space: "semantic" | "lexical"; points: CloudPoint[]; mean_similarity: number | null };
+/** Cosine similarity and unit-vector distance in the full vector space, never the 3D projection. */
+export type CloudCompare = {
+  space: "semantic" | "lexical";
+  pairs: { a: string; b: string; similarity: number; distance: number }[];
+  neighbours: { id: string; near: { id: string; similarity: number }[] }[];
+};
 
 export type ChatToolCall = { id: string; type: "function"; function: { name: string; arguments: string } };
 

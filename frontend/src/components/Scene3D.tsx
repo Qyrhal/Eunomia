@@ -24,6 +24,8 @@ type Props = {
   axes?: [string, string, string];
   selectedId?: string | null;
   onSelect?: (id: string) => void;
+  /** ids drawn larger, without rebuilding the scene (a multi-selection) */
+  marked?: string[];
   ariaLabel: string;
   /** draw every point's label (only sensible for small graphs) */
   labels?: boolean;
@@ -59,6 +61,8 @@ const START = new THREE.Vector3(1.8, 1.3, 1.8);
 const NO_INSETS: SceneInsets = { top: 0, right: 0, bottom: 0, left: 0 };
 const LABEL_H = 15; // px per label row, for collision nudging
 const SELECTED_SCALE = 1.3;
+const MARKED_SCALE = 2.2;
+const NO_MARKS: string[] = [];
 
 // Motion for pointer work only (keyboard selection and zoom stay instant).
 const PICK_MS = 260; // pick ring: scale 1 to 2.2 and fade
@@ -72,7 +76,7 @@ const easeInOut = (t: number) => (t < 0.5 ? 8 * t ** 4 : 1 - (-2 * t + 2) ** 4 /
 type Box = { x0: number; y0: number; x1: number; y1: number };
 const pointerDriven = () => document.documentElement.dataset.input === "pointer" && !prefersReducedMotion();
 
-export default function Scene3D({ points, links = [], axes, selectedId, onSelect, ariaLabel, labels, zoomControls, flat, insets }: Props) {
+export default function Scene3D({ points, links = [], axes, selectedId, onSelect, marked = NO_MARKS, ariaLabel, labels, zoomControls, flat, insets }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
   const zoomTextRef = useRef<HTMLSpanElement>(null);
@@ -87,11 +91,13 @@ export default function Scene3D({ points, links = [], axes, selectedId, onSelect
   const insetsRef = useRef<SceneInsets>(insets ?? NO_INSETS);
   const onSelectRef = useRef(onSelect);
   const selectedRef = useRef(selectedId);
+  const markedRef = useRef(marked);
   const [hover, setHover] = useState<{ label: string; x: number; y: number } | null>(null);
 
   useEffect(() => {
     onSelectRef.current = onSelect;
     selectedRef.current = selectedId;
+    markedRef.current = marked;
   });
 
   const { top = 0, right = 0, bottom = 0, left = 0 } = insets ?? {};
@@ -446,6 +452,9 @@ export default function Scene3D({ points, links = [], axes, selectedId, onSelect
     const edge = { t: 0, from: 0, to: 0, start: 0 };
 
     let lastSelected: number | undefined;
+    let lastMarked: string[] = [];
+    let markIdx = new Set<number>();
+    const rest = (i: number) => (markIdx.has(i) ? MARKED_SCALE : 1);
     let raf = 0;
     const frame = () => {
       raf = requestAnimationFrame(frame);
@@ -459,6 +468,14 @@ export default function Scene3D({ points, links = [], axes, selectedId, onSelect
         }
       }
       controls.update();
+      if (markedRef.current !== lastMarked) {
+        const prev = markIdx;
+        lastMarked = markedRef.current;
+        markIdx = new Set(lastMarked.map((id) => index.get(id)).filter((i): i is number => i !== undefined));
+        for (const i of new Set([...prev, ...markIdx])) place(i, i === lastSelected ? Math.max(SELECTED_SCALE, rest(i)) : rest(i));
+        mesh.instanceMatrix.needsUpdate = true;
+        ring.instanceMatrix.needsUpdate = true;
+      }
       const sel = selectedRef.current ? index.get(selectedRef.current) : undefined;
       if (sel !== lastSelected) {
         const incident = sel === undefined ? [] : pairs.filter(([a, b]) => a === sel || b === sel);
@@ -466,12 +483,12 @@ export default function Scene3D({ points, links = [], axes, selectedId, onSelect
         const to = incident.length ? 1 : 0;
         if (to !== edge.to) Object.assign(edge, { from: edge.t, to, start: pointerDriven() ? now : -Infinity });
         if (lastSelected !== undefined) {
-          place(lastSelected, 1);
+          place(lastSelected, rest(lastSelected));
           const k = labelled.indexOf(lastSelected);
           if (k >= 0) pointTags[k].style.color = "";
         }
         if (sel !== undefined) {
-          place(sel, SELECTED_SCALE);
+          place(sel, Math.max(SELECTED_SCALE, rest(sel)));
           const k = labelled.indexOf(sel);
           if (k >= 0) pointTags[k].style.color = "var(--ink)";
         }

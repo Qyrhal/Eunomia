@@ -2163,6 +2163,65 @@
         ]
       }
     },
+    "/api/entities/cloud/compare": {
+      "get": {
+        "tags": [
+          "entities"
+        ],
+        "summary": "Compare vector cloud points",
+        "operationId": "compareCloudPoints",
+        "parameters": [
+          {
+            "name": "vault_ids",
+            "in": "query",
+            "description": "comma-separated vault ids, the same as for the cloud; default: your personal vault",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "ids",
+            "in": "query",
+            "description": "comma-separated point ids from that cloud, at most 8",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CloudCompare"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookie": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/api/entities/graph": {
       "get": {
         "tags": [
@@ -4604,6 +4663,14 @@
           "points"
         ],
         "properties": {
+          "mean_similarity": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float",
+            "description": "Mean cosine similarity over every pair of points, in the full vector space.\nNull with fewer than two points."
+          },
           "points": {
             "type": "array",
             "items": {
@@ -4616,6 +4683,95 @@
           }
         }
       },
+      "CloudCompare": {
+        "type": "object",
+        "required": [
+          "space",
+          "pairs",
+          "neighbours"
+        ],
+        "properties": {
+          "neighbours": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CloudNeighbours"
+            }
+          },
+          "pairs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CloudPair"
+            },
+            "description": "Every pair of the requested ids that are in the cloud."
+          },
+          "space": {
+            "type": "string",
+            "description": "Same meaning as `Cloud.space`."
+          }
+        }
+      },
+      "CloudNear": {
+        "type": "object",
+        "required": [
+          "id",
+          "similarity"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "similarity": {
+            "type": "number",
+            "format": "float"
+          }
+        }
+      },
+      "CloudNeighbours": {
+        "type": "object",
+        "required": [
+          "id",
+          "near"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "near": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CloudNear"
+            },
+            "description": "The closest other points in the same cloud, most similar first."
+          }
+        }
+      },
+      "CloudPair": {
+        "type": "object",
+        "required": [
+          "a",
+          "b",
+          "similarity",
+          "distance"
+        ],
+        "properties": {
+          "a": {
+            "type": "string"
+          },
+          "b": {
+            "type": "string"
+          },
+          "distance": {
+            "type": "number",
+            "format": "float",
+            "description": "Euclidean distance between the unit vectors, 0 to 2."
+          },
+          "similarity": {
+            "type": "number",
+            "format": "float",
+            "description": "Cosine similarity of the full (unit-length) vectors, -1 to 1."
+          }
+        }
+      },
       "CloudPoint": {
         "type": "object",
         "required": [
@@ -4625,9 +4781,15 @@
           "label",
           "x",
           "y",
-          "z"
+          "z",
+          "centrality"
         ],
         "properties": {
+          "centrality": {
+            "type": "number",
+            "format": "float",
+            "description": "Cosine similarity of this point's full vector to the cloud's mean direction\n(not the 3D projection). Low means an outlier, high means central."
+          },
           "id": {
             "type": "string"
           },
