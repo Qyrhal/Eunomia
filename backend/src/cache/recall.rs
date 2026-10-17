@@ -1,5 +1,5 @@
 //! Recall pipeline: 6 arms (semantic over records, keyword, graph, temporal, memory text, semantic
-//! over memory facts), fused via Reciprocal Rank Fusion, then boosted by recency + "proof" (how
+//! over memory facts), fused via Reciprocal Rank Fusion, then boosted by recency + arm agreement (how
 //! many arms agreed on an item), then truncated to a token budget.
 //!
 //! Pipeline, matching the reference diagram:
@@ -11,7 +11,7 @@
 //!                      |
 //!          (cross-encoder step -- intentionally omitted, see below)
 //!                      |
-//!                 boosts (recency x proof)
+//!                 boosts (recency x arm agreement)
 //!                      |
 //!               token-budget truncation
 //! ```
@@ -68,8 +68,9 @@ const MAX_NAME_WORDS: usize = 64;
 const RECENCY_FLOOR: f64 = 0.5;
 const RECENCY_WINDOW_DAYS: f64 = 365.0;
 const RECENCY_SPAN: f64 = 0.5;
-// proof boost: +5% per extra arm that surfaced the same item.
-const PROOF_STEP: f64 = 0.05;
+// arm agreement boost: +5% per extra arm that surfaced the same item. Arms reading the same
+// fact are not independent sources, so this is agreement, not proof the fact is true.
+const AGREEMENT_STEP: f64 = 0.05;
 
 /// `surrealdb::types::Datetime` only converts *from* `chrono::DateTime<Utc>`
 /// (`Datetime::from`); the reverse direction isn't exposed on the wrapper
@@ -89,6 +90,8 @@ pub struct RecallItem {
     pub occurred_at: Option<String>,
     /// 0..1, relative to the best hit of this recall.
     pub score: f64,
+    /// How many retrieval arms found it (arm agreement). Arms over the same fact are not independent
+    /// sources: this is not evidence the fact is true.
     pub arms_hit: usize,
     /// The vault the hit came from (its id), and that vault's name.
     pub vault: String,
@@ -495,16 +498,16 @@ async fn hydrate(db: &OrgDb, scope: &cs::RecordScope, vault: &RecordId, keys: &[
     Ok(out)
 }
 
-/// Monotonic in both arm-count ("proof") and recency, matching the diagram's
+/// Monotonic in both arm agreement (arm count) and recency, matching the diagram's
 /// small multipliers in spirit, not exact values -- the task leaves the
 /// exact formula up to the implementation.
 ///
-/// proof:   `1 + 0.05 * (arms_hit - 1)` -> 1.00 .. 1.25 for 1..6 arms
+/// agreement: `1 + 0.05 * (arms_hit - 1)` -> 1.00 .. 1.25 for 1..6 arms
 /// recency: 1.0 at age=0, linearly down to a 0.7 floor at 365+ days old;
 ///          1.0 (neutral) when there's no date to judge recency from.
 ///
 fn boost(arms_hit: usize, occurred_at: Option<DateTime<Utc>>, now: DateTime<Utc>) -> f64 {
-    let proof = 1.0 + PROOF_STEP * (arms_hit as f64 - 1.0);
+    let agreement = 1.0 + AGREEMENT_STEP * (arms_hit as f64 - 1.0);
 
     let recency = match occurred_at {
         None => 1.0,
@@ -514,7 +517,7 @@ fn boost(arms_hit: usize, occurred_at: Option<DateTime<Utc>>, now: DateTime<Utc>
         }
     };
 
-    proof * recency
+    agreement * recency
 }
 
 /// Checks recall's inputs up front -- every bound is a clear 400, not a slow
@@ -754,12 +757,22 @@ async fn recall_in(
     Ok(scored)
 }
 
-/// Fits ranked items into a token budget (~4 chars/token). Each item is
-/// capped at a third of the budget -- trimmed with "…", its `id` kept so the
-/// caller can fetch the full text -- and an item that doesn't fit is skipped
-/// rather than ending the list, so one huge memory (an imported transcript,
-/// say) can't crowd out everything after it.
+/// ~4 characters per token: the estimate every budget here uses (no tokenizer).
+pub(crate) fn estimate_tokens(s: &str) -> usize {
+    s.chars().count().div_ceil(4)
+}
+
+/// Fits ranked items into a token budget, counting each item's text.
 fn fit_budget(items: Vec<RecallItem>, budget: usize) -> Vec<RecallItem> {
+    fit_budget_by(items, budget, |item| estimate_tokens(&item.text))
+}
+
+/// Fits ranked items into a token budget, an item costing `cost(item)` tokens (its text plus whatever
+/// the caller wraps around it). Each item's text is capped at a third of the budget -- trimmed with
+/// "…", its `id` kept so the caller can fetch the full text -- and an item that doesn't fit is
+/// skipped rather than ending the list, so one huge memory (an imported transcript, say) can't
+/// crowd out everything after it.
+pub(crate) fn fit_budget_by(items: Vec<RecallItem>, budget: usize, cost: impl Fn(&RecallItem) -> usize) -> Vec<RecallItem> {
     let cap_chars = (budget / 3).max(60) * 4;
     let mut out = Vec::new();
     let mut used = 0usize;
@@ -767,7 +780,7 @@ fn fit_budget(items: Vec<RecallItem>, budget: usize) -> Vec<RecallItem> {
         if item.text.chars().count() > cap_chars {
             item.text = item.text.chars().take(cap_chars - 1).collect::<String>() + "\u{2026}";
         }
-        let tokens = item.text.chars().count().div_ceil(4);
+        let tokens = cost(&item);
         if used.saturating_add(tokens) > budget {
             continue;
         }

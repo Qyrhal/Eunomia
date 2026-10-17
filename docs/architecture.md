@@ -246,13 +246,21 @@ lists, with rank starting at 1. Hydration rechecks record ownership and vault sc
 observations and superseded facts. Agreement adds 5% for each additional arm
 that found the same item. Recency decreases linearly from 1.0 to a floor of
 0.5 over 365 days; undated items receive a neutral multiplier. Scores are
-normalised relative to the best returned hit. “Proof” here means retrieval
-agreement, not independent evidence that a fact is true.
+normalised relative to the best returned hit. This is arm agreement (how many
+arms found the item, `arms_hit`), not independent evidence that a fact is true.
 
 Results retain their IDs, source, date, vault and number of matching arms.
 An optional token budget estimates one token per four characters and trims
 individual texts; clients can use the ID to fetch full content. There is no
 cross-encoder reranking step.
+
+`reflect` always applies a budget: an 8,000-token context minus the system
+prompt, the question and 1,000 tokens for the answer, with each memory counted
+with its metadata (date, vault, source, IDs and index), not just its text.
+Memories that do not fit are left out. A citation to an index that was not in
+the prompt is dropped; each returned citation carries the memory's `id`,
+`vault` and `occurred_at`, which do not depend on arm agreement. The no-model
+`recall_only` reply obeys the same budget and returns the same fields.
 
 Sources: [recall orchestration and ranking](../backend/src/cache/recall.rs),
 [full-text, vector search and RRF](../backend/src/cache/search.rs).

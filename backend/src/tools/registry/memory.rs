@@ -110,7 +110,7 @@ pub(super) fn register_all(registry: &mut HashMap<&'static str, ToolSpec>) {
                 "query": {"type": "string"},
                 "vault_id": {"type": "string", "description": "reflect over just this vault (a vault id or its name, e.g. \"Acme\"); omit to use your personal vault and every org vault you belong to"},
                 "vault_ids": vault_ids_schema(),
-                "limit": {"type": "integer", "description": "how many recalled memories to consider"},
+                "limit": {"type": "integer", "description": "how many recalled memories to consider (fewer if they do not fit the model's context budget)"},
             },
             "required": ["query"],
         }),
